@@ -227,9 +227,23 @@ the expanded rail's user row is slightly clipped at 900px tall (IgRail footer); 
 `--ok-fg/--warn-fg/--bad-fg/--info-fg/--brand-fg/--r-md/--shadow-card/--fast/--ease`, which Ignition
 never defined (pre-existing); 7 hard-coded old hexes remain (reports:16,214 · dashboard:171 ·
 campaigns:219 · app/page.js:9) — fix each one on its page's commit.
+**Phase 2 DONE (S412):** one commit per page, each hostile-reviewed; batches smoked live.
+Rail footer pin `22ea44f9`-era fix (only the nav scrolls) · Login · Import (D3) · Manual (`--font-body`, D4) ·
+B-List + Move to master (W5) · Payments (final→"Balance" everywhere via `lib/paymentKinds.js`; delete
+confirms) · Influencers (Menu `anchorRef`; footer denominator = selected type) · Connects (D5 labels in
+`lib/connects.js`; "{n} new in latest 200") · Campaigns · UGC · Users · Engagements (tabs, NO counts — W4
+open) · Schedule (overdue mirrors the worker rule; IST month) · Targets · Reports (D6) · Roster (W7
+partial; count only on the active pill) · **Dashboard + W1** (`e35db080`, ignitionops e444af9b:
+`stage_counts` + `committed` = Engagements Total cost). KpiCard is no longer used by any Phase 2 page.
+**Carry into Phase 3 / close-out:** `data/manual.json` Payments entry still says "Final" and "deletes
+straight away, no undo" (manual-builder at close-out) · W9b Re-book ships with New Deal ·
+W4 tab counts could now come from W1 `stage_counts` (only if they match the tab filters exactly) ·
+`discount-codes` page has no prototype (tokens only, if anything) · ProductLinesEditor placeholder
+clip (New Deal) · old hexes on detail pages. Backlog bugs filed: getRoster limit-before-filter (Roster
+"All" shows 168 of 438), getReports UTC bounds, getSchedule out-of-month rows.
 2. ~~Phase 1~~ done. Was: tokens → fonts → primitives (`src/components/ui/`, Ignition-local Modal) → shell (IgRail
    + IgTopbar). One coherent visual switch; check at 375px.
-3. Phase 2 list pages → Phase 3 detail pages → W1/W3/W5/W9b quick builds alongside their page.
+3. ~~Phase 2~~ done. **NEXT: Phase 3 detail pages** (§4 order; Engagement detail last, one card per commit) with W3 + W9b alongside.
 
 **Deviations from the design taken without asking** (they protect live behaviour, constraints 1–2):
 the Advance modal gets a second step for the inputs the worker requires; the Connects composer keeps
