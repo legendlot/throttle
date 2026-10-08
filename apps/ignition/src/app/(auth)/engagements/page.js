@@ -10,6 +10,7 @@ import { STAGE_VALUES, STAGE_LABELS } from '../../../lib/stages.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS } from '../../../lib/dealTypes.js';
 import { productLabel, titleish, productKey } from '../../../lib/productLabel.js';
 import { metricsCompleteness, organicViews } from '../../../lib/metrics.js';
+import { useListScroll } from '../../../lib/useListScroll.js';
 
 // S369 — a deal can be Complete because a metric was EXPLAINED (a recorded metric_gaps reason)
 // rather than captured. The tick used to promise "all metrics captured" either way, which claims
@@ -126,6 +127,7 @@ export default function EngagementsPage() {
   const [restored, setRestored] = useState(false);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [fetchedOnce, setFetchedOnce] = useState(false);   // the scroll restore waits for the first completed fetch
   const [campaigns, setCampaigns] = useState([]);
 
   // Restore once, after mount — sessionStorage does not exist during the static export's
@@ -196,7 +198,7 @@ export default function EngagementsPage() {
       // write is guarded — otherwise page 2 of the previous query lands on top of page 1 of
       // the current one and the list silently mixes two filters.
       .catch(e => { if (!cancelled) toast(e.message || 'Failed to load engagements', 'error'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
+      .finally(() => { if (!cancelled) { setLoading(false); setFetchedOnce(true); } });
 
     return () => { cancelled = true; };
   }, [tab, type, stages, search, session, restored]);
@@ -315,8 +317,14 @@ export default function EngagementsPage() {
     };
   }, [visible]);
 
+  // Back from a deal lands where you left the list (Nandeswari, #bugs 1791356178.730839) —
+  // restored once the first re-fetch has settled (rows or not), never over the spinner.
+  const { ref: listRef, remember: rememberScroll } =
+    useListScroll('engagements', fetchedOnce && !loading);
+  function openDeal(r) { rememberScroll(); router.push(`/engagements/detail/?id=${r.id}`); }
+
   const { focusedIdx, setFocusedIdx } = useListNav(visible.length, (i) => {
-    const r = visible[i]; if (r) router.push(`/engagements/detail/?id=${r.id}`);
+    const r = visible[i]; if (r) openDeal(r);
   });
 
   function removeProduct(k) { setF(prev => ({ ...prev, products: prev.products.filter(x => x !== k) })); }
@@ -337,7 +345,7 @@ export default function EngagementsPage() {
     || dateMode !== 'any';
 
   return (
-    <div>
+    <div ref={listRef}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
           Engagements
@@ -503,7 +511,7 @@ export default function EngagementsPage() {
                 const label = productLabel(r.product_code, r.product_variant);
                 return (
                   <tr key={r.id}
-                    onClick={() => router.push(`/engagements/detail/?id=${r.id}`)}
+                    onClick={() => openDeal(r)}
                     style={{
                       cursor: 'pointer', borderTop: '1px solid var(--border)',
                       background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
