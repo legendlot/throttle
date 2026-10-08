@@ -6,7 +6,7 @@ import { RequireAuth } from '@throttle/auth';
 function Landing() {
   const router = useRouter();
   useEffect(() => { router.replace('/dashboard/'); }, [router]);
-  return <div style={{ padding: 20, color: '#888' }}>Loading…</div>;
+  return <div style={{ padding: 20, color: 'var(--text-3)' }}>Loading…</div>;
 }
 
 export default function Home() {
