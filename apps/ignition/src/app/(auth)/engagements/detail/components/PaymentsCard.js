@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useToast } from '@throttle/ui';
 import { ignitionopsGet } from '../../../../../lib/ignitionopsFetch.js';
 import { NewPaymentModal } from '../../../../../components/NewPaymentModal.js';
+import { paymentKindLabel } from '../../../../../lib/paymentKinds.js';
 import { KV } from './shared.js';
 
 /** Payments for THIS deal, with the screenshot reachable here (Reann #7, 2026-08-27). */
@@ -46,7 +47,7 @@ export function PaymentsCard({ payments, paidTotal, agreed, engagement, influenc
           {payments.map(p => (
             <div key={p.id} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13 }}>
               <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>₹{Number(p.amount || 0).toLocaleString('en-IN')}</span>
-              <span style={{ color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase' }}>{p.kind}</span>
+              <span style={{ color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase' }}>{paymentKindLabel(p.kind)}</span>
               <span style={{ color: 'var(--text-3)' }}>{p.paid_on || '—'}</span>
               <span style={{ marginLeft: 'auto' }}>
                 {p.proof_path ? (

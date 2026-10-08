@@ -6,9 +6,9 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Plus, Trash2, Paperclip } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
 import { NewPaymentModal } from '../../../components/NewPaymentModal.js';
+import { paymentKindLabel } from '../../../lib/paymentKinds.js';
 
 const rupee = n => `₹${Number(n || 0).toLocaleString('en-IN')}`;
-const KIND_LABEL = { advance: 'Advance', final: 'Final', other: 'Other' };
 
 export default function PaymentsPage() {
   const { session } = useAuth();
@@ -28,6 +28,8 @@ export default function PaymentsPage() {
   useEffect(load, [session]);
 
   async function del(id) {
+    // The bin is a bigger target in the Pit Control row; a payment row is money history (S412).
+    if (!window.confirm('Remove this payment record?')) return;
     try { await ignitionopsPost('deletePayment', { id }, session); toast('Payment removed', 'success'); load(); }
     catch (e) { toast(e.message, 'error'); }
   }
@@ -44,56 +46,61 @@ export default function PaymentsPage() {
   const payments = data?.payments || [];
 
   return (
-    <div style={{ maxWidth: 1100 }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Payments</h1>
-        <button onClick={() => setModal(true)} style={newBtn}><Plus size={15} strokeWidth={2.25} /> Record Payment</button>
+    <div style={{ maxWidth: 1100, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <header className="ig-up" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '.14em', color: 'var(--text-4)' }}>WORK · MONEY OUT, WITH PROOF</div>
+          <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 32, fontWeight: 700, marginTop: 6 }}>Payments</h1>
+        </div>
+        <button onClick={() => setModal(true)} style={newBtn}><Plus size={15} strokeWidth={2.25} /> Record payment</button>
       </header>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <Tile label="Today" tile={s?.today} />
-        <Tile label="This Week" tile={s?.week} />
-        <Tile label="This Month" tile={s?.month} />
-        <Tile label="All Time" tile={s?.all} muted />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+        <PayTile label="Today" tile={s?.today} d={60} />
+        <PayTile label="This week" tile={s?.week} d={110} />
+        <PayTile label="This month" tile={s?.month} d={160} accent />
+        <PayTile label="All time" tile={s?.all} d={210} muted />
       </div>
 
       {loading ? <Spinner /> : (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <div className="ig-up" style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', overflowX: 'auto', animationDelay: '220ms' }}>
+          <table style={{ width: '100%', minWidth: 900, borderCollapse: 'collapse', fontSize: 14 }}>
             <thead>
-              <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
+              <tr style={{ textAlign: 'left' }}>
                 <th style={th}>Date</th><th style={th}>Influencer</th><th style={th}>Deal</th>
-                <th style={th}>Kind</th><th style={{ ...th, textAlign: 'right' }}>Amount</th><th style={th}>Note</th><th style={th} />
+                <th style={th}>Kind</th><th style={{ ...th, textAlign: 'right' }}>Amount</th><th style={th}>Note</th><th style={th}>Proof</th><th style={th} />
               </tr>
             </thead>
             <tbody>
               {payments.length === 0 && (
-                <tr><td colSpan={7} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No payments recorded yet</td></tr>
+                <tr><td colSpan={8} style={{ ...td, color: 'var(--text-4)', textAlign: 'center' }}>No payments recorded yet</td></tr>
               )}
               {payments.map(p => (
-                <tr key={p.id} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={{ ...td, whiteSpace: 'nowrap' }}>{p.paid_on}</td>
+                <tr key={p.id} className="ig-row" style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ ...td, whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-2)' }}>{p.paid_on}</td>
                   <td style={td}>
                     {p.influencer
-                      ? <><span style={{ color: '#FF6B00', fontWeight: 600 }}>{p.influencer.influencer_code}</span> {p.influencer.channel_name || p.influencer.person_name || ''}</>
+                      ? <><span style={{ color: 'var(--accent-hi)', fontWeight: 600 }}>{p.influencer.influencer_code}</span> <span style={{ fontWeight: 600 }}>{p.influencer.channel_name || p.influencer.person_name || ''}</span></>
                       : '—'}
                   </td>
                   <td style={td}>
                     {p.engagement
-                      ? <span onClick={() => router.push(`/engagements/detail/?id=${p.engagement_id}`)} style={{ cursor: 'pointer', color: 'var(--text-1)' }}>{p.engagement.engagement_no}{p.engagement.product_code ? ` · ${p.engagement.product_code}` : ''}</span>
+                      ? <span onClick={() => router.push(`/engagements/detail/?id=${p.engagement_id}`)} style={{ cursor: 'pointer', color: 'var(--accent-hi)', fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600 }}>{p.engagement.engagement_no}{p.engagement.product_code ? ` · ${p.engagement.product_code}` : ''}</span>
                       : '—'}
                   </td>
-                  <td style={td}><span style={kindChip(p.kind)}>{KIND_LABEL[p.kind] || p.kind}</span></td>
-                  <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{rupee(p.amount)}</td>
-                  <td style={{ ...td, color: 'var(--text-3)' }}>{p.note || '—'}</td>
-                  <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {p.proof_path && (
-                      <button onClick={() => viewProof(p.id)} title={p.proof_name || 'View screenshot'} style={{ background: 'transparent', border: 'none', color: '#FF6B00', cursor: 'pointer', marginRight: 6 }}>
-                        <Paperclip size={14} />
+                  <td style={td}><span style={kindChip(p.kind)}>{paymentKindLabel(p.kind)}</span></td>
+                  <td className="num" style={{ ...td, textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 700, whiteSpace: 'nowrap' }}>{rupee(p.amount)}</td>
+                  <td style={{ ...td, color: 'var(--text-2)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.note || '—'}</td>
+                  <td style={{ ...td, fontSize: 13, whiteSpace: 'nowrap' }}>
+                    {p.proof_path ? (
+                      <button onClick={() => viewProof(p.id)} title={p.proof_name || 'View screenshot'} style={{ background: 'transparent', border: 'none', padding: 0, color: 'var(--accent-hi)', cursor: 'pointer', font: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Paperclip size={13} /> View ↗
                       </button>
-                    )}
+                    ) : <span style={{ color: 'var(--state-error-fg)' }}>Missing</span>}
+                  </td>
+                  <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {canManage && (
-                      <button onClick={() => del(p.id)} title="Remove" style={{ background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer' }}>
+                      <button className="ig-ctl" onClick={() => del(p.id)} title="Remove" style={{ background: 'transparent', border: 'none', borderRadius: 8, width: 30, height: 30, color: 'var(--text-4)', cursor: 'pointer' }}>
                         <Trash2 size={14} />
                       </button>
                     )}
@@ -110,28 +117,29 @@ export default function PaymentsPage() {
   );
 }
 
-function Tile({ label, tile, muted }) {
+function PayTile({ label, tile, d, accent, muted }) {
   return (
-    <div style={{ flex: '1 1 200px', minWidth: 180, background: 'var(--surface)', border: `1px solid ${muted ? 'var(--border)' : '#FF6B00'}`, borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
-      <div style={{ fontSize: 11, color: muted ? 'var(--text-3)' : '#FF6B00', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 700, color: 'var(--text-1)', fontFamily: 'var(--font-cond)', marginTop: 4 }}>
-        {tile ? `₹${Number(tile.amount).toLocaleString('en-IN')}` : '–'}
-      </div>
-      <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
+    <div className="ig-up" style={{ animationDelay: `${d}ms`, background: muted ? 'var(--surface-sunk)' : 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-3)' }}>{label}</span>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 26, fontWeight: 700, color: accent ? 'var(--accent-hi)' : muted ? 'var(--text-2)' : 'var(--text-1)' }}>
+        {tile ? rupee(tile.amount) : '–'}
+      </span>
+      <span style={{ fontSize: 12, color: 'var(--text-4)' }}>
         {tile ? `${tile.count} payment${tile.count === 1 ? '' : 's'} · ${tile.influencers} influencer${tile.influencers === 1 ? '' : 's'}` : ''}
-      </div>
+      </span>
     </div>
   );
 }
 
-const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
-const td = { padding: '10px 12px' };
+const th = { padding: '12px 18px', fontSize: 12, color: 'var(--text-4)', fontWeight: 600 };
+const td = { padding: '10px 18px' };
 const newBtn = {
-  display: 'inline-flex', alignItems: 'center', gap: 6, background: '#FF6B00', color: '#fff',
-  border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 14px',
-  fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 6, height: 42, padding: '0 16px', background: 'var(--text-1)', color: 'var(--bg, #0e1015)',
+  border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer',
 };
 function kindChip(kind) {
-  const c = kind === 'advance' ? '#F2CD1A' : kind === 'final' ? '#FF6B00' : 'var(--text-3)';
-  return { fontSize: 11, color: c, border: `1px solid ${c}`, borderRadius: 'var(--radius-sm)', padding: '2px 8px', textTransform: 'uppercase', letterSpacing: '0.04em' };
+  const [fg, bg] = kind === 'advance' ? ['#fbbf24', 'rgba(251,191,36,.14)']
+    : kind === 'final' ? ['#4ade80', 'rgba(34,197,94,.14)']
+    : ['var(--text-2)', 'rgba(169,176,194,.12)'];
+  return { display: 'inline-block', fontSize: 12, fontWeight: 600, color: fg, background: bg, borderRadius: 8, padding: '3px 9px' };
 }

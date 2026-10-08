@@ -143,7 +143,7 @@ export function NewPaymentModal({ open, onClose, session, onSaved, presetInfluen
         <Field label="Payment kind">
           <select value={form.kind} onChange={e => setField('kind', e.target.value)} style={inp}>
             <option value="advance">Advance</option>
-            <option value="final">Final</option>
+            <option value="final">Balance</option>
             <option value="other">Other</option>
           </select>
         </Field>
