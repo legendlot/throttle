@@ -94,7 +94,7 @@ export default function IgRail({ navGroups, pathname, onNavigate, userLabel, use
           display: 'flex', alignItems: 'center', gap: 12, height: 32, width: ex ? 'auto' : 44,
           paddingLeft: ex ? 8 : 10, color: 'var(--text-1)', whiteSpace: 'nowrap', overflow: 'hidden', minWidth: 0,
         }}>
-          <img src="/favicon.svg" alt="Ignition" style={{ height: 28, width: 'auto', flexShrink: 0, display: 'block' }} />
+          <img src="/ignition-mark.svg" alt="Ignition" style={{ height: 28, width: 'auto', flexShrink: 0, display: 'block' }} />
           <span style={{ fontFamily: 'var(--font-cond)', fontSize: 16, fontWeight: 700, letterSpacing: '.1em',
             opacity: labelOp, transition: 'opacity 180ms' }}>IGNITION</span>
         </a>
