@@ -287,6 +287,17 @@ export default function DashboardPage() {
                   <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.channel_name || r.person_name || '—'}</div>
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-4)' }}>{r.influencer_code} · {r.days_since}d idle</div>
                 </a>
+                {canManage && (
+                  <a href={`/engagements/new/?influencer=${r.influencer_id}`}
+                    onClick={ev => { ev.preventDefault(); ev.stopPropagation(); router.push(`/engagements/new/?influencer=${r.influencer_id}`); }}
+                    onMouseEnter={ev => { const b = ev.currentTarget.style; b.background = 'var(--accent)'; b.borderColor = 'var(--accent)'; b.color = 'var(--accent-fg)'; }}
+                    onMouseLeave={ev => { const b = ev.currentTarget.style; b.background = 'transparent'; b.borderColor = 'var(--border-3)'; b.color = 'var(--text-1)'; }}
+                    style={{ flexShrink: 0, padding: '6px 12px', borderRadius: 'var(--r-ctl)', border: '1px solid var(--border-3)',
+                      background: 'transparent', color: 'var(--text-1)', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap',
+                      transition: 'background 140ms, border-color 140ms, color 140ms' }}>
+                    Re-book
+                  </a>
+                )}
               </div>
             ))}
             {!quality.reengage?.length && (

@@ -308,7 +308,10 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
           : (rowNeedsRef(l) ? `“${l.product_code}” isn’t linked to a catalogue product.` : null);
         return (
         <div key={uid} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.1fr 60px 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
+        {/* Pit Control (2026-10-08): a wrapping flex row instead of the fixed 6-col grid, so the
+            product box gets room for its placeholder and the row stacks at 375px. Every row has the
+            same bases, so on one line the columns still line up under row 0's labels. */}
+        <div className={i > 0 ? 'ig-pop' : undefined} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start' }}>
           <div
             // Captured on the wrapper because the Combobox's own blur is deferred 150 ms, which
             // loses the race against a click on Save. Focus clears the row's error so a mistyped
@@ -318,39 +321,42 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
             // Any keystroke means the pending Combobox commit (if any) is no longer what is in
             // the box, so the next blur must be judged on its text.
             onChangeCapture={() => pickedRef.current.delete(uid)}
+            style={{ flex: '2 1 200px', minWidth: 0 }}
           >
             {i === 0 && <div style={lbl}>Product</div>}
             <Combobox
               value={l.product_code || ''}
               options={productOptions}
               onChange={(val, opt) => onProductPicked(i, val, opt)}
-              placeholder="Search a product…"
+              placeholder="Search product…"
               // Legacy rows (341 deals) hold a name that matches no option. Without this the
               // Combobox renders them EMPTY, which reads as the line having been destroyed.
               // Creatable mode is deliberately absent — see the header note.
               freeTextValue
               portal
-              style={inp}
+              // inputStyle styles the <input> itself; `style` only reaches the wrapper div (the old
+              // `style={inp}` boxed a second input inside it, which is what clipped the placeholder).
+              inputStyle={{ ...inp, paddingRight: 28 }}
             />
           </div>
-          <div>
+          <div style={{ flex: '1 1 140px', minWidth: 0 }}>
             {i === 0 && <div style={lbl}>Variant / colour</div>}
             <input
               value={l.product_variant || ''}
               onChange={e => setRow(i, { product_variant: e.target.value })}
-              placeholder="e.g. Burnout Yellow"
+              placeholder="e.g. Burnout Yellow" aria-label="Variant"
               style={inp}
             />
           </div>
-          <div>
+          <div style={{ flex: '0 0 72px' }}>
             {i === 0 && <div style={lbl}>Qty</div>}
             <input type="number" min="1" value={l.quantity}
-              onChange={e => setRow(i, { quantity: e.target.value })} style={inp} />
+              onChange={e => setRow(i, { quantity: e.target.value })} placeholder="Qty" aria-label="Quantity" title="Quantity" style={inpMono} />
           </div>
-          <div>
+          <div style={{ flex: '1 1 96px', minWidth: 0 }}>
             {i === 0 && <div style={lbl}>Goodies ₹</div>}
             <input type="number" min="0" value={l.goodies_cost ?? ''}
-              onChange={e => setRow(i, { goodies_cost: e.target.value })} placeholder="0" style={inp} />
+              onChange={e => setRow(i, { goodies_cost: e.target.value })} placeholder="Goodies ₹" aria-label="Goodies cost" style={inpMono} />
             {/* Reference only (S309). Shows what the product retails for so nobody has
                 to go and look it up, which is what Reann was doing by hand. "Use" is a
                 deliberate click, never automatic — see onProductPicked for why. */}
@@ -364,12 +370,15 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
               </div>
             )}
           </div>
-          <div>
+          <div style={{ flex: '1 1 96px', minWidth: 0 }}>
             {i === 0 && <div style={lbl}>Shipping ₹</div>}
             <input type="number" min="0" value={l.shipping_cost ?? ''}
-              onChange={e => setRow(i, { shipping_cost: e.target.value })} placeholder="0" style={inp} />
+              onChange={e => setRow(i, { shipping_cost: e.target.value })} placeholder="Shipping ₹" aria-label="Shipping cost" style={inpMono} />
           </div>
-          <button type="button" onClick={() => removeRow(i)} title="Remove" style={removeBtn}>×</button>
+          <div style={{ flex: '0 0 36px' }}>
+            {i === 0 && <div style={lbl} aria-hidden="true">&nbsp;</div>}
+            <button type="button" onClick={() => removeRow(i)} title="Remove" aria-label="Remove product line" className="ig-ghost-btn" style={removeBtn}>×</button>
+          </div>
         </div>
         {problem && (
           <div style={errText}>
@@ -381,7 +390,7 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
         );
       })}
       <div>
-        <button type="button" onClick={addRow} style={addBtn}>+ Add product</button>
+        <button type="button" onClick={addRow} className="ig-ghost-btn" style={addBtn}>+ Add product</button>
       </div>
     </div>
   );
@@ -415,8 +424,9 @@ export function linesAreValid(lines) {
 
 const errText = { fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.4, color: 'var(--state-error-fg)' };
 const hint = { display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-3)' };
-const hintBtn = { background: 'transparent', border: 'none', padding: 0, color: 'var(--state-info-fg, #6aa9ff)', fontFamily: 'var(--font-mono)', fontSize: 10.5, textDecoration: 'underline', cursor: 'pointer' };
-const lbl = { fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 };
-const inp = { width: '100%', boxSizing: 'border-box', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 13 };
-const removeBtn = { padding: '6px 10px', background: 'transparent', color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 16, lineHeight: 1, cursor: 'pointer' };
-const addBtn = { padding: '6px 12px', background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' };
+const hintBtn = { background: 'transparent', border: 'none', padding: 0, color: 'var(--state-info-fg)', fontFamily: 'var(--font-mono)', fontSize: 10.5, textDecoration: 'underline', cursor: 'pointer' };
+const lbl = { fontSize: 13, fontWeight: 600, color: 'var(--text-3)', marginBottom: 6 };
+const inp = { width: '100%', boxSizing: 'border-box', height: 42, padding: '0 12px', background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 14 };
+const inpMono = { ...inp, fontFamily: 'var(--font-mono)' };
+const removeBtn = { width: 36, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, background: 'transparent', color: 'var(--text-3)', border: '1px solid transparent', borderRadius: 'var(--r-ctl)', fontSize: 18, lineHeight: 1, cursor: 'pointer', transition: 'background 140ms, color 140ms' };
+const addBtn = { padding: '9px 14px', background: 'transparent', color: 'var(--text-2)', border: '1px dashed var(--border-input-hover)', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'border-color 140ms, color 140ms' };
