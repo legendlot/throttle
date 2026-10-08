@@ -219,8 +219,15 @@ Until each W ships, its element is **omitted**, never faked.
 3b4cd118; B1–B3 smoked live) · P0.2 `015f8dce` (detail → `engagements/detail/components/*`) · P0.3
 `d78bf52e` (`lib/useDealForm.js` + `lib/dealPayload.js`, D7/B4) · P0.4 `33c068a8`. Each one was
 hostile-reviewed before its commit.
-1. ~~Phase 1 heads-up~~ — dropped by Afshaan 2026-10-08 (no `#system-updates` post). Push Phase 1 once it is reviewed.
-2. Phase 1: tokens → fonts → primitives (`src/components/ui/`, Ignition-local Modal) → shell (IgRail
+1. ~~Phase 1 heads-up~~ — dropped by Afshaan 2026-10-08 (no `#system-updates` post).
+**Phase 1 DONE (S412):** `55f9b82e`, smoked live 9/9 (shell, rail persist + `[` guard, nav highlight,
+page search, sign-out confirm, modals, 375px). Codex 2nd pass couldn't run (login rejects every model).
+**Carry into Phase 2:** the Add Deal product-search placeholder is clipped ("Search a pr…", ProductLinesEditor);
+the expanded rail's user row is slightly clipped at 900px tall (IgRail footer); the shared KpiCard reads
+`--ok-fg/--warn-fg/--bad-fg/--info-fg/--brand-fg/--r-md/--shadow-card/--fast/--ease`, which Ignition
+never defined (pre-existing); 7 hard-coded old hexes remain (reports:16,214 · dashboard:171 ·
+campaigns:219 · app/page.js:9) — fix each one on its page's commit.
+2. ~~Phase 1~~ done. Was: tokens → fonts → primitives (`src/components/ui/`, Ignition-local Modal) → shell (IgRail
    + IgTopbar). One coherent visual switch; check at 375px.
 3. Phase 2 list pages → Phase 3 detail pages → W1/W3/W5/W9b quick builds alongside their page.
 
