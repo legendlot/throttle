@@ -35,6 +35,7 @@ import { fromIstNaive } from './telephony/exotel-client.js';
 import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage, formatTicketNotes, maskPhoneForExport, dailySeries, DAILY_METRICS, istDayRange, istBucketRange } from './analytics.js';
 import { splitMulti } from './multiselect.js';
 import { postNeedsMeta, shouldFetchPostMeta, postMetaPatch } from './social-posts.js';
+import { normalizeUpc, normalizeTicketUpcs, upcInFilter, findMissingUpc } from './upc.js';
 
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
@@ -1603,13 +1604,6 @@ async function getTicketHistory(params, auth, env) {
 // Agents or customers may read out the human-readable or bare digits, so resolve
 // LOT-00081760 / lot-81760 / 00081760 / 81760 / SHAK00081760 → LOT-<8-pad>.
 // No trailing digits → returned unchanged (exact-match fallback).
-function normalizeUpc(raw) {
-  const s = String(raw || '').trim();
-  if (!s) return s;
-  const m = s.match(/(\d+)\s*$/);   // trailing run of digits = the serial
-  return (m && m[1]) ? 'LOT-' + m[1].padStart(8, '0') : s;
-}
-
 async function lookupByUpc(params, auth, env) {
   const raw = params.get('upc');
   if (!raw) return err('upc required');
@@ -3371,6 +3365,18 @@ async function createTicket(body, auth, env) {
   return ok({ ticket_no, id: ticket.id, due_at });
 }
 
+// UPC columns FK to units(upc). Confirm a changed UPC is a real unit so the agent gets a
+// readable message instead of a raw FK violation. Patch must already be normalised (upc.js).
+async function checkTicketUpcs(patch, current, env) {
+  const { missing, failed } = await findMissingUpc(patch, current, async (upcs) => {
+    const r = await sbPublic(`/rest/v1/units?upc=${upcInFilter(upcs)}&select=upc`, env);
+    return r.ok ? (r.data || []).map((u) => u.upc) : null;
+  });
+  if (failed)  return err('Could not check the UPC — try again', 502);
+  if (missing) return err(`UPC ${missing} is not a LOT unit — check the label and try again`);
+  return null;
+}
+
 async function updateTicket(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { ticket_id, patch } = body;
@@ -3400,11 +3406,17 @@ async function updateTicket(body, auth, env) {
     }
   }
 
-  const cleanPatch = {};
+  let cleanPatch = {};
   for (const [k, v] of Object.entries(patch)) {
     if (!PROTECTED.has(k)) cleanPatch[k] = v;
   }
   if (Object.keys(cleanPatch).length === 0) return err('Nothing to update');
+
+  // UPC columns FK to units(upc): normalise the way createTicket does, then confirm the unit
+  // exists so a typo gets a readable message instead of a raw FK violation (see upc.js).
+  cleanPatch = normalizeTicketUpcs(cleanPatch);
+  const upcErr = await checkTicketUpcs(cleanPatch, current, env);
+  if (upcErr) return upcErr;
 
   // Triage routing side-effects when disposition is being changed.
   // Track keys injected here so history logging can exclude them (Fix 2).
@@ -3530,8 +3542,10 @@ async function advanceStage(body, auth, env, request) {
     return err(`Cannot advance ${t.stage} → ${target_stage} for ${t.disposition} ticket`, 422);
   }
 
-  // Apply pre-advance patches (so gate check sees them)
-  const cleanPatch = { ...patch };
+  // Apply pre-advance patches (so gate check sees them). UPC columns normalised (upc.js).
+  const cleanPatch = normalizeTicketUpcs(patch);
+  const upcErr = await checkTicketUpcs(cleanPatch, t, env);
+  if (upcErr) return upcErr;
   delete cleanPatch.stage; delete cleanPatch.stage_changed_at;
   delete cleanPatch.closed_at; delete cleanPatch.closed_reason;
   delete cleanPatch.ticket_no; delete cleanPatch.id;
