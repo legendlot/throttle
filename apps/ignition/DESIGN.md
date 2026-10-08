@@ -1,51 +1,65 @@
 ---
 name: Ignition
-description: Influencer-marketing CRM for Legend of Toys
+description: Influencer-marketing CRM for Legend of Toys. Visual system "Pit Control" (S412, 2026-10-08) - dark navy surfaces, ignition-orange accent.
 colors:
-  bg: "#1f1f1f"
-  surface: "#2a2a2a"
-  surface2: "#333333"
-  surface3: "#3c3c3c"
-  border: "#404040"
-  border2: "#4a4a4a"
-  text-1: "#f5f5f5"
-  text-2: "#b0b0b0"
-  text-3: "#888888"
-  text-4: "#666666"
+  bg: "#0e1015"
+  rail: "#0a0c10"
+  surface: "#13161e"
+  surface-hover: "#171a23"
+  surface-raised: "#171a22"
+  input: "#151821"
+  surface-sunk: "#10131a"
+  chip-neutral: "#1b1f2a"
+  menu: "#171a23"
+  menu-hover: "#20242f"
+  border: "#1d212b"
+  border-2: "#232838"
+  border-3: "#2b3142"
+  border-hover: "#2e3446"
+  border-input-hover: "#3a4156"
+  row-divider: "#181b24"
+  text-1: "#eef0f4"
+  text-2: "#a9b0c2"
+  text-3: "#8b93a7"
+  text-4: "#6b7385"
+  text-5: "#5a6278"
+  accent: "#FF6B00"
+  accent-hi: "#ff8a33"
+  accent-fg: "#0a0a0a"
+  ignition-orange-deep: "#cc5500"
   brand-yellow: "#F2CD1A"
   brand-blue: "#213CE2"
   brand-red: "#DE2A2A"
   brand-green: "#22c55e"
-  ignition-orange: "#FF6B00"
-  ignition-orange-deep: "#cc5500"
   state-warning: "#fbbf24"
-  state-info: "#7b93ff"
-  accent-fg: "#0a0a0a"
+  state-error: "#DE2A2A"
+  state-success: "#22c55e"
+  state-info: "#4f6bff"
 typography:
   display:
-    fontFamily: "Tomorrow, sans-serif"
-    fontSize: "28px"
-    fontWeight: 700
-  headline:
-    fontFamily: "Tomorrow, sans-serif"
-    fontSize: "22px"
+    fontFamily: "Tomorrow, system-ui, sans-serif"
+    fontSize: "32px"
     fontWeight: 700
   title:
-    fontFamily: "Tomorrow, sans-serif"
-    fontSize: "16px"
+    fontFamily: "Tomorrow, system-ui, sans-serif"
+    fontSize: "17px"
     fontWeight: 700
-  body:
-    fontFamily: "JetBrains Mono, monospace"
-    fontSize: "13px"
-    fontWeight: 400
-  body-condensed:
-    fontFamily: "JetBrains Mono, monospace"
+  eyebrow:
+    fontFamily: "JetBrains Mono, ui-monospace, Menlo, monospace"
     fontSize: "12px"
+    letterSpacing: "0.14em"
+  body:
+    fontFamily: "Hanken Grotesk, system-ui, -apple-system, sans-serif"
+    fontSize: "14px"
     fontWeight: 400
   numeric:
-    fontFamily: "JetBrains Mono, monospace"
+    fontFamily: "JetBrains Mono, ui-monospace, Menlo, monospace"
     fontVariantNumeric: "tabular-nums"
 ---
+
+# Ignition - Technical Design
+
+> Last updated: 2026-10-08 (S412 - design tokens, typography, components and frontend layout rewritten for the Pit Control redesign; data model / worker / sheet-import sections unchanged)
 
 # Ignition — Technical Design
 
@@ -357,53 +371,103 @@ Damage cases: `cs_ticket_no` is set without changing `stage`. UI surfaces a "dam
 // return { ok: true, data: { ticket_no, engagement_no } }
 ```
 
-## Frontend layout (clone of apps/pitstop)
+## Design system - "Pit Control"
 
-`apps/ignition/` directory:
+Source of truth: `apps/ignition/src/app/globals.css` `:root`. Dark only (no light mode, no
+`prefers-color-scheme`). Fonts load once via the `<link>` in `src/app/layout.js`. Component code
+styles inline from these tokens; `globals.css` carries only what inline styles cannot (hover/focus,
+keyframes, mobile).
+
+### Tokens
+
+- **Surfaces**: `--bg #0e1015` · `--rail #0a0c10` · `--surface #13161e` · `--surface-hover #171a23` · `--surface-raised #171a22` · `--input #151821` · `--surface-sunk #10131a` · `--chip-neutral #1b1f2a` · `--menu #171a23` · `--menu-hover #20242f`
+- **Borders**: `--border #1d212b` · `--border-2 #232838` · `--border-3 #2b3142` · `--border-hover #2e3446` · `--border-input-hover #3a4156` · `--row-divider #181b24`
+- **Text**: `--text-1 #eef0f4` · `--text-2 #a9b0c2` · `--text-3 #8b93a7` · `--text-4 #6b7385` · `--text-5 #5a6278`
+- **Brand**: `--brand-yellow #F2CD1A` (`-deep #d4b200`) · `--brand-blue #213CE2` · `--brand-red #DE2A2A` · `--brand-green #22c55e` · `--brand-orange #f97316`
+- **Accent (the "lit fuse")**: `--ignition-orange #FF6B00` (`-deep #cc5500`) · `--accent` = ignition-orange · `--accent-hi #ff8a33` · `--accent-fg #0a0a0a` · `--accent-bg rgba(255,107,0,.14)` · `--accent-bg-soft rgba(255,107,0,.08)`
+- **State** (each has `-fg` text and `-bg` tint): `--state-warning #fbbf24` · `--state-error #DE2A2A` (fg `#ff7b7b`) · `--state-success #22c55e` (fg `#4ade80`) · `--state-info #4f6bff` (fg `#8ea2ff`) · `--info-bar #4f6bff` / `--info-bar-2 #7b93ff`
+- **Overlay / shadow**: `--scrim` · `--sticky-bar` · `--shadow-menu` · `--shadow-modal` · `--shadow-cta`
+- **Type scale**: `--text-2xs 11` · `xs 12` · `sm 13` · `base 14` (body) · `md 16` · `lg 18` · `xl 22` · `2xl 28` · `3xl 36` px. Tracking: `--tracking-tight .04em` · `-mid .06em` · `-wide .08em` · `-eyebrow .14em`
+- **Space**: `--space-1` 4 · `-2` 8 · `-3` 12 · `-4` 16 · `-5` 20 · `-6` 24 · `-8` 32 · `-10` 40 px
+- **Radii**: Pit Control scale `--r-card 18` · `--r-tile 16` · `--r-row 14` · `--r-btn 12` · `--r-ctl 10` · `--r-seg 9` · `--r-deal 8`; legacy `--radius-sm 6` · `-md 10` · `-lg 14` · `-full 9999`
+- **Fonts**: `--font-ui` Hanken Grotesk (body) · `--font-cond` Tomorrow (headings) · `--font-mono` JetBrains Mono (numbers, eyebrows, tab labels) · `--font-body` = `--font-ui` (read by the shared `@throttle/ui` Manual)
+- **Motion**: `--duration-fast 140ms` · `-default 160ms` · `-slow 240ms` · `--ease-out cubic-bezier(0.22,1,0.36,1)`
+- **Legacy aliases** (kept so un-restyled pages still render): `--surface2/3`, `--surface-2/3` (-> chip-neutral / menu-hover), `--border2`, `--t1..t4`, `--yellow`, `--yellow2`, `--blue`, `--red`, `--green`, `--orange`, `--mono`, `--cond`, `--r-full`. Prefer the new names in new code.
+
+### Motion
+
+Keyframes: `igUp` `igSlide` `igGrowX` `igGrowY` `igFuse` `igPulse` `igRing` `igPop` `igFade` `igDash` `igBlink` (+ `ig-sheetup` for the mobile sheet). Classes: `.ig-up` (500ms) `.ig-slide` (380ms) `.ig-pop` (240ms) `.ig-fade` (160ms) `.ig-growx` (800ms) `.ig-growy` (600ms) `.ig-fuse` (animated orange stripe) `.ig-live-dot` (pulsing green dot). Entrances use fill-mode `backwards`, never `both` (`both` pins the last keyframe and overrides inline opacity/transform). `prefers-reduced-motion` collapses all durations and stops `.ig-fuse` / `.ig-live-dot`.
+
+### Typography
+
+- Body: `--font-ui` Hanken Grotesk, 14px / line-height 1.45, antialiased. `td, th, .num` get `tabular-nums`.
+- Numbers (KPI values, `NumCell`, tab labels): `--font-mono`.
+- **Page-header pattern**: a mono 12px `letter-spacing: .14em` UPPERCASE eyebrow in `--text-4` (e.g. "Work · Post dates"), then an `<h1>` in `--font-cond` 32px / 700 with `marginTop: 6`. Card/section titles: `--font-cond` 15-17px / 700 (`SectionTitle`).
+
+### Components
+
+`@throttle/ui` `Sidebar`, `Modal` and `KpiCard` (and `Topbar`) are **no longer used by Ignition**. `packages/ui` is shared by 11 other apps - **never edit it for Ignition**; build/restyle locally. Still imported from `@throttle/ui`: `Spinner`, `Chip`, `Combobox`, `EmptyState`, `Manual`, `AppLauncher`, `ToastProvider`, `useToast`, `useListNav`, `useSearchShortcut`.
+
+**Shell** (`src/components/shell/`, wired in `app/(auth)/layout.js`):
+- `IgRail` - icon rail, default collapsed, persisted in `localStorage['ig.rail.expanded']`; `[` toggles. Sections WORK / LISTS / ANALYZE / HELP & ADMIN; nav items with `rail: false` are skipped (New Deal lives in the top-bar CTA). Hidden at <=767px. Props: `navGroups, pathname, onNavigate, userLabel, userInitial, userRole, onLogout`.
+- `IgTopbar` - props `refreshing, lastRefreshed, showNewDeal, onNewDeal`. Search field (or Cmd/Ctrl+K) focuses the page's `[data-search-primary]` input; no command palette. Shows a live/sync chip and the New Deal CTA (both hidden on mobile).
+
+**Primitives** (`src/components/ui/`, barrel `index.js`; `import { Card, ... } from '<rel>/components/ui/index.js'`):
+
+| Component | Props / behaviour |
+|---|---|
+| `Card` | `title, action, hero, hover, as`; #13161e, 1px border, radius 18 |
+| `SectionTitle` | `children, action, onAction, actionHref, eyebrow, size=17` |
+| `Segmented` | `options [{value,label,count?}], value, onChange, disabled, size`; replaces Chip tab rows |
+| `StagePill` | `stage, ugc, size 'sm'|'lg', dot, label`; labels from `lib/stages.js` / `lib/ugcStages.js` |
+| `DealPill` | `type`; outlined, labels from `lib/dealTypes.js` |
+| `RatingDot` (+ `RATING_COLORS`) | `rating, showLabel, size` |
+| `Tile` | KPI tile: `label, value, hint, color, size=24, right, hover, onClick` |
+| `FilterSelect` | `value, onChange, options, width`; native `<select>` underneath |
+| `SearchField` | `value, onChange, placeholder, primary=true, width=300`; renders `data-search-primary` unless `primary={false}` |
+| `TableCard`, `Row`, `NumCell` | CSS-grid table: `columns, head, minWidth=720`; `Row` takes `onClick, focused, first, index, animate`; `NumCell` is mono right-aligned |
+| `Avatar` (+ `AVATAR_TINTS`) | `name, seed, index, size=34, square, ring, tint` |
+| `Modal` | Same props/behaviour as the `@throttle/ui` Modal, restyled; `footer` replaces Cancel/Confirm, size `'lg'` widens |
+| `Stepper` | `steps [{key,label,date?}], current`; done = orange check, current = igRing pulse |
+| `ProgressBar` (+ `viewsTone`, `spendTone`, `budgetTone`) | `pct` or `value/max, color, height=8, fuse, delay` |
+| `Spark` | `values, color, dim, height=28, highlightLast` |
+| `Banner` | `tone='warning', icon, lead, children, action, onAction, actionDisabled` |
+| `Menu` | `open, onClose, anchorRef, items [{label,onClick,icon?,danger?,disabled?,active?}], align='right', width=220` |
+
+Hover/focus helper classes in `globals.css` (inline styles cannot do `:hover`; the rules are `!important` because components set resting colours inline): `.ig-card-hover` `.ig-card-action` `.ig-row` `.ig-seg-pill` `.ig-ctl` `.ig-menu-item` `.ig-ghost-btn` `.ig-cta` `.ig-rail-*` `.ig-topbar-search`.
+
+### Layout and mobile rules
+
+- `<main className="ig-main">` padding `8px 32px 40px`; `html, body` are `overflow: hidden` - the main region scrolls.
+- **Mobile (<=767px)**: rail hides; fixed bottom tab bar (`.ig-tabbar`: Dashboard / Influencers / Engagements / Schedule / More) + a "More" bottom sheet with the full nav (incl. New Deal). Inputs/selects/textareas are forced to 16px (stops iOS focus zoom); tables scroll sideways inside `.ig-main`.
+- **Mobile CSS selects on inline style strings**: `.ig-main [style*="columns: 1fr 1fr"]` collapses two-column form grids to one. A page that wants to stack must write that exact inline `gridTemplateColumns: '1fr 1fr'` string (React serialises it as `grid-template-columns: 1fr 1fr`), and week-grid `repeat(7,...)` is deliberately not matched. Do not reformat those strings.
+- **375px must not scroll horizontally** - check every new page at 375px.
+- **`data-search-primary`** on each page's search input (via `SearchField`, or the attribute directly): it is the target for `/`, Cmd/Ctrl+K and the top-bar search. Pages without a search: no-op.
+- **Presentation never fakes data**: no placeholder numbers, sparkline filler or invented deltas - an empty/zero value renders as empty/zero (`Spark` renders flat stubs for no data).
+
+## Frontend layout
+
+`apps/ignition/` (Next.js static export, `@throttle/{auth,db,ui,domain}` consumed as-is):
 
 ```
-package.json               // @throttle/ignition, deps mirror apps/pitstop
-next.config.js             // output: 'export', transpilePackages
-jsconfig.json
-public/
 src/
   app/
-    layout.js              // <AuthProvider workerUrl=NEXT_PUBLIC_IGNITIONOPS_URL>
-    login/page.js
+    layout.js              // fonts <link>, AuthProvider, ToastProvider
+    globals.css            // Pit Control tokens + motion + mobile shell
+    login/  page.js
     (auth)/
-      layout.js            // Sidebar + Topbar shell + RequireAuth
-      dashboard/page.js
-      influencers/page.js
-      influencers/detail/page.js
-      engagements/page.js
-      engagements/detail/page.js
-      engagements/new/page.js
-      roster/page.js
-      blist/page.js
-      ugc/page.js
-      campaigns/page.js
-      discount-codes/page.js
-      reports/page.js
-      admin/users/page.js
-      admin/import/page.js
+      layout.js            // RequireAuth + IgRail + IgTopbar + mobile tab bar, useSearchShortcut
+      dashboard/ influencers/ engagements/ (detail, new) schedule/ payments/
+      connects/ targets/ roster/ blist/ ugc/ campaigns/ discount-codes/
+      reports/ manual/ admin/ (users, import)
   components/
-    StageBadge.js
-    RatingBadge.js
-    DealTypeBadge.js
-    StageStepper.js
-    AdvanceModal.js
-    InfluencerCard.js
-    EngagementForm.js
-    ShipmentTimeline.js
-    OpenPitstopButton.js
-    IgnitionIcon.js
-  lib/
-    ignitionopsFetch.js    // mirror of csopsFetch.js
-    stages.js              // STAGE_VALUES + STAGE_LABELS + STAGE_PALETTE
-    dealTypes.js
-    nav.js                 // NAV_GROUPS + filterNavByPerms
-  hooks/
+    shell/                 // IgRail, IgTopbar
+    ui/                    // Pit Control primitives (above)
+    StageBadge, RatingBadge, DealTypeBadge, StageStepper, AdvanceModal, NewDealModal,
+    NewInfluencerModal, NewPaymentModal, OpenPitstopButton, ... (feature components)
+  lib/                     // ignitionopsFetch, stages, ugcStages, dealTypes, nav, metrics, ...
 ```
+
 
 ## Deploy
 
