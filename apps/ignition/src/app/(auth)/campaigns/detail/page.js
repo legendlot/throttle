@@ -78,9 +78,14 @@ export default function CampaignDetailPage() {
               {campaign.influencer?.influencer_code && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-4)', marginLeft: 8 }}>{campaign.influencer.influencer_code}</span>}
             </div>
           )}
-          <div style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 4 }}>
-            Planned videos: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>{campaign.video_count}</span> · Agreed total: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>{inr(campaign.agreed_total)}</span>
-          </div>
+          {/* Legacy per-campaign fields — shown only when set (0 of 10 campaigns had either, S412). */}
+          {(campaign.video_count != null || campaign.agreed_total != null) && (
+            <div style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 4 }}>
+              {campaign.video_count != null && <>Planned videos: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>{campaign.video_count}</span></>}
+              {campaign.video_count != null && campaign.agreed_total != null && ' · '}
+              {campaign.agreed_total != null && <>Agreed total: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>{inr(campaign.agreed_total)}</span></>}
+            </div>
+          )}
         </div>
         <StatusPill status={campaign.status} />
         {canManage && (
