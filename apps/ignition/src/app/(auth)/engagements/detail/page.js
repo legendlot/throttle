@@ -37,6 +37,7 @@ export default function EngagementDetailPage() {
   const [advOpen, setAdvOpen] = useState(false);
   const [note, setNote] = useState('');
   const [delOpen, setDelOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [approving, setApproving] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const canManage = !!perms?.ignition_manage;
@@ -64,6 +65,8 @@ export default function EngagementDetailPage() {
   }
 
   async function doDelete() {
+    if (deleting) return;
+    setDeleting(true);
     try {
       const res = await ignitionopsPost('deleteEngagement', { engagement_id: data.engagement.id }, session);
       toast(`Deleted ${res.engagement_no}`, 'success');
@@ -77,6 +80,8 @@ export default function EngagementDetailPage() {
         toast(e.message, 'error');
       }
       setDelOpen(false);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -120,7 +125,7 @@ export default function EngagementDetailPage() {
     reload();
   }
 
-  if (err) return <div style={{ color: 'var(--state-error-fg)', padding: 16 }}>Error: {err}</div>;
+  if (err) return <div style={{ color: 'var(--state-error-fg)', padding: 16, fontSize: 14 }}>Error: {err}</div>;
   if (!data) return <Spinner />;
   const e = data.engagement;
   const inf = e.influencer || {};
@@ -137,12 +142,16 @@ export default function EngagementDetailPage() {
   const unlockedWindow = completeness.complete && !locked && unlockActive(e);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1200 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+      <a href="/engagements/" onClick={ev => { ev.preventDefault(); router.push('/engagements/'); }}
+        style={{ fontSize: 13, color: 'var(--text-3)', width: 'max-content', textDecoration: 'none' }}>← Engagements</a>
+
       <DetailHeader e={e} inf={inf} data={data} completeness={completeness} session={session} reload={reload} setAdvOpen={setAdvOpen} canManage={canManage} setDelOpen={setDelOpen} />
 
       <PipelineCard e={e} data={data} canApprove={canApprove} doApprove={doApprove} approving={approving} locked={locked} doUnlock={doUnlock} unlocking={unlocking} unlockedWindow={unlockedWindow} doRelock={doRelock} dataWarnings={dataWarnings} />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+      {/* Card grid — auto-fit columns that fall to one below ~650px of content width. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))', gap: 14, alignItems: 'start' }}>
         <DealTermsCard e={e} paidTotal={data.paid_total} canEdit={canManage} locked={locked} session={session} onSaved={reload} />
 
         <ProductsCard
@@ -204,27 +213,31 @@ export default function EngagementDetailPage() {
 
         <PostLiveCard e={e} canEdit={canManage} locked={locked} session={session} onSaved={reload} />
 
-        <PerformanceCard
-          e={e}
-          videos={data.videos || []}
-          ads={data.ads || []}
-          canEdit={!!perms?.ignition_manage && e.stage === 'live'}
-          session={session}
-          onSaved={reload}
-          platform={inf?.channel_platform}
-          gapReasons={catalogs?.metric_gap_reasons}
-        />
-
         <ComplianceCard e={e} canManage={canManage} locked={locked} session={session} onSaved={reload} />
       </div>
 
+      {/* Performance spans the page under the grid (prototype); editing stays Live-only. */}
+      <PerformanceCard
+        e={e}
+        videos={data.videos || []}
+        ads={data.ads || []}
+        canEdit={!!perms?.ignition_manage && e.stage === 'live'}
+        session={session}
+        onSaved={reload}
+        platform={inf?.channel_platform}
+        gapReasons={catalogs?.metric_gap_reasons}
+      />
+
       <CodesCard engagementId={e.id} canManage={canManage} session={session} />
 
-      <NotesCard data={data} note={note} setNote={setNote} addNote={addNote} />
-
-      <HistoryCard data={data} />
+      {/* Notes and History side by side; stack below ~780px of content width. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))', gap: 14, alignItems: 'start' }}>
+        <NotesCard data={data} note={note} setNote={setNote} addNote={addNote} />
+        <HistoryCard data={data} />
+      </div>
 
       <AdvanceModal
+        key={advOpen ? 'open' : 'closed'}  // remount per open: no stale target / inputs / error
         open={advOpen}
         engagement={e}
         onClose={() => setAdvOpen(false)}
@@ -232,16 +245,18 @@ export default function EngagementDetailPage() {
       />
 
       {delOpen && (
-        <Modal open title={`Delete ${e.engagement_no}?`} onClose={() => setDelOpen(false)}>
-          <div style={{ minWidth: 360, display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
-              This permanently removes the deal and its products, notes and history.
-              Deals with recorded payments can&apos;t be deleted — cancel/close them instead.
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button onClick={() => setDelOpen(false)} style={{ padding: '8px 14px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
-              <button onClick={doDelete} style={{ padding: '8px 14px', background: 'var(--state-error-fg)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Delete deal</button>
-            </div>
+        <Modal
+          open
+          title={`Delete ${e.engagement_no}?`}
+          onClose={() => setDelOpen(false)}
+          onConfirm={doDelete}
+          loading={deleting}
+          confirmLabel="Delete deal"
+          confirmColor="red"
+        >
+          <div style={{ fontSize: 14, color: 'var(--text-2)', lineHeight: 1.5 }}>
+            This permanently removes the deal and its products, notes and history.
+            Deals with recorded payments can&apos;t be deleted — cancel/close them instead.
           </div>
         </Modal>
       )}
