@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, useListNav } from '@throttle/ui';
 import { Modal } from '../../../components/ui/Modal.js';
+import { Card, ProgressBar, budgetTone } from '../../../components/ui/index.js';
 import { Plus, Trash2 } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
 
@@ -50,9 +51,12 @@ export default function CampaignsPage() {
 
   return (
     <div>
-      <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16 }}>
+      <header style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
         <div>
-          <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '.14em', color: 'var(--text-4)', textTransform: 'uppercase' }}>
+            Lists · budgeted groups of deals
+          </div>
+          <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 32, fontWeight: 700, marginTop: 6 }}>
             Campaigns
           </h1>
           <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
@@ -61,55 +65,61 @@ export default function CampaignsPage() {
         </div>
         {canManage && (
           <button onClick={() => setShowNew(true)} style={btnPrimary}>
-            <Plus size={14} strokeWidth={2.5} style={{ marginRight: 6, verticalAlign: '-2px' }} />New Campaign
+            <Plus size={16} strokeWidth={2.5} style={{ marginRight: 6, verticalAlign: '-3px' }} />New campaign
           </button>
         )}
       </header>
 
-      {loading ? <Spinner /> : (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead><tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
-              <th style={th}>Campaign #</th><th style={th}>Campaign</th>
-              <th style={th}>Videos</th><th style={th}>Posted</th>
-              <th style={th}>Budget</th><th style={th}>Consumed</th><th style={th}>Remaining</th>
-              <th style={th}>Status</th>
-              {canManage && <th style={th}></th>}
-            </tr></thead>
-            <tbody>
-              {rows.length === 0 && <tr><td colSpan={canManage ? 9 : 8} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No campaigns yet.</td></tr>}
-              {rows.map((c, i) => (
-                <tr key={c.id} onClick={() => router.push(`/campaigns/detail/?id=${c.id}`)}
-                  onMouseEnter={() => setFocusedIdx(i)}
-                  style={{
-                    borderTop: '1px solid var(--border)', cursor: 'pointer',
-                    background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
-                    outline: focusedIdx === i ? '2px solid #FF6B00' : 'none', outlineOffset: '-2px',
-                  }}>
-                  <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{c.campaign_no}</span></td>
-                  <td style={{ ...td, fontWeight: 600 }}>{c.name || '—'}</td>
-                  <td style={td}>{c.rollup?.linked_count ?? 0}</td>
-                  <td style={td}>{c.rollup?.posted_count ?? 0}</td>
-                  <td style={td}>{c.budget_amount != null ? inr(c.budget_amount) : '—'}</td>
-                  <td style={td}>{inr(c.rollup?.spend)}</td>
-                  {/* null (no budget set) must read '—', never '₹0' — that would look fully spent. */}
-                  <td style={{ ...td, color: c.rollup?.budget_remaining != null && c.rollup.budget_remaining < 0 ? 'var(--state-error-fg)' : undefined }}>
-                    {c.rollup?.budget_remaining != null ? inr(c.rollup.budget_remaining) : '—'}
-                  </td>
-                  <td style={td}><StatusPill status={c.status} /></td>
-                  {canManage && (
-                    <td style={td} onClick={(ev) => ev.stopPropagation()}>
+      {loading ? <Spinner /> : rows.length === 0 ? (
+        <Card style={{ color: 'var(--text-3)', textAlign: 'center', fontSize: 13 }}>No campaigns yet.</Card>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))', gap: 12 }}>
+          {rows.map((c, i) => {
+            const budget = c.budget_amount != null ? Number(c.budget_amount) : null;
+            const spend = Number(c.rollup?.spend) || 0;
+            const pct = budget > 0 ? (spend / budget) * 100 : null;
+            const tone = pct != null ? budgetTone(pct) : 'var(--text-3)';
+            const go = () => router.push(`/campaigns/detail/?id=${c.id}`);
+            return (
+              <Card key={c.id} hover role="button" tabIndex={-1} onClick={go}
+                onMouseEnter={() => setFocusedIdx(i)}
+                className={`ig-row${focusedIdx === i ? ' ig-row-focus' : ''}`}
+                style={{ display: 'flex', flexDirection: 'column', gap: 14, cursor: 'pointer', position: 'relative' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent-hi)', fontWeight: 600 }}>{c.campaign_no}</div>
+                    <div style={{ fontFamily: 'var(--font-cond)', fontSize: 19, fontWeight: 700, marginTop: 2, overflowWrap: 'anywhere' }}>{c.name || '—'}</div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }} onClick={(ev) => ev.stopPropagation()}>
+                    <StatusPill status={c.status} />
+                    {canManage && (
                       <button
                         onClick={() => setDelTarget(c)}
                         title="Delete campaign"
                         style={{ padding: '4px 8px', background: 'transparent', color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
                       ><Trash2 size={13} /></button>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 13, marginBottom: 6 }}>
+                    <span style={{ color: 'var(--text-3)' }}>
+                      Consumed <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)', fontWeight: 700 }}>{inr(c.rollup?.spend)}</span>
+                      {budget != null && <> of {inr(budget)}</>}
+                    </span>
+                    {pct != null && <span style={{ fontFamily: 'var(--font-mono)', color: tone }}>{Math.round(pct)}%</span>}
+                  </div>
+                  {/* No budget set → no bar and no remaining (null must never read as ₹0 / fully spent). */}
+                  {pct != null && <ProgressBar pct={pct} color={tone} delay={300 + Math.min(i, 12) * 50} />}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, paddingTop: 12, borderTop: '1px solid var(--row-divider)' }}>
+                  <CardStat label="Posted" value={c.rollup?.posted_count ?? 0} sub={`/${c.rollup?.linked_count ?? 0}`} />
+                  <CardStat label="Organic views" value={Number(c.rollup?.views || 0).toLocaleString('en-IN')} />
+                  <CardStat label="Orders" value={Number(c.rollup?.orders || 0).toLocaleString('en-IN')} />
+                </div>
+              </Card>
+            );
+          })}
         </div>
       )}
 
@@ -131,7 +141,7 @@ export default function CampaignsPage() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button onClick={() => setDelTarget(null)} style={btnGhost}>Cancel</button>
-              <button onClick={() => doDelete(delTarget)} style={{ ...btnPrimary, background: 'var(--state-error-fg)' }}>Delete</button>
+              <button onClick={() => doDelete(delTarget)} style={{ ...btnPrimary, height: 36, background: 'var(--state-error-fg)', color: '#0a0a0a' }}>Delete</button>
             </div>
           </div>
         </Modal>
@@ -158,11 +168,11 @@ function SpendVsBudget({ rows }) {
 
   return (
     <section style={{ marginTop: 24 }}>
-      <h2 style={{ fontFamily: 'var(--font-cond)', fontSize: 16, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 4 }}>
+      <h2 style={{ fontFamily: 'var(--font-cond)', fontSize: 20, fontWeight: 700, marginBottom: 4 }}>
         Spend vs Budget
       </h2>
       <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12 }}>Cross-campaign spend against agreed budget.</div>
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'auto' }}>
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead><tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
             <th style={th}>Campaign</th><th style={thR}>Budget</th><th style={thR}>Spend</th>
@@ -177,10 +187,10 @@ function SpendVsBudget({ rows }) {
               const over = budget > 0 && spend > budget;
               return (
                 <tr key={c.id} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{c.campaign_no}</span></td>
+                  <td style={td}><span style={{ color: 'var(--accent-hi)', fontWeight: 600 }}>{c.campaign_no}</span></td>
                   <td style={tdR}>{c.budget_amount != null ? inr(budget) : '—'}</td>
                   <td style={tdR}>{inr(spend)}</td>
-                  <td style={{ ...tdR, color: c.budget_amount == null ? 'var(--text-3)' : over ? 'var(--state-error-fg)' : '#4ade80' }}>
+                  <td style={{ ...tdR, color: c.budget_amount == null ? 'var(--text-3)' : over ? 'var(--state-error-fg)' : 'var(--state-success-fg)' }}>
                     {c.budget_amount == null ? '—' : (over ? `-${inr(-delta)}` : inr(delta))}
                   </td>
                   <td style={tdR}>{c.rollup?.linked_count ?? 0}</td>
@@ -197,7 +207,7 @@ function SpendVsBudget({ rows }) {
               <td style={td}>Total</td>
               <td style={tdR}>{inr(totals.budget)}</td>
               <td style={tdR}>{inr(totals.spend)}</td>
-              <td style={{ ...tdR, color: totals.spend > totals.budget ? 'var(--state-error-fg)' : '#4ade80' }}>
+              <td style={{ ...tdR, color: totals.spend > totals.budget ? 'var(--state-error-fg)' : 'var(--state-success-fg)' }}>
                 {totals.spend > totals.budget ? `-${inr(totals.spend - totals.budget)}` : inr(totals.budget - totals.spend)}
               </td>
               <td style={tdR}>{totals.videos}</td>
@@ -216,8 +226,24 @@ function SpendVsBudget({ rows }) {
 }
 
 function StatusPill({ status }) {
-  const map = { active: '#FF6B00', completed: '#4ade80', cancelled: '#888' };
-  return <span style={{ color: map[status] || 'var(--text-2)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{status}</span>;
+  const map = {
+    active: ['var(--state-success-fg)', 'var(--state-success-bg)'],
+    completed: ['#8ea2ff', 'rgba(33,60,226,.22)'],
+    cancelled: ['var(--text-3)', 'var(--chip-neutral)'],
+  };
+  const [fg, bg] = map[status] || ['var(--text-2)', 'var(--chip-neutral)'];
+  return <span style={{ color: fg, background: bg, fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 99, textTransform: 'capitalize' }}>{status}</span>;
+}
+
+function CardStat({ label, value, sub }) {
+  return (
+    <div>
+      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 700 }}>
+        {value}{sub && <span style={{ color: 'var(--text-4)', fontSize: 13 }}>{sub}</span>}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text-4)' }}>{label}</div>
+    </div>
+  );
 }
 
 function NewCampaignModal({ session, onClose, onCreated }) {
@@ -255,7 +281,7 @@ function NewCampaignModal({ session, onClose, onCreated }) {
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button onClick={onClose} style={btnGhost}>Cancel</button>
           <button onClick={submit} disabled={busy || !name.trim()}
-            style={{ ...btnGhost, background: '#FF6B00', color: '#fff', borderColor: '#FF6B00', opacity: busy || !name.trim() ? 0.6 : 1 }}>
+            style={{ ...btnGhost, background: 'var(--accent)', color: '#0a0a0a', borderColor: 'var(--accent)', opacity: busy || !name.trim() ? 0.6 : 1 }}>
             {busy ? 'Creating…' : 'Create'}
           </button>
         </div>
@@ -277,6 +303,6 @@ const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterS
 const thR = { ...th, textAlign: 'right' };
 const td = { padding: '10px 12px' };
 const tdR = { padding: '10px 12px', textAlign: 'right' };
-const inputStyle = { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 13, width: '100%', boxSizing: 'border-box' };
-const btnPrimary = { padding: '8px 16px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
+const inputStyle = { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--r-ctl)', padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 13, width: '100%', boxSizing: 'border-box' };
+const btnPrimary = { height: 42, padding: '0 16px', background: 'var(--text-1)', color: 'var(--bg)', border: 'none', borderRadius: 'var(--r-btn)', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center' };
 const btnGhost = { padding: '8px 16px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em' };
