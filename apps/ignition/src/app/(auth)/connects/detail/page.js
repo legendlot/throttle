@@ -5,27 +5,52 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { ArrowLeft, Send, Star, Lock, FileText, ExternalLink } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
+import { istToday } from '../../../../lib/istDate.js';
 import {
-  CHANNEL_LABELS, CHANNEL_ICONS, CHANNEL_PALETTE,
-  STATUS_LABELS, STATUS_PALETTE, STATUS_VALUES,
+  CHANNEL_LABELS, CHANNEL_ICONS, STATUS_LABELS, STATUS_VALUES,
 } from '../../../../lib/connects.js';
+import { Card, SectionTitle, Avatar, FilterSelect } from '../../../../components/ui/index.js';
 
 function shortTime(iso) {
   if (!iso) return '';
-  return new Date(iso).toLocaleString();
+  return new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 }
 
-function ChannelBadge({ channel }) {
-  const Icon = CHANNEL_ICONS[channel];
-  const pal = CHANNEL_PALETTE[channel] || { fg: 'var(--text-3)', bg: 'var(--surface-2)' };
+function clockTime(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+}
+
+// Day key + chip label for the centred date chips (e.g. "TUE 07 OCT"), on the IST calendar.
+function dayKey(iso) {
+  return iso ? istToday(new Date(iso).getTime()) : '';
+}
+function dayLabel(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' }).replace(/,/g, '').toUpperCase();
+}
+
+function relTime(iso) {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return 'just now';
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+const metaStyle = { fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-4)' };
+
+function DateChip({ iso }) {
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      padding: '2px 8px', borderRadius: 999, background: pal.bg, color: pal.fg,
-      fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)',
-    }}>
-      {Icon && <Icon size={11} />} {CHANNEL_LABELS[channel] || channel}
-    </span>
+    <div style={{
+      alignSelf: 'center', ...metaStyle, padding: '4px 10px', borderRadius: 99, background: 'var(--bg)',
+    }}>{dayLabel(iso)}</div>
   );
 }
 
@@ -33,20 +58,21 @@ function Bubble({ m }) {
   // Internal note (e.g. the "↪ Transferred to Influencer team" handoff) — amber, dashed, centered.
   if (m.is_internal || m.kind === 'note') {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 9 }}>
+      <div className="ig-pop" style={{ alignSelf: 'center', maxWidth: '86%' }}>
         <div style={{
-          maxWidth: '86%', padding: '8px 12px', borderRadius: 10,
+          padding: '10px 14px', borderRadius: 14,
           background: 'var(--state-warning-bg)', border: '1px dashed var(--state-warning-fg)',
         }}>
           <div style={{
-            fontSize: 9.5, fontWeight: 700, color: 'var(--state-warning-fg)', textTransform: 'uppercase',
-            letterSpacing: '0.05em', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4,
+            fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 700, color: 'var(--state-warning-fg)',
+            textTransform: 'uppercase', letterSpacing: 'var(--tracking-mid)', marginBottom: 4,
+            display: 'flex', alignItems: 'center', gap: 5,
           }}>
-            <Lock size={10} /> Internal note{m.sent_by_name ? ` · ${m.sent_by_name}` : ''}
+            <Lock size={11} /> Internal note{m.sent_by_name ? ` · ${m.sent_by_name}` : ''}
           </div>
-          <div style={{ fontSize: 13, color: 'var(--text-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>
-          <div style={{ marginTop: 4, fontSize: 9.5, color: 'var(--text-3)', textAlign: 'right' }}>{shortTime(m.created_at)}</div>
+          <div style={{ fontSize: 14, lineHeight: 1.45, color: 'var(--text-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>
         </div>
+        <div style={{ ...metaStyle, marginTop: 4, textAlign: 'center' }}>{clockTime(m.created_at)}</div>
       </div>
     );
   }
@@ -55,40 +81,59 @@ function Bubble({ m }) {
   // arbitrary customer markup can't run or escape.
   const emailHtml = m.body_html ? m.body_html : null;
   const isImage = m.kind === 'image' && m.media_url;
+  const side = isIn ? 'flex-start' : 'flex-end';
+  const fg = isIn ? 'var(--text-1)' : 'var(--accent-fg)';
   return (
-    <div style={{ display: 'flex', justifyContent: isIn ? 'flex-start' : 'flex-end', marginBottom: 9 }}>
+    <div className="ig-pop" style={{
+      alignSelf: side, alignItems: side, display: 'flex', flexDirection: 'column', gap: 4,
+      maxWidth: emailHtml ? '92%' : '70%', width: emailHtml ? 560 : undefined, minWidth: 0,
+    }}>
       <div style={{
-        maxWidth: emailHtml ? '92%' : '74%', padding: '8px 12px', borderRadius: 12,
-        borderBottomLeftRadius: isIn ? 3 : 12, borderBottomRightRadius: isIn ? 12 : 3,
-        background: isIn ? 'var(--surface)' : 'var(--accent-bg)',
-        border: `1px solid ${isIn ? 'var(--border)' : 'var(--border-2)'}`,
+        padding: emailHtml ? 8 : '10px 14px', borderRadius: 16, maxWidth: '100%', boxSizing: 'border-box',
+        width: emailHtml ? '100%' : undefined,
+        background: emailHtml ? 'var(--surface-raised)' : isIn ? 'var(--chip-neutral)' : 'var(--accent)',
+        border: emailHtml ? '1px solid var(--border-2)' : 'none',
+        color: emailHtml ? 'var(--text-1)' : fg, fontSize: 14, lineHeight: 1.45,
       }}>
         {m.media_url && (isImage ? (
-          <a href={m.media_url} target="_blank" rel="noreferrer" style={{ display: 'block', marginBottom: m.body ? 6 : 2 }}>
+          <a href={m.media_url} target="_blank" rel="noreferrer" style={{ display: 'block', marginBottom: m.body ? 6 : 0 }}>
             <img src={m.media_url} alt={m.media_filename || 'image'}
-              style={{ maxWidth: 240, maxHeight: 240, borderRadius: 8, display: 'block' }} />
+              style={{ maxWidth: '100%', width: 240, maxHeight: 240, objectFit: 'cover', borderRadius: 10, display: 'block' }} />
           </a>
         ) : (
           <a href={m.media_url} target="_blank" rel="noreferrer" style={{
-            display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11, color: 'var(--accent)',
+            display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12, fontWeight: 600,
+            color: isIn || emailHtml ? 'var(--accent)' : fg, textDecoration: isIn || emailHtml ? 'none' : 'underline',
+            wordBreak: 'break-all',
           }}>
-            <FileText size={12} />{m.media_filename || 'media'}
+            <FileText size={13} style={{ flexShrink: 0 }} />{m.media_filename || 'media'}
           </a>
         ))}
         {emailHtml ? (
           <iframe sandbox="" srcDoc={emailHtml} title="email body"
             style={{
-              width: 'min(560px, 70vw)', minHeight: 90, maxHeight: 460, border: 'none',
-              background: '#fff', borderRadius: 6, display: 'block',
+              width: '100%', minHeight: 90, maxHeight: 460, border: 'none',
+              background: '#fff', borderRadius: 10, display: 'block',
             }} />
         ) : m.body ? (
-          <div style={{ fontSize: 13, color: 'var(--text-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>
+          <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>
         ) : null}
-        <div style={{ marginTop: 4, fontSize: 9.5, color: 'var(--text-3)', display: 'flex', gap: 7, alignItems: 'center', justifyContent: 'flex-end' }}>
-          {!isIn && m.sent_by_name && <span>{m.sent_by_name}</span>}
-          <span>{shortTime(m.created_at)}</span>
-        </div>
       </div>
+      <span style={metaStyle}>
+        {clockTime(m.created_at)}{!isIn && m.sent_by_name ? ` · ${m.sent_by_name}` : ''}
+      </span>
+    </div>
+  );
+}
+
+function KV({ label, children }) {
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+      padding: '7px 0', borderTop: '1px solid var(--row-divider)', fontSize: 14,
+    }}>
+      <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{label}</span>
+      <span style={{ textAlign: 'right', minWidth: 0, wordBreak: 'break-word' }}>{children}</span>
     </div>
   );
 }
@@ -120,7 +165,7 @@ export default function ConnectDetailPage() {
   }, [data?.messages?.length]);
 
   async function send() {
-    if (!text.trim()) return;
+    if (sending || !text.trim()) return;
     setSending(true);
     setSendErr(null);
     try {
@@ -160,11 +205,11 @@ export default function ConnectDetailPage() {
   }
 
   async function returnToPitstop() {
-    if (!confirm('Return this conversation to the Pitstop CS team? It leaves Connects and goes back to their inbox.')) return;
+    if (!confirm('Send this conversation back to the Pitstop CS team? It leaves Connects and goes back to their inbox.')) return;
     setReturning(true);
     try {
       await ignitionopsPost('returnConnect', { thread_id: threadId }, session);
-      toast('Returned to Pitstop CS', 'success');
+      toast('Sent back to Pitstop CS', 'success');
       router.push('/connects/');
     } catch (e) {
       toast(e.message, 'error');
@@ -189,167 +234,220 @@ export default function ConnectDetailPage() {
   const composerDisabled = !isEmail && !inWindow;
   const disabledReason = 'Outside the 24h reply window — wait for the customer to message again.';
 
+  const channelLabel = CHANNEL_LABELS[t.channel] || t.channel || '';
+  const ChannelIcon = CHANNEL_ICONS[t.channel];
+  const handleLine = t.customer_handle && t.customer_handle !== who ? t.customer_handle : null;
+  const sendDisabled = sending || !text.trim();
+
+  // Date chips: one per calendar day, before that day's first message.
+  const items = [];
+  let lastDay = '';
+  messages.forEach(m => {
+    const k = dayKey(m.created_at);
+    if (k && k !== lastDay) { items.push(<DateChip key={`d-${k}`} iso={m.created_at} />); lastDay = k; }
+    items.push(<Bubble key={m.id} m={m} />);
+  });
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 920 }}>
-      {/* Header */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button onClick={() => router.push('/connects/')} style={iconBtn} title="Back to Connects">
-          <ArrowLeft size={16} />
-        </button>
-        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 20, fontWeight: 700, letterSpacing: '0.03em' }}>
-          {who}
-        </h1>
-        <ChannelBadge channel={t.channel} />
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <select
-            value={connect.status || 'new'}
-            onChange={e => changeStatus(e.target.value)}
-            style={{
-              background: 'var(--surface-2)', color: 'var(--text-1)',
-              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-              padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 12,
-            }}
-          >
-            {STATUS_VALUES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
-          </select>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
+      {/* Thread card */}
+      <Card padding="0" className="ig-up" style={{
+        flex: '999 1 480px', minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      }}>
+        {/* Header */}
+        <div style={{
+          display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12, padding: '14px 18px',
+          borderBottom: '1px solid var(--border)',
+        }}>
+          <button onClick={() => router.push('/connects/')} style={iconBtn} className="ig-ghost-btn" title="Back to Connects">
+            <ArrowLeft size={16} />
+          </button>
+          <Avatar name={who} seed={threadId} size={40} />
+          <div style={{ flex: '1 1 160px', minWidth: 0 }}>
+            <h1 style={{
+              margin: 0, fontFamily: 'var(--font-cond)', fontSize: 18, fontWeight: 700, lineHeight: 1.25,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {who}
+            </h1>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+              {ChannelIcon && <ChannelIcon size={12} />}
+              <span>{channelLabel}</span>
+              {handleLine && <span>· {handleLine}</span>}
+              {t.ignition_transferred_at && <span>· transferred by Pitstop CS {relTime(t.ignition_transferred_at)}</span>}
+            </div>
+          </div>
           <button
             onClick={returnToPitstop}
             disabled={returning}
+            className="ig-ghost-btn"
             title="Send this conversation back to the Pitstop CS team"
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              padding: '6px 12px', background: 'var(--surface-2)', color: 'var(--text-2)',
-              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-              fontFamily: 'var(--font-mono)', fontSize: 12,
+              height: 36, padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6,
+              borderRadius: 10, border: '1px solid var(--border-3)', background: 'transparent',
+              color: 'var(--text-1)', font: 'inherit', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
               cursor: returning ? 'not-allowed' : 'pointer', opacity: returning ? 0.5 : 1,
             }}
           >
-            <ArrowLeft size={13} /> {returning ? 'Returning…' : 'Return to Pitstop'}
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--state-success)' }} />
+            {returning ? 'Sending back…' : 'Send back to Pitstop'}
           </button>
-          {promoted && influencer ? (
-            <a
-              href={`/influencers/detail/?id=${influencer.id}`}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '6px 14px', background: 'var(--state-success-bg)', color: 'var(--state-success-fg)',
-                border: '1px solid var(--state-success-fg)', borderRadius: 'var(--radius-sm)',
-                fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
-                letterSpacing: '0.04em', textDecoration: 'none',
-              }}
-            >
-              <Star size={13} /> {influencer.influencer_code} <ExternalLink size={12} />
-            </a>
+        </div>
+
+        {/* Handoff banner */}
+        {connect.thread_id && (
+          <div style={{
+            margin: '12px 18px 0', padding: '10px 14px', borderRadius: 'var(--r-row)',
+            background: 'var(--state-warning-bg)', border: '1px dashed var(--state-warning-fg)',
+            color: 'var(--text-2)', fontSize: 13, display: 'flex', alignItems: 'flex-start', gap: 8,
+          }}>
+            <Lock size={13} style={{ color: 'var(--state-warning-fg)', flexShrink: 0, marginTop: 2 }} />
+            <span>
+              Transferred from Pitstop CS{t.ignition_transferred_at ? ` · ${shortTime(t.ignition_transferred_at)}` : ''}.
+              Channel ownership stays with Pitstop — your replies go out through their channel.
+            </span>
+          </div>
+        )}
+
+        {/* Email subject header */}
+        {isEmail && t.subject && (
+          <div style={{
+            margin: '12px 18px 0', padding: '8px 14px', borderRadius: 'var(--r-ctl)',
+            background: 'var(--input)', border: '1px solid var(--border-2)',
+            fontSize: 14, color: 'var(--text-1)', wordBreak: 'break-word',
+          }}>
+            <span style={{
+              fontFamily: 'var(--font-mono)', color: 'var(--text-4)', fontSize: 11, textTransform: 'uppercase',
+              letterSpacing: 'var(--tracking-wide)', marginRight: 8,
+            }}>Subject</span>
+            {t.subject}
+          </div>
+        )}
+
+        {/* Conversation */}
+        <div ref={scrollRef} style={{
+          display: 'flex', flexDirection: 'column', gap: 10, padding: 20,
+          minHeight: 240, maxHeight: '58vh', overflowY: 'auto',
+        }}>
+          {messages.length === 0 ? (
+            <div style={{ color: 'var(--text-3)', textAlign: 'center', padding: 20 }}>No messages yet.</div>
+          ) : items}
+        </div>
+
+        {/* Composer — multi-line; sends on Cmd/Ctrl+Enter only (plain Enter = newline). */}
+        <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)' }}>
+          {composerDisabled ? (
+            <div style={{
+              color: 'var(--state-warning-fg)', fontSize: 13, padding: '8px 0',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+              <Lock size={13} style={{ flexShrink: 0 }} /> {disabledReason}
+            </div>
           ) : (
-            <button
-              onClick={promote}
-              disabled={promoting}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '6px 14px', background: '#FF6B00', color: '#fff',
-                border: 'none', borderRadius: 'var(--radius-sm)',
-                fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
-                letterSpacing: '0.06em', textTransform: 'uppercase',
-                cursor: promoting ? 'not-allowed' : 'pointer', opacity: promoting ? 0.5 : 1,
-              }}
-            >
-              <Star size={13} /> {promoting ? 'Promoting…' : 'Promote to influencer'}
-            </button>
+            <>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <textarea
+                  value={text}
+                  onChange={e => setText(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) send(); }}
+                  placeholder={`Reply on ${channelLabel || 'this channel'}… (Cmd/Ctrl+Enter to send)`}
+                  rows={2}
+                  style={{
+                    flex: 1, minWidth: 0, minHeight: 44, boxSizing: 'border-box', resize: 'vertical',
+                    background: 'var(--input)', color: 'var(--text-1)',
+                    border: '1px solid var(--border-2)', borderRadius: 'var(--r-btn)',
+                    padding: '11px 14px', font: 'inherit', fontSize: 14, lineHeight: 1.45, outline: 'none',
+                  }}
+                />
+                <button
+                  onClick={send}
+                  disabled={sendDisabled}
+                  className={sendDisabled ? undefined : 'ig-cta'}
+                  style={{
+                    height: 44, padding: '0 18px', flexShrink: 0,
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    background: 'var(--accent)', color: 'var(--accent-fg)',
+                    border: 'none', borderRadius: 'var(--r-btn)',
+                    font: 'inherit', fontSize: 14, fontWeight: 700,
+                    cursor: sendDisabled ? 'not-allowed' : 'pointer',
+                    opacity: sendDisabled ? 0.5 : 1,
+                  }}
+                >
+                  <Send size={14} /> {sending ? 'Sending…' : 'Send'}
+                </button>
+              </div>
+              {sendErr && (
+                <div style={{ color: 'var(--state-error-fg)', fontSize: 13, marginTop: 8 }}>{sendErr}</div>
+              )}
+            </>
           )}
         </div>
-      </div>
+      </Card>
 
-      {/* Handoff banner */}
-      {connect.thread_id && (
-        <div style={{
-          padding: '10px 14px', borderRadius: 'var(--radius-md)',
-          background: 'var(--state-warning-bg)', border: '1px dashed var(--state-warning-fg)',
-          color: 'var(--text-1)', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8,
-        }}>
-          <Lock size={13} style={{ color: 'var(--state-warning-fg)' }} />
-          Transferred from Pitstop CS{t.ignition_transferred_at ? ` · ${shortTime(t.ignition_transferred_at)}` : ''}.
-          Channel ownership stays with Pitstop — your replies go out through their channel.
-        </div>
-      )}
-
-      {/* Email subject header */}
-      {isEmail && t.subject && (
-        <div style={{
-          padding: '8px 14px', borderRadius: 'var(--radius-md)',
-          background: 'var(--surface-2)', border: '1px solid var(--border)',
-          fontSize: 13, color: 'var(--text-1)',
-        }}>
-          <span style={{ color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', marginRight: 8 }}>Subject</span>
-          {t.subject}
-        </div>
-      )}
-
-      {/* Conversation */}
-      <div ref={scrollRef} style={{
-        background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-md)', padding: 14,
-        maxHeight: '58vh', overflowY: 'auto',
-      }}>
-        {messages.length === 0 ? (
-          <div style={{ color: 'var(--text-3)', textAlign: 'center', padding: 20 }}>No messages yet.</div>
-        ) : messages.map(m => <Bubble key={m.id} m={m} />)}
-      </div>
-
-      {/* Composer */}
-      <div style={{
-        background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-md)', padding: 12,
-      }}>
-        {composerDisabled ? (
-          <div style={{
-            color: 'var(--state-warning-fg)', fontSize: 12.5, padding: '8px 4px',
-            display: 'flex', alignItems: 'center', gap: 6,
-          }}>
-            <Lock size={13} /> {disabledReason}
-          </div>
-        ) : (
-          <>
-            <textarea
-              value={text}
-              onChange={e => setText(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send(); }}
-              placeholder={isEmail ? 'Write a reply… (Cmd/Ctrl+Enter to send)' : 'Write a reply… (Cmd/Ctrl+Enter to send)'}
-              rows={3}
-              style={{
-                width: '100%', boxSizing: 'border-box', resize: 'vertical',
-                background: 'var(--surface-2)', color: 'var(--text-1)',
-                border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-                padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 13,
-              }}
-            />
-            {sendErr && (
-              <div style={{ color: 'var(--state-error-fg)', fontSize: 12, marginTop: 6 }}>{sendErr}</div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-              <button
-                onClick={send}
-                disabled={sending || !text.trim()}
+      {/* Right column */}
+      <aside style={{ flex: '1 1 340px', maxWidth: '100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Card className="ig-up" style={{ animationDelay: '80ms' }}>
+          <SectionTitle size={15} style={{ marginBottom: 4 }}>Link to influencer</SectionTitle>
+          {promoted && influencer ? (
+            <>
+              <div style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 12 }}>Linked to</div>
+              <a
+                href={`/influencers/detail/?id=${influencer.id}`}
+                className="ig-ghost-btn"
                 style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                  padding: '8px 16px', background: '#FF6B00', color: '#fff',
-                  border: 'none', borderRadius: 'var(--radius-sm)',
-                  fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
-                  letterSpacing: '0.06em', textTransform: 'uppercase',
-                  cursor: (sending || !text.trim()) ? 'not-allowed' : 'pointer',
-                  opacity: (sending || !text.trim()) ? 0.5 : 1,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 42,
+                  borderRadius: 'var(--r-btn)', border: '1px solid var(--border-3)',
+                  fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 700, color: 'var(--accent)',
                 }}
               >
-                <Send size={13} /> {sending ? 'Sending…' : 'Send'}
+                <Star size={14} /> {influencer.influencer_code} <ExternalLink size={13} />
+              </a>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 12 }}>
+                Not linked yet. Creates a new influencer record from this thread’s handle / phone / email.
+              </div>
+              <button
+                onClick={promote}
+                disabled={promoting}
+                className={promoting ? undefined : 'ig-cta'}
+                style={{
+                  width: '100%', height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  borderRadius: 'var(--r-btn)', border: 'none', background: 'var(--text-1)', color: 'var(--bg)',
+                  font: 'inherit', fontSize: 14, fontWeight: 700,
+                  cursor: promoting ? 'not-allowed' : 'pointer', opacity: promoting ? 0.5 : 1,
+                }}
+              >
+                <Star size={14} /> {promoting ? 'Creating…' : 'Create influencer'}
               </button>
-            </div>
-          </>
-        )}
-      </div>
+            </>
+          )}
+        </Card>
+
+        <Card className="ig-up" style={{ animationDelay: '140ms' }}>
+          <SectionTitle size={15} style={{ marginBottom: 8 }}>Details</SectionTitle>
+          <KV label="Channel">{channelLabel || '—'}</KV>
+          {t.customer_handle && <KV label="Handle">{t.customer_handle}</KV>}
+          {t.customer_phone && <KV label="Phone"><span style={{ fontFamily: 'var(--font-mono)' }}>{t.customer_phone}</span></KV>}
+          {t.customer_email && <KV label="Email">{t.customer_email}</KV>}
+          {t.ignition_transferred_at && <KV label="Transferred">{shortTime(t.ignition_transferred_at)}</KV>}
+          {!isEmail && <KV label="Reply window">{inWindow
+            ? <span style={{ color: 'var(--state-success-fg)' }}>Open</span>
+            : <span style={{ color: 'var(--state-warning-fg)' }}>Closed</span>}</KV>}
+          <KV label="Status">
+            <FilterSelect value={connect.status || 'new'} onChange={e => changeStatus(e.target.value)} width={140} style={{ height: 34 }}>
+              {STATUS_VALUES.map(s => <option key={s} value={s}>{STATUS_LABELS[s] || s}</option>)}
+            </FilterSelect>
+          </KV>
+        </Card>
+      </aside>
     </div>
   );
 }
 
 const iconBtn = {
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  width: 32, height: 32, background: 'var(--surface-2)', color: 'var(--text-1)',
-  border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  width: 34, height: 34, background: 'transparent', color: 'var(--text-2)',
+  border: '1px solid var(--border-2)', borderRadius: 10, cursor: 'pointer',
 };
