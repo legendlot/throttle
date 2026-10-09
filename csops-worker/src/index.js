@@ -5254,14 +5254,17 @@ async function getWaThread(params, auth, env) {
   const { thread } = await findOrCreateWaThread(t.customer_phone, env, { create: false });
   if (!thread) return ok({ thread: null, messages: [], reason: 'no_thread_yet' });
 
+  // NEWEST N, returned oldest-first (desc + reverse): an asc+limit read hid a long thread's latest
+  // messages — the ones being answered (S413; bridgeGetThread 82cbe702 had the same bug). direction.desc:
+  // a bot reply is written with its inbound's created_at, and after the reverse the inbound comes first.
   const msgsRes = await sb(
-    `/rest/v1/cs_wa_messages?thread_id=eq.${thread.id}&select=*&order=created_at.asc&limit=500`,
+    `/rest/v1/cs_wa_messages?thread_id=eq.${thread.id}&select=*&order=created_at.desc,direction.desc,id.desc&limit=500`,
     env,
   );
 
   return ok({
     thread,
-    messages: msgsRes.data || [],
+    messages: (msgsRes.data || []).reverse(),
     within_customer_window: withinCustomerWindow(thread),
     provider_wired: false,   // flip to true in Phase C2
   });
@@ -5953,8 +5956,9 @@ async function getWaConversation(params, auth, env) {
   // Internal notes live ONLY in our DB (Chatwoot never sees them), so merge the
   // local notes back into the live pull — otherwise notes added on a WA thread
   // vanish on the next re-pull.
+  // Newest 200 notes (order irrelevant here — merged and re-sorted below; S413).
   const notesRes = await sb(
-    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}&is_internal=eq.true&select=*&order=created_at.asc&limit=200`,
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}&is_internal=eq.true&select=*&order=created_at.desc,direction.desc,id.desc&limit=200`,
     env,
   );
   const tsOf = (m) => new Date(m.received_at || m.sent_at || m.created_at || 0).getTime();
@@ -7865,8 +7869,11 @@ async function sendWaAttachmentViaRelay(thread, file, auth, env) {
 // source → full local history; no Chatwoot pull, no attribution overlay). Window from
 // the local authoritative column.
 async function getWaConversationLocal(thread, env) {
-  const r = await sb(`/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}&select=*&order=created_at.asc&limit=1000`, env);
-  const messages = r.data || [];
+  // NEWEST N, returned oldest-first (desc + reverse): an asc+limit read hid a long thread's latest
+  // messages — the ones being answered (S413; bridgeGetThread 82cbe702 had the same bug). direction.desc:
+  // a bot reply is written with its inbound's created_at, and after the reverse the inbound comes first.
+  const r = await sb(`/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}&select=*&order=created_at.desc,direction.desc,id.desc&limit=1000`, env);
+  const messages = (r.data || []).reverse();
   await signInboundWaMedia(messages, env);
   const until = thread.customer_window_until || null;
   const open = until ? (new Date(until).getTime() > Date.now()) : false;
@@ -10713,11 +10720,14 @@ async function getMessagingThread(params, auth, env) {
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
   const thread = tRes.data?.[0];
   if (!thread) return err('Thread not found', 404);
+  // NEWEST N, returned oldest-first (desc + reverse): an asc+limit read hid a long thread's latest
+  // messages — the ones being answered (S413; bridgeGetThread 82cbe702 had the same bug). direction.desc:
+  // a bot reply is written with its inbound's created_at, and after the reverse the inbound comes first.
   const mRes = await sb(
-    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}&select=*&order=created_at.asc&limit=500`,
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}&select=*&order=created_at.desc,direction.desc,id.desc&limit=500`,
     env,
   );
-  const messages = mRes.data || [];
+  const messages = (mRes.data || []).reverse();
   // ⚠️ The NEWEST stamped message, not the oldest. `messages` is ordered created_at.asc, so the
   // old `.find()` returned the FIRST ticket ever raised on this conversation — usually one closed
   // weeks ago. A long-running thread accumulates tickets in chronological blocks because the
@@ -11237,7 +11247,7 @@ async function bridgeGetThread(body, env) {
   // The NEWEST 500, returned oldest-first: on a long thread the latest messages are the ones being
   // replied to, and an asc+limit read cut exactly those off (S412 review; one thread has 702).
   const mRes = await sb(
-    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}&select=*&order=created_at.desc,id.desc&limit=500`, env);
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}&select=*&order=created_at.desc,direction.desc,id.desc&limit=500`, env);
   // Same has_reply contract as bridgeGetConnects, via the same RPC rather than the
   // messages above, so the list view and the detail view can never disagree about
   // whether a thread has been worked (the message fetch is capped at 500).

@@ -558,7 +558,7 @@ export default function InboxPage() {
         }
       } else {
         setConvo(d);
-        setOldestReached(true);   // DB path already returns full history (500)
+        setOldestReached(true);   // DB path returns the newest 500 (full history below that)
       }
       setErr(null);   // self-heal on successful thread load (S177)
     } catch (e) { setErr(e.message); }
@@ -676,7 +676,8 @@ export default function InboxPage() {
     } else {
       el.scrollTop = el.scrollHeight;
     }
-  }, [convo?.messages?.length, selectedId]);
+    // Also keyed on the newest message: a thread at the read cap keeps its length when one arrives.
+  }, [convo?.messages?.length, convo?.messages?.[convo.messages.length - 1]?.id, selectedId]);
 
   function loadOlderMessages() {
     if (loadingOlder || oldestReached) return;
