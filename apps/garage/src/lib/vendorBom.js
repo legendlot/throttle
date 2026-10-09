@@ -41,7 +41,8 @@ const PIECE = new Set(['', '1', 'ea', 'each', 'pc', 'pcs', 'piece', 'pieces', 'n
 const unitKey = (u) => { const k = String(u ?? '').trim().toLowerCase().replace(/\.$/, ''); return PIECE.has(k) ? 'piece' : k; };
 export function perUnit(r) {
   const pu = String(r.price_unit || '').trim();
-  return pu && unitKey(pu) !== unitKey(r.issue_uom) ? pu : '';
+  if (!pu || unitKey(pu) === unitKey(r.issue_uom)) return '';
+  return unitKey(pu) === 'piece' ? 'pcs' : pu;   // never "/ 1" or "/ ."
 }
 
 function priceText(r) {
