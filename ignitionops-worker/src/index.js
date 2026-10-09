@@ -1577,7 +1577,7 @@ async function getOverdueEngagements(url, auth, env) {
 async function getSchedule(url, auth, env) {
   const from = url.searchParams.get('from');
   const to   = url.searchParams.get('to');
-  if (!from || !to) return err('from and to required (YYYY-MM-DD)', 400);
+  if (!isRealIsoDate(from) || !isRealIsoDate(to)) return err('from and to required (YYYY-MM-DD)', 400);
   const f = encodeURIComponent(from), t = encodeURIComponent(to);
   const dateOr = `or=(and(expected_post_date.gte.${f},expected_post_date.lte.${t}),and(post_date.gte.${f},post_date.lte.${t}))`;
   const r = await sb(
@@ -1585,11 +1585,15 @@ async function getSchedule(url, auth, env) {
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  // The query matches EITHER date in range, but a deal sits on the calendar at its effective date
+  // (posted beats planned) — so a deal planned this month and posted in another is dropped here, or
+  // the page would count it in "N in <Month>" and never place it.
   const rows = (r.data || []).map(e => ({
     ...e,
     effective_date: e.post_date || e.expected_post_date,
     is_planned: !e.post_date,
-  })).sort((a, b) => (a.effective_date || '').localeCompare(b.effective_date || ''));
+  })).filter(e => e.effective_date >= from && e.effective_date <= to)
+    .sort((a, b) => (a.effective_date || '').localeCompare(b.effective_date || ''));
   return ok({ engagements: rows, from, to });
 }
 
