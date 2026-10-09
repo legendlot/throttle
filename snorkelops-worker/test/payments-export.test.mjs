@@ -191,3 +191,40 @@ test('an empty range produces a header-only file, never a throw', () => {
   assert.equal(csv, PAYMENTS_EXPORT_COLUMNS.join(','));
   assert.equal(buildPaymentsExportCsv(null), PAYMENTS_EXPORT_COLUMNS.join(','));
 });
+
+import { buildPaymentListCsv, PAYMENT_LIST_EXPORT_COLUMNS } from '../../apps/snorkel/src/lib/paymentsExport.js';
+test('buildPaymentListCsv: every status, paid-only money columns blank on unpaid rows, deep link', () => {
+  const csv = buildPaymentListCsv([
+    { id: 7, request_no: 'PAY-0007', status: 'paid', requested_by_name: 'Kirti', requested_at: '2026-10-08T20:00:00+00:00',
+      payee: { name: 'Anu, Printers' }, purpose: 'Para', invoice_no: 'INV-1', amount_to_pay: '1000.00', currency: 'INR',
+      paid_at: '2026-10-08T19:00:00+00:00', paid_amount: '990.00', payment_ref: 'UTR1', is_urgent: true },
+    { id: 8, request_no: 'PAY-0008', status: 'approved', amount_to_pay: '500.00', payment_ref: 'stale', paid_amount: '500' },
+  ]);
+  const lines = csv.split('\n');
+  assert.equal(lines[0], PAYMENT_LIST_EXPORT_COLUMNS.join(','));
+  assert.equal(lines.length, 3);
+  assert.match(lines[1], /^"?PAY-0007"?,"?Payment"?,"?Paid"?,"?Kirti"?,"?2026-10-09"?,/);   // no request_type → Payment   // requested_at → IST date
+  assert.match(lines[1], /"Anu, Printers"/);
+  assert.match(lines[1], /2026-10-09,"?990"?,"?UTR1"?/);                         // paid on (IST), net, UTR
+  assert.match(lines[1], /,"?Yes"?,/);
+  assert.match(lines[1], /HYPERLINK\(""https:\/\/snorkel\.legendoftoys\.com\/payments\/detail\?id=7""/);
+  assert.match(lines[2], /With Finance/);
+  assert.doesNotMatch(lines[2], /stale/);                                       // no UTR/net on an unpaid row
+});
+
+import { safeText } from '../../apps/snorkel/src/lib/paymentsExport.js';
+test('buildPaymentListCsv: requester text never opens as a formula; Type + category label', () => {
+  assert.equal(safeText('=HYPERLINK("http://x","Invoice")'), `'=HYPERLINK("http://x","Invoice")`);
+  assert.equal(safeText('+91 Vendor'), "'+91 Vendor");
+  assert.equal(safeText('-12'), "'-12");
+  assert.equal(safeText('@sum'), "'@sum");
+  assert.equal(safeText('Anu Printers'), 'Anu Printers');
+  assert.equal(safeText(null), '');
+  const line = buildPaymentListCsv([{ id: 9, request_no: 'PAY-0009', request_type: 'credit_note', status: 'submitted',
+    purpose: '=cmd', category: { category_key: 'material_supply', label: 'Material / Supply' }, category_key: 'material_supply' }]).split('\n')[1];
+  assert.match(line, /^"?PAY-0009"?,"?Credit note"?,/);
+  assert.match(line, /"?'=cmd"?/);
+  assert.match(line, /Material \/ Supply/);
+  assert.doesNotMatch(line, /material_supply/);
+  assert.match(line, /=HYPERLINK\(/);                       // the deep link stays a live formula
+});

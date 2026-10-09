@@ -128,3 +128,61 @@ export function buildPaymentsExportCsv(rows) {
   }
   return out.join('\n');
 }
+
+// ── The request-list export (Prarthi, #bugs 1791444233.835769) ───────────────────────────────
+// What the All Requests / My Requests screen is showing, after its tab and search: one row per
+// REQUEST in any status, not just paid. It reads only what the list already loaded (the
+// getPaymentRequests rows the viewer is allowed to see), so it widens nothing. The invoice link
+// is the same app deep link as above — the files are private behind openDoc.
+export const PAYMENT_LIST_EXPORT_COLUMNS = [
+  'Request No', 'Type', 'Status', 'Requested By', 'Requested On', 'Payee / Vendor', 'Purpose', 'Category',
+  'Invoice No', 'Invoice Date', 'Invoice Total', 'Amount to Pay', 'Currency', 'Needed By',
+  'Linked PO', 'Urgent', 'Paid On', 'Net Paid', 'UTR / Ref', 'Invoice (open in Snorkel)',
+];
+const LIST_STATUS_LABEL = {
+  submitted: 'Submitted', pending_approval: 'Awaiting approval', approved: 'With Finance',
+  held: 'On hold with Finance', paid: 'Paid', rejected: 'Rejected', cancelled: 'Cancelled',
+};
+
+const LIST_TYPE_LABEL = { payment: 'Payment', credit_note: 'Credit note', debit_note: 'Debit note' };
+
+// Free text typed by any requester (purpose, payee, invoice no., PO) must not open as a live
+// formula in Finance's Excel: a leading = + - @ (or tab/CR) gets an apostrophe, which Excel and
+// Sheets show as plain text. Applied to text columns only — never the deep-link formula cell or
+// the numbers.
+export function safeText(v) {
+  const s = v === null || v === undefined ? '' : String(v);
+  return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+}
+
+export function buildPaymentListCsv(rows) {
+  const out = [PAYMENT_LIST_EXPORT_COLUMNS.join(',')];
+  for (const r of rows || []) {
+    const paid = r.status === 'paid';
+    out.push([
+      safeText(r.request_no),
+      LIST_TYPE_LABEL[r.request_type] || r.request_type || 'Payment',
+      LIST_STATUS_LABEL[r.status] || r.status || '',
+      safeText(r.requested_by_name),
+      istDateOf(r.requested_at),
+      safeText(r.payee?.name || r.payee_name),
+      safeText(r.purpose),
+      safeText(r.category?.label || r.category_key),
+      safeText(r.invoice_no),
+      r.invoice_date || '',
+      r.invoice_total ?? '',
+      r.amount_to_pay ?? '',
+      r.currency || 'INR',
+      r.needed_by || '',
+      safeText(r.linked_po_number),
+      r.is_urgent ? 'Yes' : '',
+      paid ? istDateOf(r.paid_at) : '',
+      // Net paid only means something once paid — an unpaid row would otherwise show its
+      // amount-to-pay here and read as money that already left.
+      paid ? (netPaidOf(r) ?? '') : '',
+      paid ? safeText(r.payment_ref) : '',
+      paymentDetailLinkCell(r.id),
+    ].map(csvCell).join(','));
+  }
+  return out.join('\n');
+}

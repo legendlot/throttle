@@ -43,3 +43,20 @@ export function valueRowsForTab(rows, tabKey) {
 export function otherStatusRows(rows) {
   return rows.filter(r => !KNOWN_STATUSES.has(r?.status));
 }
+
+// Free-text search over the loaded rows (Prarthi, #bugs 1791444233.835769): request no., payee,
+// purpose, invoice no., linked PO, UTR, requester and the amounts. Every word must match
+// somewhere in the row, case-insensitive, so "anu 0157" finds PAY-0157 for Anu Printers.
+// Amounts match as typed with or without commas ("124396" or "1,24,396").
+export function searchPaymentRows(rows, q) {
+  const words = String(q ?? '').toLowerCase().replace(/,/g, '').split(/\s+/).filter(Boolean);
+  if (!words.length) return rows;
+  return rows.filter(r => {
+    const hay = [
+      r?.request_no, r?.payee?.name, r?.payee?.payee_code, r?.purpose, r?.invoice_no,
+      r?.linked_po_number, r?.payment_ref, r?.requested_by_name, r?.category_key,
+      r?.amount_to_pay, r?.invoice_total, r?.paid_amount,
+    ].filter(v => v !== null && v !== undefined && v !== '').join(' ').toLowerCase().replace(/,/g, '');
+    return words.every(w => hay.includes(w));
+  });
+}

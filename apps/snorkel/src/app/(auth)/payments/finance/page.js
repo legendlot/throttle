@@ -9,6 +9,8 @@ import { fmtDateShort } from '@/components/format.js';
 import { money } from '../PaymentList.js';
 import PriorTdsWarning from '../PriorTdsWarning.js';
 import { computeTds, netPayable, defaultGstRate, GST_RATES } from '@/lib/tds.js';
+import { searchPaymentRows } from '@/lib/paymentList.js';
+import { useSessionState } from '@/lib/useSessionState.js';
 
 const todayISO = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 
@@ -48,6 +50,8 @@ export default function FinanceQueuePage() {
   const gstFor = r => gstRates[r.id]
     ?? String(defaultGstRate({ poGstRate: r.po_gst_rate, vendorGstRate: r.vendor_gst_rate, payeeGstin: r.payee?.gstin }));
   const [onlyUrgent, setOnlyUrgent] = useState(false);
+  // Search (Prarthi, #bugs 1791444233.835769) — narrows both the to-pay cards and the held list.
+  const [search, setSearch] = useSessionState('payments:finance:search', '');
   // ⚠️ getFinanceQueue admits execute OR super_admin, but markPaymentPaid requires EXECUTE alone
   // (snorkelops:3932). So a super admin could open this queue and click a Mark-paid button that
   // was certain to 403. Paying is finance's — Mahesh and Priya (Afshaan, 2026-09-04) — so super
@@ -90,8 +94,9 @@ export default function FinanceQueuePage() {
   // The queue now carries two states. `ready` is the pile finance works down; `held` is parked
   // and deliberately kept OUT of the value total, the urgent filter and the overdue count —
   // a held request is not money finance can pay today.
-  const ready = useMemo(() => d.requests.filter(r => r.status !== 'held'), [d.requests]);
-  const held  = useMemo(() => d.requests.filter(r => r.status === 'held'), [d.requests]);
+  const found = useMemo(() => searchPaymentRows(d.requests, search), [d.requests, search]);
+  const ready = useMemo(() => found.filter(r => r.status !== 'held'), [found]);
+  const held  = useMemo(() => found.filter(r => r.status === 'held'), [found]);
   const rows = useMemo(
     () => (onlyUrgent ? ready.filter(r => r.is_urgent) : ready),
     [ready, onlyUrgent]);
@@ -217,7 +222,11 @@ export default function FinanceQueuePage() {
         {held.length > 0 && <Kpi label="On hold" value={held.length} />}
       </div>
 
-      <div style={{ marginBottom: 12 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <input value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Search request no., payee, purpose, invoice, PO, amount…"
+          style={{ ...inp, fontSize: 14, flex: '1 1 260px', maxWidth: 480 }} />
+        {search && <Btn onClick={() => setSearch('')}>Clear</Btn>}
         <Btn kind={onlyUrgent ? 'primary' : 'ghost'} onClick={() => setOnlyUrgent(v => !v)}>
           {onlyUrgent ? 'Showing urgent only' : 'Show urgent only'}
         </Btn>
@@ -225,8 +234,8 @@ export default function FinanceQueuePage() {
 
       {rows.length === 0 ? (
         <Panel title="Finance Queue">
-          <EmptyState icon="check-check" title="All clear"
-            hint={held.length
+          <EmptyState icon="check-check" title={search.trim() ? 'No match' : 'All clear'}
+            hint={search.trim() ? 'No request in the queue matches this search.' : held.length
               ? `Nothing is waiting to be paid — ${held.length} request(s) are on hold below.`
               : 'Nothing approved is waiting to be paid.'} />
         </Panel>

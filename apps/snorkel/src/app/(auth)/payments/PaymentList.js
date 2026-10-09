@@ -6,7 +6,10 @@ import { garageFetch, workerFetch, getValidSession } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js';
 import { fmtDateShort } from '@/components/format.js';
-import { STATUS_TABS, isINR, filterByTab, valueRowsForTab, otherStatusRows } from '@/lib/paymentList.js';
+import { STATUS_TABS, isINR, filterByTab, valueRowsForTab, otherStatusRows, searchPaymentRows } from '@/lib/paymentList.js';
+import { buildPaymentListCsv } from '@/lib/paymentsExport.js';
+import { todayStr } from '@throttle/domain';
+import { Download } from 'lucide-react';
 import { netPayable, hasTds } from '@/lib/tds.js';
 import { useSessionState } from '@/lib/useSessionState.js';
 
@@ -47,6 +50,7 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
   const [busy, setBusy] = useState(false);
   const [ref, setRef] = useState('');
   const [tab, setTab] = useSessionState(`payments:${scope}:tab`, 'all');
+  const [search, setSearch] = useSessionState(`payments:${scope}:search`, '');
   const firstLoadDone = useRef(false);
 
   const load = useCallback(async () => {
@@ -69,18 +73,21 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
   // Status tabs (My Requests only — Approvals and Finance are status-pinned by the worker).
   // Client-side over the loaded rows, so the truncation banner must not claim they narrow the read.
   const tabs = scope === 'mine' || scope === 'all' ? STATUS_TABS : null;
-  const visible = tabs ? filterByTab(rows, tab) : rows;
+  // Search narrows whatever the tab shows (Prarthi, #bugs 1791444233.835769) — client-side over
+  // the loaded rows, like the tabs.
+  const searched = searchPaymentRows(rows, search);
+  const visible = tabs ? filterByTab(searched, tab) : searched;
   // A cancelled or rejected request is not money anyone still owes — it must never sit in the
   // headline Value (Siddhanth, #bugs 1788853477: a cancelled ₹2,61,000 kept inflating the total).
   // On the All tab the Value is the ACTIVE value; on a specific tab it is that tab's value, so the
   // Cancelled tab still shows what was cancelled for tracking.
-  const valueRows = valueRowsForTab(rows, tabs ? tab : 'all');
+  const valueRows = valueRowsForTab(searched, tabs ? tab : 'all');
   // Never add rupees to dollars: the headline is INR-only, and any other currency is counted, not summed.
   const total = valueRows.filter(isINR).reduce((a, r) => a + (Number(r.amount_to_pay) || 0), 0);
   const foreign = valueRows.filter(r => !isINR(r)).length;
   // An 8th status (outside every tab's list) must still show up somewhere, or it can hide
   // indefinitely behind a tab count that never mentions it (2026-09-10).
-  const other = tabs ? otherStatusRows(rows).length : 0;
+  const other = tabs ? otherStatusRows(searched).length : 0;
 
   function toggle(id) {
     setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -109,6 +116,26 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
     } finally { setBusy(false); }
   }
 
+  // Spreadsheet of exactly what the list shows (tab + search), with a link to open each request's
+  // invoice in Snorkel. Only on My Requests / All Requests — the rows are ones this viewer can
+  // already open, so the file widens nothing.
+  const canExportList = scope === 'mine' || scope === 'all';
+  function exportList() {
+    if (!visible.length) return;
+    if (truncation && !window.confirm(
+      `This export is PARTIAL — only the first ${truncation.limit} requests were loaded` +
+      (truncation.total != null ? ` of ${truncation.total}` : '') +
+      `. Any total you calculate from it will be too low.\n\nExport anyway?`)) return;
+    const blob = new Blob(['\ufeff' + buildPaymentListCsv(visible)], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `lot-payment-requests-${scope}${tab !== 'all' ? '-' + tab : ''}${search.trim() ? '-search' : ''}`
+      + `${truncation ? '-PARTIAL' : ''}-${todayStr()}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   if (loading) return <Spinner />;
 
   return (
@@ -135,7 +162,7 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
       {tabs && rows.length > 0 && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
           {tabs.map(t => {
-            const n = t.statuses ? rows.filter(r => t.statuses.includes(r.status)).length : rows.length;
+            const n = t.statuses ? searched.filter(r => t.statuses.includes(r.status)).length : searched.length;
             const on = tab === t.key;
             return (
               <button key={t.key} type="button" onClick={() => { setTab(t.key); setSel(new Set()); }}
@@ -176,11 +203,26 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
       )}
 
       {rows.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+          <input value={search} onChange={e => { setSearch(e.target.value); setSel(new Set()); }}
+            placeholder="Search request no., payee, purpose, invoice, PO, UTR, amount…"
+            style={{ flex: '1 1 260px', maxWidth: 480, padding: '9px 12px', fontSize: 14, borderRadius: 8,
+                     border: '1px solid var(--bd)', background: 'var(--surface)', color: 'var(--t1)' }} />
+          {search && <Btn onClick={() => setSearch('')}>Clear</Btn>}
+          {canExportList && (
+            <Btn onClick={exportList} disabled={!visible.length}>
+              <Download size={14} /> Export {visible.length} to spreadsheet
+            </Btn>
+          )}
+        </div>
+      )}
+
+      {rows.length > 0 && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <Kpi label="Requests" value={visible.length} />
           <Kpi label={(tab === 'all' ? 'Value (active)' : 'Value') + (foreign ? ' · INR only' : '')} value={total} format={v => money(v)} />
           {foreign > 0 && <Kpi label="Other currencies" value={foreign} />}
-          {tabs && tab === 'all' && <Kpi label="Paid" value={rows.filter(r => r.status === 'paid').length} />}
+          {tabs && tab === 'all' && <Kpi label="Paid" value={searched.filter(r => r.status === 'paid').length} />}
         </div>
       )}
 
@@ -205,7 +247,8 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
         {visible.length === 0
           ? (loadError && !rows.length
               ? <EmptyState icon="shield" title="Couldn't load requests" hint={/permission/i.test(loadError) ? "You don't have access to this list." : loadError} />
-              : <EmptyState icon="check-check" title="Nothing here" hint={rows.length ? 'No requests in this status.' : emptyHint} />)
+              : <EmptyState icon="check-check" title="Nothing here"
+                  hint={!rows.length ? emptyHint : search.trim() ? 'No requests match this search.' : 'No requests in this status.'} />)
           : (
             <div style={{ overflowX: 'auto' }}>
               <table className="dt">

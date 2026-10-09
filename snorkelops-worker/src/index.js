@@ -2346,7 +2346,8 @@ export default {
             // widens discovery, not reach. Refused outright rather than degraded to `mine` — a list
             // that silently shows only your own would read as "nobody else has raised anything".
             if (scope === 'all' && !canReadAnyPaymentRequest(P)) return err('No permission', 403);
-            let q = `?select=*,payee:payment_payees(id,payee_code,name,payee_type)&order=requested_at.desc&limit=${PAY_PAGE_LIMIT}`;
+            // category embed (S413): the list export prints the label, as the paid export does.
+            let q = `?select=*,payee:payment_payees(id,payee_code,name,payee_type),category:payment_categories(category_key,label)&order=requested_at.desc&limit=${PAY_PAGE_LIMIT}`;
             // A plain requester sees only their own. Approver/executor/super-admin see the queues.
             const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
             if (scope === 'mine' || (scope !== 'all' && !privileged)) q += `&requested_by_user_id=eq.${userId}`;

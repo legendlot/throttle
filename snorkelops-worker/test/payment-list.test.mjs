@@ -51,3 +51,20 @@ test('an unknown 8th status falls into Other, invisible to every named tab', () 
   const other = otherStatusRows(withUnknown);
   assert.deepEqual(other.map(r => r.id), [8]);
 });
+
+import { searchPaymentRows } from '../../apps/snorkel/src/lib/paymentList.js';
+test('searchPaymentRows: every word must match somewhere; amounts with or without commas', () => {
+  const rows = [
+    { id: 1, request_no: 'PAY-0157', payee: { name: 'Anu Printers' }, purpose: 'Colosseum Para', amount_to_pay: '124396.00' },
+    { id: 2, request_no: 'PAY-0156', payee: { name: 'Sandhya Mohan' }, purpose: 'Influencer payment', payment_ref: 'UTR998877' },
+    { id: 3, request_no: 'PAY-0154', payee: null, purpose: 'Battery Terminals', linked_po_number: 'IN-VR-0042' },
+  ];
+  assert.deepEqual(searchPaymentRows(rows, 'anu 0157').map(r => r.id), [1]);
+  assert.deepEqual(searchPaymentRows(rows, 'ANU').map(r => r.id), [1]);
+  assert.deepEqual(searchPaymentRows(rows, '1,24,396').map(r => r.id), [1]);
+  assert.deepEqual(searchPaymentRows(rows, 'utr998877').map(r => r.id), [2]);
+  assert.deepEqual(searchPaymentRows(rows, 'vr-0042').map(r => r.id), [3]);   // null payee is fine
+  assert.deepEqual(searchPaymentRows(rows, 'anu sandhya'), []);                // AND, not OR
+  assert.equal(searchPaymentRows(rows, '   '), rows);                          // blank → unchanged
+  assert.equal(searchPaymentRows(rows, null), rows);
+});
