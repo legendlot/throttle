@@ -5149,6 +5149,12 @@ async function setConnectStatus(body, auth, env) {
   const { thread_id, status } = body;
   if (!thread_id) return err('thread_id required', 400);
   if (!['new', 'working', 'promoted', 'closed'].includes(status)) return err('invalid_status', 400);
+  // "promoted" = an influencer is linked, which only promoteConnect does. Re-picking it on an already
+  // linked connect is fine; picking it bare left a "promoted" connect pointing at nobody (S412 review).
+  if (status === 'promoted') {
+    const cr = await sb(`/rest/v1/connects?thread_id=eq.${encodeURIComponent(thread_id)}&select=influencer_id&limit=1`, env);
+    if (!cr.data?.[0]?.influencer_id) return err('use "Create influencer" — it links the influencer', 409);
+  }
   const r = await sb(`/rest/v1/connects?thread_id=eq.${encodeURIComponent(thread_id)}`, env, {
     method: 'PATCH', prefer: 'return=representation',
     body: JSON.stringify({ status, updated_at: nowIso() }),
@@ -5180,6 +5186,60 @@ async function returnConnect(body, auth, env) {
 
 // Promote a connect into an influencer (lead → CRM record), prefilled from the
 // conversation. Idempotent — returns the existing influencer if already promoted.
+// The existing influencer a connect's person already is, so promoting never mints a duplicate (S412
+// review: both promotes so far, IN1265/IN1272, duplicated IN925/IN882). Matches on the Instagram handle
+// (in channel_link or as channel_name), the last 10 phone digits, or the email — case-insensitive.
+// PostgREST pre-filters (ilike: `_` is a wildcard there), JS decides. Only strict-shaped values reach the
+// or-group, so nothing a customer typed can break out of it. Archived influencers never match.
+export const igHandleOf = link => {
+  const m = /instagram\.com\/([A-Za-z0-9._]{2,30})/i.exec(String(link || ''));
+  return m ? m[1].toLowerCase() : null;
+};
+export const phone10 = p => { const d = String(p || '').replace(/\D/g, ''); return d.length >= 10 ? d.slice(-10) : null; };
+const EMAIL_RE = /^[^\s,()"'*\\]+@[^\s,()"'*\\]+\.[A-Za-z]{2,}$/;
+
+export function pickExistingInfluencer(rows, { handle, phone, email }) {
+  const h = handle && HANDLE_RE.test(handle.replace(/^@+/, '')) ? handle.replace(/^@+/, '').toLowerCase() : null;
+  const p = phone10(phone);
+  const e = email && EMAIL_RE.test(email) ? email.toLowerCase() : null;
+  const hit = (rows || []).filter(r => r.list_status !== 'archived').map(r => {
+    const on = [];
+    if (h && (igHandleOf(r.channel_link) === h || String(r.channel_name || '').trim().replace(/^@+/, '').toLowerCase() === h)) on.push('handle');
+    if (p && phone10(r.contact_number) === p) on.push('phone');
+    if (e && String(r.email || '').trim().toLowerCase() === e) on.push('email');
+    return { r, on };
+  }).filter(x => x.on.length);
+  // Most signals first, then the most filled-in row (the oldest is not always the real one — petrol_hunter's
+  // older IN575 was the empty copy), then the oldest.
+  const filled = r => ['contact_number', 'email', 'channel_link', 'reach', 'influencer_type'].filter(k => r[k] != null && r[k] !== '').length
+    + (r.quality_rating && r.quality_rating !== 'unrated' ? 1 : 0);
+  hit.sort((a, b) => b.on.length - a.on.length || filled(b.r) - filled(a.r)
+    || String(a.r.created_at).localeCompare(String(b.r.created_at)));
+  return hit[0] ? { influencer: hit[0].r, matched_on: hit[0].on, candidates: hit.length } : null;
+}
+
+async function findExistingInfluencer(env, { handle, phone, email }) {
+  const h = handle && HANDLE_RE.test(handle.replace(/^@+/, '')) ? handle.replace(/^@+/, '') : null;
+  const p = phone10(phone);
+  const e = email && EMAIL_RE.test(email) ? email : null;
+  const ors = [];
+  // The link must END at the handle (`/h`, `/h/…`, `/h?…`) — a bare prefix let `/th` fill the row cap.
+  if (h) ors.push(`channel_link.ilike.*instagram.com/${h}`, `channel_link.ilike.*instagram.com/${h}/*`,
+    `channel_link.ilike.*instagram.com/${h}?*`, `channel_name.ilike.${h}`, `channel_name.ilike.@${h}`);
+  // Digits interleaved with `*`, so a number stored as "+91 87077-95109" still matches.
+  if (p) ors.push(`contact_number.ilike.*${p.split('').join('*')}*`);
+  if (e) ors.push(`email.ilike.${e}`);
+  if (!ors.length) return null;
+  const r = await sb(
+    `/rest/v1/influencers?or=(${encodeURIComponent(ors.join(','))})&list_status=neq.archived`
+    + '&select=id,influencer_code,channel_name,channel_link,contact_number,email,list_status,created_at,reach,influencer_type,quality_rating'
+    + '&order=created_at.asc&limit=50',
+    env,
+  );
+  if (!r.ok) return { error: r.data };
+  return pickExistingInfluencer(r.data, { handle: h, phone: p, email: e });
+}
+
 async function promoteConnect(body, auth, env) {
   const gate = requirePerm('ignition_connects', auth); if (gate) return gate;
   const { thread_id } = body;
@@ -5205,18 +5265,37 @@ async function promoteConnect(body, auth, env) {
   const channel_name = handle || phone || email || thread.external_user_id || 'New connect';
   const channel_link = ch === 'instagram' && handle ? `https://instagram.com/${handle}` : null;
 
-  const code = await mintInfluencerCode(env);
-  if (!code) return err('failed_to_mint_influencer_code', 500);
-  const row = {
-    influencer_code: code, created_by: auth.userId,
-    channel_name, person_name: handle || null,
-    channel_platform: platform, channel_platforms: [platform],
-    channel_link, contact_number: phone, email,
-    list_status: 'master',
-  };
-  const ins = await sb(`/rest/v1/influencers`, env, { method: 'POST', body: JSON.stringify([row]) });
-  if (!ins.ok || !ins.data?.[0]) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
-  const influencer = ins.data[0];
+  // Already in the CRM? Link the connect to that influencer, filling only its BLANK contact fields
+  // from the thread — never overwrite what a person typed.
+  const match = await findExistingInfluencer(env, { handle: ch === 'instagram' ? handle : null, phone, email });
+  if (match?.error) return err(`db_error: ${JSON.stringify(match.error)}`, 500);
+  let influencer, matched = null;
+  if (match) {
+    influencer = match.influencer;
+    matched = { on: match.matched_on, candidates: match.candidates };
+    const fill = {};
+    if (!influencer.contact_number && phone) fill.contact_number = phone;
+    if (!influencer.email && email) fill.email = email;
+    if (!influencer.channel_link && channel_link) fill.channel_link = channel_link;
+    if (Object.keys(fill).length) {
+      await sb(`/rest/v1/influencers?id=eq.${influencer.id}`, env, {
+        method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ...fill, updated_at: nowIso() }),
+      });
+    }
+  } else {
+    const code = await mintInfluencerCode(env);
+    if (!code) return err('failed_to_mint_influencer_code', 500);
+    const row = {
+      influencer_code: code, created_by: auth.userId,
+      channel_name, person_name: handle || null,
+      channel_platform: platform, channel_platforms: [platform],
+      channel_link, contact_number: phone, email,
+      list_status: 'master',
+    };
+    const ins = await sb(`/rest/v1/influencers`, env, { method: 'POST', body: JSON.stringify([row]) });
+    if (!ins.ok || !ins.data?.[0]) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
+    influencer = ins.data[0];
+  }
 
   // Link + mark the connect promoted (upsert).
   if (existing) {
@@ -5230,7 +5309,7 @@ async function promoteConnect(body, auth, env) {
       body: JSON.stringify([{ thread_id, channel: ch || null, influencer_id: influencer.id, status: 'promoted', transferred_at: thread.ignition_transferred_at || null }]),
     });
   }
-  return ok({ influencer });
+  return ok({ influencer, matched });
 }
 
 // ────────────────────────────────────────────────────────────────────────────

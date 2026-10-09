@@ -162,7 +162,8 @@ export default function ConnectDetailPage() {
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [data?.messages?.length]);
+    // Keyed on the newest message, not the count: a thread at the 500-message cap keeps its length.
+  }, [data?.messages?.length, data?.messages?.[data.messages.length - 1]?.id]);
 
   async function send() {
     if (sending || !text.trim()) return;
@@ -185,7 +186,10 @@ export default function ConnectDetailPage() {
     try {
       const res = await ignitionopsPost('promoteConnect', { thread_id: threadId }, session);
       const inf = res?.influencer;
-      toast(res?.already_promoted ? 'Already promoted' : `Promoted → ${inf?.influencer_code || ''}`, 'success');
+      toast(res?.already_promoted ? 'Already promoted'
+        : res?.matched ? `Linked to existing ${inf?.influencer_code || ''} (same ${res.matched.on.join(' + ')})`
+          + (res.matched.candidates > 1 ? ` — ${res.matched.candidates - 1} other match${res.matched.candidates > 2 ? 'es' : ''}, check for duplicates` : '')
+        : `Promoted → ${inf?.influencer_code || ''}`, 'success');
       reload();
     } catch (e) {
       toast(e.message, 'error');
@@ -437,7 +441,8 @@ export default function ConnectDetailPage() {
             : <span style={{ color: 'var(--state-warning-fg)' }}>Closed</span>}</KV>}
           <KV label="Status">
             <FilterSelect value={connect.status || 'new'} onChange={e => changeStatus(e.target.value)} width={140} style={{ height: 34 }}>
-              {STATUS_VALUES.map(s => <option key={s} value={s}>{STATUS_LABELS[s] || s}</option>)}
+              {/* "Promoted" means an influencer is linked — reached only through Promote, never picked bare. */}
+              {STATUS_VALUES.map(s => <option key={s} value={s} disabled={s === 'promoted' && !connect.influencer_id}>{STATUS_LABELS[s] || s}</option>)}
             </FilterSelect>
           </KV>
         </Card>
