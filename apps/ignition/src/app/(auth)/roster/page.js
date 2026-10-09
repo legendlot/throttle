@@ -16,13 +16,13 @@ const FILTERS = [
   { id: 'unrated', label: 'Unrated', value: 'unrated' },
 ];
 const VIEWS = [{ value: 'tiles', label: 'Tiles' }, { value: 'list', label: 'List' }];
-const FETCH_LIMIT = 200;
+const PAGE = 500; // getRoster's max; the page reads every page, so the counts below are the whole roster
 
 const ratingKey = r => (RATING_COLORS[r?.quality_rating] ? r.quality_rating : 'unrated');
 const reachOf = r => Number(r.reach) || 0;
 const fmt = n => (n == null || n === '' ? '—' : Number(n).toLocaleString());
 const href = r => `/influencers/detail/?id=${r.id}`;
-// Client-side search over the loaded roster (plan 2026-10-08 S5) — inherits the getRoster limit bug.
+// Client-side search over the whole roster (plan 2026-10-08 S5) — every page is loaded below.
 const rosterFields = r => [r.channel_name, r.person_name, r.influencer_code, r.channel_link, r.influencer_type];
 
 export default function RosterPage() {
@@ -37,22 +37,34 @@ export default function RosterPage() {
 
   useEffect(() => {
     if (!session) return;
+    let live = true;
     setLoading(true);
-    const params = { limit: FETCH_LIMIT };
-    if (rating) params.rating = rating;
-    ignitionopsGet('getRoster', params, session)
-      .then(r => setRows(r.roster || []))
-      .finally(() => setLoading(false));
+    (async () => {
+      const all = [];
+      for (let offset = 0; ; offset += PAGE) {
+        const params = { limit: PAGE, offset };
+        if (rating) params.rating = rating;
+        if (!live) break;
+        const r = await ignitionopsGet('getRoster', params, session);
+        const page = r.roster || [];
+        all.push(...page);
+        if (page.length < PAGE) break;
+      }
+      return all;
+    })()
+      .then(all => { if (live) setRows(all); })
+      .catch(() => { if (live) setRows([]); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
   }, [rating, session]);
 
-  // Counts come from the fetched rows only, and getRoster limits BEFORE its shipped+ filter (backlog
-  // bug), so a per-rating count on "All" understates by up to ~7x vs that rating's own fetch. Only the
-  // ACTIVE option carries a count — the one number the rows on screen actually back (S412 review).
+  // The rows are the whole roster for the active filter, so on "All" every rating's count is exact;
+  // on a single rating only that option's count is backed by the rows on screen.
   const counts = { '': rows.length, green: 0, yellow: 0, red: 0, unrated: 0 };
   rows.forEach(r => { counts[ratingKey(r)] += 1; });
   const filterOptions = FILTERS.map(f => ({
     value: f.value, label: f.label,
-    count: loading || rating !== f.value ? undefined : counts[f.value].toLocaleString(),
+    count: loading || (rating && rating !== f.value) ? undefined : counts[f.value].toLocaleString(),
   }));
 
   return (
@@ -104,7 +116,7 @@ export default function RosterPage() {
       {loading ? <Spinner /> : shown.length === 0 ? (
         <div style={{ color: 'var(--text-3)', textAlign: 'center', padding: 24, fontSize: 13 }}>
           {rows.length
-            ? <>No loaded influencer matches &ldquo;{q.trim()}&rdquo; &mdash; search covers the {rows.length} shown on this page, not the whole roster.</>
+            ? <>No loaded influencer matches &ldquo;{q.trim()}&rdquo; &mdash; searched all {rows.length} on the roster.</>
             : 'No influencers in roster.'}
         </div>
       ) : view === 'list' ? (

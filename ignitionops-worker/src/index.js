@@ -1228,7 +1228,7 @@ async function getEngagementVideos(url, auth, env) {
 }
 
 async function getRoster(url, auth, env) {
-  // Derived: influencers who have at least one engagement past 'shipped'.
+  // Derived: influencers who have at least one engagement at 'shipped' or later.
   const rating = url.searchParams.get('rating');
   const limit = intParam(url, 'limit', 100, { min: 1, max: 500 });
   const offset = intParam(url, 'offset', 0);
@@ -1237,14 +1237,17 @@ async function getRoster(url, auth, env) {
   if (rating) filters.push(`quality_rating=eq.${encodeURIComponent(rating)}`);
   filters.push('list_status=neq.archived');
 
+  // Roster = influencers with at least one engagement in shipped+ stages. The test runs IN SQL, before
+  // limit/offset: `qual` is an !inner embed filtered to shipped+, so an influencer without one drops out
+  // of the result, while `engagements` stays the full deal list. Filtering in JS after the limit hid
+  // every qualifying influencer past the first page of candidates (2026-10-09: 437 qualify, 97 shown).
+  filters.push('qual.stage=in.(shipped,delivered,scheduled,posting,live)');
   const r = await sb(
-    `/rest/v1/influencers?${filters.join('&')}&select=*,engagements:engagements!influencer_id(id,engagement_no,stage,post_date,closed_reason)&order=updated_at.desc&limit=${limit}&offset=${offset}`,
+    `/rest/v1/influencers?${filters.join('&')}&select=*,engagements:engagements!influencer_id(id,engagement_no,stage,post_date,closed_reason),qual:engagements!influencer_id!inner(id)&order=updated_at.desc,id.asc&limit=${limit}&offset=${offset}`,
     env,
   );
   if (!r.ok) return err('db_error', 500);
-  // Roster = influencers with at least one engagement in shipped+ stages.
-  const PROGRESSED = new Set(['shipped','delivered','scheduled','posting','live']);
-  const rows = (r.data || []).filter(i => (i.engagements || []).some(e => PROGRESSED.has(e.stage)));
+  const rows = (r.data || []).map(({ qual, ...i }) => i);
   return ok({ roster: rows, offset, limit });
 }
 
