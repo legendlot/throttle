@@ -35,10 +35,13 @@ export function qtyText(r) {
   return parts.length ? parts.join(' · ') : '';
 }
 
-// A PO line priced per kg (or per set) against a per-piece BOM row must say so.
-function perUnit(r) {
+// A PO line priced per kg (or per set) against a per-piece BOM row must say so. POs write a piece
+// as "pcs" (and 6 lines as "1") where the BOM says "EA" — all the same unit, so no suffix.
+const PIECE = new Set(['', '1', 'ea', 'each', 'pc', 'pcs', 'piece', 'pieces', 'no', 'nos', 'unit', 'units']);
+const unitKey = (u) => { const k = String(u ?? '').trim().toLowerCase().replace(/\.$/, ''); return PIECE.has(k) ? 'piece' : k; };
+export function perUnit(r) {
   const pu = String(r.price_unit || '').trim();
-  return pu && pu.toLowerCase() !== String(r.issue_uom || '').trim().toLowerCase() ? pu : '';
+  return pu && unitKey(pu) !== unitKey(r.issue_uom) ? pu : '';
 }
 
 function priceText(r) {
