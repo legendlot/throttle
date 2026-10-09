@@ -4310,15 +4310,23 @@ async function openPitstopTicket(body, auth, env) {
 // A campaign is now a MARKETING campaign (Reann #3, S273) — it spans influencers and carries a
 // budget. `influencer_id` and `video_count` are legacy columns from the dormant per-influencer
 // construct: both are nullable and left NULL, video count being DERIVED from linked deals.
+// Exact, case-insensitive name clash (campaigns_name_ci_key is lower(name)). Compared in JS: an `ilike`
+// filter reads `_` / `%` / `*` in a name as wildcards, so "Diwali_2026" would clash with "Diwali-2026".
+async function campaignNameClash(env, name, exceptId = null) {
+  const r = await sb(`/rest/v1/campaigns?select=id,name&limit=2000`, env);
+  const n = name.toLowerCase();
+  return (r.data || []).find(c => c.id !== exceptId && String(c.name || '').toLowerCase() === n) || null;
+}
+
 async function createCampaign(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   const name = String(body.name || '').trim();
   if (!name) return err('name required', 400);
   const budget = (body.budget_amount != null && body.budget_amount !== '') ? Number(body.budget_amount) : null;
-  if (budget != null && (isNaN(budget) || budget < 0)) return err('budget_amount must be a non-negative number', 400);
+  if (budget != null && (!Number.isFinite(budget) || budget < 0)) return err('budget_amount must be a non-negative number', 400);
   // Case-insensitive dedupe, matching campaigns_name_ci_key — a friendly 409 beats a raw 23505.
-  const dupe = await sb(`/rest/v1/campaigns?name=ilike.${encodeURIComponent(name)}&select=id,name&limit=1`, env);
-  if (dupe.ok && dupe.data?.[0]) return err(`a campaign named "${dupe.data[0].name}" already exists`, 409);
+  const dupe = await campaignNameClash(env, name);
+  if (dupe) return err(`a campaign named "${dupe.name}" already exists`, 409);
   const yyyy = String(new Date().getUTCFullYear());
   const code = `CMP-${yyyy}-${String(Date.now()).slice(-6)}`;
   const r = await sb(`/rest/v1/campaigns`, env, {
@@ -4387,6 +4395,21 @@ async function updateCampaign(body, auth, env) {
   if (Object.keys(patch).length === 0) return err('no_patch', 400);
   if ('status' in patch && !['active', 'completed', 'cancelled'].includes(patch.status)) {
     return err('invalid_status', 400);
+  }
+  // Same rules as createCampaign: a name is required and unique (case-insensitive, campaigns_name_ci_key),
+  // a budget is blank (= no budget, never ₹0) or a non-negative number.
+  if ('name' in patch) {
+    patch.name = String(patch.name || '').trim();
+    if (!patch.name) return err('name required', 400);
+    const dupe = await campaignNameClash(env, patch.name, body.campaign_id);
+    if (dupe) return err(`a campaign named "${dupe.name}" already exists`, 409);
+  }
+  if ('budget_amount' in patch) {
+    const b = patch.budget_amount;
+    patch.budget_amount = (b == null || b === '') ? null : Number(b);
+    if (patch.budget_amount != null && (!Number.isFinite(patch.budget_amount) || patch.budget_amount < 0)) {
+      return err('budget_amount must be a non-negative number', 400);
+    }
   }
   const r = await sb(`/rest/v1/campaigns?id=eq.${body.campaign_id}`, env, {
     method: 'PATCH',

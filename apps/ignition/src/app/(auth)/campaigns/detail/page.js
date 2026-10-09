@@ -154,7 +154,11 @@ function CampaignDetailPageBody() {
                   <span style={{ color: 'var(--text-2)' }}>{e.engagement_type === 'ugc' ? 'UGC' : 'Video'}</span>
                   <span style={{ color: 'var(--text-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{productLabel(e.product_code, e.product_variant) || '—'}</span>
                   <span style={{ justifySelf: 'start' }}><StagePill stage={e.stage} ugc={e.engagement_type === 'ugc'} /></span>
-                  <NumCell>{inr(e.total_cost != null ? e.total_cost : e.payment_amount)}</NumCell>
+                  {/* A cancelled deal stays linked but is not spend (worker countsTowardSpend) — struck, so the
+                      rows never seem to add up to more than Consumed. */}
+                  {e.stage === 'cancelled'
+                    ? <NumCell><span title="Cancelled — not counted in Consumed" style={{ textDecoration: 'line-through', color: 'var(--text-4)' }}>{inr(e.total_cost != null ? e.total_cost : e.payment_amount)}</span></NumCell>
+                    : <NumCell>{inr(e.total_cost != null ? e.total_cost : e.payment_amount)}</NumCell>}
                   <NumCell>
                     {Math.max(0, num(e.views) - num(e.paid_views)).toLocaleString('en-IN')}
                     {num(e.paid_views) > 0 && <div style={{ fontSize: 11, color: 'var(--text-4)' }}>+ {num(e.paid_views).toLocaleString('en-IN')} paid</div>}
@@ -332,8 +336,10 @@ function AttachModal({ session, campaign, onClose, onAttached }) {
 
 function EditCampaignModal({ session, campaign, onClose, onSaved }) {
   const { showToast: toast } = useToast();
-  const [videoCount, setVideoCount] = useState(campaign.video_count);
-  const [agreedTotal, setAgreedTotal] = useState(campaign.agreed_total ?? '');
+  // Name + budget are the campaign (S273). video_count / agreed_total are legacy and no longer edited
+  // here — the old form re-saved video_count as 1 whenever it was blank.
+  const [name, setName] = useState(campaign.name || '');
+  const [budget, setBudget] = useState(campaign.budget_amount ?? '');
   const [status, setStatus] = useState(campaign.status);
   const [busy, setBusy] = useState(false);
 
@@ -343,8 +349,9 @@ function EditCampaignModal({ session, campaign, onClose, onSaved }) {
       await ignitionopsPost('updateCampaign', {
         campaign_id: campaign.id,
         patch: {
-          video_count: Number(videoCount) || 1,
-          agreed_total: agreedTotal === '' ? null : Number(agreedTotal),
+          // name only when renamed — an unchanged name never needs the clash check
+          ...(name.trim() !== campaign.name ? { name: name.trim() } : {}),
+          budget_amount: budget === '' ? null : Number(budget),
           status,
         },
       }, session);
@@ -356,8 +363,8 @@ function EditCampaignModal({ session, campaign, onClose, onSaved }) {
   return (
     <Modal open title="Edit campaign" onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: 'min(340px, 100%)', minWidth: 0 }}>
-        <Field label="Video count"><input type="number" min={1} value={videoCount} onChange={e => setVideoCount(e.target.value)} style={inputStyle} /></Field>
-        <Field label="Agreed total (₹)"><input type="number" value={agreedTotal} onChange={e => setAgreedTotal(e.target.value)} placeholder="optional" style={inputStyle} /></Field>
+        <Field label="Name"><input value={name} onChange={e => setName(e.target.value)} style={inputStyle} /></Field>
+        <Field label="Budget (₹)"><input type="number" min={0} inputMode="decimal" value={budget} onChange={e => setBudget(e.target.value)} placeholder="blank = no budget" style={inputStyle} /></Field>
         <Field label="Status">
           <select value={status} onChange={e => setStatus(e.target.value)} style={inputStyle}>
             <option value="active">Active</option>
@@ -367,7 +374,7 @@ function EditCampaignModal({ session, campaign, onClose, onSaved }) {
         </Field>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
           <button onClick={onClose} className="ig-ghost-btn" style={btnGhost}>Cancel</button>
-          <button onClick={save} disabled={busy} style={{ ...btnPrimary, opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
+          <button onClick={save} disabled={busy || !name.trim()} style={{ ...btnPrimary, opacity: busy || !name.trim() ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </Modal>
