@@ -11234,8 +11234,10 @@ async function bridgeGetThread(body, env) {
   const thread = tRes.data?.[0];
   if (!thread) return err('Thread not found', 404);
   if (!thread.ignition_connect) return err('Not an Ignition connect', 403);
+  // The NEWEST 500, returned oldest-first: on a long thread the latest messages are the ones being
+  // replied to, and an asc+limit read cut exactly those off (S412 review; one thread has 702).
   const mRes = await sb(
-    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}&select=*&order=created_at.asc&limit=500`, env);
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}&select=*&order=created_at.desc,id.desc&limit=500`, env);
   // Same has_reply contract as bridgeGetConnects, via the same RPC rather than the
   // messages above, so the list view and the detail view can never disagree about
   // whether a thread has been worked (the message fetch is capped at 500).
@@ -11245,7 +11247,7 @@ async function bridgeGetThread(body, env) {
   const has_reply = fRes.ok ? !!(fRes.data || [])[0]?.has_reply : null;
   return ok({
     thread: { ...thread, has_reply },
-    messages: mRes.data || [],
+    messages: (mRes.data || []).reverse(),
     within_customer_window: withinCustomerWindow(thread),
   });
 }
