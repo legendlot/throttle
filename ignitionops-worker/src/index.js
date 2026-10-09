@@ -3193,10 +3193,11 @@ async function shopifyDeactivateDiscount(env, gid) {
   return { ok: true };
 }
 
-// Orders that used a code (paginated, capped). Returns [{order_id,name,date,gross,refunded}].
+// Orders that used a code (paginated, capped, NEWEST first — a capped read keeps the latest orders).
+// Returns [{order_id,name,date,gross,refunded}].
 async function shopifyOrdersForCode(env, code, sinceDate, maxPages = 3) {
   const q = `discount_code:${code}` + (sinceDate ? ` created_at:>=${sinceDate}` : '');
-  const query = `query($q:String!,$cursor:String){ orders(first:50, after:$cursor, query:$q, sortKey:CREATED_AT){ edges{ cursor node{ id name createdAt totalPriceSet{ shopMoney{ amount } } totalRefundedSet{ shopMoney{ amount } } } } pageInfo{ hasNextPage } } }`;
+  const query = `query($q:String!,$cursor:String){ orders(first:50, after:$cursor, query:$q, sortKey:CREATED_AT, reverse:true){ edges{ cursor node{ id name createdAt totalPriceSet{ shopMoney{ amount } } totalRefundedSet{ shopMoney{ amount } } } } pageInfo{ hasNextPage } } }`;
   const out = []; let cursor = null;
   for (let p = 0; p < maxPages; p++) {
     const r = await shopifyGraphql(env, query, { q, cursor });
@@ -3341,8 +3342,10 @@ async function syncOneCoupon(env, coupon, maxPages) {
     const row = e.data?.[0] || {};
     win = { from: row.affiliate_active_from || null, to: row.affiliate_active_to || null, rate: Number(row.commission_rate) || 0 };
   }
-  const since = coupon.last_synced_at ? String(coupon.last_synced_at).slice(0, 10) : null;
-  const ord = await shopifyOrdersForCode(env, coupon.code, since, maxPages);
+  // Every sync re-reads ALL of the code's orders (newest first, capped at maxPages×50; the largest code had 43
+  // on 2026-10-09 — one page). Reading only since the last sync left an order synced before its window opened,
+  // moved or closed — or refunded later — on its stale eligibility/net forever (S413 review).
+  const ord = await shopifyOrdersForCode(env, coupon.code, null, maxPages);
   const rows = (ord.orders || []).map(o => {
     const net = Math.max(0, o.gross - o.refunded);
     const eligible = coupon.kind === 'affiliate' && couponInWindow(o.date, win.from, win.to);
