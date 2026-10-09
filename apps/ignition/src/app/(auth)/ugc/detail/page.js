@@ -22,7 +22,7 @@ function computeRoas(spend, rev) {
 }
 function amountOwed(e) {
   const fee = Number(e.payment_amount || 0);
-  const feeUnpaid = e.creator_fee_status === 'paid' || e.is_barter ? 0 : fee;
+  const feeUnpaid = e.creator_fee_status === 'paid' || e.is_barter || e.deal_type === 'barter' ? 0 : fee;
   const commOut = Number(e.commission_earned || 0) - Number(e.commission_paid || 0);
   return feeUnpaid + Math.max(commOut, 0);
 }

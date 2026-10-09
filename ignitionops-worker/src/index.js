@@ -1370,7 +1370,9 @@ async function getUgcPipeline(_url, auth, env) {
     const revenue = num(e.conversions_value);
     const roas = adSpend > 0 ? revenue / adSpend : null;
     const commOutstanding = Math.max(0, num(e.commission_earned) - num(e.commission_paid));
-    const feeUnpaid = (e.creator_fee_status !== 'paid') ? num(e.payment_amount) : 0;
+    // A barter deal owes no fee — same rule as the UGC detail page (S413; they showed different owed figures).
+    // is_barter is NULL on every row today; deal_type is the real flag (engagements/page.js:44).
+    const feeUnpaid = (e.creator_fee_status !== 'paid' && !e.is_barter && e.deal_type !== 'barter') ? num(e.payment_amount) : 0;
     by_stage[e.stage] = (by_stage[e.stage] || 0) + 1;
     if (!TERMINAL_UGC.has(e.stage)) active_creatives += 1;
     commissions_owed += commOutstanding;
@@ -2986,7 +2988,7 @@ async function advanceStage(body, auth, env) {
   // Affiliate commission window (theme ②): opens when the video goes live, closes when
   // it leaves live (paused/vault/completed/…). Re-entering live re-opens it. Revenue
   // still attributes after close; only commission stops (couponInWindow check).
-  const _today = nowIso().slice(0, 10);
+  const _today = istToday();   // IST day (S413) — the UTC date closed 00:00–05:29 IST windows on yesterday
   if (body.to_stage === 'live') {
     if (!cur.data[0].affiliate_active_from) patch.affiliate_active_from = _today;
     patch.affiliate_active_to = null;
@@ -3252,9 +3254,12 @@ async function mintRandomGiftCode(env) {
 
 // Is an order's date inside the engagement's commission window? from required (window
 // not open until live); to is exclusive (commission stops the day it leaves live).
-function couponInWindow(orderDateIso, from, to) {
+// The window is IST calendar days (advanceStage stamps istToday()); Shopify's createdAt is UTC, so the
+// order is placed on its IST day first — slicing the UTC string put 00:00–05:29 IST orders a day early.
+export function couponInWindow(orderDateIso, from, to) {
   if (!from) return false;
-  const d = String(orderDateIso || '').slice(0, 10);
+  const t = Date.parse(String(orderDateIso || ''));
+  const d = Number.isFinite(t) ? istToday(t) : '';
   if (!d || d < from) return false;
   if (to && d >= to) return false;
   return true;
