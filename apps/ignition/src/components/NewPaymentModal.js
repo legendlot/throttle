@@ -5,6 +5,7 @@ import { Modal } from './ui/Modal.js';
 import { supabase } from '@throttle/db';
 import { ignitionopsGet, ignitionopsPost } from '../lib/ignitionopsFetch.js';
 import { titleish } from '../lib/productLabel.js';
+import { InfluencerPicker } from './NewDealModal.js';
 
 const PROOF_BUCKET = 'ignition-payment-proofs';
 
@@ -20,8 +21,6 @@ export function NewPaymentModal({ open, onClose, session, onSaved, presetInfluen
   const { showToast: toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const [search, setSearch] = useState('');
-  const [results, setResults] = useState([]);
   const [influencer, setInfluencer] = useState(null);
   const [engagements, setEngagements] = useState([]);
   const [form, setForm] = useState({ engagement_id: '', kind: 'advance', amount: '', paid_on: '', note: '' });
@@ -29,7 +28,7 @@ export function NewPaymentModal({ open, onClose, session, onSaved, presetInfluen
   const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   function reset() {
-    setSearch(''); setResults([]); setInfluencer(presetInfluencer || null); setEngagements([]);
+    setInfluencer(presetInfluencer || null); setEngagements([]);
     setForm({
       engagement_id: presetEngagementId || '', kind: 'advance', amount: '', paid_on: '', note: '',
     });
@@ -37,14 +36,8 @@ export function NewPaymentModal({ open, onClose, session, onSaved, presetInfluen
   }
   useEffect(() => { if (open) reset(); }, [open, presetInfluencer, presetEngagementId]);
 
-  useEffect(() => {
-    if (!session || search.length < 2) { setResults([]); return; }
-    ignitionopsGet('getInfluencers', { search, limit: 8 }, session)
-      .then(r => setResults(r.influencers || [])).catch(() => setResults([]));
-  }, [search, session]);
-
   function pickInfluencer(inf) {
-    setInfluencer(inf); setSearch(''); setResults([]);
+    setInfluencer(inf);
     ignitionopsGet('getInfluencer', { id: inf.id }, session)
       .then(r => {
         const engs = r.engagements || [];
@@ -101,19 +94,7 @@ export function NewPaymentModal({ open, onClose, session, onSaved, presetInfluen
             )}
           </div>
         ) : (
-          <>
-            <input autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code, handle, name…" style={inp} />
-            {results.length > 0 && (
-              <div style={{ marginTop: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', maxHeight: 180, overflowY: 'auto' }}>
-                {results.map(r => (
-                  <div key={r.id} onClick={() => pickInfluencer(r)} style={{ padding: 9, cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
-                    <span style={{ color: '#FF6B00', fontWeight: 600 }}>{r.influencer_code}</span>
-                    <span style={{ marginLeft: 8 }}>{r.channel_name || r.person_name || '—'}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
+          <InfluencerPicker session={session} onPick={pickInfluencer} autoFocus />
         )}
       </div>
 

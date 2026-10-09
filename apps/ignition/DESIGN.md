@@ -425,6 +425,7 @@ Keyframes: `igUp` `igSlide` `igGrowX` `igGrowY` `igFuse` `igPulse` `igRing` `igP
 | `Tile` | KPI tile: `label, value, hint, color, size=24, right, hover, onClick` |
 | `FilterSelect` | `value, onChange, options, width`; native `<select>` underneath |
 | `SearchField` | `value, onChange, placeholder, primary=true, width=300`; renders `data-search-primary` unless `primary={false}` |
+| `Typeahead` | combo search (S413, plan `2026-10-08-ignition-typeahead-search`): `fetchResults(q, signal)` → groups/items, `onPick`, `onSubmit`, `minChars=2`, `debounceMs=200`, `autoHighlight`, `clearOnPick`, `quiet` (list pages), `persistent` (phone sheet), `primary`; abort + stale guard, ↑↓/Enter/Esc. Used by global ⌘K search, every list page box and the in-form pickers (`InfluencerPicker` in `NewDealModal.js`). Row look `searchRows.js`; client-side filter `matchRows` (lib/typeahead.js) |
 | `TableCard`, `Row`, `NumCell` | CSS-grid table: `columns, head, minWidth=720`; `Row` takes `onClick, focused, first, index, animate`; `NumCell` is mono right-aligned |
 | `Avatar` (+ `AVATAR_TINTS`) | `name, seed, index, size=34, square, ring, tint` |
 | `Modal` | Same props/behaviour as the `@throttle/ui` Modal, restyled; `footer` replaces Cancel/Confirm, size `'lg'` widens |

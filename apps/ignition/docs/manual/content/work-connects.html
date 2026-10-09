@@ -8,7 +8,7 @@
 </div>
 
 <h2 class="sec">The list</h2>
-<p>Each row is one conversation: who it is, the channel (Instagram, Messenger, WhatsApp or Email), the last message, how long ago, a status pill, and either the influencer code it is linked to or <strong>Not linked</strong>. An <strong>Awaiting reply</strong> tag marks threads where the customer spoke last. Filter by channel with the buttons and by status with the dropdown. The heading shows how many are <strong>New</strong> among the latest 200 conversations loaded.</p>
+<p>Each row is one conversation: who it is, the channel (Instagram, Messenger, WhatsApp or Email), the last message, how long ago, a status pill, and either the influencer code it is linked to or <strong>Not linked</strong>. An <strong>Awaiting reply</strong> tag marks threads where the customer spoke last. The search box filters the loaded conversations; every word must match. Filter by channel with the buttons and by status with the dropdown. The heading shows how many are <strong>New</strong> among the latest 200 conversations loaded.</p>
 
 <h2 class="sec">Statuses</h2>
 <table class="tbl">
@@ -20,17 +20,17 @@
     <tr><td><strong>Closed</strong></td><td>Finished; nothing more to do.</td></tr>
   </tbody>
 </table>
-<p>Change a status from the dropdown in the <strong>Details</strong> card on the conversation.</p>
+<p>Change a status from the dropdown in the <strong>Details</strong> card on the conversation. <strong>Linked</strong> cannot be picked by hand; it is set only by creating or linking an influencer (Promote, below), so the option stays greyed out until the thread has an influencer.</p>
 
 <h2 class="sec">Working a conversation</h2>
 <ol class="steps">
-  <li><span class="s-title">Read the thread.</span> Messages are shown with times in IST; internal notes appear in a dashed box with the author&rsquo;s name.</li>
+  <li><span class="s-title">Read the thread.</span> A thread shows its latest 500 messages, with times in IST; internal notes appear in a dashed box with the author&rsquo;s name.</li>
   <li><span class="s-title">Reply.</span> Type in the box and press <strong>Send</strong>, or press <strong>Cmd+Enter</strong> (Ctrl+Enter on Windows). Plain Enter just adds a new line. Replies go out through Pitstop&rsquo;s channel. On Instagram, Messenger and WhatsApp the box locks when the customer&rsquo;s 24-hour reply window has closed; email has no such window.</li>
-  <li><span class="s-title">Link to an influencer.</span> If the thread is not linked, <strong>Create influencer</strong> makes a <em>new</em> influencer record from the thread&rsquo;s handle, phone or email. It always creates a new record, it does not search for an existing one, so check Influencers first to avoid a duplicate. Once linked, the card shows the influencer code and a link to the profile.</li>
+  <li><span class="s-title">Link to an influencer.</span> If the thread is not linked, <strong>Create influencer</strong> (Promote) first looks for an existing influencer with the same Instagram handle, phone number or email (archived ones are ignored). If one exists, the thread is linked to it and a toast says <em>Linked to existing INxxx</em>; otherwise a new record is made from the thread&rsquo;s handle, phone or email. Once linked, the card shows the influencer code and a link to the profile.</li>
   <li><span class="s-title">Hand it back if needed.</span> <strong>Send back to Pitstop</strong> asks you to confirm, then returns the conversation to the support team&rsquo;s inbox and removes it from Connects.</li>
 </ol>
 
 <div class="callout warn">
-  <div class="c-title">&#9888; Create influencer always makes a new record</div>
-  <p>Pressing it for a creator who is already on the roster gives you a second copy. Search Influencers by handle first, and only create when they are genuinely new.</p>
+  <div class="c-title">&#9888; Check the code in the toast</div>
+  <p>Matching is by handle, phone or email, so a creator known under a different handle and number can still get a new record. Read the toast: &ldquo;Linked to existing&rdquo; means no duplicate was made.</p>
 </div>

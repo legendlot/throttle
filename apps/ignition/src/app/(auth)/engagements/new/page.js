@@ -9,7 +9,7 @@ import { useDealForm } from '../../../../lib/useDealForm.js';
 import PocSelect from '../../../../components/PocSelect.js';
 import SelectedInfluencerCard from '../../../../components/SelectedInfluencerCard.js';
 import {
-  DealTypeCards, DealField, InfluencerResults, ENGAGEMENT_TYPE_OPTS, fieldGrid, ctl, ctlMono,
+  DealTypeCards, DealField, InfluencerPicker, ENGAGEMENT_TYPE_OPTS, fieldGrid, ctl, ctlMono,
 } from '../../../../components/NewDealModal.js';
 import { Card, Segmented } from '../../../../components/ui/index.js';
 
@@ -24,7 +24,7 @@ export default function NewEngagementPage() {
   const deal = useDealForm({ session, initial: { directed_to: 'website' } });
   const {
     form, setForm, setField, isPaid, isAffiliate,
-    selected, setSelected, search: influencerSearch, setSearch: setInfluencerSearch, results: searchResults, pick,
+    selected, setSelected, pick,
     lines, setLines, productsValid, setProductsValid,
     campaigns: campaignOpts, loadCampaigns, busy,
   } = deal;
@@ -110,14 +110,7 @@ export default function NewEngagementPage() {
                 Couldn’t load that influencer — search for them below.
               </div>
             )}
-            <input
-              data-search-primary
-              placeholder="Search code, handle, name…"
-              value={influencerSearch}
-              onChange={e => setInfluencerSearch(e.target.value)}
-              style={ctl}
-            />
-            <InfluencerResults results={searchResults} onPick={pick} />
+            <InfluencerPicker session={session} onPick={pick} primary />
           </div>
         )}
       </Card>

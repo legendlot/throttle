@@ -3,6 +3,16 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.16.0] - 2026-10-09
+### Added
+- Signing In: Esc closes the search dropdown (second Esc clears), B-List included and archived excluded, phone search is a full-screen sheet; page search boxes (dropdown on Engagements / Influencers, loaded-row filter elsewhere).
+- In-form pickers (New deal, Record payment, Campaign Link deal) search as you type with arrow keys and Enter.
+### Changed
+- Roster lists every influencer with a shipped-or-later deal; rating counts on All are exact.
+- Campaigns chapter rewritten for the current model (named campaign, optional budget, many deals; spend vs budget; New campaign = name + budget; Link deal needs a click or arrows + Enter).
+- Campaigns: Edit covers Name, Budget (blank = none) and Status; cancelled spend struck through, not in Consumed.
+- Connects: Create influencer links to an existing influencer by handle / phone / email; Linked cannot be set by hand; threads show the latest 500 messages.
+
 ## [1.15.0] - 2026-10-08
 ### Added
 - Connects chapter: list, statuses (New / Replied / Linked / Closed), replying with

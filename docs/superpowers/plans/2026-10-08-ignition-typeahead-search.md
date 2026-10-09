@@ -30,7 +30,18 @@ said reach; dropped, the list shows it). Typeahead now fetches only while focuse
 whole. Picks: connect thread, campaign, roster profile, payment → its deal, user → narrows the table (status-
 filtered list, named users only). Roster/Payments empty states say "loaded" (Roster search covers only the
 rows `getRoster` returns — the filed limit bug). Bold matching is now per word.
-**NEXT: S6** — pickers: `lib/useDealForm.js`, `NewDealModal.js`, `engagements/new/page.js`, `NewPaymentModal.js`, campaign "Link deal".
+**S6 DONE (S413):** the 4 picker surfaces (New-deal page, New-deal modal, NewPaymentModal, campaign "Link deal") are
+`Typeahead` (`autoHighlight`: Enter picks the top match). The three influencer pickers share `InfluencerPicker`
+(in `NewDealModal.js`; same `getInfluencers {search, limit 8}`, 2 chars); `useDealForm` lost its search/results
+state and effect (`pick` = setSelected; `?influencer=` preset untouched). Link deal keeps `getEngagements {limit 10}` +
+the unassigned filter; a row pick links (already-linked rows show "Linked", no-op). Signal passed through
+`ignitionopsGet`. Row look: avatar + name + code · type (Link deal: no. + product · stage), no per-row button.
+S6 hostile review (S413): Link deal lost `autoHighlight` (a pick is a write — a queued Enter must never link an unseen
+top row), its dropdown sits in flow (`position: static`; the modal panel clipped it to ~2 rows), fetches 30 then keeps
+10 unassigned, and a "Linked" row toasts instead of silently closing.
+**S7 DONE (S413):** manual 1.16.0 (Navigation + every list chapter + pickers + the S413 bug-fix behaviour), PDF and
+in-app data regenerated; `DESIGN.md` lists `Typeahead`; `systems/ignition.md` shell paragraph names global search.
+**PLAN COMPLETE.** Live smoke of S1–S5 + the S413 fixes passed; S6 smoke after its Pages deploy.
 
 ## 0. What exists today (the facts the plan rests on)
 

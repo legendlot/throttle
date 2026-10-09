@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@throttle/ui';
 import { Modal } from './ui/Modal.js';
-import { Segmented, Avatar } from './ui/index.js';
+import { Segmented, Avatar, Typeahead } from './ui/index.js';
+import { ignitionopsGet } from '../lib/ignitionopsFetch.js';
 import ProductLinesEditor from './ProductLinesEditor.js';
 import { useDealForm } from '../lib/useDealForm.js';
 import PocSelect from './PocSelect.js';
@@ -22,7 +23,7 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
   const deal = useDealForm({ session, active: !!open, presetInfluencer });
   const {
     form, setForm, setField, isPaid, isAffiliate,
-    selected, setSelected, search, setSearch, results, pick,
+    selected, setSelected, pick,
     lines, setLines, productsValid, setProductsValid,
     campaigns, busy,
   } = deal;
@@ -54,10 +55,7 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
               onChange={presetInfluencer ? null : () => setSelected(null)}
             />
           ) : (
-            <>
-              <input autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code, handle, name…" style={ctl} />
-              <InfluencerResults results={results} onPick={pick} maxHeight={180} />
-            </>
+            <InfluencerPicker session={session} onPick={pick} autoFocus />
           )}
         </div>
 
@@ -170,26 +168,35 @@ export function DealField({ label, off = false, children }) {
   );
 }
 
-export function InfluencerResults({ results, onPick, maxHeight }) {
-  if (!results.length) return null;
+// The influencer picker shared by the New Deal page + modal and NewPaymentModal (typeahead S6): the
+// same getInfluencers {search, limit 8} call as before, now behind Typeahead (debounce, abort/stale
+// guard, ↑↓ + Enter — autoHighlight, so Enter picks the top match). onPick gets the raw influencer.
+export function InfluencerPicker({ session, onPick, primary = false, autoFocus = false }) {
+  const [text, setText] = useState('');
   return (
-    <div style={{ marginTop: 8, background: 'var(--menu)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-row)',
-      padding: 6, maxHeight, overflowY: maxHeight ? 'auto' : undefined }}>
-      {results.map(r => {
-        const name = r.channel_name || r.person_name || '—';
-        return (
-          <div key={r.id} onClick={() => onPick(r)} className="ig-menu-item"
-            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 9, cursor: 'pointer', minWidth: 0 }}>
-            <Avatar name={name} seed={r.influencer_code || name} size={28} />
-            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14 }}>
-              {name}{' '}
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent-hi)', fontWeight: 600 }}>{r.influencer_code}</span>
-            </span>
-            {r.influencer_type && <span style={{ fontSize: 12, color: 'var(--text-3)', textTransform: 'capitalize' }}>{r.influencer_type}</span>}
-          </div>
-        );
-      })}
-    </div>
+    <Typeahead
+      value={text}
+      onChange={setText}
+      width="100%"
+      primary={primary}
+      autoFocus={autoFocus}
+      autoHighlight
+      clearOnPick
+      placeholder="Search code, handle, name…"
+      dropdownStyle={{ maxHeight: 220 }}
+      fetchResults={async (q, signal) => {
+        const r = await ignitionopsGet('getInfluencers', { search: q, limit: 8 }, session, { signal });
+        return (r?.influencers || []).map(inf => {
+          const name = inf.channel_name || inf.person_name || '—';
+          return {
+            id: inf.id, raw: inf, primary: name,
+            secondary: [inf.influencer_code, inf.influencer_type].filter(Boolean).join(' · '),
+            lead: <Avatar name={name} seed={inf.influencer_code || name} size={28} />,
+          };
+        });
+      }}
+      onPick={it => onPick(it.raw)}
+    />
   );
 }
 

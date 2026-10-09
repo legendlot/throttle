@@ -4,7 +4,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { Modal } from '../../../../components/ui/Modal.js';
-import { Card, SectionTitle, Tile, StagePill, Row, NumCell, ProgressBar, budgetTone } from '../../../../components/ui/index.js';
+import { Typeahead, Card, SectionTitle, Tile, StagePill, Row, NumCell, ProgressBar, budgetTone } from '../../../../components/ui/index.js';
 import { Plus, X, ArrowLeft } from 'lucide-react';
 import { supabase } from '@throttle/db';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
@@ -287,16 +287,8 @@ function CampaignBrief({ campaign, canManage, session, onSaved }) {
 
 function AttachModal({ session, campaign, onClose, onAttached }) {
   const { showToast: toast } = useToast();
-  const [search, setSearch] = useState('');
-  const [results, setResults] = useState([]);
+  const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!session || search.length < 2) { setResults([]); return; }
-    ignitionopsGet('getEngagements', { search, limit: 10 }, session)
-      .then(r => setResults((r.engagements || []).filter(e => e.campaign_id == null || e.campaign_id === campaign.id)))
-      .catch(() => setResults([]));
-  }, [search, session]);
 
   async function attach(engId) {
     setBusy(true);
@@ -310,22 +302,37 @@ function AttachModal({ session, campaign, onClose, onAttached }) {
   return (
     <Modal open title="Link deal" onClose={onClose}>
       <div style={{ width: 'min(380px, 100%)', minWidth: 0 }}>
-        <input autoFocus placeholder="Search engagement # / link / tracking…" value={search} onChange={e => setSearch(e.target.value)} style={inputStyle} />
+        {/* Typeahead (plan 2026-10-08 S6): getEngagements search + unassigned filter; a pick LINKS the deal,
+            so no autoHighlight — an Enter queued while rows load must never write the top row unseen (S6
+            review). The dropdown sits in flow: an absolute one is clipped by the modal's scrolling panel.
+            30 fetched then 10 kept, so deals of other campaigns can't crowd out every match. */}
+        <Typeahead
+          value={text}
+          onChange={setText}
+          width="100%"
+          primary={false}
+          autoFocus
+          placeholder="Search engagement # / link / tracking…"
+          dropdownStyle={{ position: 'static', marginTop: 6 }}
+          fetchResults={async (q, signal) => {
+            const r = await ignitionopsGet('getEngagements', { search: q, limit: 30 }, session, { signal });
+            return (r?.engagements || [])
+              .filter(e => e.campaign_id == null || e.campaign_id === campaign.id)
+              .slice(0, 10)
+              .map(e => ({
+                id: e.id, primary: e.engagement_no || '—',
+                secondary: `${titleish(e.product_code) || '—'} · ${e.stage}`,
+                meta: e.campaign_id === campaign.id
+                  ? <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)' }}>Linked</span> : null,
+                linked: e.campaign_id === campaign.id,
+              }));
+          }}
+          onPick={it => {
+            if (it.linked) { toast(`${it.primary} is already in this campaign`, 'info'); return; }
+            if (!busy) attach(it.id);
+          }}
+        />
         <div style={{ fontSize: 12, color: 'var(--text-4)', margin: '8px 0' }}>Only unassigned engagements (or already in this campaign) are shown.</div>
-        <div style={{ background: 'var(--surface-sunk)', borderRadius: 12, border: '1px solid var(--border)', maxHeight: 280, overflowY: 'auto' }}>
-          {results.length === 0 && <div style={{ padding: 12, color: 'var(--text-3)', fontSize: 13, textAlign: 'center' }}>{search.length < 2 ? 'Type to search…' : 'No matches.'}</div>}
-          {results.map(e => (
-            <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '9px 12px', borderBottom: '1px solid var(--row-divider)' }}>
-              <span style={{ minWidth: 0 }}>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--accent-hi)', fontWeight: 600 }}>{e.engagement_no}</span>
-                <span style={{ marginLeft: 8, fontSize: 13, color: 'var(--text-2)' }}>{titleish(e.product_code) || '—'} · {e.stage}</span>
-              </span>
-              <button onClick={() => attach(e.id)} disabled={busy || e.campaign_id === campaign.id} style={{ ...btnPrimary, opacity: (busy || e.campaign_id === campaign.id) ? 0.5 : 1 }}>
-                {e.campaign_id === campaign.id ? 'Linked' : 'Link'}
-              </button>
-            </div>
-          ))}
-        </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
           <button onClick={onClose} className="ig-ghost-btn" style={btnGhost}>Done</button>
         </div>
