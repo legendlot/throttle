@@ -4,6 +4,8 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
+import { vendorBomRows, loadThumbs, buildVendorBomPdf, buildVendorBomXlsx, vendorBomFilename, triggerBlobDownload }
+  from '../../../../lib/vendorBom.js';
 
 const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
 const panelHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)' };
@@ -51,6 +53,12 @@ export default function LibraryDownloadsPage() {
   const [selectedProduct, setSelectedProduct] = useState('');
   const [bomCache, setBomCache] = useState({});
   const [singleLoading, setSingleLoading] = useState(false);
+
+  // Vendor BOM (pictures, PDF/Excel). Prices are OFF by default — this copy goes to vendors.
+  const [vendorProduct, setVendorProduct] = useState('');
+  const [includePrices, setIncludePrices] = useState(false);
+  const [vendorBusy, setVendorBusy] = useState('');        // '' | 'pdf' | 'xlsx'
+  const [vendorStatus, setVendorStatus] = useState('');
 
   const [fullStats, setFullStats] = useState({ products: '—', lines: '—', parts: '—' });
   const [fullLoading, setFullLoading] = useState(true);
@@ -129,6 +137,42 @@ export default function LibraryDownloadsPage() {
     }
   }
 
+  async function downloadVendor(kind) {
+    if (!vendorProduct || vendorBusy) return;
+    const product = vendorProduct;
+    const showPrices = includePrices;
+    setVendorBusy(kind);
+    setVendorStatus('Loading BOM…');
+    try {
+      // with_price=1 returns { rows, prices_withheld }; without it getBOM is the plain array.
+      const res = await garageFetch('getBOM', showPrices ? { product, with_price: 1 } : { product }, session);
+      // A bare array back from a with_price call = a worker without the price path; refuse
+      // rather than hand over a "with-prices" file whose price column is silently empty.
+      if (showPrices && Array.isArray(res)) throw new Error('Prices are not available yet — try again in a few minutes');
+      const raw = Array.isArray(res) ? res : (Array.isArray(res?.rows) ? res.rows : []);
+      if (!raw.length) { showToast('No BOM lines for this product', 'error'); return; }
+      const rows = vendorBomRows(raw);
+      const thumbs = await loadThumbs(rows, (done, total) => setVendorStatus(`Loading pictures ${done}/${total}…`));
+      setVendorStatus(kind === 'pdf' ? 'Building PDF…' : 'Building Excel…');
+      const args = { product, rows, thumbs, showPrices };
+      const blob = kind === 'pdf' ? await buildVendorBomPdf(args) : await buildVendorBomXlsx(args);
+      triggerBlobDownload(blob, vendorBomFilename(product, kind, showPrices));
+      const pics = rows.filter((r) => r.image_url && thumbs[r.image_url]).length;
+      const priced = rows.filter((r) => r.price_num != null).length;
+      const withheld = Number(res?.prices_withheld) || 0;
+      showToast(`Downloaded ${product} — ${rows.length} lines, ${pics} with pictures`
+        + (showPrices ? `, ${priced} with prices` : ''), 'success');
+      setVendorStatus(showPrices && withheld
+        ? `${withheld} part price${withheld === 1 ? '' : 's'} left blank — your login can't see those purchase-order prices.`
+        : '');
+    } catch (e) {
+      showToast(e.message || 'Download failed', 'error');
+      setVendorStatus('');
+    } finally {
+      setVendorBusy('');
+    }
+  }
+
   async function downloadFull() {
     setFullDownloading(true);
     try {
@@ -168,6 +212,44 @@ export default function LibraryDownloadsPage() {
         <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
           Download per-product BOMs or the full master extract.
         </p>
+      </div>
+
+      <div style={panelStyle}>
+        <div style={panelHeaderStyle}><span>Vendor BOM — with part pictures</span></div>
+        <div style={panelBodyStyle}>
+          <p style={{ color: 'var(--t2)', fontSize: 12, lineHeight: 1.6, margin: 0, marginBottom: 12 }}>
+            One product per file, with each part&apos;s picture, as a PDF or an Excel sheet — ready to send to a vendor.
+            Prices are left out unless you tick the box; when included, each price is the part&apos;s last purchase-order price.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end', marginBottom: 12 }}>
+            <div style={{ width: 300, maxWidth: '100%' }}>
+              <span style={labelStyle}>Product</span>
+              <Combobox
+                value={vendorProduct}
+                options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+                onChange={(v) => setVendorProduct(v)}
+                placeholder="Search products…"
+                loading={productsLoading}
+              />
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t1)', cursor: 'pointer', paddingBottom: 7 }}>
+              <input type="checkbox" checked={includePrices} onChange={(e) => setIncludePrices(e.target.checked)} disabled={!!vendorBusy} />
+              Include prices
+            </label>
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            {[['pdf', '↓ Download PDF'], ['xlsx', '↓ Download Excel']].map(([kind, label]) => {
+              const off = !vendorProduct || !!vendorBusy;
+              return (
+                <button key={kind} onClick={() => downloadVendor(kind)} disabled={off}
+                  style={{ ...btnPrimary, opacity: off ? 0.5 : 1, cursor: off ? 'not-allowed' : 'pointer' }}>
+                  {vendorBusy === kind ? 'Preparing…' : label}
+                </button>
+              );
+            })}
+            {vendorStatus && <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>{vendorStatus}</span>}
+          </div>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 20, alignItems: 'start' }}>
