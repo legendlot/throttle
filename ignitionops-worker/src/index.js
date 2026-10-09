@@ -1719,6 +1719,18 @@ export function istToday(now = Date.now()) {
 const isRealIsoDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Date.parse(d))
   && new Date(d).toISOString().slice(0, 10) === d;
 const addDaysIso = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+// PostgREST range filters on a timestamptz column covering whole IST days `from`..`to` (inclusive).
+// Takes YYYY-MM-DD, or anything starting with it (older Reports clients send `…T00:00:00`), and keeps only
+// the date: a bare date / naive time compared with a timestamptz is read as UTC, i.e. 05:30 IST.
+export function istDayRangeFilters(col, from, to) {
+  const day = v => (v ? String(v).slice(0, 10) : null);
+  const f = day(from), t = day(to);
+  if ((f && !isRealIsoDate(f)) || (t && !isRealIsoDate(t))) return { error: 'from/to must be YYYY-MM-DD' };
+  const filters = [];
+  if (f) filters.push(`${col}=gte.${encodeURIComponent(`${f}T00:00:00+05:30`)}`);
+  if (t) filters.push(`${col}=lt.${encodeURIComponent(`${addDaysIso(t, 1)}T00:00:00+05:30`)}`);
+  return { filters };
+}
 const shortDate = (d) => `${Number(d.slice(8, 10))} ${MONTHS_SHORT[Number(d.slice(5, 7)) - 1]}`;
 
 /** The take an ad sits on, out of the deal's video rows (null when unlinked or the take is gone). */
@@ -2157,9 +2169,9 @@ async function getReports(url, auth, env) {
   const gate = requirePerm('ignition_reports_view', auth); if (gate) return gate;
   const from = url.searchParams.get('from');
   const to = url.searchParams.get('to');
-  const filters = [];
-  if (from) filters.push(`created_at=gte.${encodeURIComponent(from)}`);
-  if (to) filters.push(`created_at=lte.${encodeURIComponent(to)}`);
+  const range = istDayRangeFilters('created_at', from, to);
+  if (range.error) return err(range.error, 400);
+  const filters = range.filters;
   // Cancelled deals are excluded from the whole report, not just its money columns — a report is
   // metrics end to end, and a deal called off before anything was spent has no numbers to add.
   filters.push(EXCLUDE_NON_SPEND);

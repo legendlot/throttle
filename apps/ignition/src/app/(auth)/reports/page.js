@@ -51,7 +51,7 @@ export default function ReportsPage() {
     if (!session || !canView) { setLoading(false); return; }
     let alive = true;
     setLoading(true);
-    ignitionopsGet('getReports', { from: `${from}T00:00:00`, to: `${to}T23:59:59` }, session)
+    ignitionopsGet('getReports', { from, to }, session)  // worker bounds whole IST days
       .then(d => { if (alive) { setData(d); setError(null); } })
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
