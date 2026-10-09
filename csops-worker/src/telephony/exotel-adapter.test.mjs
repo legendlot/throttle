@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mapExotelStatus, exotelConnected, needsCallback, exotelToNormalised, exotelCallPatch, isSettled, hookDialTarget, hookAction, hookAttempt,
+  mapExotelStatus, exotelConnected, exotelUnfinishedAnswered, soleDialedAgent, needsCallback, exotelToNormalised, exotelCallPatch, isSettled, hookDialTarget, hookAction, hookAttempt,
 } from './exotel-adapter.js';
 import { toIstNaive, fromIstNaive, unwrapCalls, nextCursorOf } from './exotel-client.js';
 
@@ -299,5 +299,64 @@ test('exotelConnected: recording or a later leg on-call counts; first leg alone 
   assert.equal(exotelConnected({ Details: { Legs: [{ Leg: { Id: 1, OnCallDuration: 272 } }, { Leg: { Id: 2, OnCallDuration: 264 } }] } }), true);
   assert.equal(exotelConnected({ Details: { Legs: [{ Leg: { Id: 1, OnCallDuration: 38 } }, { Leg: { Id: 2, OnCallDuration: 0 } }] } }), false);
   assert.equal(exotelConnected({}), false);
+});
+
+// ── S413: inbound calls Exotel finalises UNFINISHED (Pruthvi #bugs 1791541942.326389) ──
+test('exotelUnfinishedAnswered: inbound + recording + no legs only', () => {
+  const unfinished = { Status: 'completed', RecordingUrl: 'https://r', EndTime: '1970-01-01 05:30:00', Duration: '106', Details: { ConversationDuration: 0, Legs: [] } };
+  assert.equal(exotelUnfinishedAnswered(unfinished, 'incoming'), true);
+  // a greeting hang-up: too short for any agent to have answered, recording or not
+  assert.equal(exotelUnfinishedAnswered({ ...unfinished, Duration: '9' }, 'incoming'), false);
+  assert.equal(exotelUnfinishedAnswered({ ...unfinished, Duration: '10' }, 'incoming'), false);
+  assert.equal(exotelUnfinishedAnswered({ ...unfinished, Duration: '11' }, 'incoming'), true);
+  assert.equal(exotelUnfinishedAnswered({ ...unfinished, Duration: null }, 'incoming'), false);
+  assert.equal(exotelUnfinishedAnswered({ ...unfinished, Details: {} }, 'incoming'), true);
+  // outbound: the recording proves only the agent leg connected
+  assert.equal(exotelUnfinishedAnswered(unfinished, 'outgoing'), false);
+  // no recording = nobody spoke
+  assert.equal(exotelUnfinishedAnswered({ ...unfinished, RecordingUrl: null }, 'incoming'), false);
+  // a normal record with legs keeps the talk-time rule
+  assert.equal(exotelUnfinishedAnswered({ ...unfinished, Details: { Legs: [{ Leg: { Id: 1, OnCallDuration: 16 } }] } }, 'incoming'), false);
+});
+
+test('completed + talk 0 is answered only when the inbound record is unfinished with a recording', () => {
+  assert.deepEqual(mapExotelStatus('completed', 0, true, true, true), { status: 'answered', dial_status: 'completed' });
+  assert.deepEqual(mapExotelStatus('completed', 0, true, true, false), { status: 'abandoned', dial_status: 'completed' });
+});
+
+test('exotelToNormalised: the 9 Oct 12:05 call shape maps answered, an outbound twin stays abandoned', () => {
+  const call = { Sid: 'x', Direction: 'inbound', Status: 'completed', From: '09876500000', To: '08044656833',
+    StartTime: '2026-10-09 12:05:00', EndTime: '1970-01-01 05:30:00', Duration: 106,
+    RecordingUrl: 'https://r', Details: { ConversationDuration: 0, Legs: [] } };
+  const n = exotelToNormalised(call);
+  assert.equal(n.status, 'answered');
+  assert.equal(needsCallback(n.status, n.direction), false);
+  const out = exotelToNormalised({ ...call, Direction: 'outbound-api' });
+  assert.equal(out.status, 'abandoned');
+});
+
+test('soleDialedAgent: exactly one agent rung, or null', () => {
+  const dial = (agent) => ({ event: 'dial', agent, status: 'busy' });
+  const term = (agent) => ({ event: 'terminal', agent, status: 'free' });
+  assert.equal(soleDialedAgent([dial('sip:dhirajs63dd53fa'), term('sip:dhirajs63dd53fa')]), 'sip:dhirajs63dd53fa');
+  assert.equal(soleDialedAgent([dial('sip:A'), dial('sip:b')]), null, 'two agents rung is ambiguous');
+  assert.equal(soleDialedAgent([dial('sip:A'), dial('sip:a')]), 'sip:a', 'case-insensitive');
+  assert.equal(soleDialedAgent([term('sip:a')]), null, 'a Terminal alone is not a ring');
+  assert.equal(soleDialedAgent([{ agent: 'sip:a' }]), 'sip:a', 'pre-S410 fires had no EventType');
+  assert.equal(soleDialedAgent(null), null);
+  assert.equal(soleDialedAgent([]), null);
+});
+
+test('exotelCallPatch: an answered call clears needs_callback; a no-leg call keeps To/DialWhom', () => {
+  const call = { Sid: 's1', Direction: 'inbound', Status: 'completed', From: '09876500000', To: 'sip:x', DialWhomNumber: 'sip:y',
+    StartTime: '2026-10-09 12:05:00', EndTime: '1970-01-01 05:30:00', Duration: 106,
+    RecordingUrl: 'https://r', Details: { ConversationDuration: 0, Legs: [] } };
+  const p = exotelCallPatch(exotelToNormalised(call));
+  assert.equal(p.status, 'answered');
+  assert.equal(p.needs_callback, false);
+  assert.equal(p.raw_meta.to, 'sip:x');
+  assert.equal(p.raw_meta.dial_whom, 'sip:y');
+  const abandoned = exotelCallPatch(exotelToNormalised({ ...call, RecordingUrl: null }));
+  assert.equal(abandoned.needs_callback, true);
 });
 

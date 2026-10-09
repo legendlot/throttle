@@ -354,3 +354,12 @@ test('withinShift: boundary minutes are inclusive at both ends', () => {
   assert.equal(withinShift(istAt(10, 29), SHIFT), false);
   assert.equal(withinShift(istAt(19, 1), SHIFT), false);
 });
+
+test('shouldAssignTicket: an unfinished Exotel call answered with talk 0 is still assigned out of hours', () => {
+  assert.equal(shouldAssignTicket(
+    { direction: 'incoming', status: 'answered', talk_duration_seconds: 0, started_at: istAt(8, 52) }, SHIFT), true);
+  // control: the same call un-answered is withheld, so the line above is not vacuous
+  assert.equal(shouldAssignTicket(
+    { direction: 'incoming', status: 'abandoned', talk_duration_seconds: 0, started_at: istAt(8, 52) }, SHIFT), false);
+});
+

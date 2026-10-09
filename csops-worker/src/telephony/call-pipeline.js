@@ -70,7 +70,8 @@ export function withinShift(startedAt, shift) {
  */
 export function shouldAssignTicket(norm, shift) {
   if (norm?.direction !== 'incoming') return true;
-  const answered = Number(norm?.talk_duration_seconds) > 0;
+  // status too: an unfinished Exotel record is answered with talk 0 (exotelUnfinishedAnswered, S413).
+  const answered = Number(norm?.talk_duration_seconds) > 0 || norm?.status === 'answered';
   if (answered) return true;
   return withinShift(norm?.started_at, shift);
 }

@@ -23,7 +23,7 @@ import { fromIstNaive } from './exotel-client.js';
  * us Details.ConversationDuration for exactly this; MyOperator never did, which is why
  * ~30% of inbound (1–15s) was landing as `answered` with no agent.
  */
-export function mapExotelStatus(rawStatus, talkSeconds, ended = false, connected = false) {
+export function mapExotelStatus(rawStatus, talkSeconds, ended = false, connected = false, unfinishedAnswered = false) {
   const s = String(rawStatus || '').toLowerCase().trim();
   const talk = Number(talkSeconds) || 0;
   // ⚠️ Exotel sometimes finalises a call with NO Status at all — EndTime set, legs timed
@@ -39,7 +39,11 @@ export function mapExotelStatus(rawStatus, talkSeconds, ended = false, connected
   }
   switch (s) {
     case 'completed':
-      return { status: talk > 0 ? 'answered' : 'abandoned', dial_status: 'completed' };
+      // `unfinishedAnswered` (exotelUnfinishedAnswered): an INBOUND call Exotel closed as
+      // completed without finishing the record — talk 0, no legs, EndTime 1970 — but with a
+      // recording. 521 such calls over 10 s (23 Aug–9 Oct) were filed abandoned, mostly also queued
+      // for callback, although an agent had spoken to the customer (Pruthvi #bugs 1791541942.326389).
+      return { status: (talk > 0 || unfinishedAnswered) ? 'answered' : 'abandoned', dial_status: 'completed' };
     case 'no-answer':
     case 'no_answer':
       return { status: 'missed',      dial_status: 'no-answer' };
@@ -95,6 +99,27 @@ export function exotelConnected(call) {
   return legs.slice(1).some((l) => (Number((l && l.Leg) ? l.Leg.OnCallDuration : l?.OnCallDuration) || 0) > 0);
 }
 
+/**
+ * An INBOUND call Exotel finalised UNFINISHED: no Legs at all, yet a recording exists. Exotel's
+ * own dashboard shows these as completed with Talk Time 0s and End Time 01 Jan 1970, hours later,
+ * so re-polling never completes them. Measured 2026-10-09 over every Exotel call: a recording sits
+ * on every normally-answered inbound call and on NO normally-abandoned one, and all 533 inbound
+ * completed+recording+no-legs rows were this shape.
+ * ⚠️ Inbound only: our OUTBOUND calls also arrive with no legs and a recording (148 abandoned), but
+ * there the recording only proves the AGENT leg connected — not that the customer picked up.
+ */
+// Shortest normally-answered inbound Exotel call: 11 s, and greeting + ring alone never took under
+// 9 s (measured 2026-10-09, 2,298 answered calls). The 12 unfinished calls at ≤10 s (of 533) hung up
+// in the greeting — the recording is the IVR, not a conversation.
+const MIN_ANSWERABLE_SECONDS = 10;
+
+export function exotelUnfinishedAnswered(call, direction) {
+  if (direction !== 'incoming' || !call?.RecordingUrl) return false;
+  if (!(Number(call.Duration) > MIN_ANSWERABLE_SECONDS)) return false;
+  const legs = call?.Details?.Legs;
+  return !Array.isArray(legs) || legs.length === 0;
+}
+
 export function exotelToNormalised(call, { departmentId = null } = {}) {
   const direction = normaliseDirection(call.Direction, 'exotel');
   const inbound = direction === 'incoming';
@@ -102,7 +127,8 @@ export function exotelToNormalised(call, { departmentId = null } = {}) {
   const details = call.Details || {};
   const talk = num(details.ConversationDuration);
   const legDuration = num(call.Duration);
-  const { status, dial_status } = mapExotelStatus(call.Status, talk, Boolean(call.EndTime), exotelConnected(call));
+  const { status, dial_status } = mapExotelStatus(call.Status, talk, Boolean(call.EndTime), exotelConnected(call),
+    exotelUnfinishedAnswered(call, direction));
 
   // ⚠️ OBSERVED 2026-08-20 from a live inbound call — the field names are not what
   // the shape suggests, and one of them was mapped wrongly on the first pass:
@@ -165,6 +191,13 @@ export function exotelCallPatch(norm) {
       legs: Array.isArray(norm.legs) ? norm.legs : [],
     },
   };
+  // No legs = Exotel left the record unfinished (exotelUnfinishedAnswered) and there is nothing to
+  // attribute the agent from. Keep the two fields that might name them, so the next such call is
+  // the evidence (Pruthvi reports Exotel's own To column shows the agent on these, S413).
+  if (!patch.raw_meta.legs.length && norm.raw) {
+    patch.raw_meta.to = norm.raw.To ?? null;
+    patch.raw_meta.dial_whom = norm.raw.DialWhomNumber ?? null;
+  }
   const maybe = {
     started_at: norm.started_at,
     ended_at: norm.ended_at,
@@ -178,7 +211,23 @@ export function exotelCallPatch(norm) {
     if (v !== null && v !== undefined) patch[k] = v;
   }
   if (needsCallback(norm.status, norm.direction)) patch.needs_callback = true;
+  // ...and cleared once a later poll finds the call answered (e.g. an unfinished record that was
+  // first read before its recording landed). The flag is derived from status alone — markCalledBack
+  // never touches it — so clearing it here loses nothing.
+  else if (norm.status === 'answered') patch.needs_callback = false;
   return patch;
+}
+
+/**
+ * The ONE agent the flow rang for this call, from the agent-hook's dial_attempts (S410), or null
+ * when none or several were rung. Only meaningful on a call already proven answered
+ * (exotelUnfinishedAnswered): a Dial fire alone means "rang", not "picked up".
+ */
+export function soleDialedAgent(dialAttempts) {
+  const rung = new Set((Array.isArray(dialAttempts) ? dialAttempts : [])
+    .filter((a) => a && (!a.event || a.event === 'dial') && typeof a.agent === 'string' && a.agent.trim())
+    .map((a) => a.agent.trim().toLowerCase()));
+  return rung.size === 1 ? [...rung][0] : null;
 }
 
 /** A call is settled once Exotel has finalised the fields it back-fills. */

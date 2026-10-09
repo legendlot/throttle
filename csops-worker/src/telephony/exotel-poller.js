@@ -17,6 +17,7 @@
 import { makeExotelClient, exotelConfigured } from './exotel-client.js';
 import {
   exotelToNormalised, exotelCallPatch, isSettled, agentCandidates, matchAgent,
+  exotelUnfinishedAnswered, soleDialedAgent,
 } from './exotel-adapter.js';
 
 // Overlapping window: we re-read more than one tick's worth every time. The upsert is
@@ -146,7 +147,16 @@ export async function reconcileExotelCalls(env, pipeline, opts = {}) {
         // agentCandidates(). A miss is logged with what we DID see, so the real leg
         // shape becomes evident from the logs instead of guesswork.
         const cands = agentCandidates(raw, norm.direction);
-        const hit = matchAgent(cands, roster, toE164);
+        let hit = matchAgent(cands, roster, toE164);
+        // An unfinished inbound record (no legs) carries no agent identity at all, but the flow
+        // hook logged who it rang. Answered + exactly one agent rung = that agent took it (S413,
+        // Pruthvi #bugs 1791541942.326389). One read, only on these rows (~10/day).
+        if (!hit && norm.status === 'answered' && exotelUnfinishedAnswered(raw, norm.direction)) {
+          const da = await sb(`/rest/v1/cs_calls?provider=eq.exotel&provider_call_sid=eq.${encodeURIComponent(norm.provider_call_sid)}`
+            + `&select=dial_attempts&limit=1`, env);
+          const sole = soleDialedAgent(da.data?.[0]?.dial_attempts);
+          if (sole) hit = matchAgent([sole], roster, toE164);
+        }
         if (hit) {
           const name = await nameFor(hit.id, env, sb, nameCache);
           await pipeline.attributeAgent(
