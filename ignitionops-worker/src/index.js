@@ -3423,7 +3423,7 @@ async function syncCouponRedemptions(body, auth, env) {
 async function getProductCogs(url, auth, env) {
   const code = String(url.searchParams.get('product_code') || '').trim();
   if (!code) return err('product_code required', 400);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istToday(); // IST — the UTC date read yesterday's cost row 00:00–05:29 IST
   const r = await sb(
     `/rest/v1/product_cost?product_code=eq.${encodeURIComponent(code)}&effective_from=lte.${today}`
     + `&select=product_code,cogs_inr,effective_from&order=effective_from.desc&limit=1`,
