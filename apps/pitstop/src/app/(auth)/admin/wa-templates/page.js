@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { EmptyState, Spinner } from '@throttle/ui';
-import { ExternalLink, MessageSquare, AlertTriangle } from 'lucide-react';
+import { ExternalLink, MessageSquare, AlertTriangle, Plus } from 'lucide-react';
 import { csopsGet } from '../../../../lib/csopsFetch.js';
 
 // WhatsApp templates are made in RELAY, not here (S412). This page used to edit
@@ -11,6 +11,10 @@ import { csopsGet } from '../../../../lib/csopsFetch.js';
 // WhatsApp Template button reads Relay's comms.templates via getWaSendTemplates, so this page
 // now shows exactly that list plus where and how to add one.
 const RELAY_TEMPLATES_URL = 'https://relay.legendoftoys.com/templates/';
+// `preset=support` opens Relay's new-template form already on WhatsApp, the Support account,
+// category Utility and a `lot_support_` name (Relay templates/page.js NEW_PRESETS) — Pruthvi asked
+// for "create template" to land straight there (#bugs 1791361825.689069).
+const RELAY_NEW_SUPPORT_TEMPLATE_URL = `${RELAY_TEMPLATES_URL}?new=1&preset=support`;
 
 export default function WaTemplatesPage() {
   const { perms, session } = useAuth();
@@ -49,14 +53,21 @@ export default function WaTemplatesPage() {
       <section style={{ padding: 16, borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface-1)', marginBottom: 20 }}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>To add a template</div>
         <ol style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.7, color: 'var(--t2)' }}>
-          <li>Open Relay → Templates and create a WhatsApp template on the <b>Support</b> WhatsApp account (WABA 1350960337019398), category <b>Utility</b> — a template on any other account cannot send from the support number.</li>
-          <li>Its Meta name must start with <code>lot_support</code> — anything else is a journey template and will not show up here.</li>
+          <li>Press <b>Create template in Relay</b> below. It opens a new WhatsApp template already set to the <b>Support</b> account (WABA 1350960337019398) and category <b>Utility</b> — a template on any other account cannot send from the support number.</li>
+          <li>Its Meta name must start with <code>lot_support</code> (pre-filled — add the rest, e.g. <code>lot_support_payment_reminder</code>) — anything else is a journey template and will not show up here.</li>
           <li>Submit it to Meta. It appears in the inbox&rsquo;s WhatsApp Template button once Meta approves it.</li>
         </ol>
-        <a href={RELAY_TEMPLATES_URL} target="_blank" rel="noreferrer"
-           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 12, fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>
-          Open Relay → Templates <ExternalLink size={14} />
-        </a>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginTop: 12 }}>
+          <a href={RELAY_NEW_SUPPORT_TEMPLATE_URL} target="_blank" rel="noreferrer"
+             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 'var(--radius-sm)',
+               background: 'var(--accent)', color: '#000', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
+            <Plus size={14} /> Create template in Relay
+          </a>
+          <a href={RELAY_TEMPLATES_URL} target="_blank" rel="noreferrer"
+             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>
+            All Relay templates <ExternalLink size={14} />
+          </a>
+        </div>
       </section>
 
       <div style={{ fontSize: 12, letterSpacing: 1, textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 8 }}>

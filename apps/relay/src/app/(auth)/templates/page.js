@@ -171,6 +171,24 @@ function emptyTemplate() {
   };
 }
 
+// Deep-link presets — `/templates/?new=1&preset=<key>` opens the new-template form pre-filled.
+// Named keys rather than raw field params, so a URL cannot pre-fill arbitrary content.
+const NEW_PRESETS = {
+  // Pitstop → Admin → WA Templates → "Create template in Relay". csops getWaSendTemplates lists only
+  // APPROVED WhatsApp templates whose meta_name starts `lot_support`, and the support number
+  // sends only from the Support WABA — so all three are fixed here, not left for the agent to know.
+  // status 'active' too: Meta approval sync writes approval_status only, and getWaSendTemplates
+  // also filters status=active — a draft would be approved and still never appear. Safe because
+  // every WA send path gates on approval_status=APPROVED regardless of status.
+  support: (n) => ({
+    ...n, channel: 'whatsapp', purpose: 'utility', status: 'active',
+    wa: { ...n.wa, category: 'UTILITY', waba_id: '1350960337019398', meta_name: 'lot_support_' },
+  }),
+};
+function applyNewPreset(n, key) {
+  return Object.hasOwn(NEW_PRESETS, key || '') ? NEW_PRESETS[key](n) : n;
+}
+
 // ── SMS editor ───────────────────────────────────────────────────────────────
 // SMS is neither email nor WhatsApp. TrustSignal sends a DLT template id plus POSITIONAL
 // pr1..pr5 params, and the carrier matches the delivered text against the DLT registration —
@@ -797,7 +815,9 @@ export default function TemplatesPage() {
     .map((id) => ({ id, label: wabaLabel(id) }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
-  function startNew() { const n = emptyTemplate(); setT(n); setBaseline(waSnapshot(n)); setHtmlOnly(false); setWaDirty(false); resetTest(); resetVersions(); resetShape(); setEditorKey('new-' + Date.now()); setView('form'); }
+  // Baseline null = an unsaved template is always dirty (Save enabled), as Duplicate does — a WA
+  // preset would otherwise snapshot itself as "Saved" before anything was saved.
+  function startNew(params) { const n = applyNewPreset(emptyTemplate(), params?.get?.('preset')); setT(n); setBaseline(null); setHtmlOnly(false); setWaDirty(false); resetTest(); resetVersions(); resetShape(); setEditorKey('new-' + Date.now()); setView('form'); }
   // ⌘K "New template" — cross-screen ?new=1 + same-screen relay:new event.
   useNewParam(canEdit, startNew);
   function startEdit(r) {

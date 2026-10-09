@@ -22,10 +22,12 @@ export function useNewParam(enabled, onNew) {
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
-    if (!consumed.current && new URLSearchParams(window.location.search).get('new') === '1') {
+    const params = new URLSearchParams(window.location.search);
+    if (!consumed.current && params.get('new') === '1') {
       consumed.current = true;
       window.history.replaceState(null, '', window.location.pathname);
-      if (enabled) cb.current();
+      // The params ride along so a page can honour extra deep-link keys (templates: `preset`).
+      if (enabled) cb.current(params);
     }
     const h = () => { if (enabled) cb.current(); };
     window.addEventListener('relay:new', h);
