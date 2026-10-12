@@ -13,6 +13,7 @@
  *        05_Throttle/apps/ignition/DESIGN.md
  */
 
+import { dedupeBySku } from './price-dedupe.js';
 import { isLocked, unlockActive, metricsCompleteness, lockedFieldsIn, LOCK_SELECT, LOCKED_MESSAGE } from './completeness.js';
 
 // ── CORS ────────────────────────────────────────────────────────────────────
@@ -3448,7 +3449,7 @@ async function refreshProductPrices(body, auth, env) {
   // `shadow-rc-drift-car`, so a link built from the handle showed whichever variant Shopify has
   // first (Tarmac Black) regardless of which colour the deal was for. `?variant=<id>` is the only
   // thing the storefront honours — verified live 2026-08-31.
-  const query = `query($cursor:String){ productVariants(first:100, after:$cursor){ edges{ cursor node{ id sku price product{ title handle } } } pageInfo{ hasNextPage } } }`;
+  const query = `query($cursor:String){ productVariants(first:100, after:$cursor){ edges{ cursor node{ id sku price product{ title handle status } } } pageInfo{ hasNextPage } } }`;
   // Page until Shopify says there is no next page. This was `p < 8` — a hard 800-variant ceiling
   // that would have truncated silently once the catalogue outgrew it (266 today, so it had not
   // bitten yet). PAGE_MAX is a runaway guard, not a budget: hitting it is logged and reported, so
@@ -3467,7 +3468,7 @@ async function refreshProductPrices(body, auth, env) {
       // GID → bare number. Stored as text: it is an identifier we only ever concatenate into a
       // URL, and 47394784149556 is already past what a JS number holds exactly for arithmetic.
       const variantId = String(n.id || '').split('/').pop() || null;
-      seen.push({ sku, title: n.product?.title || null, handle: n.product?.handle || null, variant_id: /^\d+$/.test(variantId || '') ? variantId : null, price: Number(n.price) || 0, currency: 'INR', synced_at: nowIso() });
+      seen.push({ sku, title: n.product?.title || null, handle: n.product?.handle || null, variant_id: /^\d+$/.test(variantId || '') ? variantId : null, price: Number(n.price) || 0, currency: 'INR', synced_at: nowIso(), status: n.product?.status || null });
     }
     if (!conn?.pageInfo?.hasNextPage) break;
     if (p === PAGE_MAX - 1) truncated = true;
@@ -3475,12 +3476,21 @@ async function refreshProductPrices(body, auth, env) {
   if (truncated) console.error(`[refreshProductPrices] stopped at the ${PAGE_MAX}-page guard with more pages available — ${seen.length} variants read`);
   // A sweep that upserts nothing is the six-week silent failure repeating. Say so out loud.
   if (!seen.length) console.error('[refreshProductPrices] read ZERO variants — check the Shopify grant (read_products)');
-  for (let i = 0; i < seen.length; i += 200) {
-    await sb(`/rest/v1/product_prices?on_conflict=sku`, env, {
-      method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify(seen.slice(i, i + 200)),
+  // One row per sku — a duplicate inside a 200-row batch refuses the whole batch (src/price-dedupe.js).
+  const { rows, duplicates: dupSkus } = dedupeBySku(seen);
+  if (dupSkus.length) console.warn(`[refreshProductPrices] ${dupSkus.length} sku(s) on more than one Shopify variant: ${dupSkus.join(', ')}`);
+  const failed = [];
+  for (let i = 0; i < rows.length; i += 200) {
+    const w = await sb(`/rest/v1/product_prices?on_conflict=sku`, env, {
+      method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify(rows.slice(i, i + 200).map(({ status, ...row }) => row)), // status ranks dupes only — not a column
     });
+    if (!w.ok) {
+      failed.push({ from: i, status: w.status, error: typeof w.data === 'string' ? w.data : (w.data?.message || null) });
+      console.error(`[refreshProductPrices] batch from ${i} refused (${w.status}): ${JSON.stringify(w.data)}`);
+    }
   }
-  return ok({ upserted: seen.length, pages, truncated });
+  if (failed.length) return json({ ok: false, error: 'price_upsert_failed', read: seen.length, rows: rows.length, failed, duplicate_skus: dupSkus }, 502);
+  return ok({ upserted: rows.length, read: seen.length, duplicate_skus: dupSkus, pages, truncated });
 }
 
 async function getProductPrice(url, auth, env) {
@@ -5651,10 +5661,12 @@ export default {
       return;
     }
 
-    // 09:00 IST Mondays — refresh the Shopify variant-price cache (goodies auto-fill).
+    // 09:00 IST SUNDAYS (Cloudflare counts day 1 as Sunday) — refresh the Shopify variant-price cache (goodies auto-fill).
     if (cron === '30 3 * * 1') {
       ctx.waitUntil(refreshProductPrices({}, CRON_AUTH, env).then(
-        () => console.log('[price-refresh] cron done'),
+        // A refused batch returns a 502 Response, which still RESOLVES — read the status, or the
+        // one scheduled caller logs "done" over a failed sweep (how this hid for weeks).
+        r => (r?.status >= 400 ? console.error : console.log)(`[price-refresh] cron ${r?.status >= 400 ? 'FAILED' : 'done'} (${r?.status})`),
         e => console.error('[price-refresh] cron error', e),
       ));
       return;
