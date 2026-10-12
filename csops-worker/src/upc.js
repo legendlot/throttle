@@ -12,7 +12,15 @@ export function normalizeUpc(raw) {
   const s = String(raw || '').trim();
   if (!s) return s;
   const m = s.match(/(\d+)\s*$/);   // trailing run of digits = the serial
-  return (m && m[1]) ? 'LOT-' + m[1].padStart(8, '0') : s;
+  if (!(m && m[1])) return s;
+  let digits = m[1];
+  // The label prints `<product code><serial>`, and a code ending in the letter O is read as a
+  // zero: "SHTO00431807" typed as "SHT000431807" leaves a 9-digit run → LOT-000431807, which
+  // matches nothing (S415, Pruthvi #bugs 1791800633). Every unit serial is exactly 8 digits, so
+  // surplus LEADING ZEROS are dropped. Any other surplus (an EAN pasted by mistake) is left
+  // as-is: "not found" is right there, and taking its last 8 digits would land on a stranger's unit.
+  if (digits.length > 8 && /^0+$/.test(digits.slice(0, digits.length - 8))) digits = digits.slice(-8);
+  return 'LOT-' + digits.padStart(8, '0');
 }
 
 /** cs_tickets columns that reference units(upc). */

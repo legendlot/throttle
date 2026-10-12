@@ -10,6 +10,17 @@ test('normalizeUpc: label prefixes and bare serials map to LOT-<8 digits>', () =
   assert.equal(normalizeUpc('LOT-00386646'), 'LOT-00386646');
 });
 
+test('normalizeUpc: a product code ending in O read as zero still resolves (S415)', () => {
+  assert.equal(normalizeUpc('SHT000431807'), 'LOT-00431807');   // SHTO typed with a zero
+  assert.equal(normalizeUpc('SHTO00431807'), 'LOT-00431807');
+  assert.equal(normalizeUpc('LOT-000431807'), 'LOT-00431807');
+});
+
+test('normalizeUpc: a long non-zero-padded run (an EAN) is NOT truncated onto some other unit', () => {
+  assert.equal(normalizeUpc('5949998559549'), 'LOT-5949998559549');
+  assert.equal(normalizeUpc('SHT100431807'), 'LOT-100431807');
+});
+
 test('normalizeUpc: blank and digitless input pass through', () => {
   assert.equal(normalizeUpc(''), '');
   assert.equal(normalizeUpc(null), '');

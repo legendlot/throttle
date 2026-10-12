@@ -1622,7 +1622,8 @@ async function lookupPastCases(params, auth, env) {
   const orFilters = [];
   if (phone)    orFilters.push(`customer_phone.eq.${encodeURIComponent(phone)}`);
   if (order_id) orFilters.push(`external_order_id.eq.${encodeURIComponent(order_id)}`);
-  if (upc)      orFilters.push(`lot_unit_upc.eq.${encodeURIComponent(upc)}`);
+  // lot_unit_upc is stored canonical (LOT-<8>) — a label-form UPC must be normalised to match.
+  if (upc)      orFilters.push(`lot_unit_upc.eq.${encodeURIComponent(normalizeUpc(upc))}`);
 
   const filters = [`or=(${orFilters.join(',')})`];
   if (exclude) filters.push(`id=neq.${exclude}`);
