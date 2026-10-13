@@ -181,6 +181,8 @@ export default function DamageLedgerPage() {
       setHasMore(data.length === filter.limit);
       // A search refinement keeps the ticks on rows that are still in the result.
       if (keepSelection) { const ids = new Set(data.map(x => x.id)); setSelected(prev => new Set([...prev].filter(id => ids.has(id)))); }
+    } catch (e) {
+      if (seq === reqSeq.current) toast(e.message || 'Failed to load', 'error');
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
@@ -197,6 +199,8 @@ export default function DamageLedgerPage() {
       // A row recorded since the first page shifts the offset by one — skip ids already shown.
       setRows(prev => { const seen = new Set(prev.map(x => x.id)); return [...prev, ...data.filter(x => !seen.has(x.id))]; });
       setHasMore(data.length === filter.limit);
+    } catch (e) {
+      if (seq === reqSeq.current) toast(e.message || 'Failed to load more', 'error');
     } finally {
       setLoadingMore(false);
     }
@@ -218,6 +222,8 @@ export default function DamageLedgerPage() {
     try {
       const r = await workerFetch('getDamageSummary', { data: {} }, session);
       setSummary(r?.ok ? (r.data || []) : []);
+    } catch (e) {
+      toast(e.message || 'Failed to load summary', 'error');
     } finally {
       setSumLoading(false);
     }
@@ -327,7 +333,8 @@ export default function DamageLedgerPage() {
       setRepairForm({ destination: '', notes: '' });
       await loadLedger();
       printBatch(r.data.batch_no);
-    } finally { setActing(false); }
+    } catch (e) { toast(e.message || 'Send to repair failed', 'error'); }
+    finally { setActing(false); }
   }
   async function submitScrap() {
     if (!canBatchScrap) return;
@@ -342,7 +349,8 @@ export default function DamageLedgerPage() {
       setScrapForm({ notes: '' });
       await loadLedger();
       printBatch(r.data.batch_no);
-    } finally { setActing(false); }
+    } catch (e) { toast(e.message || 'Scrap failed', 'error'); }
+    finally { setActing(false); }
   }
   async function submitRtv() {
     if (!canBatchRtv) return;
@@ -359,7 +367,8 @@ export default function DamageLedgerPage() {
       setRtvForm({ destination: '', notes: '' });
       await loadLedger();
       printBatch(r.data.batch_no);
-    } finally { setActing(false); }
+    } catch (e) { toast(e.message || 'RTV failed', 'error'); }
+    finally { setActing(false); }
   }
 
   function setLine(i, patch) {
@@ -399,7 +408,8 @@ export default function DamageLedgerPage() {
       resetRecord();
       await loadLedger();
       if (view === 'summary') loadSummary();
-    } finally { setActing(false); }
+    } catch (e) { toast(e.message || 'Record failed', 'error'); }
+    finally { setActing(false); }
   }
 
   async function submitDamageOut() {
@@ -436,31 +446,38 @@ export default function DamageLedgerPage() {
       setOutOpen(false);
       await Promise.all([loadLedger(), loadSummary()]);
       printBatch(r.data.batch_no);
-    } finally { setActing(false); }
+    } catch (e) { toast(e.message || 'Damage out failed', 'error'); }
+    finally { setActing(false); }
   }
 
   async function markRepaired(row) {
     if (!confirm(`Mark ${row.ledger_no} as repaired and restock ${row.qty} ${row.part_code}?`)) return;
-    const r = await workerFetch('damageMarkRepaired', { data: { ledger_id: row.id } }, session);
-    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
-    toast(`${row.ledger_no} restocked +${r.data.restocked_qty}`, 'success');
-    loadLedger();
+    try {
+      const r = await workerFetch('damageMarkRepaired', { data: { ledger_id: row.id } }, session);
+      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+      toast(`${row.ledger_no} restocked +${r.data.restocked_qty}`, 'success');
+      loadLedger();
+    } catch (e) { toast(e.message || 'Failed', 'error'); }
   }
   async function markNotRepairable(row) {
     const reason = prompt(`Why is ${row.ledger_no} not repairable? (becomes scrap on next batch)`);
     if (reason == null) return;
-    const r = await workerFetch('damageMarkNotRepairable', { data: { ledger_id: row.id, notes: reason } }, session);
-    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
-    toast(`${row.ledger_no} returned to pending`, 'success');
-    loadLedger();
+    try {
+      const r = await workerFetch('damageMarkNotRepairable', { data: { ledger_id: row.id, notes: reason } }, session);
+      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+      toast(`${row.ledger_no} returned to pending`, 'success');
+      loadLedger();
+    } catch (e) { toast(e.message || 'Failed', 'error'); }
   }
   async function cancelRow(row) {
     const reason = prompt(`Cancel ${row.ledger_no} — reason?`);
     if (!reason || !reason.trim()) return;
-    const r = await workerFetch('damageCancel', { data: { ledger_id: row.id, reason: reason.trim() } }, session);
-    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
-    toast(`${row.ledger_no} cancelled`, 'success');
-    loadLedger();
+    try {
+      const r = await workerFetch('damageCancel', { data: { ledger_id: row.id, reason: reason.trim() } }, session);
+      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+      toast(`${row.ledger_no} cancelled`, 'success');
+      loadLedger();
+    } catch (e) { toast(e.message || 'Failed', 'error'); }
   }
 
   async function openHistory(row) {
@@ -470,7 +487,8 @@ export default function DamageLedgerPage() {
     try {
       const r = await workerFetch('getDamageLedgerHistory', { data: { ledger_id: row.id } }, session);
       setHistory(r?.ok ? (r.data || []) : []);
-    } finally { setHistLoading(false); }
+    } catch (e) { toast(e.message || 'Failed to load history', 'error'); }
+    finally { setHistLoading(false); }
   }
 
   function batchPillFor(row) {

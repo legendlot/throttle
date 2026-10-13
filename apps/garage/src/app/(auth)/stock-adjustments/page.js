@@ -80,7 +80,8 @@ export default function StockAdjustmentsPage() {
       const f = tab === 'all' ? { posted: false } : { approval_status: tab };
       const r = await workerFetch('getStockAdjustments', { data: f }, session);
       setRows(r?.ok ? (r.data || []) : []);
-    } finally { setLoading(false); }
+    } catch (e) { toast(e.message || 'Failed to load', 'error'); }
+    finally { setLoading(false); }
   }
   useEffect(() => { loadList(); /* eslint-disable-next-line */ }, [tab, session]);
 
@@ -91,7 +92,8 @@ export default function StockAdjustmentsPage() {
     try {
       const r = await workerFetch('getStockAdjustment', { data: { adj_no } }, session);
       setDetail(r?.ok ? r.data : null);
-    } finally { setDetailLoading(false); }
+    } catch (e) { toast(e.message || 'Failed to load', 'error'); }
+    finally { setDetailLoading(false); }
   }
 
   return (
@@ -219,7 +221,8 @@ function AdjustmentDetailModal({ adjNo, detail, loading, session, toast, canAppr
       setAction(null);
       setReason('');
       onReload();
-    } finally { setActing(false); }
+    } catch (e) { toast(e.message || 'Failed', 'error'); }
+    finally { setActing(false); }
   }
 
   return (
@@ -352,7 +355,8 @@ function NewAdjustmentModal({ session, toast, onClose, onCreated }) {
       if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
       toast(`Created ${r.data.adj_no} · tier=${r.data.required_tier.toUpperCase()} · status=${r.data.approval_status}`, 'success');
       onCreated();
-    } finally { setSubmitting(false); }
+    } catch (e) { toast(e.message || 'Failed', 'error'); }
+    finally { setSubmitting(false); }
   }
 
   return (

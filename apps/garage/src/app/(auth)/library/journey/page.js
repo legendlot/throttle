@@ -117,6 +117,8 @@ export default function PartJourneyPage() {
       const r = await workerFetch('getPartJourney', { data: { part_code: code, limit: 500 } }, session);
       if (!r?.ok) { toast(r?.data?.error || 'Load failed', 'error'); setJourney(null); return; }
       setJourney(r.data);
+    } catch (e) {
+      toast(e.message || 'Load failed', 'error'); setJourney(null);
     } finally {
       setLoading(false);
     }
