@@ -1164,7 +1164,7 @@ async function getTickets(params, auth, env) {
     updated: 'stage_changed_at.desc.nullslast',
   };
   const orderClause = `order=${ORDERS[sort] || ORDERS.newest}`;
-  const path = `/rest/v1/cs_tickets?select=id,ticket_no,created_at,customer_name,customer_phone,product,product_model,product_color,platform,external_order_id,disposition,issue_category,issue_subcategory,issue_subcategory_custom,stage,stage_changed_at,assigned_agent_id,assigned_agent_name,due_at,closed_at,auto_created,closure_requested_at,closure_requested_by_name,closure_request_reason&${filters.join('&')}&${orderClause}&limit=${limit}&offset=${offset}`;
+  const path = `/rest/v1/cs_tickets?select=id,ticket_no,created_at,customer_name,customer_phone,product,product_model,product_color,platform,platform_other,external_order_id,disposition,issue_category,issue_subcategory,issue_subcategory_custom,stage,stage_changed_at,assigned_agent_id,assigned_agent_name,due_at,closed_at,auto_created,closure_requested_at,closure_requested_by_name,closure_request_reason&${filters.join('&')}&${orderClause}&limit=${limit}&offset=${offset}`;
 
   const res = await sb(path, env, {
     headers: { Prefer: 'count=exact' },
@@ -3268,7 +3268,7 @@ async function createTicket(body, auth, env) {
 
   const {
     intake_channel, customer_name, customer_phone, customer_email, customer_address,
-    platform, external_order_id, lot_unit_upc,
+    platform, platform_other, external_order_id, lot_unit_upc,
     product, product_sku, product_model, product_color,
     issue_category, issue_subcategory, issue_subcategory_custom, issue_description,
     disposition,
@@ -3282,6 +3282,10 @@ async function createTicket(body, auth, env) {
   if ((issue_category === 'Other' || issue_subcategory === 'Other') && !issue_subcategory_custom) {
     return err('issue_subcategory_custom required when category or subcategory is Other');
   }
+
+  // Platform 'other' must name the platform (Pruthvi #bugs 1791879432) — kept only for 'other'.
+  const platformOther = platform === 'other' ? String(platform_other || '').trim().slice(0, 80) : '';
+  if (platform === 'other' && !platformOther) return err('Platform name required when platform is Other');
 
   // Atomic sequence increment
   const year = String(new Date().getFullYear());
@@ -3339,6 +3343,7 @@ async function createTicket(body, auth, env) {
       customer_email: customer_email || null,
       customer_address: customer_address || null,
       platform: platform || null,
+      platform_other: platformOther || null,
       // Agent-supplied wins; otherwise infer from the customer's orders (see inferOrderLink).
       external_order_id: external_order_id || inferred?.external_order_id || null,
       ...(!external_order_id && inferred?.purchase_date ? { purchase_date: inferred.purchase_date } : {}),
@@ -3412,6 +3417,14 @@ async function updateTicket(body, auth, env) {
     if (!PROTECTED.has(k)) cleanPatch[k] = v;
   }
   if (Object.keys(cleanPatch).length === 0) return err('Nothing to update');
+
+  // Same rule as createTicket: 'other' carries a platform name; any other platform carries none.
+  if ('platform' in cleanPatch || 'platform_other' in cleanPatch) {
+    const nextPlatform = 'platform' in cleanPatch ? cleanPatch.platform : current.platform;
+    const nextOther = String(('platform_other' in cleanPatch ? cleanPatch.platform_other : current.platform_other) || '').trim().slice(0, 80);
+    if (nextPlatform === 'other' && !nextOther) return err('Platform name required when platform is Other');
+    cleanPatch.platform_other = nextPlatform === 'other' ? nextOther : null;
+  }
 
   // UPC columns FK to units(upc): normalise the way createTicket does, then confirm the unit
   // exists so a typo gets a readable message instead of a raw FK violation (see upc.js).

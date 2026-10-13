@@ -26,7 +26,7 @@ const TABS = [
   { id: 'closed',     label: 'Closed' },
 ];
 
-const PLATFORMS = ['website', 'amazon', 'cred', 'blinkit', 'instamart', 'marketplace', 'offline', 'zepto', 'swiggy'];
+const PLATFORMS = ['website', 'amazon', 'flipkart', 'cred', 'blinkit', 'instamart', 'marketplace', 'offline', 'zepto', 'swiggy', 'investor', 'other'];
 
 const PAGE_SIZE = 50;
 
@@ -199,7 +199,7 @@ export default function QueuePage() {
       ['ticket_no', 'customer', 'phone', 'product', 'model', 'disposition', 'stage', 'platform', 'agent', 'created_at', 'due_at', 'closed_at'],
       ...tickets.map(t => [
         t.ticket_no, t.customer_name || '', maskPhone(t.customer_phone), t.product || '', t.product_model || '',
-        t.disposition || '', t.stage, t.platform || '', t.assigned_agent_name || '', t.created_at || '', t.due_at || '', t.closed_at || '',
+        t.disposition || '', t.stage, (t.platform === 'other' && t.platform_other ? `other — ${t.platform_other}` : t.platform) || '', t.assigned_agent_name || '', t.created_at || '', t.due_at || '', t.closed_at || '',
       ]),
     ];
     const csv = rows.map(r => r.map(v => {

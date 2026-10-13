@@ -806,7 +806,7 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh, onOr
       {t.call_session_id && <CallBlock ticket={t} />}
 
       <SectionLabel style={{ marginTop: 18 }}>Order</SectionLabel>
-      <Field label="Platform" value={t.platform || '—'} />
+      <Field label="Platform" value={t.platform === 'other' && t.platform_other ? `other — ${t.platform_other}` : (t.platform || '—')} />
       <Field label="Order ID"  value={t.external_order_id || '—'} mono />
       <Field label="Purchased" value={t.purchase_date ? `${t.purchase_date}${ageingLabel(t.purchase_date, t.created_at)}` : '—'} />
       <Field label="UPC"       value={t.lot_unit_upc || '—'} mono />

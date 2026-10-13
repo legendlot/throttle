@@ -12,7 +12,7 @@ import { fmtIstDateLong } from '../../../lib/datetime.js';
 import { catalogCategories, filterByCategory, categoryOfProduct } from '../../../lib/catalog.js';
 
 const PLATFORMS = [
-  '', 'website','amazon','cred','blinkit','instamart','marketplace','offline','zepto','swiggy','investor','other'
+  '', 'website','amazon','flipkart','cred','blinkit','instamart','marketplace','offline','zepto','swiggy','investor','other'
 ];
 const INTAKE_CHANNELS = ['phone','whatsapp','email','marketplace','walkin','other'];
 
@@ -56,6 +56,7 @@ export default function NewTicketPage() {
     customer_email:  '',
     customer_address:'',
     platform:        '',
+    platform_other:  '',
     external_order_id: '',
     lot_unit_upc:    '',
     product:         '',
@@ -139,6 +140,7 @@ export default function NewTicketPage() {
     e?.preventDefault();
     if (!form.customer_name.trim())      return setError('Customer name required');
     if (!form.issue_description.trim())  return setError('Issue description required');
+    if (form.platform === 'other' && !form.platform_other.trim()) return setError('Platform name required when platform is Other');
     setError(null);
     setSubmitting(true);
     try {
@@ -175,6 +177,9 @@ export default function NewTicketPage() {
               <select value={form.platform} onChange={set('platform')} style={inputStyle}>
                 {PLATFORMS.map(p => <option key={p} value={p}>{p || '— select —'}</option>)}
               </select>
+              {form.platform === 'other' && (
+                <input value={form.platform_other} onChange={set('platform_other')} placeholder="Platform name (required)" required style={{ ...inputStyle, marginTop: 6 }} />
+              )}
             </Field>
             <Field label="External order ID">
               <input value={form.external_order_id} onChange={set('external_order_id')} placeholder="LOT8069 / 403-..." style={inputStyle} />
