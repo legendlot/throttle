@@ -51,6 +51,9 @@ test('support_channel: known channels get their display label', () => {
   assert.equal(analyticsDims({ intake_channel: 'whatsapp' }, {}).support_channel, 'WhatsApp');
   assert.equal(analyticsDims({ intake_channel: 'email' }, {}).support_channel, 'Email');
   assert.equal(analyticsDims({ intake_channel: 'sheet' }, {}).support_channel, 'Imported');
+  assert.equal(analyticsDims({ intake_channel: 'instagram' }, {}).support_channel, 'Instagram');
+  assert.equal(analyticsDims({ intake_channel: 'facebook' }, {}).support_channel, 'Facebook');
+  assert.equal(analyticsDims({ intake_channel: 'web' }, {}).support_channel, 'Web');
 });
 
 test('support_channel: an UNKNOWN channel passes through as itself, and only a missing one is Unknown', () => {

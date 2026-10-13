@@ -803,6 +803,8 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh, onOr
         <ShopifyPanel session={session} phone={t.customer_phone} email={t.customer_email} autoLoad onOrders={onOrders} />
       </div>
 
+      <Field label="Channel" value={t.intake_channel === 'other' && t.intake_channel_other ? `other — ${t.intake_channel_other}` : (t.intake_channel || '—')} />
+
       {t.call_session_id && <CallBlock ticket={t} />}
 
       <SectionLabel style={{ marginTop: 18 }}>Order</SectionLabel>

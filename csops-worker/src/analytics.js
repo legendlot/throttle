@@ -7,7 +7,7 @@
 // silently) was not needed. Prefer this shape for any new pure helper.
 
 export const SUPPORT_CHANNEL_LABELS = {
-  whatsapp: 'WhatsApp', email: 'Email', instagram: 'Instagram', messenger: 'Messenger',
+  whatsapp: 'WhatsApp', email: 'Email', instagram: 'Instagram', messenger: 'Messenger', facebook: 'Facebook',
   web: 'Web', sheet: 'Imported', other: 'Other',
 };
 // The five filterable dimensions, each derived ONCE here and used for both the option

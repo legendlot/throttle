@@ -3267,7 +3267,7 @@ async function createTicket(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
 
   const {
-    intake_channel, customer_name, customer_phone, customer_email, customer_address,
+    intake_channel, intake_channel_other, customer_name, customer_phone, customer_email, customer_address,
     platform, platform_other, external_order_id, lot_unit_upc,
     product, product_sku, product_model, product_color,
     issue_category, issue_subcategory, issue_subcategory_custom, issue_description,
@@ -3286,6 +3286,9 @@ async function createTicket(body, auth, env) {
   // Platform 'other' must name the platform (Pruthvi #bugs 1791879432) — kept only for 'other'.
   const platformOther = platform === 'other' ? String(platform_other || '').trim().slice(0, 80) : '';
   if (platform === 'other' && !platformOther) return err('Platform name required when platform is Other');
+  // Intake channel 'other' must name the channel too (Pruthvi #bugs 1791892361).
+  const intakeOther = intake_channel === 'other' ? String(intake_channel_other || '').trim().slice(0, 80) : '';
+  if (intake_channel === 'other' && !intakeOther) return err('Channel name required when intake channel is Other');
 
   // Atomic sequence increment
   const year = String(new Date().getFullYear());
@@ -3338,6 +3341,7 @@ async function createTicket(body, auth, env) {
       created_by_user_id: auth.userId,
       created_by_name: auth.fullName,
       intake_channel: intake_channel || 'phone',
+      intake_channel_other: intakeOther || null,
       customer_name,
       customer_phone: normPhone,
       customer_email: customer_email || null,
@@ -3428,6 +3432,12 @@ async function updateTicket(body, auth, env) {
     const nextOther = String(('platform_other' in cleanPatch ? cleanPatch.platform_other : current.platform_other) || '').trim().slice(0, 80);
     if (nextPlatform === 'other' && !nextOther) return err('Platform name required when platform is Other');
     cleanPatch.platform_other = nextPlatform === 'other' ? nextOther : null;
+  }
+  if ('intake_channel' in cleanPatch || 'intake_channel_other' in cleanPatch) {
+    const nextChannel = 'intake_channel' in cleanPatch ? cleanPatch.intake_channel : current.intake_channel;
+    const nextOther = String(('intake_channel_other' in cleanPatch ? cleanPatch.intake_channel_other : current.intake_channel_other) || '').trim().slice(0, 80);
+    if (nextChannel === 'other' && !nextOther) return err('Channel name required when intake channel is Other');
+    cleanPatch.intake_channel_other = nextChannel === 'other' ? nextOther : null;
   }
 
   // UPC columns FK to units(upc): normalise the way createTicket does, then confirm the unit
@@ -11019,8 +11029,10 @@ async function setThreadPriority(body, auth, env) {
 
 // Quick-create a ticket FROM a DM conversation and auto-link it (S164, Pruthvi).
 // Mirrors createTicket's insert shape; prefills customer + channel from the thread.
-// IG/FB have no phone → intake_channel='other', customer_name = handle. Idempotent:
+// IG/FB have no phone → customer_name = handle; intake_channel follows the thread's channel
+// (THREAD_INTAKE_CHANNEL). Idempotent:
 // if the thread already links a ticket, returns it instead of minting a duplicate.
+const THREAD_INTAKE_CHANNEL = { whatsapp: 'whatsapp', email: 'email', instagram: 'instagram', messenger: 'facebook', web: 'web' };
 async function createTicketFromThread(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { thread_id } = body;
@@ -11059,7 +11071,8 @@ async function createTicketFromThread(body, auth, env) {
       cs_department_id: auth.cs_department_id || null,
       created_by_user_id: auth.userId,
       created_by_name: auth.fullName,
-      intake_channel: isWa ? 'whatsapp' : 'other',
+      intake_channel: THREAD_INTAKE_CHANNEL[thread.channel] || 'other',
+      intake_channel_other: THREAD_INTAKE_CHANNEL[thread.channel] ? null : (thread.channel || 'unknown'),
       customer_name,
       customer_phone: isWa ? (thread.customer_phone || null) : null,
       disposition: 'pending',

@@ -14,7 +14,7 @@ import { catalogCategories, filterByCategory, categoryOfProduct } from '../../..
 const PLATFORMS = [
   '', 'website','amazon','flipkart','cred','blinkit','instamart','marketplace','offline','zepto','swiggy','investor','other'
 ];
-const INTAKE_CHANNELS = ['phone','whatsapp','email','marketplace','walkin','other'];
+const INTAKE_CHANNELS = ['phone','whatsapp','email','instagram','facebook','web','marketplace','walkin','other'];
 
 const inputStyle = {
   background: 'var(--surface-2)',
@@ -51,6 +51,7 @@ export default function NewTicketPage() {
 
   const [form, setForm] = useState({
     intake_channel:  'phone',
+    intake_channel_other: '',
     customer_name:   prefilledName,
     customer_phone:  prefilledPhone,
     customer_email:  '',
@@ -141,6 +142,7 @@ export default function NewTicketPage() {
     if (!form.customer_name.trim())      return setError('Customer name required');
     if (!form.issue_description.trim())  return setError('Issue description required');
     if (form.platform === 'other' && !form.platform_other.trim()) return setError('Platform name required when platform is Other');
+    if (form.intake_channel === 'other' && !form.intake_channel_other.trim()) return setError('Channel name required when intake channel is Other');
     setError(null);
     setSubmitting(true);
     try {
@@ -273,6 +275,9 @@ export default function NewTicketPage() {
               <select value={form.intake_channel} onChange={set('intake_channel')} style={inputStyle}>
                 {INTAKE_CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
+              {form.intake_channel === 'other' && (
+                <input value={form.intake_channel_other} onChange={set('intake_channel_other')} placeholder="Channel name (required)" required style={{ ...inputStyle, marginTop: 6 }} />
+              )}
             </Field>
           </Row>
           <Field label="Description *" wide>
