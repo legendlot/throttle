@@ -6,6 +6,13 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## 1.30.1 - 2026-10-13
+
+- **Cycle Counts**: new "Recounting lines" section. Flagging lines for recount, the new
+  "START RECOUNT (N)" button on a Counted count (opens a new count of just the flagged parts with
+  their reasons, closes the old one as Reconciled with "recounted on CYC-xxx"), and the refusal
+  when another open count holds any of those parts.
+
 ## 1.30.0 - 2026-10-13
 
 - **Cycle Counts**: documents that several counts can now be open at once (one per product, requested

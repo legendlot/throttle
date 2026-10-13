@@ -105,6 +105,7 @@ export default function CycleCountsPage() {
       toast={toast}
       onBack={() => { setActiveCount(null); setDetail(null); loadList(); }}
       onReload={() => openDetail(activeCount, { blind: detail.header.status === 'in_progress' })}
+      onOpen={no => { loadList(); openDetail(no, { blind: true }); }}
       canRecord={canRecord}
     />;
   }
@@ -381,7 +382,7 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Count detail view — blind entry UX
 // ─────────────────────────────────────────────────────────────────────────────
-function CountDetailView({ header, lines, session, toast, onBack, onReload, canRecord }) {
+function CountDetailView({ header, lines, session, toast, onBack, onReload, onOpen, canRecord }) {
   const [entries, setEntries] = useState({}); // part_code → counted_qty draft
   const [savingPart, setSavingPart] = useState(null);
   const [recountSel, setRecountSel] = useState(new Set());
@@ -496,6 +497,22 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
     finally { setCompleting(false); }
   }
 
+  // Parts flagged for recount are counted again on a NEW count (the worker resolves them from
+  // this one, links each new line to the old, and closes this count). Ideally a different person
+  // counts them.
+  const [startingRecount, setStartingRecount] = useState(false);
+  async function startRecount() {
+    if (!confirm(`Start a recount of the ${stats.recount} flagged part(s) on ${header.count_no}?\n\nA new count opens with just these parts, and ${header.count_no} is closed. Ideally a different person does the recount.`)) return;
+    setStartingRecount(true);
+    try {
+      const r = await workerFetch('createCycleCount',
+        { data: { count_type: 'recount', recount_of: header.count_no } }, session);
+      toast(`${r.data.count_no} started — recount of ${r.data.lines_created} part(s) from ${header.count_no}`, 'success');
+      onOpen(r.data.count_no);
+    } catch (e) { toast(e.message || 'Could not start the recount', 'error'); onReload(); }
+    finally { setStartingRecount(false); }
+  }
+
   async function cancel() {
     const reason = prompt(`Cancel ${header.count_no}? Reason:`);
     if (!reason || !reason.trim()) return;
@@ -513,9 +530,13 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
     printWindow(buildCycleCountSheetHtml(header, lines.filter(l => l.status !== 'cancelled')));
   }
 
+  // A line moved to a recount count is closed as `cancelled` with "recounted on CYC-x" in its
+  // notes — show it as Recounted, not Removed.
+  const isRecounted = l => l.status === 'cancelled' && /recounted on CYC-/.test(l.notes || '');
   const stats = useMemo(() => ({
     total:     lines.filter(l => l.status !== 'cancelled').length,
-    removed:   lines.filter(l => l.status === 'cancelled').length,
+    removed:   lines.filter(l => l.status === 'cancelled' && !isRecounted(l)).length,
+    recounted: lines.filter(isRecounted).length,
     pending:   lines.filter(l => l.status === 'pending_count').length,
     counted:   lines.filter(l => l.status === 'counted').length,
     recount:   lines.filter(l => l.status === 'recount_required').length,
@@ -543,6 +564,9 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
             {canRecord && isInProgress && selectedLines.length > 0 && (
               <button onClick={() => removeLines(selectedLines)} disabled={removing} style={{ ...btnS, color: '#ff7070', borderColor: 'rgba(222,42,42,.3)' }}>{removing ? 'REMOVING…' : `✕ REMOVE ${selectedLines.length}`}</button>
             )}
+            {canRecord && header.status === 'counted' && stats.recount > 0 && (
+              <button onClick={startRecount} disabled={startingRecount} style={{ ...btnP, opacity: startingRecount ? 0.6 : 1 }}>{startingRecount ? 'STARTING…' : `⤿ START RECOUNT (${stats.recount})`}</button>
+            )}
             {canRecord && isInProgress && stats.pending === 0 && (
               <button onClick={complete} disabled={completing} style={{ ...btnP, opacity: completing ? 0.6 : 1 }}>{completing ? 'COMPLETING…' : '✓ COMPLETE COUNT'}</button>
             )}
@@ -560,6 +584,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
             <KpiTile label="Recount" value={stats.recount} tone="orange" />
             <KpiTile label="Reconciled" value={stats.reconciled} tone="green" />
             {stats.removed > 0 && <KpiTile label="Removed" value={stats.removed} />}
+            {stats.recounted > 0 && <KpiTile label={`Recounted on ${(lines.find(isRecounted)?.notes || '').match(/CYC-\d+/)?.[0] || 'a new count'}`} value={stats.recounted} tone="orange" />}
             {!isBlind && stats.variance_lines > 0 && <KpiTile label="With Variance" value={stats.variance_lines} tone="red" />}
             <KpiTile label="Bags Scanned" value={totalScans} tone={totalScans > 0 ? 'green' : 'gray'} />
           </div>
@@ -679,9 +704,9 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
         <Modal open onClose={() => setRecountOpen(false)} size="md" title={`Flag ${recountIds.length} line(s) for recount`}
                confirmLabel="FLAG FOR RECOUNT" onConfirm={flagRecount}>
           <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--t2)' }}>
-            Flagged lines stay on this count but get marked as <code>recount_required</code>. Create a fresh count
-            with <code>count_type=&apos;recount&apos;</code> assigning a <strong>different counter</strong> to satisfy
-            segregation of duties.
+            Flagged lines stay on this count, are not adjusted when it is completed, and show in the Recount tile.
+            After completing, press <strong>Start recount</strong> on this count: a new count opens with just those
+            parts. Ideally a <strong>different person</strong> does the recount.
           </p>
           <div>
             <label style={lbl}>Reason</label>
