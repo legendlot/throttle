@@ -20,14 +20,16 @@
   <div class="a-row"><div class="a-key">With Production</div><div class="a-val"><p>Units still in the production stage, built and inwarded but <strong>not yet finished and ready for dispatch</strong>. These are coming, but you can&rsquo;t ship them yet.</p></div></div>
   <div class="a-row"><div class="a-key">Unalloc (R)</div><div class="a-val"><p><strong>Unallocated, Retail.</strong> Finished, packed for the <em>Retail</em> format, but not yet committed to a specific dispatch channel. Shown in yellow: this is stock waiting for a decision.</p></div></div>
   <div class="a-row"><div class="a-key">Unalloc (E)</div><div class="a-val"><p><strong>Unallocated, Ecom.</strong> The same, but packed for the <em>Ecom</em> format. Also yellow.</p></div></div>
-  <div class="a-row"><div class="a-key">Unalloc (Total)</div><div class="a-val"><p>The two unallocated columns added together: all finished-but-uncommitted stock for the product, regardless of format.</p></div></div>
+  <div class="a-row"><div class="a-key">Unalloc (X)</div><div class="a-val"><p><strong>Unallocated, Export.</strong> Boxes packed on the export channel (their box labels end in <strong>-X</strong>), not yet committed to a shipment. Also yellow.</p></div></div>
+  <div class="a-row"><div class="a-key">Unalloc (?)</div><div class="a-val"><p><strong>Unallocated, channel unknown.</strong> Units held with dispatch that have <em>no packing scan</em>, so we can&rsquo;t tell which format they were packed in. These are mostly old returns and RTO units. They are <strong>not Retail</strong>; don&rsquo;t count them as Retail stock. Shown in grey because it&rsquo;s a &ldquo;find out what this is&rdquo; bucket, not a ready-to-ship one.</p></div></div>
+  <div class="a-row"><div class="a-key">Unalloc (Total)</div><div class="a-val"><p>All four unallocated columns added together, R + E + X + ?: every unit dispatch is holding that isn&rsquo;t yet committed to a channel, whatever its format (or unknown format).</p></div></div>
   <div class="a-row"><div class="a-key">Total Allocated</div><div class="a-val"><p>Units already committed to a channel and waiting to be packed into a shipment (green). The sum of all the channel columns to its right.</p></div></div>
   <div class="a-row"><div class="a-key">Channel columns</div><div class="a-val"><p>One column per active sales channel (Amazon, Flipkart, Cred, retail partners&hellip;), showing how many allocated units are committed to each. These are the live channels from the Channel Master.</p></div></div>
 </div>
 
 <div class="callout tip">
   <div class="c-title">&#10003; Reading R vs E</div>
-  <p>&ldquo;Retail&rdquo; and &ldquo;Ecom&rdquo; here are the <strong>packing format</strong> a unit was finished in (the sticker it carries), not its final destination channel. A unit is first packed Retail or Ecom, then later <em>allocated</em> to a specific channel. That&rsquo;s why a unit moves from the yellow Unalloc columns into a green channel column as dispatch commits it.</p>
+  <p>&ldquo;Retail&rdquo;, &ldquo;Ecom&rdquo; and &ldquo;Export&rdquo; here are the <strong>packing format</strong> a unit was finished in (the sticker it carries), not its final destination channel. A unit is first packed Retail or Ecom, then later <em>allocated</em> to a specific channel. That&rsquo;s why a unit moves from the yellow Unalloc columns into a green channel column as dispatch commits it.</p>
 </div>
 
 <h2 class="sec">The totals row</h2>

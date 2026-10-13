@@ -1,5 +1,9 @@
 # Changelog — Depot Operations Manual
 
+## 1.16.1 — 2026-10-13
+
+- **Dispatch Pipeline:** the unallocated columns are now R, E, **X (export, box labels ending -X)** and **? (held units with no packing scan, channel unknown; mostly old returns/RTO, not Retail)**. Unalloc (Total) is explained as all four added together. Previously the chapter described only R and E.
+
 ## 1.16.0 — 2026-09-10 (Session 370)
 
 - **Scan Feed:** search now takes a courier AWB as well as a UPC or box label, and works both
