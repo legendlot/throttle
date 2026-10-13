@@ -4604,13 +4604,26 @@ async function placeCall(body, auth, env) {
  */
 async function handleExotelStatus(request, url, env, ctx) {
   if (!exotelWebhookAuthed(url, env)) return err('Unauthorized', 401);
-  const payload = await request.json().catch(() => null);
+  // connect() asks for StatusCallbackContentType=application/json, but Exotel's default is
+  // form-encoded and nothing has ever confirmed which one arrives (every exotel cs_calls row's
+  // last_event is 'poll' — the 2-min poller overwrites it, so the webhook's effect can't be seen
+  // in the data). Accept both; the flat form keys (CallSid, Status, ...) match the JSON ones.
+  // Parse by CONTENT, not header: a JSON body with a missing/odd content-type must still parse.
+  // Empty form fields are dropped so `Duration=` doesn't become Number('') = 0.
+  const ctype = (request.headers.get('content-type') || '').toLowerCase();
+  const text = await request.text().catch(() => '');
+  let payload = null, fmt = 'none';
+  try { payload = JSON.parse(text); fmt = 'json'; }
+  catch {
+    const form = Object.fromEntries([...new URLSearchParams(text)].filter(([, v]) => v !== ''));
+    if (Object.keys(form).length) { payload = form; fmt = 'form'; }
+  }
 
   background(ctx, (async () => {
     try {
       const call = payload?.Call || payload || {};
       const sid = call.Sid || call.CallSid;
-      if (!sid) return;
+      if (!sid) { console.warn(`[exotel:status] no sid (${fmt}, content-type: ${ctype || 'none'})`); return; }
       const talk = Number(call.Details?.ConversationDuration ?? call.ConversationDuration);
       const { status, dial_status } = mapExotelStatus(call.Status, talk, Boolean(call.EndTime), exotelConnected(call));
       const patch = { status, dial_status, raw_meta: { last_event: 'status', provider: 'exotel' } };
@@ -4621,7 +4634,7 @@ async function handleExotelStatus(request, url, env, ctx) {
 
       await sb(`/rest/v1/cs_calls?provider=eq.exotel&provider_call_sid=eq.${encodeURIComponent(sid)}`, env,
         { method: 'PATCH', body: JSON.stringify(patch) });
-      console.log(`[exotel:status] sid=${sid} -> ${status}`);
+      console.log(`[exotel:status] sid=${sid} -> ${status} (${fmt}, content-type: ${ctype || 'none'})`);
     } catch (e) {
       console.error('[exotel:status] failed', e?.message || e);
     }
