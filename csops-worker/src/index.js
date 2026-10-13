@@ -3389,7 +3389,7 @@ async function updateTicket(body, auth, env) {
   if (!ticket_id || !patch || typeof patch !== 'object') return err('ticket_id and patch required');
 
   // Stage-aware editable fields enforcement
-  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&select=*&limit=1`, env);
+  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}&select=*&limit=1`, env);
   const current = tRes.data?.[0];
   if (!current) return err('Ticket not found', 404);
 
@@ -3417,6 +3417,10 @@ async function updateTicket(body, auth, env) {
     if (!PROTECTED.has(k)) cleanPatch[k] = v;
   }
   if (Object.keys(cleanPatch).length === 0) return err('Nothing to update');
+  // NOT NULL columns an agent can edit: refuse an empty value with a readable message.
+  for (const [k, label] of [['disposition', 'Disposition'], ['customer_name', 'Name'], ['issue_description', 'Issue description']]) {
+    if (k in cleanPatch && String(cleanPatch[k] ?? '').trim() === '') return err(`${label} can't be empty`);
+  }
 
   // Same rule as createTicket: 'other' carries a platform name; any other platform carries none.
   if ('platform' in cleanPatch || 'platform_other' in cleanPatch) {
@@ -3477,7 +3481,7 @@ async function updateTicket(body, auth, env) {
     }
   }
 
-  const upd = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}`, env, {
+  const upd = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`, env, {
     method: 'PATCH',
     body: JSON.stringify(cleanPatch),
   });
@@ -3486,9 +3490,14 @@ async function updateTicket(body, auth, env) {
   // History per changed field — log user-supplied fields + 'stage' + 'disposition',
   // but suppress injected system fields (stage_changed_at / closed_at / closed_reason /
   // closed_by_user_id) which are noise and expose raw UUIDs as human-facing values.
+  // An unchanged field is not history — the issue panel used to send all 10 of its inputs and
+  // wrote up to 10 noise rows per save (S412 review). Loose compare: a client may send a number
+  // or a numeric string, and null/'' are the same "empty".
+  const same = (a, b) => String(a ?? '') === String(b ?? '');
   await Promise.all(
     Object.entries(cleanPatch)
       .filter(([k]) => !injectedSystemKeys.has(k))
+      .filter(([k, v]) => !same(current[k], v))
       .map(([k, v]) => insertHistory(ticket_id, k, current[k], v, null, auth, env))
   );
 
@@ -3540,7 +3549,7 @@ async function advanceStage(body, auth, env, request) {
   const { ticket_id, target_stage, patch = {} } = body;
   if (!ticket_id || !target_stage) return err('ticket_id and target_stage required');
 
-  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&select=*&limit=1`, env);
+  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}&select=*&limit=1`, env);
   const t = tRes.data?.[0];
   if (!t) return err('Ticket not found', 404);
 
@@ -3569,7 +3578,7 @@ async function advanceStage(body, auth, env, request) {
   // Attachments count for awaiting_evidence → verified gate
   let attachCount = 0;
   if (target_stage === 'verified') {
-    const aRes = await sb(`/rest/v1/cs_ticket_attachments?ticket_id=eq.${ticket_id}&select=id`, env);
+    const aRes = await sb(`/rest/v1/cs_ticket_attachments?ticket_id=eq.${encodeURIComponent(ticket_id)}&select=id`, env);
     attachCount = (aRes.data || []).length;
   }
 
@@ -3601,7 +3610,7 @@ async function advanceStage(body, auth, env, request) {
     }
   }
 
-  const upd = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}`, env, {
+  const upd = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`, env, {
     method: 'PATCH',
     body: JSON.stringify(update),
   });
@@ -3615,7 +3624,7 @@ async function advanceStage(body, auth, env, request) {
   // the PATCH itself is the test. A ticket already owned keeps its owner — the closer is not
   // necessarily who did the work.
   if (['closed', 'cancelled', 'rejected'].includes(target_stage)) {
-    await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&assigned_agent_id=is.null`, env, {
+    await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}&assigned_agent_id=is.null`, env, {
       method: 'PATCH',
       body: JSON.stringify({
         assigned_agent_id: auth.userId,
@@ -3656,11 +3665,11 @@ async function assignAgent(body, auth, env) {
   const agent = aRes.data?.[0];
   if (!agent) return err('Agent not found', 404);
 
-  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&select=assigned_agent_id,assigned_agent_name&limit=1`, env);
+  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}&select=assigned_agent_id,assigned_agent_name&limit=1`, env);
   const t = tRes.data?.[0];
   if (!t) return err('Ticket not found', 404);
 
-  const upd = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}`, env, {
+  const upd = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`, env, {
     method: 'PATCH',
     body: JSON.stringify({ assigned_agent_id: agent.id, assigned_agent_name: agent.full_name }),
   });
@@ -5269,7 +5278,7 @@ async function getWaThread(params, auth, env) {
   // Resolve the ticket (we only need customer_phone)
   let tRes;
   if (ticket_id) {
-    tRes = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&select=id,ticket_no,customer_phone&limit=1`, env);
+    tRes = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}&select=id,ticket_no,customer_phone&limit=1`, env);
   } else {
     tRes = await sb(`/rest/v1/cs_tickets?ticket_no=eq.${encodeURIComponent(ticket_no)}&select=id,ticket_no,customer_phone&limit=1`, env);
   }
@@ -5756,7 +5765,7 @@ async function sendWaMessage(body, auth, env) {
   if (kind === 'template' && !template_name) return err('template_name required for template kind');
   if (['image','video','audio','document'].includes(kind) && !media_url) return err('media_url required for media kinds');
 
-  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&select=id,customer_phone&limit=1`, env);
+  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}&select=id,customer_phone&limit=1`, env);
   const t = tRes.data?.[0];
   if (!t) return err('Ticket not found', 404);
   if (!t.customer_phone) return err('Ticket has no customer_phone — cannot send WhatsApp', 422);

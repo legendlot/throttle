@@ -1147,6 +1147,7 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
   const [form, setForm] = useState(() => Object.fromEntries(fields.map(f => [f, ticket[f] ?? ''])));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const [badNumeric, setBadNumeric] = useState({});
 
   // Product catalog for the Issue section's Product → Variant → Colour cascade
   // (Pruthvi S149 — let agents tag the product on auto-created call tickets).
@@ -1164,12 +1165,26 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
     setSubmitting(true);
     setError(null);
     try {
+      // Send only what the agent CHANGED: the issue section alone has 10 inputs, and sending all
+      // of them wrote a history row per field on every save. A field emptied that had a value is
+      // sent as null so it can actually be cleared (it used to be silently dropped). The three
+      // NOT NULL columns can't be emptied — say so rather than fail in the database.
+      const REQUIRED = { disposition: 'Disposition', customer_name: 'Name', issue_description: 'Issue description' };
       const patch = {};
-      for (const [k, v] of Object.entries(form)) {
-        if (v !== '' && v !== null) {
-          patch[k] = numericFields.has(k) ? Number(v) : v;
+      const badField = Object.keys(badNumeric).find(k => badNumeric[k]);
+      if (badField) { setError(`${badField.replace(/_/g, ' ')} is not a valid number`); return; }
+      for (const [k, raw] of Object.entries(form)) {
+        const v = typeof raw === 'string' ? raw.trim() : raw;
+        const before = ticket[k] ?? '';
+        if (String(v ?? '') === String(before).trim()) continue;
+        if (v === '' || v === null) {
+          if (REQUIRED[k]) { setError(`${REQUIRED[k]} can't be empty`); return; }
+          patch[k] = null;
+          continue;
         }
+        patch[k] = numericFields.has(k) ? Number(v) : v;
       }
+      if (!Object.keys(patch).length) { onClose(); return; }
       await csopsPost('updateTicket', { ticket_id: ticket.id, patch }, session);
       onSaved();
     } catch (e) { setError(e.message); }
@@ -1219,7 +1234,13 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
               <input
                 type={f === 'purchase_date' ? 'date' : numericFields.has(f) ? 'number' : 'text'}
                 value={form[f] || ''}
-                onChange={e => setForm(s => ({ ...s, [f]: e.target.value }))}
+                onChange={e => {
+                  // A number box hands back '' for unreadable input ("1e", "-"); remember that so
+                  // save() refuses it instead of treating it as "clear the amount".
+                  const bad = !!e.target.validity?.badInput;
+                  setBadNumeric(b => ({ ...b, [f]: bad }));
+                  setForm(s => ({ ...s, [f]: e.target.value }));
+                }}
                 style={inputStyle}
               />
             )}
