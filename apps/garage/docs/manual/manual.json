@@ -2,8 +2,8 @@
   "title": "Garage",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to store, inventory, fulfilment, returns and procurement at Legend of Toys.",
-  "version": "1.29.0",
-  "date": "2026-09-11",
+  "version": "1.30.0",
+  "date": "2026-10-13",
   "app_url": "garage.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {

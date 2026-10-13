@@ -9,9 +9,9 @@
 
 <h2 class="sec">The flow</h2>
 <ol class="steps">
-  <li><span class="s-title">Start the count in Garage first.</span> Cycle Counts, then + Bag-Scan Count. Without an open count the station has nowhere to put the scans and will tell you so.</li>
+  <li><span class="s-title">Start the count in Garage first.</span> Cycle Counts, then + Bag-Scan Count. Without an open count the station has nowhere to put the scans and will tell you so. Several counts can be open at once; each bag goes to the count that has its part.</li>
   <li><span class="s-title">Set the device to Store, then Cycle Count</span> and sign in with your badge as usual.</li>
-  <li><span class="s-title">Scan the QR on each bag.</span> A green flash and a beep mean it counted. The toast shows the part, how many that bag added, and the running total for that part.</li>
+  <li><span class="s-title">Scan the QR on each bag.</span> A green flash and a beep mean it counted. The toast shows the part, how many that bag added, and the running total for that part. It always ends with the number of the count the bag went to, for example <span class="mono">CYC-017</span>.</li>
   <li><span class="s-title">Keep going until the shelves are done</span>, then complete the count back in Garage.</li>
 </ol>
 
@@ -20,9 +20,14 @@
   <p>Each bag counts once per count. If it is scanned again you get an amber <strong>Already counted</strong> with the unchanged total, not a red reject. Nothing is broken and nothing is lost. Scan freely: re-walk a rack, or work an aisle with someone else, without worrying about counting anything twice.</p>
 </div>
 
+<h2 class="sec">The header with several counts open</h2>
+<p>With one count open, the bar at the top of the station shows its number, the bags scanned and the parts on it. With more than one open it reads <strong>N COUNTS OPEN</strong> and lists each count with its product (or <em>shelf</em> for a bag-scan count) and the bags scanned on it. Hit refresh to update it.</p>
+
 <h2 class="sec">What the messages mean</h2>
 <ul class="bullets">
   <li><span class="mono">&#10003; PART +50 &rarr; 320</span> counted. That bag added 50, and 320 of that part have been counted so far.</li>
+  <li><span class="mono">&#10003; FG-PB-01 +50 &rarr; 150 &middot; CYC-017</span> the count that took the bag is always named at the end.</li>
+  <li><span class="mono">PART is not on any open count (CYC-016, CYC-017)</span> no open count has this part on its list and no bag-scan shelf count is open to catch it. This can happen with just one product or Due parts count open. Nothing was recorded. The message stays green (soft), as always. Put the part on a count in Garage, or start a bag-scan shelf count, then scan again.</li>
   <li><span class="mono">Already counted</span> that exact bag was scanned before on this count. The total is unchanged, which is correct.</li>
   <li><span class="mono">No count in progress</span> nobody has started a count in Garage yet, or the one you were on has been completed or cancelled. Start one and carry on.</li>
   <li><span class="mono">Unknown bag label</span> the code is not a bag we hold. Check you scanned a bag QR and not a car sticker or a box label.</li>

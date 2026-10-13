@@ -70,7 +70,8 @@ export default function CycleCountsPage() {
       toast(`${r.data.count_no} started — scan bags on the Cycle Count station`, 'success');
       await loadList();
       openDetail(r.data.count_no, { blind: true });
-    } finally { setStartingScan(false); }
+    } catch (e) { toast(e.message || 'Could not start count', 'error'); }
+    finally { setStartingScan(false); }
   }
 
   async function loadList() {
@@ -80,7 +81,8 @@ export default function CycleCountsPage() {
       const filter = tab === 'all' ? {} : { status: tab };
       const r = await workerFetch('getCycleCounts', { data: filter }, session);
       setCounts(r?.ok ? (r.data || []) : []);
-    } finally { setLoading(false); }
+    } catch (e) { toast(e.message || 'Could not load counts', 'error'); setCounts([]); }
+    finally { setLoading(false); }
   }
   useEffect(() => { loadList(); /* eslint-disable-next-line */ }, [tab, session]);
 
@@ -91,7 +93,8 @@ export default function CycleCountsPage() {
     try {
       const r = await workerFetch('getCycleCount', { data: { count_no, blind: opts.blind !== false } }, session);
       setDetail(r?.ok ? r.data : null);
-    } finally { setDetailLoading(false); }
+    } catch (e) { toast(e.message || 'Could not open count', 'error'); setActiveCount(null); }
+    finally { setDetailLoading(false); }
   }
 
   if (activeCount && detail) {
@@ -203,8 +206,10 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
       try {
         const r = await workerFetch('getCycleCountSchedule', {}, session);
         setSchedule(r?.ok ? r.data : null);
-      } finally { setLoading(false); }
+      } catch (e) { toast(e.message || 'Could not load the schedule', 'error'); }
+      finally { setLoading(false); }
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
   // Multi-token AND-of-OR across product / part_code / part_name / abc_class.
@@ -251,9 +256,13 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
       }, session);
       if (!r?.ok) { toast(r?.data?.error || 'Create failed', 'error'); return; }
       const skipped = (r.data.skipped_not_in_ledger?.length || 0) + (r.data.skipped_retired?.length || 0);
-      toast(`Created ${r.data.count_no} · ${r.data.lines_created} lines${skipped ? ` · ${skipped} skipped (retired / not in stock ledger)` : ''}`, 'success');
+      // Parts already on another open count stay there — a part is counted on one open count only.
+      const onOpen = r.data.skipped_on_open_count || [];
+      const onOpenNos = [...new Set(onOpen.map(x => x.count_no))].join(', ');
+      toast(`Created ${r.data.count_no} · ${r.data.lines_created} lines${skipped ? ` · ${skipped} skipped (retired / not in stock ledger)` : ''}${onOpen.length ? ` · ${onOpen.length} part${onOpen.length === 1 ? '' : 's'} left off (already on ${onOpenNos})` : ''}`, onOpen.length ? 'warning' : 'success');
       onCreated(r.data.count_no);
-    } finally { setCreating(false); }
+    } catch (e) { toast(e.message || 'Create failed', 'error'); }
+    finally { setCreating(false); }
   }
 
   return (
@@ -271,7 +280,9 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
         <>
           <div style={{ marginBottom: 12, padding: '8px 10px', background: 'var(--surface2)', borderRadius: 3, fontSize: 11, color: 'var(--t2)' }}>
             Counts every active BOM part of one product, including shared screws and universal parts on its BOM.
-            Retired parts and parts with no stock-ledger row are left out.
+            Retired parts and parts with no stock-ledger row are left out, and so are parts already on another
+            open count — several counts can run at once, each scanned bag goes to the count that has its part,
+            and a product count only takes the parts on its list.
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
             <div>
@@ -419,7 +430,8 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
       // Reload to fetch updated line with revealed variance
       onReload();
       // Keep entry value for visibility
-    } finally { setSavingPart(null); }
+    } catch (e) { toast(e.message || 'Save failed', 'error'); }
+    finally { setSavingPart(null); }
   }
 
   // The row checkboxes now select for Remove as well as Recount. Recount only applies to
@@ -457,7 +469,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
   async function removeLines(target) {
     if (!target.length) return;
     const names = target.map(l => l.part_code).join(', ');
-    if (!confirm(`Remove ${target.length} part${target.length === 1 ? '' : 's'} from ${header.count_no}?\n\n${names}\n\nRemoved parts will NOT be adjusted — no stock change is proposed for them. Bags already scanned stay on record, and a later scan of these parts is ignored on this count. To count them, finish this count first, then start a new one.`)) return;
+    if (!confirm(`Remove ${target.length} part${target.length === 1 ? '' : 's'} from ${header.count_no}?\n\n${names}\n\nRemoved parts will NOT be adjusted — no stock change is proposed for them. Bags already scanned stay on record, and a later scan of these parts is ignored on this count. To count them, put them on another count.`)) return;
     setRemoving(true);
     try {
       const r = await workerFetch('removeCycleCountLines', {
@@ -467,7 +479,8 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
       toast(`Removed ${r.data.removed.length} part(s) from ${header.count_no}${r.data.warning ? ` — ${r.data.warning}` : ''}`, r.data.warning ? 'warning' : 'success');
       setRecountSel(new Set());
       onReload();
-    } finally { setRemoving(false); }
+    } catch (e) { toast(e.message || 'Remove failed', 'error'); }
+    finally { setRemoving(false); }
   }
 
   async function complete() {
@@ -479,7 +492,8 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
       const d = r.data;
       toast(`Completed · ${d.lines_counted} counted · ${d.adjustments_created} adjustment(s) proposed${d.lines_recount_queued ? ` · ${d.lines_recount_queued} recount queued` : ''}${d.warning ? ` — ${d.warning}` : ''}`, d.warning ? 'warning' : 'success');
       onReload();
-    } finally { setCompleting(false); }
+    } catch (e) { toast(e.message || 'Complete failed', 'error'); onReload(); }
+    finally { setCompleting(false); }
   }
 
   async function cancel() {
@@ -491,7 +505,8 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
       if (!r?.ok) { toast(r?.data?.error || 'Cancel failed', 'error'); return; }
       toast(`${header.count_no} cancelled`, 'success');
       onBack();
-    } finally { setCancelling(false); }
+    } catch (e) { toast(e.message || 'Cancel failed', 'error'); }
+    finally { setCancelling(false); }
   }
 
   function printSheet() {

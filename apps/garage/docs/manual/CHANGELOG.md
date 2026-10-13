@@ -6,6 +6,16 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## 1.30.0 - 2026-10-13
+
+- **Cycle Counts**: documents that several counts can now be open at once (one per product, requested
+  by Piyush); that a part is counted on one open count only, with shared parts left on the count that
+  already has them ("3 parts left off (already on CYC-016)"); that only one bag-scan shelf count can be open,
+  and that it catches parts on no other count; that a product or Due parts count only takes its own listed parts even when alone (only the Bag-Scan Count adds parts on first sight); the By product tab of Pick Parts; that a removed part
+  can go on another count; and that refused starts and completes now show as a red message.
+- **Cycle Count (scanner)**: documents the "N COUNTS OPEN" header, the scan message that names the
+  count, and the soft "is not on any open count" message.
+
 ## 1.29.0 - 2026-09-16
 
 - **Issue Repair**: documents that every row in **Issued so far** now expands (click to toggle,

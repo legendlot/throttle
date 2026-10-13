@@ -8,8 +8,16 @@
 </div>
 
 <h2 class="sec">Two ways to start a count</h2>
-<p><strong>Bag-Scan Count</strong> is the one to use day to day. Press it and the count opens straight away with no parts chosen, because an audit should record what is actually on the shelf rather than what you expected to find. Every bag you scan adds its part to the count the first time that part is seen.</p>
-<p><strong>Pick Parts</strong> is the planned route. It lists the parts that are due a count (classed A, B or C by how much they move and what they cost), you tick the ones you want, and the count opens with exactly those lines. Use it when you are working through the due list rather than walking a rack.</p>
+<p><strong>Bag-Scan Count</strong> is the one to use day to day. Press it and the count opens straight away with no parts chosen, because an audit should record what is actually on the shelf rather than what you expected to find. Every bag you scan adds its part to the count the first time that part is seen. This is what sets it apart: a count started with Pick Parts only ever takes the parts on its list.</p>
+<p><strong>Pick Parts</strong> is the planned route. It opens a window with two tabs. <strong>Due parts</strong> lists the parts that are due a count (classed A, B or C by how much they move and what they cost); you tick the ones you want and the count opens with exactly those lines. <strong>By product</strong> counts every active part on one product&rsquo;s bill of materials, including shared screws and universal parts; you just pick the product. Retired parts and parts with no stock-ledger row are left out.</p>
+
+<h2 class="sec">Several counts open at once</h2>
+<p>You can start a new count while another is still open, for example one count per product. Each bag scanned at the Cycle Count station goes to the open count that has that bag&rsquo;s part on its list.</p>
+<ul class="bullets">
+  <li><strong>A part is counted on one open count only.</strong> If a new count&rsquo;s part list includes parts already on another open count (typically shared screws and universal parts), those parts are left off the new count. Garage tells you with a message such as <span class="mono">3 parts left off (already on CYC-016)</span>; they are counted on the count that already has them.</li>
+  <li><strong>Only one bag-scan shelf count can be open at a time.</strong> While several counts are open, it catches any scanned part that is not on another count&rsquo;s list. Without a shelf count, a part that is on no open count is not recorded, and the scanner says so (see the Cycle Count chapter in the Scanner part).</li>
+  <li><strong>A product count or a Due parts count only takes the parts on its own list</strong>, even when it is the only count open. A bag of any other part is not recorded unless a bag-scan shelf count is open; the scanner says <span class="mono">PART is not on any open count</span>. Only the Bag-Scan Count adds parts the first time they are seen.</li>
+</ul>
 
 <h2 class="sec">Running a bag-scan count</h2>
 <ol class="steps">
@@ -27,11 +35,17 @@
 
 <h2 class="sec">Typing a count instead</h2>
 <p>You can still enter a figure by hand on any line, which is the right thing to do for parts that are not bagged, or for a loose remainder. Type the quantity and press Enter to save that line. Where a part has both, the typed figure replaces the scanned total on that line, so enter the full quantity rather than only the loose extra.</p>
+<p>If a part should not be on a count, you can remove it from that count. Because a part belongs to one open count only, a removed part can then be put on another count.</p>
 <p>If a line looks wrong you can flag it for <strong>recount</strong> with a reason; a fresh recount is expected to be done by a different counter.</p>
 
 <div class="callout warn">
   <div class="c-title">&#9888; Blind counting, and completing only proposes</div>
   <p>While a count is in progress the system quantity is hidden until that line has a figure; this is deliberate, to stop the count being biased. <strong>Completing a count does not change stock</strong>: it only <em>proposes</em> adjustments, which still need approval and posting on the Stock Adjustments screen. Scanning on its own never moves stock either. Watch the variance colours: over (counted more than the system) shows red, under shows yellow.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Refusals show as a red message</div>
+  <p>If Garage refuses to start, complete or cancel a count, the reason now appears as a red message at the top of the screen, so you can read what to fix.</p>
 </div>
 
 <div class="callout note">
