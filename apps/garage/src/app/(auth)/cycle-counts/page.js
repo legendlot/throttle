@@ -477,7 +477,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onOp
         data: { count_no: header.count_no, line_ids: target.map(l => l.id) },
       }, session);
       if (!r?.ok) { toast(r?.data?.error || 'Remove failed', 'error'); return; }
-      toast(`Removed ${r.data.removed.length} part(s) from ${header.count_no}${r.data.warning ? ` — ${r.data.warning}` : ''}`, r.data.warning ? 'warning' : 'success');
+      toast(`Removed ${r.data.removed.length} part(s) from ${header.count_no}${r.data.flags_returned ? ` · ${r.data.flags_returned} recount flag(s) back on ${r.data.returned_to}` : ''}${r.data.warning ? ` — ${r.data.warning}` : ''}`, r.data.warning ? 'warning' : 'success');
       setRecountSel(new Set());
       onReload();
     } catch (e) { toast(e.message || 'Remove failed', 'error'); }
@@ -520,7 +520,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onOp
     try {
       const r = await workerFetch('cancelCycleCount', { data: { count_no: header.count_no, reason: reason.trim() } }, session);
       if (!r?.ok) { toast(r?.data?.error || 'Cancel failed', 'error'); return; }
-      toast(`${header.count_no} cancelled`, 'success');
+      toast(`${header.count_no} cancelled${r.data?.flags_returned ? ` · ${r.data.flags_returned} recount flag(s) back on ${r.data.returned_to}` : ''}`, 'success');
       onBack();
     } catch (e) { toast(e.message || 'Cancel failed', 'error'); }
     finally { setCancelling(false); }
@@ -584,7 +584,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onOp
             <KpiTile label="Recount" value={stats.recount} tone="orange" />
             <KpiTile label="Reconciled" value={stats.reconciled} tone="green" />
             {stats.removed > 0 && <KpiTile label="Removed" value={stats.removed} />}
-            {stats.recounted > 0 && <KpiTile label={`Recounted on ${(lines.find(isRecounted)?.notes || '').match(/CYC-\d+/)?.[0] || 'a new count'}`} value={stats.recounted} tone="orange" />}
+            {stats.recounted > 0 && <KpiTile label={`Recounted on ${(lines.find(isRecounted)?.notes || '').match(/recounted on (CYC-\d+)/)?.[1] || 'a new count'}`} value={stats.recounted} tone="orange" />}
             {!isBlind && stats.variance_lines > 0 && <KpiTile label="With Variance" value={stats.variance_lines} tone="red" />}
             <KpiTile label="Bags Scanned" value={totalScans} tone={totalScans > 0 ? 'green' : 'gray'} />
           </div>
