@@ -101,7 +101,27 @@ async function getAuthUser(request, env) {
     },
   });
   if (!res.ok) return null;
-  return res.json();
+  const user = await res.json();
+  if (!user?.id) return null;
+  // S419: a valid Supabase JWT is NOT a LOT employee. Email-OTP signup is open and Google's
+  // `hd` hint is not enforced server-side, so without this any outsider who created a login
+  // was auto-provisioned below as a 'requester'. Require an ACTIVE store.users_profile — the
+  // same gate every other LOT worker applies. The self-heal below also refuses non-LOT
+  // emails, so external partners (active or not) never get a brand.users row.
+  const profRes = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/users_profile?id=eq.${user.id}&select=active&limit=1`,
+    {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        'Accept-Profile': 'store',
+      },
+    },
+  );
+  if (!profRes.ok) return null;
+  const prof = (await profRes.json())?.[0];
+  if (!prof?.active) return null;
+  return user;
 }
 
 async function getBrandUser(userId, env) {
@@ -206,6 +226,11 @@ export default {
     if (!authUser) return err('Unauthorized', 401);
 
     let brandUser = await getBrandUser(authUser.id, env);
+    // S419: self-heal provisions LOT staff only. Solve Factory partners hold ACTIVE profiles
+    // (Manifest's verifyJWT requires it), so the active-profile gate alone would still admit them.
+    if (!brandUser && !/@legendoftoys\.com$/i.test(authUser.email || '')) {
+      return err('Forbidden', 403);
+    }
     if (!brandUser) {
       // First-time Throttle login self-heal: staff already exist in auth.users
       // from Garage/Redline, so on_auth_user_created never fires for them.
