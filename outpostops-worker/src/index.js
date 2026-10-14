@@ -40,8 +40,17 @@ async function sbReq(path, profile, opts = {}) {
 }
 const op   = (path, opts) => sbReq(path, 'outpost', opts);
 const st   = (path, opts) => sbReq(path, 'store', opts);
+const pub  = (path, opts) => sbReq(path, 'public', opts);
 const q    = s => encodeURIComponent(s);
 const rpc  = (fn, args) => op(`/rest/v1/rpc/${fn}`, { method: 'POST', body: JSON.stringify(args) });
+// A raised `outpost: …` exception from an outpost.* function → its message for the caller (these are
+// our own validation messages); anything else stays generic.
+// A value inside a PostgREST in.(…) list: double-quoted, with \ and " escaped (URL-encode the whole list after).
+const pgrstQuote = v => `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+const sqlMsg = r => {
+  const m = String(r?.data?.message || '');
+  return m.startsWith('outpost: ') ? m.slice(9) : null;
+};
 const ins  = (table, row, prefer = 'return=representation') =>
   op(`/rest/v1/${table}`, { method: 'POST', body: JSON.stringify(row), prefer });
 const patch = (table, filter, body) =>
@@ -274,7 +283,63 @@ async function vendorRoute(request, url, rawBody, ip) {
     return ok({ stepup: token, purpose: body.purpose, seconds: STEPUP_SECONDS });
   }
 
+  if (route === 'products' && request.method === 'GET') {
+    const list = await vendorProducts(ctx.vendorId);
+    return list ? ok(list) : fail('outpost_unavailable', 503);
+  }
+
+  if (route === 'orders' && request.method === 'GET') {
+    // Only orders whose product the vendor still packs: a deactivated / built_only product's open order is
+    // not workable (the owner closes it in Depot).
+    const r = await op(`/rest/v1/work_orders?vendor_id=eq.${ctx.vendorId}&status=eq.open` +
+      `&vendor_products.active=is.true&vendor_products.mode=eq.packed` +
+      `&select=id,wo_no,sku,channel,target_qty,created_at,vendor_products!inner(product)&order=id`);
+    if (!r.ok) return fail('outpost_unavailable', 503);
+    return ok(r.data);
+  }
+
+  if (route === 'mint' && request.method === 'POST') {
+    if (ctx.operator.role !== 'supervisor') return fail('supervisor_only', 403);
+    const qty = body.quantity;
+    if (typeof qty !== 'number' || !Number.isInteger(qty) || qty < 1 || qty > 10000) return fail('quantity 1–10000');
+    if (typeof body.product_code !== 'string' || !body.product_code.trim()) return fail('product_code required');
+    const r = await rpc('vendor_mint', { p_vendor_id: ctx.vendorId, p_device_id: ctx.deviceId,
+      // The key travels INSIDE the signed body, so it is covered by the device signature. The request
+      // hash is over the body minus the key: a retry with the same key + same order replays.
+      p_idem_key: typeof body.idempotency_key === 'string' ? body.idempotency_key : null,
+      p_request_hash: await sha256Hex(JSON.stringify({ product_code: body.product_code, quantity: qty })),
+      p_product_code: body.product_code, p_quantity: qty, p_operator_id: ctx.operator.id,
+      p_generated_by: `Outpost ${ctx.operator.op_code} ${ctx.operator.name}`.slice(0, 120) });
+    if (!r.ok) {
+      const m = sqlMsg(r);
+      return m ? fail(m, m === 'paused' || m === 'vendor not active' ? 403 : 400) : fail('outpost_unavailable', 503);
+    }
+    return ok(r.data);
+  }
+
+  if (route === 'batches' && request.method === 'GET') {
+    const r = await pub(`/rest/v1/upc_batches?vendor_id=eq.${ctx.vendorId}` +
+      `&select=batch_id,product,product_code,quantity,upc_from,upc_to,status,generated_by,generated_at&order=generated_at.desc&limit=50`);
+    if (!r.ok) return fail('outpost_unavailable', 503);
+    return ok(r.data);
+  }
+
   return fail('not_found', 404);
+}
+
+// The vendor's active PACKED products with each car code (colour + EAN) and the shared remote code.
+async function vendorProducts(vendorId) {
+  const vp = await op(`/rest/v1/vendor_products?vendor_id=eq.${vendorId}&active=is.true&mode=eq.packed` +
+    `&select=id,product,remote_code,carton_qty&order=product`);
+  if (!vp.ok) return null;                                   // unreadable ≠ "no products"
+  if (!vp.data.length) return [];
+  const fams = vp.data.map(v => pgrstQuote(v.product)).join(',');
+  const pm = await pub(`/rest/v1/product_master?product=in.(${q(fams)})&component_type=eq.car&is_active=is.true` +
+    `&select=product,product_code,model,color,ean&order=product_code`);
+  if (!pm.ok) return null;
+  const cars = pm.data;
+  return vp.data.map(v => ({ ...v, cars: cars.filter(c => c.product === v.product)
+    .map(c => ({ code: c.product_code, model: c.model, color: c.color, ean: c.ean })) }));
 }
 
 async function enrol(body, ip) {
@@ -357,6 +422,9 @@ async function verifyOwner(authHeader) {
   if (perms.outpost_owner !== true) return null;
   return { userId: user.id, email: user.email, fullName: p.data[0].full_name };
 }
+
+// Units per shipping carton by product family (Afshaan 2026-10-14) — a default, editable per vendor.
+const CARTON_DEFAULTS = { Gator: 18, Shadow: 24 };
 
 const VENDOR_CFG_FIELDS = ['active', 'killed', 'defect_tolerance_pct', 'pickup_address',
   'leak_unused_sticker_days', 'leak_packed_undispatched_days', 'leak_over_po_pct'];
@@ -534,6 +602,74 @@ async function ownerRoute(request, url, rawBody) {
         if (r.status !== 409) return fail('write_failed', 502);
       }
       return fail('try again', 503);
+    }
+    case 'GET getVendorProducts': {
+      if (!needVendor()) return fail('vendor_id required');
+      const r = await op(`/rest/v1/vendor_products?vendor_id=eq.${vendorId}&select=*&order=product`);
+      if (!r.ok) return fail('read_failed', 502);
+      return ok(r.data);
+    }
+    case 'POST setVendorProduct': {
+      if (!needVendor()) return fail('vendor_id required');
+      const product = String(P.product || '').trim();
+      if (!product) return fail('product required');
+      if ('mode' in P && !['packed', 'built_only'].includes(P.mode)) return fail('mode must be packed or built_only');
+      if ('active' in P && typeof P.active !== 'boolean') return fail('active must be true or false');
+      // An update keeps every field it does not name — a carton-qty edit must never silently re-enable a
+      // product or flip it back to packed (Codex S421).
+      const ex = await op(`/rest/v1/vendor_products?vendor_id=eq.${vendorId}&product=eq.${q(product)}&select=*`);
+      if (!ex.ok) return fail('read_failed', 502);
+      const cur = ex.data[0] || null;
+      const fam = await pub(`/rest/v1/product_master?product=eq.${q(product)}&is_active=is.true&select=product_code,component_type`);
+      if (!fam.ok) return fail('read_failed', 502);
+      if (!fam.data.some(r => r.component_type === 'car')) return fail(`no active car codes for '${product}'`, 404);
+      const remotes = fam.data.filter(r => r.component_type === 'remote').map(r => r.product_code.toUpperCase());
+      let remote = 'remote_code' in P ? (P.remote_code ? String(P.remote_code).toUpperCase() : null) : (cur ? cur.remote_code : null);
+      if (!remote && !cur && remotes.length === 1) remote = remotes[0];                 // new row: the family's sole remote
+      if (remote && !remotes.includes(remote)) return fail(`${remote} is not an active remote of ${product}`);
+      const nextMode = 'mode' in P ? P.mode : cur ? cur.mode : 'packed';
+      if (nextMode === 'packed' && !remote) return fail(`packed mode needs a remote code (${product} has ${remotes.length} active remotes)`);
+      const qty = 'carton_qty' in P && P.carton_qty !== '' && P.carton_qty != null ? Number(P.carton_qty)
+        : cur ? cur.carton_qty : CARTON_DEFAULTS[product];
+      if (!Number.isInteger(qty) || qty < 1 || qty > 500) return fail('carton_qty 1–500 required');
+      const row = { vendor_id: vendorId, product, remote_code: remote, carton_qty: qty, updated_at: new Date().toISOString(),
+        mode: nextMode,
+        active: 'active' in P ? P.active : cur ? cur.active : true,
+        box_type_id: 'box_type_id' in P ? (P.box_type_id || null) : cur ? cur.box_type_id : null,
+        created_by: cur ? cur.created_by : me.userId };
+      const r = await op('/rest/v1/vendor_products?on_conflict=vendor_id,product', { method: 'POST',
+        body: JSON.stringify(row), prefer: 'resolution=merge-duplicates,return=representation' });
+      if (!r.ok) return fail(r.data?.message || 'write_failed', 400);
+      await lot(vendorId, 'vendor_product', { product, mode: row.mode, remote_code: remote, carton_qty: qty, active: row.active });
+      return ok(r.data[0]);
+    }
+    case 'GET getWorkOrders': {
+      if (!needVendor()) return fail('vendor_id required');
+      const status = ['open', 'closed', 'cancelled'].includes(P.status) ? `&status=eq.${P.status}` : '';
+      const r = await op(`/rest/v1/work_orders?vendor_id=eq.${vendorId}${status}&select=*&order=id.desc&limit=500`);
+      if (!r.ok) return fail('read_failed', 502);
+      return ok(r.data);
+    }
+    case 'POST createWorkOrder': {
+      if (!needVendor()) return fail('vendor_id required');
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(P.channel_id || ''))) return fail('channel_id required');
+      if (!Number.isSafeInteger(Number(P.target_qty)) || Number(P.target_qty) < 1) return fail('target_qty must be a whole number ≥ 1');
+      if (P.po_line_id != null && P.po_line_id !== '' && !(Number.isSafeInteger(Number(P.po_line_id)) && Number(P.po_line_id) > 0)) {
+        return fail('po_line_id must be a PO line id');
+      }
+      const r = await rpc('create_work_order', { p_vendor_id: vendorId, p_sku: String(P.sku || ''),
+        p_channel_id: P.channel_id || null, p_target_qty: Number(P.target_qty),
+        p_po_line_id: P.po_line_id ? Number(P.po_line_id) : null, p_created_by: me.userId, p_notes: P.notes || null });
+      if (!r.ok) { const m = sqlMsg(r); return fail(m || 'write_failed', m ? 400 : 502); }
+      return ok(r.data);
+    }
+    case 'POST setWorkOrderStatus': {
+      if (!['closed', 'cancelled'].includes(P.status)) return fail('status must be closed or cancelled');
+      const r = await patch('work_orders', `id=eq.${Number(P.id)}&status=eq.open`,
+        { status: P.status, closed_at: new Date().toISOString() });
+      if (!r.ok || !r.data[0]) return fail('not found or not open', 404);
+      await lot(r.data[0].vendor_id, 'work_order_' + P.status, { work_order_id: r.data[0].id, wo_no: r.data[0].wo_no });
+      return ok(r.data[0]);
     }
     case 'GET getEvents': {
       if (!needVendor()) return fail('vendor_id required');

@@ -186,7 +186,7 @@ export function corsHeaders(origin, allowed = ALLOWED_ORIGINS) {
   const h = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers':
-      'Content-Type, Authorization, X-Outpost-Device, X-Outpost-Ts, X-Outpost-Nonce, X-Outpost-Sig, X-Outpost-Session, X-Idempotency-Key',
+      'Content-Type, Authorization, X-Outpost-Device, X-Outpost-Ts, X-Outpost-Nonce, X-Outpost-Sig, X-Outpost-Session',
     'Access-Control-Max-Age': '600',
     'Vary': 'Origin',
   };
