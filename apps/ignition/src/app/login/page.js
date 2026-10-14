@@ -41,8 +41,10 @@ export default function LoginPage() {
         options: { emailRedirectTo: window.location.origin, shouldCreateUser: false },
       });
       // An un-invited address comes back as an error from Supabase; say the same thing either way
-      // rather than confirming which addresses exist.
-      if (error && !/signups not allowed|not found|otp_disabled/i.test(error.message || '')) throw error;
+      // rather than confirming which addresses exist. The per-address resend cooldown ("For security
+      // purposes, you can only request this after Ns") only ever hits an INVITED address, so it is
+      // swallowed too — showing it would confirm the address is real.
+      if (error && !/signups not allowed|not found|otp_disabled|for security purposes|rate limit/i.test(error.message || '')) throw error;
       setSent(true);
     } catch (err) {
       setError(err?.message || 'Could not send the sign-in link');
