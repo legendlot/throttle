@@ -307,7 +307,8 @@ async function vendorRoute(request, url, rawBody, ip) {
       // The key travels INSIDE the signed body, so it is covered by the device signature. The request
       // hash is over the body minus the key: a retry with the same key + same order replays.
       p_idem_key: typeof body.idempotency_key === 'string' ? body.idempotency_key : null,
-      p_request_hash: await sha256Hex(JSON.stringify({ product_code: body.product_code, quantity: qty })),
+      p_request_hash: await sha256Hex(JSON.stringify({ product_code: body.product_code, quantity: qty,
+        operator_id: ctx.operator.id })),
       p_product_code: body.product_code, p_quantity: qty, p_operator_id: ctx.operator.id,
       p_generated_by: `Outpost ${ctx.operator.op_code} ${ctx.operator.name}`.slice(0, 120) });
     if (!r.ok) {
@@ -422,6 +423,10 @@ async function verifyOwner(authHeader) {
   if (perms.outpost_owner !== true) return null;
   return { userId: user.id, email: user.email, fullName: p.data[0].full_name };
 }
+
+// A whole number from a JSON number or a digit string; anything else (true, [5], 1.5, '') → NaN.
+const wholeNumber = v => (typeof v === 'number' && Number.isSafeInteger(v)) || (typeof v === 'string' && /^\d{1,15}$/.test(v))
+  ? Number(v) : NaN;
 
 // Units per shipping carton by product family (Afshaan 2026-10-14) — a default, editable per vendor.
 const CARTON_DEFAULTS = { Gator: 18, Shadow: 24 };
@@ -620,21 +625,23 @@ async function ownerRoute(request, url, rawBody) {
       const ex = await op(`/rest/v1/vendor_products?vendor_id=eq.${vendorId}&product=eq.${q(product)}&select=*`);
       if (!ex.ok) return fail('read_failed', 502);
       const cur = ex.data[0] || null;
+      // Switching a product OFF is always allowed — the family/remote checks only guard a row that will mint.
+      const willBeActive = 'active' in P ? P.active : cur ? cur.active : true;
       const fam = await pub(`/rest/v1/product_master?product=eq.${q(product)}&is_active=is.true&select=product_code,component_type`);
       if (!fam.ok) return fail('read_failed', 502);
-      if (!fam.data.some(r => r.component_type === 'car')) return fail(`no active car codes for '${product}'`, 404);
+      if (willBeActive && !fam.data.some(r => r.component_type === 'car')) return fail(`no active car codes for '${product}'`, 404);
       const remotes = fam.data.filter(r => r.component_type === 'remote').map(r => r.product_code.toUpperCase());
       let remote = 'remote_code' in P ? (P.remote_code ? String(P.remote_code).toUpperCase() : null) : (cur ? cur.remote_code : null);
       if (!remote && !cur && remotes.length === 1) remote = remotes[0];                 // new row: the family's sole remote
-      if (remote && !remotes.includes(remote)) return fail(`${remote} is not an active remote of ${product}`);
+      if (willBeActive && remote && !remotes.includes(remote)) return fail(`${remote} is not an active remote of ${product}`);
       const nextMode = 'mode' in P ? P.mode : cur ? cur.mode : 'packed';
-      if (nextMode === 'packed' && !remote) return fail(`packed mode needs a remote code (${product} has ${remotes.length} active remotes)`);
-      const qty = 'carton_qty' in P && P.carton_qty !== '' && P.carton_qty != null ? Number(P.carton_qty)
+      if (willBeActive && nextMode === 'packed' && !remote) return fail(`packed mode needs a remote code (${product} has ${remotes.length} active remotes)`);
+      const qty = 'carton_qty' in P && P.carton_qty !== '' && P.carton_qty != null ? wholeNumber(P.carton_qty)
         : cur ? cur.carton_qty : CARTON_DEFAULTS[product];
       if (!Number.isInteger(qty) || qty < 1 || qty > 500) return fail('carton_qty 1–500 required');
       const row = { vendor_id: vendorId, product, remote_code: remote, carton_qty: qty, updated_at: new Date().toISOString(),
         mode: nextMode,
-        active: 'active' in P ? P.active : cur ? cur.active : true,
+        active: willBeActive,
         box_type_id: 'box_type_id' in P ? (P.box_type_id || null) : cur ? cur.box_type_id : null,
         created_by: cur ? cur.created_by : me.userId };
       const r = await op('/rest/v1/vendor_products?on_conflict=vendor_id,product', { method: 'POST',
@@ -653,12 +660,13 @@ async function ownerRoute(request, url, rawBody) {
     case 'POST createWorkOrder': {
       if (!needVendor()) return fail('vendor_id required');
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(P.channel_id || ''))) return fail('channel_id required');
-      if (!Number.isSafeInteger(Number(P.target_qty)) || Number(P.target_qty) < 1) return fail('target_qty must be a whole number ≥ 1');
-      if (P.po_line_id != null && P.po_line_id !== '' && !(Number.isSafeInteger(Number(P.po_line_id)) && Number(P.po_line_id) > 0)) {
+      const tq = wholeNumber(P.target_qty);
+      if (!(tq >= 1 && tq <= 1_000_000)) return fail('target_qty must be a whole number 1–1,000,000');
+      if (P.po_line_id != null && P.po_line_id !== '' && !(wholeNumber(P.po_line_id) >= 1)) {
         return fail('po_line_id must be a PO line id');
       }
       const r = await rpc('create_work_order', { p_vendor_id: vendorId, p_sku: String(P.sku || ''),
-        p_channel_id: P.channel_id || null, p_target_qty: Number(P.target_qty),
+        p_channel_id: P.channel_id || null, p_target_qty: wholeNumber(P.target_qty),
         p_po_line_id: P.po_line_id ? Number(P.po_line_id) : null, p_created_by: me.userId, p_notes: P.notes || null });
       if (!r.ok) { const m = sqlMsg(r); return fail(m || 'write_failed', m ? 400 : 502); }
       return ok(r.data);
