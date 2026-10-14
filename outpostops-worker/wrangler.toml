@@ -1,0 +1,17 @@
+name = "outpostops"
+main = "src/index.js"
+compatibility_date = "2026-05-28"
+workers_dev = true
+
+# Outpost — vendor production system worker (docs/outpost/OUTPOST_PLAN.md). The ONLY client of the
+# `outpost` schema. Vendor benches / print agents / supervisor dashboard authenticate with Outpost's
+# own credentials (/v/*, /d/*); LOT owners from Depot with a Supabase JWT + `outpost_owner` (/?action=).
+
+# Housekeeping: expired nonces, idempotency rows, auth-failure buckets. Every 15 min.
+[triggers]
+crons = ["*/15 * * * *"]
+
+# Secrets set via `wrangler secret put` — never stored in this file:
+#   SUPABASE_SERVICE_KEY  (service_role sb_secret key — same project as lotopsproxy)
+#   OUTPOST_PEPPER        (internal, random 32 bytes — keys code + PIN hashes; rotating it
+#                          invalidates every PIN, enrolment code and login code)
