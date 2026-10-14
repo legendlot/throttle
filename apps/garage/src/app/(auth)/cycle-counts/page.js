@@ -484,16 +484,45 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onOp
     finally { setRemoving(false); }
   }
 
+  // A product count lists every part of the product up front, so a part with no bag on the
+  // shelf stays pending and the worker refuses to complete. Offer to take those parts off
+  // (no stock change for them — same as Remove) and complete in one go. `only_pending` makes
+  // the worker skip any of them scanned since this page loaded (the scan poll does not refresh
+  // `lines`), so a just-scanned part is completed, not thrown away.
   async function complete() {
-    if (!confirm(`Complete ${header.count_no}? This proposes adjustments for any variance.`)) return;
+    const pendingLines = lines.filter(l => l.status === 'pending_count');
+    const n = pendingLines.length;
+    if (n) {
+      const isRecount = header.count_type === 'recount' && header.recount_of;
+      const msg = `${n} part${n === 1 ? ' has' : 's have'} no bag scanned and no quantity entered (as of when this page loaded):\n\n${pendingLines.map(l => l.part_code).join(', ')}\n\n`
+        + `Complete ${header.count_no} anyway? ${n === 1 ? 'This part is' : 'These parts are'} taken off the count and NOT adjusted — no stock change is proposed for them`
+        + `${isRecount ? `, and ${n === 1 ? 'its' : 'their'} recount flag goes back to ${header.recount_of}` : ''}. Any part scanned since is counted as normal. `
+        + `Every other counted part gets a proposed adjustment for any variance.\n\nTo count them instead, press Cancel and scan their bags (or enter a quantity).`;
+      if (n > 10) {
+        const typed = prompt(`${msg}\n\nThis takes ${n} parts off. Type ${header.count_no} to confirm.`);
+        if (typed == null) return;
+        if (typed.trim().toUpperCase() !== header.count_no.toUpperCase()) { toast(`Not completed — type ${header.count_no} exactly to confirm`, 'warning'); return; }
+      } else if (!confirm(msg)) return;
+    } else if (!confirm(`Complete ${header.count_no}? This proposes adjustments for any variance.`)) return;
     setCompleting(true);
+    let offNote = '';
     try {
+      if (n) {
+        const rr = await workerFetch('removeCycleCountLines', {
+          data: { count_no: header.count_no, line_ids: pendingLines.map(l => l.id), only_pending: true },
+        }, session);
+        if (!rr?.ok) { toast(rr?.data?.error || 'Could not take the unscanned parts off', 'error'); onReload(); return; }
+        const off = rr.data.removed || [];
+        offNote = `${off.length} unscanned part(s) taken off${off.length ? ` (${off.join(', ')})` : ''}`
+          + `${rr.data.flags_returned ? ` · ${rr.data.flags_returned} recount flag(s) back on ${rr.data.returned_to}` : ''}`
+          + `${rr.data.warning ? ` — ${rr.data.warning}` : ''}`;
+      }
       const r = await workerFetch('completeCycleCount', { data: { count_no: header.count_no } }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Complete failed', 'error'); return; }
+      if (!r?.ok) { toast(`${offNote ? offNote + '; ' : ''}complete failed — ${r?.data?.error || 'try again'}`, 'error'); onReload(); return; }
       const d = r.data;
-      toast(`Completed · ${d.lines_counted} counted · ${d.adjustments_created} adjustment(s) proposed${d.lines_recount_queued ? ` · ${d.lines_recount_queued} recount queued` : ''}${d.warning ? ` — ${d.warning}` : ''}`, d.warning ? 'warning' : 'success');
+      toast(`Completed · ${d.lines_counted} counted · ${d.adjustments_created} adjustment(s) proposed${d.lines_recount_queued ? ` · ${d.lines_recount_queued} recount queued` : ''}${offNote ? ` · ${offNote}` : ''}${d.warning ? ` — ${d.warning}` : ''}`, d.warning ? 'warning' : 'success');
       onReload();
-    } catch (e) { toast(e.message || 'Complete failed', 'error'); onReload(); }
+    } catch (e) { toast(`${offNote ? offNote + '; ' : ''}complete failed — ${e.message || 'try again'}`, 'error'); onReload(); }
     finally { setCompleting(false); }
   }
 
@@ -567,8 +596,8 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onOp
             {canRecord && header.status === 'counted' && stats.recount > 0 && (
               <button onClick={startRecount} disabled={startingRecount} style={{ ...btnP, opacity: startingRecount ? 0.6 : 1 }}>{startingRecount ? 'STARTING…' : `⤿ START RECOUNT (${stats.recount})`}</button>
             )}
-            {canRecord && isInProgress && stats.pending === 0 && (
-              <button onClick={complete} disabled={completing} style={{ ...btnP, opacity: completing ? 0.6 : 1 }}>{completing ? 'COMPLETING…' : '✓ COMPLETE COUNT'}</button>
+            {canRecord && isInProgress && (
+              <button onClick={complete} disabled={completing} title={stats.pending ? `${stats.pending} part(s) not scanned yet — they will be taken off the count` : undefined} style={{ ...btnP, opacity: completing ? 0.6 : 1 }}>{completing ? 'COMPLETING…' : `✓ COMPLETE COUNT${stats.pending ? ` (${stats.pending} unscanned)` : ''}`}</button>
             )}
             {canRecord && header.status !== 'reconciled' && header.status !== 'cancelled' && (
               <button onClick={cancel} disabled={cancelling} style={{ ...btnS, color: '#ff7070', borderColor: 'rgba(222,42,42,.3)' }}>CANCEL</button>
