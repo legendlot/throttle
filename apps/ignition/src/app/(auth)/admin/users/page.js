@@ -6,6 +6,7 @@ import { ShieldCheck } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
 import { Card, Segmented, Typeahead, TableCard, Row, Avatar } from '../../../../components/ui/index.js';
 import { matchRows } from '../../../../lib/typeahead.js';
+import { PARTNER_TOGGLE_LABELS, defaultPartnerExpiry } from '../../../../lib/partner.js';
 
 // Role colours per the Pit Control spec; any other role_key falls back to the neutral style.
 const ROLE_STYLE = {
@@ -13,7 +14,11 @@ const ROLE_STYLE = {
   ignition_lead:    { c: '#F2CD1A', bg: 'rgba(242,205,26,.14)' },
   ignition_manager: { c: '#8ea2ff', bg: 'rgba(33,60,226,.22)' },
   ignition_viewer:  { c: '#a9b0c2', bg: '#1b1f2a' },
+  ignition_partner: { c: '#4ade80', bg: 'rgba(74,222,128,.12)' },
 };
+const isExternal = (r) => !!r?.permissions?.ignition_external;
+const inputStyle = { height: 44, boxSizing: 'border-box', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 12, padding: '0 14px', fontSize: 14, color: 'var(--text-1)', fontFamily: 'inherit', outline: 'none' };
+const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }) : null);
 const roleStyle = (k) => ROLE_STYLE[k] || { c: 'var(--text-3)', bg: 'var(--surface-2)' };
 
 const fieldLabel = { fontSize: 13, fontWeight: 600, color: 'var(--text-3)' };
@@ -32,6 +37,10 @@ export default function AdminUsersPage() {
   const [pickRole, setPickRole] = useState('ignition_manager');
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('all');
+  // Invite partner (S419) — external, own-email sign-in, expiry defaults to today + 90 days.
+  const [invEmail, setInvEmail] = useState('');
+  const [invName, setInvName] = useState('');
+  const [invExpiry, setInvExpiry] = useState(defaultPartnerExpiry());
 
   const load = useCallback(async () => {
     if (!session || !canAdmin) { setLoading(false); return; }
@@ -72,6 +81,30 @@ export default function AdminUsersPage() {
     } finally { setBusy(false); }
   }
 
+  async function invite() {
+    if (!invEmail.trim() || !invName.trim() || !invExpiry) { showToast('Email, name and expiry are all required', 'error'); return; }
+    setBusy(true);
+    try {
+      const r = await ignitionopsPost('invitePartner', { data: { email: invEmail.trim(), full_name: invName.trim(), expires_at: invExpiry } }, session);
+      showToast(`${r?.email || 'Partner'} invited — they sign in with “Partner sign-in” on the login page`, 'success');
+      setInvEmail(''); setInvName(''); setInvExpiry(defaultPartnerExpiry());
+      load();
+    } catch (e) {
+      showToast(e.message || 'Invite failed', 'error');
+    } finally { setBusy(false); }
+  }
+
+  async function setToggle(role, key, value) {
+    setBusy(true);
+    try {
+      await ignitionopsPost('setIgnitionRolePermission', { data: { role_key: role.role_key, key, value } }, session);
+      showToast(`${role.label}: ${key} ${value ? 'on' : 'off'}`, 'success');
+      load();
+    } catch (e) {
+      showToast(e.message || 'Update failed', 'error');
+    } finally { setBusy(false); }
+  }
+
   async function toggle(u) {
     setBusy(true);
     try {
@@ -90,7 +123,8 @@ export default function AdminUsersPage() {
     .map((u) => ({ value: u.id, label: u.full_name, hint: u.role || '' }));
 
   const activeCount = users.filter((u) => u.active).length;
-  const userFields = (u) => [u.full_name, roleLabel(u.role_key), u.global_role];
+  const userFields = (u) => [u.full_name, u.email, roleLabel(u.role_key), u.global_role];
+  const staffRoles = roles.filter((r) => !isExternal(r));
   const byStatus = users.filter((u) => status === 'all' || (status === 'active' ? u.active : !u.active));
   const rows = matchRows(byStatus, q, userFields);
 
@@ -130,7 +164,7 @@ export default function AdminUsersPage() {
               value={pickRole}
               onChange={setPickRole}
               disabled={busy}
-              options={roles.map((r) => ({ value: r.role_key, label: r.label }))}
+              options={staffRoles.map((r) => ({ value: r.role_key, label: r.label }))}
               style={{ background: 'var(--bg)', borderRadius: 12 }}
             />
           </div>
@@ -157,9 +191,54 @@ export default function AdminUsersPage() {
                   </span>
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6, lineHeight: 1.45 }}>{r.description}</div>
+                {isExternal(r) && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+                    {PARTNER_TOGGLE_LABELS.map((t) => {
+                      const on = !!r.permissions?.[t.key];
+                      return (
+                        <label key={t.key} title={t.hint} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-2)', cursor: busy ? 'not-allowed' : 'pointer' }}>
+                          <input type="checkbox" role="switch" checked={on} disabled={busy}
+                            onChange={() => setToggle(r, t.key, !on)} />
+                          <span style={{ fontWeight: 600 }}>{t.label}</span>
+                          <span style={{ color: 'var(--text-4)' }}>{t.hint}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })}
+        </div>
+      </Card>
+
+      <Card padding="20px 22px" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <span style={{ fontFamily: 'var(--font-cond)', fontSize: 17, fontWeight: 700 }}>Invite partner</span>
+        <p style={{ fontSize: 13, color: 'var(--text-3)', margin: 0, lineHeight: 1.5, maxWidth: 720 }}>
+          External agency staff (e.g. Clearshot). They sign in with their own email via a one-time link,
+          see Roster influencers read-only, and lose access on the expiry date. Their account never
+          opens any other LOT system.
+        </p>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={fieldLabel}>Email</span>
+            <input type="email" value={invEmail} onChange={(e) => setInvEmail(e.target.value)} placeholder="name@agency.com" style={{ ...inputStyle, width: 260 }} />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={fieldLabel}>Name</span>
+            <input value={invName} onChange={(e) => setInvName(e.target.value)} placeholder="Full name" style={{ ...inputStyle, width: 220 }} />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={fieldLabel}>Access until</span>
+            <input type="date" value={invExpiry} onChange={(e) => setInvExpiry(e.target.value)} style={inputStyle} />
+          </label>
+          <button
+            onClick={invite}
+            disabled={busy}
+            style={{ height: 44, padding: '0 22px', borderRadius: 12, border: 'none', background: 'var(--accent)', color: '#0a0a0a', fontWeight: 700, fontSize: 14, fontFamily: 'inherit', cursor: busy ? 'not-allowed' : 'pointer', opacity: invEmail && invName && !busy ? 1 : 0.55 }}
+          >
+            {busy ? 'Saving…' : 'Invite'}
+          </button>
         </div>
       </Card>
 
@@ -205,12 +284,22 @@ export default function AdminUsersPage() {
                 <Row key={u.user_id} columns={COLS} first={i === 0} animate index={i} style={{ opacity: u.active ? 1 : 0.5 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
                     <Avatar name={u.full_name || '?'} seed={u.user_id} size={34} />
-                    <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {u.full_name || <span style={{ color: 'var(--text-4)' }}>—</span>}
+                    <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                      <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {u.full_name || <span style={{ color: 'var(--text-4)' }}>—</span>}
+                      </span>
+                      {u.email && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email}</span>}
                     </span>
                   </span>
                   <span style={{ justifySelf: 'start', fontSize: 12, fontWeight: 700, padding: '4px 10px', borderRadius: 99, color: rs.c, background: rs.bg }}>{roleLabel(u.role_key)}</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-3)' }}>{u.global_role || '—'}</span>
+                  {u.expires_at ? (
+                    // Partner rows: the expiry IS the context that matters (their global role is inert).
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: Date.parse(u.expires_at) <= Date.now() ? '#ff7b7b' : 'var(--text-3)' }}>
+                      {Date.parse(u.expires_at) <= Date.now() ? 'Expired ' : 'Until '}{fmtDate(u.expires_at)}
+                    </span>
+                  ) : (
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-3)' }}>{u.global_role || '—'}</span>
+                  )}
                   <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 600, color: u.active ? '#4ade80' : 'var(--text-4)' }}>
                     <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'currentColor' }} />
                     {u.active ? 'Active' : 'Revoked'}

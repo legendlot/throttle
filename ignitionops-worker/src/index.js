@@ -15,6 +15,10 @@
 
 import { dedupeBySku } from './price-dedupe.js';
 import { isLocked, unlockActive, metricsCompleteness, lockedFieldsIn, LOCK_SELECT, LOCKED_MESSAGE } from './completeness.js';
+import {
+  ROSTER_STAGES, PARTNER_TOGGLES, isPartner, partnerScoped, partnerGetRefusal, stripPartnerFields,
+  partnerEngagementView, partnerEmailRefusal, partnerExpiry, partnerParamRefusal,
+} from './partner.js';
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 
@@ -235,9 +239,13 @@ async function shopifyLookup({ phone, email }, env) {
 // person's other job — an active Pitstop CS agent could not also be an Ignition manager.
 // Mirrors snorkelops `getSnorkelPerms` / RULE-SNORKEL-002. `active=false` is a
 // Ignition-scoped kill switch (Manifest's RULE-MANIFEST-006 pattern); no row = no access.
+// `expires_at` (S419, external partners): a row past its expiry is no access, same as inactive.
+// ⛔ The column must exist BEFORE this deploys — PostgREST errors on an unknown column, which
+// reads here as "no row" and would lock out every Ignition user.
 async function getIgnitionPerms(userId, env) {
   const ur = await sbStore(
-    `/rest/v1/ignition_user_roles?user_id=eq.${userId}&active=is.true&select=role_key&limit=1`,
+    `/rest/v1/ignition_user_roles?user_id=eq.${userId}&active=is.true`
+    + `&or=(expires_at.is.null,expires_at.gt.${encodeURIComponent(nowIso())})&select=role_key&limit=1`,
     env,
   );
   if (!ur.ok || !ur.data?.[0]) return { __role: null, perms: {} };
@@ -265,9 +273,13 @@ async function verifyJWT(authHeader, env) {
   );
   if (!profileRes.ok || !profileRes.data?.[0]) return null;
   const profile = profileRes.data[0];
-  if (!profile.active) return null;
 
   const ip = await getIgnitionPerms(user.id, env);
+  // An INACTIVE profile is refused by every LOT worker — that is how an external partner is kept
+  // out of every other system (§S419-ClearshotPartner). Ignition admits one ONLY when its own role
+  // layer marks the user external, and then partner mode (allowlist + field strip) applies.
+  // Active staff are unchanged.
+  if (!profile.active && !ip.perms?.ignition_external) return null;
 
   return {
     userId: user.id,
@@ -629,7 +641,26 @@ async function getInfluencer(url, auth, env) {
     `/rest/v1/engagements?influencer_id=eq.${inf.id}&select=*&order=created_at.desc`,
     env,
   );
-  return ok({ influencer: inf, engagements: er.data || [] });
+  let engagements = er.data || [];
+  // Partner scope (S419): a non-Roster influencer does not exist for a partner, and only the
+  // Roster-stage deals are shown — the same test getRoster applies, so the two never disagree.
+  if (partnerScoped(auth)) {
+    engagements = engagements.filter(e => ROSTER_STAGES.includes(e.stage));
+    if (inf.list_status === 'archived' || !engagements.length) return err('not_found', 404);
+  }
+  return ok({ influencer: inf, engagements });
+}
+
+// Is this influencer on the Roster (not archived, ≥1 deal in ROSTER_STAGES)? Partner scope check
+// for endpoints that do not already load the influencer's deals.
+async function onRoster(env, influencerId) {
+  if (!UUID_RE.test(String(influencerId || ''))) return false;
+  const r = await sb(
+    `/rest/v1/influencers?id=eq.${influencerId}&list_status=neq.archived`
+    + `&qual.stage=in.(${ROSTER_STAGES.join(',')})&select=id,qual:engagements!influencer_id!inner(id)&limit=1`,
+    env,
+  );
+  return !!(r.ok && r.data?.[0]);
 }
 
 // Ceiling for the two search reads. Comfortably above the whole table today (346 rows) so a
@@ -755,8 +786,15 @@ async function getEngagements(url, auth, env) {
   }
   if (product)  filters.push(`product_code=eq.${encodeURIComponent(product)}`);
   if (dealType) filters.push(`deal_type=eq.${encodeURIComponent(dealType)}`);
+  // S419 hostile review: these went into the PostgREST URL raw, so `date_from=2000-01-01&select=…`
+  // (decoded %26) injected a second select= that escaped the partner scope. Dates only.
+  const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+  if ((dateFrom && !ISO_DAY.test(dateFrom)) || (dateTo && !ISO_DAY.test(dateTo))) return err('date_from/date_to must be YYYY-MM-DD', 400);
   if (dateFrom) filters.push(`post_date=gte.${dateFrom}`);
   if (dateTo)   filters.push(`post_date=lte.${dateTo}`);
+  // Partner scope (S419): ANDed with any stage filter above (PostgREST ANDs repeated column
+  // filters), in SQL, so it applies before limit/offset in both the paged and the search reads.
+  if (partnerScoped(auth)) filters.push(`stage=in.(${ROSTER_STAGES.join(',')})`);
   const SELECT = '*,influencer:influencer_id(influencer_code,channel_name,person_name,influencer_type)';
 
   // ── Search: two reads merged, deliberately NOT one OR ────────────────────────────────────────
@@ -877,6 +915,7 @@ async function getEngagement(url, auth, env) {
   if (!r.ok) return err('db_error', 500);
   const eng = r.data?.[0];
   if (!eng) return err('not_found', 404);
+  if (partnerScoped(auth) && !ROSTER_STAGES.includes(eng.stage)) return err('not_found', 404);
 
   const [hr, nr, ar, pr, epr, ubr, vr, ship, adr, apr] = await Promise.all([
     sb(`/rest/v1/engagement_history?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
@@ -931,7 +970,7 @@ async function getEngagement(url, auth, env) {
     }];
   }
 
-  return ok({
+  const out = {
     engagement: eng,
     products,
     // Multiple videos per deal (Reann #10). Every deal has exactly one row today (seq 1,
@@ -953,7 +992,10 @@ async function getEngagement(url, auth, env) {
     // enforces in decideEngagementAd. A failed read is said, not rendered as "no ads".
     ads: adr.ok ? (adr.data || []).map(a => ({ ...a, approve_gate: adApprovalGate(adTake(a, vr.data || [])) })) : null,
     ad_payments: apr.ok ? (apr.data || []) : null,
-  });
+  };
+  // Partner (S419): no audit trail, notes, files, payment ledgers or staff names — whatever the
+  // toggles. Money/contact keys left on `engagement` go through the dispatcher's field strip.
+  return ok(isPartner(auth) ? partnerEngagementView(out) : out);
 }
 
 // Distinct, uuid-shaped user ids named on an engagement page (W3). The unlocker counts only while
@@ -1224,6 +1266,12 @@ async function mirrorDealVideoFields(env, engagementId, patch) {
 async function getEngagementVideos(url, auth, env) {
   const eid = url.searchParams.get('engagement_id');
   if (!eid) return err('engagement_id required', 400);
+  if (isPartner(auth) && !UUID_RE.test(eid)) return err('not_found', 404);
+  if (partnerScoped(auth)) {
+    const er = await sb(`/rest/v1/engagements?id=eq.${eid}&select=stage&limit=1`, env);
+    if (!er.ok) return err('db_error', 500);
+    if (!er.data?.[0] || !ROSTER_STAGES.includes(er.data[0].stage)) return err('not_found', 404);
+  }
   const r = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=*&order=seq.asc`, env);
   return ok({ videos: r.data || [] });
 }
@@ -1242,13 +1290,15 @@ async function getRoster(url, auth, env) {
   // limit/offset: `qual` is an !inner embed filtered to shipped+, so an influencer without one drops out
   // of the result, while `engagements` stays the full deal list. Filtering in JS after the limit hid
   // every qualifying influencer past the first page of candidates (2026-10-09: 437 qualify, 97 shown).
-  filters.push('qual.stage=in.(shipped,delivered,scheduled,posting,live)');
+  filters.push(`qual.stage=in.(${ROSTER_STAGES.join(',')})`);
   const r = await sb(
     `/rest/v1/influencers?${filters.join('&')}&select=*,engagements:engagements!influencer_id(id,engagement_no,stage,post_date,closed_reason),qual:engagements!influencer_id!inner(id)&order=updated_at.desc,id.asc&limit=${limit}&offset=${offset}`,
     env,
   );
   if (!r.ok) return err('db_error', 500);
-  const rows = (r.data || []).map(({ qual, ...i }) => i);
+  let rows = (r.data || []).map(({ qual, ...i }) => i);
+  // Partner scope (S419): the embedded deal list shows only Roster-stage deals, matching getInfluencer.
+  if (partnerScoped(auth)) rows = rows.map(i => ({ ...i, engagements: (i.engagements || []).filter(e => ROSTER_STAGES.includes(e.stage)) }));
   return ok({ roster: rows, offset, limit });
 }
 
@@ -1306,6 +1356,13 @@ function campaignRollup(c) {
 const CAMPAIGN_ENG_SELECT =
   'engagements:engagements!campaign_id(id,engagement_no,engagement_type,stage,product_code,product_variant,payment_amount,total_cost,views,paid_views,orders,post_date,expected_post_date,video_link)';
 
+// Partner scope for campaign embeds (S419 Codex review): a campaign links deals of any stage, so a
+// partner with partner_campaigns on sees only the ROSTER_STAGES ones, and the rollup is computed on those.
+function scopeCampaignForPartner(c, auth) {
+  if (!partnerScoped(auth)) return c;
+  return { ...c, engagements: (c.engagements || []).filter(e => ROSTER_STAGES.includes(e.stage)) };
+}
+
 async function getCampaigns(url, auth, env) {
   const status = url.searchParams.get('status');
   const filters = [];
@@ -1315,7 +1372,7 @@ async function getCampaigns(url, auth, env) {
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  const campaigns = (r.data || []).map(c => ({ ...c, rollup: campaignRollup(c) }));
+  const campaigns = (r.data || []).map(c => scopeCampaignForPartner(c, auth)).map(c => ({ ...c, rollup: campaignRollup(c) }));
   return ok({ campaigns });
 }
 
@@ -1323,14 +1380,16 @@ async function getCampaign(url, auth, env) {
   const id = url.searchParams.get('id');
   const no = url.searchParams.get('campaign_no');
   if (!id && !no) return err('id or campaign_no required', 400);
+  if (id && !UUID_RE.test(id)) return err('not_found', 404);
   const filter = id ? `id=eq.${id}` : `campaign_no=eq.${encodeURIComponent(no)}`;
   const r = await sb(
     `/rest/v1/campaigns?${filter}&select=*,influencer:influencer_id(*),${CAMPAIGN_ENG_SELECT}&limit=1`,
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  const c = r.data?.[0];
-  if (!c) return err('not_found', 404);
+  const c0 = r.data?.[0];
+  if (!c0) return err('not_found', 404);
+  const c = scopeCampaignForPartner(c0, auth);
   return ok({ campaign: { ...c, rollup: campaignRollup(c) } });
 }
 
@@ -2076,6 +2135,8 @@ async function deleteInfluencer(body, auth, env) {
 async function getInfluencerMetrics(url, auth, env) {
   const id = url.searchParams.get('id');
   if (!id) return err('id required', 400);
+  if (isPartner(auth) && !UUID_RE.test(id)) return err('not_found', 404);
+  if (partnerScoped(auth) && !(await onRoster(env, id))) return err('not_found', 404);
   const r = await sb(
     `/rest/v1/influencer_metrics_history?influencer_id=eq.${id}&select=*&order=captured_on.asc`,
     env,
@@ -2421,6 +2482,11 @@ async function getMe(url, auth, env) {
     ignitionRole: auth.ignitionRole,  // the role that actually gates Ignition
     fullName: auth.fullName,
     permissions: auth.permissions,
+    // Partner mode (S419) — the app switches its nav, landing page and watermark on this.
+    ignition_external: isPartner(auth),
+    partner_toggles: isPartner(auth)
+      ? Object.fromEntries(PARTNER_TOGGLES.map(k => [k, !!auth.permissions?.[k]]))
+      : null,
   });
 }
 
@@ -5365,21 +5431,141 @@ async function getIgnitionAccess(_url, auth, env) {
   const gate = requirePerm('ignition_admin', auth);
   if (gate) return gate;
   const rr = await sbStore(`/rest/v1/ignition_roles?select=role_key,label,description,permissions,is_system&order=role_key.asc`, env);
-  const ar = await sbStore(`/rest/v1/ignition_user_roles?select=user_id,role_key,active,assigned_at&order=assigned_at.desc`, env);
+  const ar = await sbStore(`/rest/v1/ignition_user_roles?select=user_id,role_key,active,assigned_at,expires_at&order=assigned_at.desc`, env);
   const assignments = ar.ok ? ar.data || [] : [];
   let users = [];
   if (assignments.length) {
     const ids = assignments.map(a => a.user_id);
-    const ur = await sbStore(`/rest/v1/users_profile?id=in.(${ids.join(',')})&select=id,full_name,role,active`, env);
+    const [ur, emails] = await Promise.all([
+      sbStore(`/rest/v1/users_profile?id=in.(${ids.join(',')})&select=id,full_name,role,active`, env),
+      // users_profile has no email column — auth is the only source. Read only for partner rows (staff
+      // are identified by name); a failed read leaves that email null rather than failing the page.
+      Promise.all(assignments.map(a => (a.role_key === 'ignition_partner' ? authUserEmail(env, a.user_id) : null))),
+    ]);
     const byId = Object.fromEntries((ur.ok ? ur.data || [] : []).map(u => [u.id, u]));
-    users = assignments.map(a => ({
+    users = assignments.map((a, i) => ({
       ...a,
+      email: emails[i],
       full_name: byId[a.user_id]?.full_name || null,
       global_role: byId[a.user_id]?.role || null,   // shown for context; never the gate
       profile_active: byId[a.user_id]?.active ?? null,
     }));
   }
   return ok({ roles: rr.ok ? rr.data || [] : [], users });
+}
+
+// ── Supabase Auth admin API (service role) ───────────────────────────────────
+async function authAdmin(env, path, opts = {}) {
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1${path}`, {
+    ...opts,
+    headers: {
+      'Content-Type':  'application/json',
+      'apikey':        env.SUPABASE_SERVICE_ROLE_KEY,
+      'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...(opts.headers || {}),
+    },
+  });
+  const text = await res.text();
+  let data;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  return { ok: res.ok, status: res.status, data };
+}
+
+async function authUserEmail(env, userId) {
+  try {
+    const r = await authAdmin(env, `/admin/users/${userId}`);
+    return r.ok ? (r.data?.email || null) : null;
+  } catch { return null; }
+}
+
+// Auth user id by email via the SECURITY DEFINER RPC store.user_id_by_email — the GoTrue admin
+// `/admin/users?email=` filter ignores the filter and returns the first user (manifestops note).
+async function authUserIdByEmail(env, email) {
+  const r = await sbStore('/rest/v1/rpc/user_id_by_email', env, { method: 'POST', body: JSON.stringify({ p_email: email }) });
+  if (!r.ok || r.data == null) return null;
+  const v = r.data;
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v)) return typeof v[0] === 'string' ? v[0] : (v[0]?.user_id_by_email || null);
+  return v.user_id_by_email || null;
+}
+
+// Invite an external partner (§S419-ClearshotPartner). Their OWN email, email-OTP sign-in, an
+// INACTIVE users_profile (so every other LOT worker refuses them) and the ignition_partner role
+// with an expiry. This never sets a profile active, and refuses an address whose profile already
+// IS active: that is a LOT user with other systems, and partner mode is no place to park them.
+async function invitePartner(body, auth, env) {
+  const gate = requirePerm('ignition_admin', auth); if (gate) return gate;
+  const { email, full_name, expires_at } = body?.data || {};
+  const bad = partnerEmailRefusal(email);
+  if (bad) return err(bad, 400);
+  const name = String(full_name || '').trim();
+  if (!name) return err('full_name required', 400);
+  const exp = partnerExpiry(expires_at);
+  if (exp.error) return err(exp.error, 400);
+  const addr = String(email).trim().toLowerCase();
+
+  let userId = await authUserIdByEmail(env, addr);
+  let created = false;
+  if (!userId) {
+    const cr = await authAdmin(env, '/admin/users', {
+      method: 'POST',
+      body: JSON.stringify({ email: addr, email_confirm: true, user_metadata: { full_name: name } }),
+    });
+    if (cr.ok && cr.data?.id) { userId = cr.data.id; created = true; }
+    else {
+      // Lost a race with a concurrent create — look again before calling it a failure.
+      userId = await authUserIdByEmail(env, addr);
+      if (!userId) return err(`auth_create_failed: ${JSON.stringify(cr.data)}`, 502);
+    }
+  }
+
+  // handle_new_user normally creates the (inactive, non-LOT) profile; make sure of it either way.
+  const pr = await sbStore(`/rest/v1/users_profile?id=eq.${userId}&select=id,active&limit=1`, env);
+  if (!pr.ok) return err(`db_error: ${JSON.stringify(pr.data)}`, 500);
+  const prof = pr.data?.[0];
+  if (prof?.active) return err('this email belongs to an ACTIVE LOT user — partners must not have an active profile', 409);
+  const pw = prof
+    ? await sbStore(`/rest/v1/users_profile?id=eq.${userId}`, env, {
+        method: 'PATCH', body: JSON.stringify({ full_name: name }),
+      })
+    // users_profile.active DEFAULTS TO TRUE — it is set false explicitly, never left to the default.
+    : await sbStore(`/rest/v1/users_profile`, env, {
+        method: 'POST',
+        body: JSON.stringify([{ id: userId, full_name: name, role: 'viewer', active: false, must_change_password: false }]),
+      });
+  if (!pw.ok) return err(`db_error: ${JSON.stringify(pw.data)}`, 500);
+
+  const res = await sbStore(`/rest/v1/ignition_user_roles`, env, {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=representation',
+    body: JSON.stringify([{
+      user_id: userId, role_key: 'ignition_partner', active: true, expires_at: exp.iso,
+      assigned_by: auth.userId, assigned_at: nowIso(),
+      disabled_at: null, disabled_by: null,
+    }]),
+  });
+  if (!res.ok) return err(`db_error: ${JSON.stringify(res.data)}`, 400);
+  return ok({ user_id: userId, email: addr, full_name: name, created, expires_at: exp.iso });
+}
+
+// Flip one partner toggle on an EXTERNAL role. Refuses staff roles and any key outside
+// PARTNER_TOGGLES, so this can never grant ignition_manage/admin to anyone.
+async function setIgnitionRolePermission(body, auth, env) {
+  const gate = requirePerm('ignition_admin', auth); if (gate) return gate;
+  const { role_key, key, value } = body?.data || {};
+  if (!role_key || !key || typeof value !== 'boolean') return err('role_key, key and value(boolean) required', 400);
+  if (!PARTNER_TOGGLES.includes(key)) return err(`key must be one of: ${PARTNER_TOGGLES.join(', ')}`, 400);
+  const rr = await sbStore(`/rest/v1/ignition_roles?role_key=eq.${encodeURIComponent(role_key)}&select=permissions&limit=1`, env);
+  if (!rr.ok) return err(`db_error: ${JSON.stringify(rr.data)}`, 500);
+  const role = rr.data?.[0];
+  if (!role) return err('unknown_role_key', 404);
+  if (!role.permissions?.ignition_external) return err('only external (partner) roles can be toggled here', 400);
+  const permissions = { ...role.permissions, [key]: value };
+  const res = await sbStore(`/rest/v1/ignition_roles?role_key=eq.${encodeURIComponent(role_key)}`, env, {
+    method: 'PATCH', body: JSON.stringify({ permissions, updated_at: nowIso() }),
+  });
+  if (!res.ok) return err(`db_error: ${JSON.stringify(res.data)}`, 400);
+  return ok({ role_key, permissions });
 }
 
 // People who could be granted access — every active profile, so a person's other job
@@ -5396,8 +5582,12 @@ async function grantIgnitionAccess(body, auth, env) {
   if (gate) return gate;
   const { user_id, role_key } = body?.data || {};
   if (!user_id || !role_key) return err('user_id and role_key required', 400);
-  const rr = await sbStore(`/rest/v1/ignition_roles?role_key=eq.${encodeURIComponent(role_key)}&select=role_key&limit=1`, env);
+  const rr = await sbStore(`/rest/v1/ignition_roles?role_key=eq.${encodeURIComponent(role_key)}&select=role_key,permissions&limit=1`, env);
   if (!rr.ok || !rr.data?.[0]) return err('unknown_role_key', 400);
+  // Partners go through invitePartner (inactive profile + expiry) — never this path.
+  if (role_key === 'ignition_partner' || rr.data[0].permissions?.ignition_external) {
+    return err('partner roles are granted with invitePartner, not grantIgnitionAccess', 400);
+  }
   const up = await sbStore(`/rest/v1/users_profile?id=eq.${user_id}&select=id,active&limit=1`, env);
   if (!up.ok || !up.data?.[0]) return err('user_not_found', 404);
   if (!up.data[0].active) return err('user_is_deactivated', 400);
@@ -5408,6 +5598,7 @@ async function grantIgnitionAccess(body, auth, env) {
       user_id, role_key, active: true,
       assigned_by: auth.userId, assigned_at: nowIso(),
       disabled_at: null, disabled_by: null,
+      expires_at: null,   // a staff grant over an old partner row must not inherit its expiry
     }]),
   });
   if (!res.ok) return err(`db_error: ${JSON.stringify(res.data)}`, 400);
@@ -5538,7 +5729,19 @@ const POST_ACTIONS = {
   returnConnect,
   grantIgnitionAccess,
   setIgnitionUserActive,
+  invitePartner,
+  setIgnitionRolePermission,
 };
+
+// Every partner JSON response passes through here (S419) — the last line of defence behind the
+// allowlist and the per-handler scope. getMe is exempt: it only echoes the caller's own identity.
+async function partnerResponse(res, action, auth) {
+  if (action === 'getMe') return res;
+  if (!(res.headers.get('Content-Type') || '').includes('application/json')) return res;
+  const body = await res.json().catch(() => null);
+  if (body == null) return res;
+  return json(stripPartnerFields(body, auth.permissions), res.status);
+}
 
 async function handleGet(url, request, env) {
   const action = url.searchParams.get('action');
@@ -5547,10 +5750,19 @@ async function handleGet(url, request, env) {
   const auth = await verifyJWT(request.headers.get('Authorization'), env);
   if (!auth) return err('unauthorized', 401);
   if (!auth.permissions?.ignition_view) return err('forbidden_ignition_view', 403);
+  // Partner: deny-by-default allowlist (PARTNER_GET_ACTIONS), checked before the action lookup.
+  const partner = isPartner(auth);
+  if (partner) {
+    const refusal = partnerGetRefusal(action, auth.permissions) || partnerParamRefusal(url.searchParams);
+    if (refusal) return err(refusal, refusal === 'partner_bad_param' ? 400 : 403);
+  }
 
   const handler = GET_ACTIONS[action];
   if (!handler) return err(`unknown_action: ${action}`, 400);
-  try { return await handler(url, auth, env); }
+  try {
+    const res = await handler(url, auth, env);
+    return partner ? await partnerResponse(res, action, auth) : res;
+  }
   catch (e) { return err(`server_error: ${e?.message || String(e)}`, 500); }
 }
 
@@ -5558,6 +5770,8 @@ async function handlePost(request, env) {
   const auth = await verifyJWT(request.headers.get('Authorization'), env);
   if (!auth) return err('unauthorized', 401);
   if (!auth.permissions?.ignition_view) return err('forbidden_ignition_view', 403);
+  // Partners are read-only: every POST is refused, before the body is even parsed.
+  if (isPartner(auth)) return err('partner_read_only', 403);
 
   let body;
   try { body = await request.json(); } catch { return err('bad_json', 400); }

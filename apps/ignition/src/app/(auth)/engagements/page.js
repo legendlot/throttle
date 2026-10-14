@@ -120,7 +120,12 @@ function todayISO() {
 }
 
 export default function EngagementsPage() {
-  const { session } = useAuth();
+  const { session, perms } = useAuth();
+  // External partner (S419): read-only, and the worker refuses campaigns / global search unless
+  // the partner role carries those toggles — don't make calls that can only 403.
+  const partner = !!perms?.ignition_external;
+  const canCampaigns = !partner || !!perms?.partner_campaigns;
+  const canGlobalSearch = !partner || !!perms?.partner_all_influencers;
   const { showToast: toast } = useToast();
   const router = useRouter();
 
@@ -151,7 +156,7 @@ export default function EngagementsPage() {
   // deals on a completed one unfindable. 10 campaigns today; loaded once per mount, not per
   // filter change, so it never joins the paging loop below.
   useEffect(() => {
-    if (!session) return;
+    if (!session || !canCampaigns) return;
     let cancelled = false;
     ignitionopsGet('getCampaigns', {}, session)
       .then(r => { if (!cancelled) setCampaigns(r.campaigns || []); })
@@ -159,7 +164,7 @@ export default function EngagementsPage() {
       // ids-with-no-names being absent, and every other filter still works.
       .catch(() => { if (!cancelled) setCampaigns([]); });
     return () => { cancelled = true; };
-  }, [session]);
+  }, [session, canCampaigns]);
 
   useEffect(() => {
     if (!session || !restored) return;
@@ -362,14 +367,14 @@ export default function EngagementsPage() {
             value={tab}
             onChange={(id) => set({ tab: id })}
           />
-          <button
+          {!partner && <button
             onClick={() => router.push('/engagements/new/')}
             style={{
               height: 42, padding: '0 18px', background: 'var(--text-1)', color: 'var(--bg)',
               border: 'none', borderRadius: 12, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700,
               cursor: 'pointer', whiteSpace: 'nowrap',
             }}
-          >+ New deal</button>
+          >+ New deal</button>}
         </div>
       </header>
 
@@ -384,6 +389,7 @@ export default function EngagementsPage() {
           value={search}
           onChange={t => set({ search: t })}
           fetchResults={async (q, signal) => {
+            if (!canGlobalSearch) return [];
             const d = await ignitionopsGet('searchAll', { q }, session, { signal });
             return decorateSearchGroups(searchAllGroups({ engagements: d?.engagements }).map(g => ({ ...g, group: '' })));
           }}

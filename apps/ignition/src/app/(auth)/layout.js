@@ -5,6 +5,8 @@ import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, useSearchShortcut } from '@throttle/ui';
 import { Menu, X, LogOut } from 'lucide-react';
 import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
+import { isPartnerPerms, partnerRouteAllowed, PARTNER_LANDING, watermarkText, watermarkDataUrl } from '../../lib/partner.js';
+import { istToday } from '../../lib/istDate.js';
 import IgRail from '../../components/shell/IgRail.js';
 import IgTopbar from '../../components/shell/IgTopbar.js';
 
@@ -38,10 +40,20 @@ export default function AuthLayout({ children }) {
 }
 
 function AuthLayoutInner({ children }) {
-  const { user, role, perms, signOut, loading } = useAuth();
+  const { user, role, perms: livePerms, brandUser, signOut, loading } = useAuth();
   const pathname  = usePathname();
   const router    = useRouter();
   const { refreshing, lastRefreshed } = useRefreshState();
+  // AuthProvider fills `perms` only after a live getMe; on a cached reload `brandUser` (the cached
+  // getMe body) already carries them — use it so a partner never flashes the staff chrome.
+  const perms = livePerms || brandUser?.permissions || null;
+  const partner = isPartnerPerms(perms);
+
+  // Partner mode: any route outside the partner set goes to the Roster. Cosmetic — the worker
+  // refuses the reads those pages would make.
+  useEffect(() => {
+    if (partner && !partnerRouteAllowed(pathname, perms)) router.replace(`${PARTNER_LANDING}/`);
+  }, [partner, pathname, perms, router]);
 
   // ── mobile "More" bottom sheet (≤767px chrome; closes itself on navigation) ─
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -60,6 +72,7 @@ function AuthLayoutInner({ children }) {
   );
 
   if (loading && !user) return <Spinner />;
+  if (partner && !partnerRouteAllowed(pathname, perms)) return <Spinner />;
 
   const displayName = user?.full_name || user?.email || '';
   const initial     = displayName ? displayName[0].toUpperCase() : '?';
@@ -80,6 +93,8 @@ function AuthLayoutInner({ children }) {
           refreshing={refreshing}
           lastRefreshed={lastRefreshed}
           showNewDeal={canNewDeal}
+          // searchAll is refused to a partner unless the role carries partner_all_influencers (S419).
+          showSearch={!partner || !!perms?.partner_all_influencers}
           onNewDeal={() => router.push('/engagements/new')}
         />
         <main className="ig-main" style={{ flex:1, overflowY:'auto', padding:'8px 32px 40px' }}>
@@ -90,11 +105,23 @@ function AuthLayoutInner({ children }) {
       {/* ── mobile app chrome (≤767px — CSS decides; desktop never shows it) ── */}
       <MobileTabBar navGroups={navGroups} pathname={pathname} moreOpen={sheetOpen}
         onGo={(r) => { setSheetOpen(false); router.push(r); }} onMore={() => setSheetOpen((s) => !s)} />
+      {partner && <PartnerWatermark text={watermarkText(user?.email || brandUser?.email, istToday())} />}
       {sheetOpen && (
         <MobileSheet navGroups={navGroups} pathname={pathname} onGo={(r) => router.push(r)} onClose={() => setSheetOpen(false)}
           userLabel={displayName} userInitial={initial} userRole={role || ''} onLogout={signOut} />
       )}
     </div>
+  );
+}
+
+// Tiled "<email> · <date>" over every page, partner mode only. pointer-events:none so it never
+// blocks a click; a deterrent against screenshots, not a control (the NDA is the control).
+function PartnerWatermark({ text }) {
+  return (
+    <div aria-hidden="true" style={{
+      position: 'fixed', inset: 0, zIndex: 9999, pointerEvents: 'none', userSelect: 'none',
+      backgroundImage: watermarkDataUrl(text), backgroundRepeat: 'repeat',
+    }} />
   );
 }
 

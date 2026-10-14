@@ -50,6 +50,11 @@ function EngagementDetailPageBody() {
   const [unlocking, setUnlocking] = useState(false);
   const canManage = !!perms?.ignition_manage;
   const canApprove = !!perms?.ignition_approve;   // S313 — final approval, admin tier only
+  // External partner (S419): read-only, and the worker already withholds notes/history/payments
+  // and strips money/contact fields — these flags just keep the empty cards off the page.
+  const partner = !!perms?.ignition_external;
+  const seeMoney = !partner || !!perms?.partner_money;
+  const seeContacts = !partner || !!perms?.partner_contacts;
 
   function reload() {
     if (!session || (!id && !eno)) return;
@@ -154,7 +159,7 @@ function EngagementDetailPageBody() {
       <a href="/engagements/" onClick={ev => { ev.preventDefault(); router.push('/engagements/'); }}
         style={{ fontSize: 13, color: 'var(--text-3)', width: 'max-content', textDecoration: 'none' }}>← Engagements</a>
 
-      <DetailHeader e={e} inf={inf} data={data} completeness={completeness} session={session} reload={reload} setAdvOpen={setAdvOpen} canManage={canManage} setDelOpen={setDelOpen} />
+      <DetailHeader e={e} inf={inf} data={data} completeness={completeness} session={session} reload={reload} setAdvOpen={setAdvOpen} canManage={canManage} setDelOpen={setDelOpen} partner={partner} />
 
       <PipelineCard e={e} data={data} canApprove={canApprove} doApprove={doApprove} approving={approving} locked={locked} doUnlock={doUnlock} unlocking={unlocking} unlockedWindow={unlockedWindow} doRelock={doRelock} dataWarnings={dataWarnings} />
 
@@ -178,7 +183,7 @@ function EngagementDetailPageBody() {
             row — it simply was not rendered, so verifying who a deal was with meant opening the
             profile in another tab. Read-only on purpose: the influencer record is edited on the
             influencer page, and two edit surfaces for one row is how they drift apart. */}
-        <InfluencerCard inf={inf} />
+        {seeContacts && <InfluencerCard inf={inf} />}
 
         {/* Reann #7 (2026-08-27): "integrate the payment section into engagements itself … the
             payment screenshot should be attached to the specific influencer's engagement record
@@ -187,7 +192,7 @@ function EngagementDetailPageBody() {
             on the wire (getEngagement returns payments + paid_total) — the deal page just showed
             the total and made you go to /payments to see the proof. The separate Payments page is
             deliberately KEPT: it is the cross-deal spend view, which this card cannot be. */}
-        <PaymentsCard
+        {!partner && <PaymentsCard
           payments={data.payments || []}
           paidTotal={data.paid_total}
           agreed={e.payment_amount}
@@ -196,13 +201,13 @@ function EngagementDetailPageBody() {
           canEdit={canManage}
           session={session}
           onSaved={reload}
-        />
+        />}
 
-        <Card title="POC">
+        {!partner && <Card title="POC">
           <KV label="Assigned to" value={e.poc_name || '—'} />
-        </Card>
+        </Card>}
 
-        <CostsCard e={e} canEdit={canManage} locked={locked} session={session} onSaved={reload} />
+        {seeMoney && <CostsCard e={e} canEdit={canManage} locked={locked} session={session} onSaved={reload} />}
 
         {/* Ads (S373) — spans the row. Deliberately NOT given `locked`: ads and ad payments stay
             editable on a Complete deal, because ads run after the video posts. */}
@@ -217,7 +222,7 @@ function EngagementDetailPageBody() {
           onSaved={reload}
         />
 
-        <LogisticsCard e={e} />
+        {seeContacts && <LogisticsCard e={e} />}
 
         <PostLiveCard e={e} canEdit={canManage} locked={locked} session={session} onSaved={reload} />
 
@@ -236,13 +241,13 @@ function EngagementDetailPageBody() {
         gapReasons={catalogs?.metric_gap_reasons}
       />
 
-      <CodesCard engagementId={e.id} canManage={canManage} session={session} />
+      {!partner && <CodesCard engagementId={e.id} canManage={canManage} session={session} />}
 
       {/* Notes and History side by side; stack below ~780px of content width. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))', gap: 14, alignItems: 'start' }}>
+      {!partner && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))', gap: 14, alignItems: 'start' }}>
         <NotesCard data={data} note={note} setNote={setNote} addNote={addNote} />
         <HistoryCard data={data} />
-      </div>
+      </div>}
 
       <AdvanceModal
         key={advOpen ? 'open' : 'closed'}  // remount per open: no stale target / inputs / error

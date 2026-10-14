@@ -3,6 +3,7 @@ import {
   Settings, Layers, FileSpreadsheet, CircleUser, CalendarDays, Wallet, Target,
   BookOpen, Gauge, Megaphone,
 } from 'lucide-react';
+import { isPartnerPerms, partnerRouteAllowed } from './partner.js';
 
 export const NAV_GROUPS = [
   {
@@ -50,6 +51,14 @@ export const NAV_GROUPS = [
 ];
 
 export function filterNavByPerms(groups, perms) {
+  // External partner (S419): only the routes partnerRoutes() offers — Roster + Engagements plus
+  // whatever their role's toggles open. No flat entries (the System Manual is internal).
+  if (isPartnerPerms(perms)) {
+    return groups
+      .filter(g => !g.flat)
+      .map(g => ({ ...g, items: (g.items || []).filter(it => partnerRouteAllowed(it.route, perms)) }))
+      .filter(g => g.items.length > 0);
+  }
   return groups
     .map(g => g.flat ? g : ({
       ...g,

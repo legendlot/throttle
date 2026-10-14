@@ -356,7 +356,7 @@ function InfluencerDetailPageBody() {
             </Card>
           )}
 
-          <AttributionCard inf={inf} session={session} />
+          {!perms?.ignition_external && <AttributionCard inf={inf} session={session} />}
         </div>
 
         <div style={{ flex: '3 1 460px', minWidth: 'min(320px, 100%)', display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -396,7 +396,8 @@ function InfluencerDetailPageBody() {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))', gap: 14, alignItems: 'start' }}>
             <GrowthCard inf={inf} session={session} canManage={canManage} onChanged={reload} />
-            <ShopifyCard inf={inf} session={session} />
+            {/* Shopify lookup = customer contact data; the worker refuses it to partners (S419). */}
+            {!perms?.ignition_external && <ShopifyCard inf={inf} session={session} />}
           </div>
         </div>
       </div>

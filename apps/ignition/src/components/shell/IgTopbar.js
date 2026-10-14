@@ -28,7 +28,7 @@ function useSyncedLabel(lastRefreshed) {
   return m < 60 ? `synced ${m}m ago` : `synced ${Math.round(m / 60)}h ago`;
 }
 
-export default function IgTopbar({ refreshing, lastRefreshed, showNewDeal, onNewDeal }) {
+export default function IgTopbar({ refreshing, lastRefreshed, showNewDeal, onNewDeal, showSearch = true }) {
   const synced = useSyncedLabel(lastRefreshed);
 
   return (
@@ -36,7 +36,7 @@ export default function IgTopbar({ refreshing, lastRefreshed, showNewDeal, onNew
       height: 72, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 18, padding: '0 32px',
       fontFamily: 'var(--font-ui)', background: 'transparent',
     }}>
-      <GlobalSearch />
+      {showSearch ? <GlobalSearch /> : <span style={{ flex: 1 }} />}
 
       <div style={{ marginLeft: 'auto', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14 }}>
         {/* Shown only when a page actually reports a refresh. Nothing in Ignition sets the
