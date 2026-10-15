@@ -8,6 +8,7 @@ const WORDS = {
   read_failed: 'Outpost could not read that. Try again.',
   write_failed: 'Outpost could not save that. Try again.',
   revoke_failed: 'Saved, but the live sessions could not be ended. Try again.',
+  try_again: 'Someone else was saving this consignment at the same moment. Try again.',
 };
 
 async function send(method, action, params, session) {

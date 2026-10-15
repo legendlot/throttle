@@ -86,7 +86,8 @@ export function Field({ label, children }) {
 }
 
 export const STATUS_TONE = { open: 'blue', closed: 'green', in_transit: 'amber', draft: 'blue', dispatched: 'green', cancelled: '',
-  pending: 'blue', leased: 'blue', printed: 'green', outcome_unknown: 'amber', failed: 'red', receiving: 'amber', accepted: 'green', hold: 'red' };
+  pending: 'blue', leased: 'blue', printed: 'green', outcome_unknown: 'amber', failed: 'red', receiving: 'amber', audit: 'amber', accepted: 'green', hold: 'red',
+  received: 'green', broken: 'red' };
 export const Badge = ({ s, children }) => <span className={`badge ${STATUS_TONE[s] || ''}`}>{children || String(s || '').replace(/_/g, ' ')}</span>;
 
 // Supervisor approval on THIS bench for one purpose: op code + PIN → a single-use token (120 s). The action that

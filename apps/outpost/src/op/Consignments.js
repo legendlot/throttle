@@ -143,6 +143,7 @@ function Detail({ csg, onClose }) {
               </tbody></table>
             )}
           </div>
+          {c.receipt && <Receipt r={c.receipt} status={c.status} />}
           {draft && (
             <div className="card" style={{ background: 'var(--surface2)' }}>
               <div className="spread">
@@ -209,5 +210,37 @@ function Dispatch({ c, onClose, onDone }) {
         </div>
       </form>
     </Modal>
+  );
+}
+
+// LOT's receipt of this consignment (O8): what was counted at LOT, what was missing, and — once LOT has accepted it —
+// the units its QC rejected with the reason. Rejects marked "return" come back to this site unpacked: fix them and
+// pack the same stickers again.
+function Receipt({ r, status }) {
+  const n = v => (v == null ? '—' : v);
+  return (
+    <div className="card" style={{ background: 'var(--surface2)' }}>
+      <h3 style={{ fontSize: 13, color: 'var(--t2)', textTransform: 'uppercase', letterSpacing: '.06em', margin: '0 0 8px' }}>Received at LOT</h3>
+      <div className="row">
+        <span>Sent <b className="mono">{n(r.expected)}</b></span>
+        <span>Received <b className="mono">{r.finished_at ? n(r.received) : 'counting…'}</b></span>
+        {r.short > 0 && <span className="err" style={{ padding: '2px 8px' }}>Short <b className="mono">{r.short}</b></span>}
+        {status === 'accepted' && <span>Accepted <b className="mono">{n(r.accepted)}</b></span>}
+        {status === 'accepted' && r.rejected > 0 && <span>Rejected <b className="mono">{r.rejected}</b></span>}
+        {(status === 'audit' || status === 'hold') && <span className="dim">quality check in progress</span>}
+      </div>
+      {r.short_units?.length > 0 && (
+        <div className="dim" style={{ marginTop: 8, fontSize: 13 }}>Not found at LOT: {r.short_units.map(u => `${u.car_upc} (${u.ctn_no})`).join(', ')}</div>
+      )}
+      {r.rejections?.length > 0 && (
+        <table className="t" style={{ marginTop: 8 }}>
+          <thead><tr><th>Unit</th><th>Carton</th><th>Reason</th><th>What happens</th></tr></thead>
+          <tbody>{r.rejections.map(j => (
+            <tr key={j.car_upc}><td className="mono">{j.batch_label || j.car_upc}</td><td className="mono">{j.ctn_no}</td><td>{j.reason}</td>
+              <td>{j.disposition === 'return_vendor' ? 'Coming back to you — fix and re-pack' : j.disposition === 'rework_lot' ? 'Reworked at LOT' : 'LOT to decide'}</td></tr>
+          ))}</tbody>
+        </table>
+      )}
+    </div>
   );
 }

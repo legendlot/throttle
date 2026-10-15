@@ -472,9 +472,13 @@ async function vendorRoute(request, url, rawBody, ip) {
       st(`/rest/v1/vendors?id=eq.${ctx.vendorId}&select=vendor_name,address,gstin`),
     ]);
     if (!pm.ok || !v.ok) return fail('outpost_unavailable', 503);
+    // LOT's receipt of it (O8): counts, units found short, and — once accepted — the rejects with their reasons.
+    const rc = row.status === 'draft' || row.status === 'cancelled' || row.status === 'dispatched' ? { ok: true, data: null }
+      : await rpc('vendor_receipt', { p_vendor_id: ctx.vendorId, p_csg_no: csg });
+    if (!rc.ok) return fail('outpost_unavailable', 503);
     const prod = new Map(pm.data.map(p => [String(p.product_code).toUpperCase(), p]));
     const { summary, ...rest } = row;
-    return ok({ ...rest, lines: lines.map(l => ({ ...l, ...(prod.get(l.sku) ? {
+    return ok({ ...rest, receipt: rc.data, lines: lines.map(l => ({ ...l, ...(prod.get(l.sku) ? {
       product: prod.get(l.sku).product, model: prod.get(l.sku).model, color: prod.get(l.sku).color,
       ean: prod.get(l.sku).ean, hsn_code: prod.get(l.sku).hsn_code } : {}) })),
       total_cartons: row.summary ? row.carton_count : row.cartons.length,
@@ -957,6 +961,54 @@ async function ownerRoute(request, url, rawBody) {
       if (!r.ok || !r.data[0]) return fail('not found or not open', 404);
       await lot(r.data[0].vendor_id, 'work_order_' + P.status, { work_order_id: r.data[0].id, wo_no: r.data[0].wo_no });
       return ok(r.data[0]);
+    }
+    // ── Receiving + audit QC (O8). Every state change is one outpost.* transaction; the SQL writes its own event. ──
+    case 'GET getConsignments': {
+      if (!needVendor()) return fail('vendor_id required');
+      const s = ['incoming', 'dispatched', 'receiving', 'audit', 'hold', 'accepted'].includes(P.status) ? P.status : null;
+      const r = await rpc('owner_consignments', { p_vendor_id: vendorId, p_status: s });
+      if (!r.ok) return fail('read_failed', 502);
+      return ok(r.data);
+    }
+    case 'GET getReceipt': {
+      const r = await rpc('owner_receipt', { p_csg_no: String(P.csg_no || '') });
+      if (!r.ok) { const m = sqlMsg(r); return fail(m || 'read_failed', m ? 404 : 502); }
+      return ok(r.data);
+    }
+    case 'POST startReceipt':
+    case 'POST receiveScan':
+    case 'POST finishReceipt':
+    case 'POST auditMark':
+    case 'POST acceptConsignment':
+    case 'POST setDisposition': {
+      const csg = String(P.csg_no || '');
+      const call = {
+        startReceipt: () => rpc('receive_start', { p_csg_no: csg, p_by: me.userId }),
+        receiveScan: () => rpc('receive_scan', { p_csg_no: csg, p_ctn_no: P.ctn_no ? String(P.ctn_no) : null,
+          p_code: String(P.code || '').slice(0, 64), p_by: me.userId }),
+        finishReceipt: () => rpc('receive_finish', { p_csg_no: csg, p_by: me.userId }),
+        auditMark: () => rpc('audit_mark', { p_csg_no: csg, p_code: String(P.code || '').slice(0, 64),
+          p_result: P.result === 'fail' ? 'fail' : P.result === 'pass' ? 'pass' : '', p_reason: P.reason ? String(P.reason) : null,
+          p_by: me.userId }),
+        // full_qc_done: only for a consignment on hold — the person confirms every unit was inspected.
+        acceptConsignment: () => rpc('accept_consignment', { p_csg_no: csg, p_full_qc_done: P.full_qc_done === true,
+          p_by: me.userId, p_by_name: me.fullName || me.email || null }),
+        setDisposition: () => {
+          const ids = Array.isArray(P.ids) ? P.ids.map(wholeNumber) : [];
+          if (!ids.length || ids.some(i => !(i >= 1))) return null;
+          return rpc('set_disposition', { p_ids: ids, p_disposition: String(P.disposition || ''), p_by: me.userId });
+        },
+      }[action];
+      const pending = call();
+      if (!pending) return fail('ids required');
+      const r = await pending;
+      if (!r.ok) {
+        const code = r?.data?.code;
+        if (code === '40P01' || code === '40001' || code === '55P03') return fail('try_again', 409);
+        const m = sqlMsg(r);
+        return fail(m || 'write_failed', m ? 400 : 502);
+      }
+      return ok(r.data);
     }
     case 'GET getEvents': {
       if (!needVendor()) return fail('vendor_id required');
