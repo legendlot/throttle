@@ -1,0 +1,9 @@
+{
+  "base_url": "https://outpostops.afshaan.workers.dev",
+  "label_printer": "windows:TSC TE244",
+  "sticker_printer": null,
+  "poll_ms": 2000,
+  "heartbeat_ms": 30000,
+  "label": { "width_mm": 50, "height_mm": 25, "gap_mm": 2, "darkness": 8, "speed": 4 },
+  "stickers": { "dpi": 300, "across": 3, "size_mm": 13, "gap_x_mm": 2, "gap_y_mm": 2, "left_mm": 1, "darkness": 10, "speed": 3, "cell": 5 }
+}

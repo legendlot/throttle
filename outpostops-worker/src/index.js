@@ -57,7 +57,7 @@ const sqlMsg = r => {
 // (authenticator lock_timeout 8 s). A consignment whose cartons changed between dispatch's read and its locks raises
 // 40001 too. Anything unexpected stays generic.
 const FORBIDDEN_MSGS = new Set(['paused', 'vendor not active', 'operator not active',
-  'not an active bench of this vendor', 'supervisor approval required']);
+  'not an active bench of this vendor', 'supervisor approval required', 'not an active print agent of this vendor']);
 const rpcFail = r => {
   const code = r?.data?.code;
   if ((code === '23505' && String(r?.data?.message || '').includes('cartons_one_open_per_bench_order'))
@@ -249,10 +249,13 @@ async function vendorRoute(request, url, rawBody, ip) {
 
   if (route === 'enrol' && request.method === 'POST') return enrol(body, ip);
 
-  const needSession = !['login', 'me'].includes(route);
+  // A print agent has no operator: its device key is its whole credential (agent/* routes only).
+  const isAgentRoute = route.startsWith('agent/');
+  const needSession = !['login', 'me'].includes(route) && !isAgentRoute;
   const a = await authDevice(request, url, rawBody, { needSession });
   if (a.res) return a.res;
   const ctx = a.ctx;
+  if (isAgentRoute) return agentRoute(request, route, body, ctx);
 
   if (route === 'me' && request.method === 'GET') {
     const v = await st(`/rest/v1/vendors?id=eq.${ctx.vendorId}&select=vendor_name`);
@@ -479,11 +482,95 @@ async function vendorRoute(request, url, rawBody, ip) {
       consignor: v.data[0] || null });
   }
 
+  // ── Printing (O5) ── what the floor sees of the print queue, and the supervisor's fix for a job the agent could
+  // not finish: reprint (same job id; refused when the label is no longer current), printed (it did come out), cancel,
+  // dismiss (a label printed after it was superseded — thrown away).
+  if (route === 'print_jobs' && request.method === 'GET') {
+    const view = url.searchParams.get('view') === 'recent' ? 'recent' : 'attention';
+    const filter = view === 'attention' ? '&or=(status.in.(outcome_unknown,failed),and(late_print.is.true,resolved_at.is.null))' : '';
+    const r = await op(`/rest/v1/print_jobs?vendor_id=eq.${ctx.vendorId}${filter}` +
+      `&select=id,kind,ref,status,attempts,reprints,error,late_print,resolved_at,created_at,printed_at,outcome_at,` +
+      `batch_label:payload->>batch_label,part:payload->part,parts:payload->parts,device:devices!print_jobs_device_id_fkey(bench_no)` +
+      `&order=id.desc&limit=${view === 'attention' ? 200 : 100}`);
+    if (!r.ok) return fail('outpost_unavailable', 503);
+    return ok(r.data);
+  }
+
+  if (route === 'print_status' && request.method === 'GET') {
+    const [ag, counts] = await Promise.all([
+      op(`/rest/v1/devices?vendor_id=eq.${ctx.vendorId}&kind=eq.agent&status=eq.active` +
+        `&select=id,label,bench_no,last_seen_at,agent_status,agent_status_at&order=id`),
+      rpc('print_counts', { p_vendor_id: ctx.vendorId })]);
+    if (!ag.ok || !counts.ok) return fail('outpost_unavailable', 503);
+    const now = Date.now();
+    return ok({ counts: counts.data, agents: ag.data.map(a => ({ ...a,
+      online: !!a.agent_status_at && now - Date.parse(a.agent_status_at) < AGENT_ONLINE_MS })) });
+  }
+
+  if (route === 'print_resolve' && request.method === 'POST') {
+    if (ctx.deviceKind !== 'bench') return fail('not_a_bench', 403);
+    if (ctx.operator.role !== 'supervisor') return fail('supervisor_only', 403);
+    const jobId = wholeNumber(body.job_id);
+    if (!(jobId > 0)) return fail('job_id required');
+    if (!['reprint', 'printed', 'cancel', 'dismiss'].includes(body.action)) return fail('action is reprint, printed, cancel or dismiss');
+    // The status the supervisor was looking at: a job that changed meanwhile (e.g. its late report landed) is refused,
+    // so a stale screen can never reprint a label that did come out.
+    if (typeof body.expected_status !== 'string' || !body.expected_status) return fail('expected_status required');
+    const r = await rpc('print_resolve', { p_vendor_id: ctx.vendorId, p_device_id: ctx.deviceId, p_operator_id: ctx.operator.id,
+      p_idem_key: idemKey(body), p_request_hash: await sha256Hex(JSON.stringify({ route, job_id: jobId, action: body.action,
+        expected_status: body.expected_status })),
+      p_job_id: jobId, p_action: body.action, p_expected_status: body.expected_status });
+    return r.ok ? ok(r.data) : rpcFail(r);
+  }
+
   if (route === 'batches' && request.method === 'GET') {
     const r = await pub(`/rest/v1/upc_batches?vendor_id=eq.${ctx.vendorId}` +
       `&select=batch_id,product,product_code,quantity,upc_from,upc_to,status,generated_by,generated_at&order=generated_at.desc&limit=50`);
     if (!r.ok) return fail('outpost_unavailable', 503);
     return ok(r.data);
+  }
+
+  return fail('not_found', 404);
+}
+
+// ── print agent (/v/agent/*) ── an enrolled `agent` device, no operator. Claims lease jobs for its own bench (the
+// device's bench_no) and, when it drives a sticker printer, the site's sticker sheets; it reports each one exactly once.
+// A lost report is never a silent reprint: the lease runs out to outcome_unknown and a supervisor decides.
+const AGENT_ONLINE_MS = 90_000;
+async function agentRoute(request, route, body, ctx) {
+  if (ctx.deviceKind !== 'agent') return fail('not_an_agent', 403);
+  if (request.method !== 'POST') return fail('not_found', 404);
+
+  if (route === 'agent/claim') {
+    const limit = wholeNumber(body.limit);
+    const r = await rpc('agent_claim', { p_vendor_id: ctx.vendorId, p_device_id: ctx.deviceId,
+      p_stickers: body.stickers === true, p_labels: body.labels !== false, p_limit: limit > 0 ? Math.min(limit, 20) : 5 });
+    return r.ok ? ok(r.data) : rpcFail(r);
+  }
+
+  if (route === 'agent/report') {
+    const jobId = wholeNumber(body.job_id), attempt = wholeNumber(body.attempt);
+    if (!(jobId > 0) || !(attempt > 0)) return fail('job_id and attempt required');
+    if (!['printed', 'not_printed', 'unknown'].includes(body.outcome)) return fail('outcome is printed, not_printed or unknown');
+    if (body.error != null && typeof body.error !== 'string') return fail('error must be text');
+    const r = await rpc('agent_report', { p_vendor_id: ctx.vendorId, p_device_id: ctx.deviceId, p_job_id: jobId,
+      p_attempt: attempt, p_outcome: body.outcome, p_error: body.error ?? null });
+    return r.ok ? ok(r.data) : rpcFail(r);
+  }
+
+  if (route === 'agent/heartbeat') {
+    // Shape kept small and flat: what the floor's printer tile shows. Anything else is dropped.
+    const printers = Array.isArray(body.printers) ? body.printers.slice(0, 6).map(p => ({
+      role: p?.role === 'stickers' ? 'stickers' : 'labels',
+      name: String(p?.name ?? '').slice(0, 60),
+      ok: p?.ok === true,
+      detail: p?.detail == null ? null : String(p.detail).slice(0, 120),
+    })) : [];
+    const status = { version: String(body.version ?? '').slice(0, 20), printers,
+      queue: wholeNumber(body.queue) >= 0 ? wholeNumber(body.queue) : null };
+    const r = await patch('devices', `id=eq.${ctx.deviceId}`, { agent_status: status, agent_status_at: new Date().toISOString() });
+    if (!r.ok) return fail('outpost_unavailable', 503);
+    return ok({ server_time: Date.now() });
   }
 
   return fail('not_found', 404);
@@ -643,7 +730,7 @@ async function ownerRoute(request, url, rawBody) {
     case 'GET getDevices': {
       if (!needVendor()) return fail('vendor_id required');
       const [d, e] = await Promise.all([
-        op(`/rest/v1/devices?vendor_id=eq.${vendorId}&select=id,kind,bench_no,label,status,enrolled_at,last_seen_at,pin_locked_until,revoked_at&order=id`),
+        op(`/rest/v1/devices?vendor_id=eq.${vendorId}&select=id,kind,bench_no,label,status,enrolled_at,last_seen_at,pin_locked_until,revoked_at,agent_status,agent_status_at&order=id`),
         op(`/rest/v1/device_enrolments?vendor_id=eq.${vendorId}&used_at=is.null&revoked_at=is.null&expires_at=gt.${q(new Date().toISOString())}&select=id,kind,bench_no,label,expires_at,created_at&order=id`)]);
       if (!d.ok || !e.ok) return fail('read_failed', 502);
       return ok({ devices: d.data, pending_enrolments: e.data });
@@ -653,12 +740,14 @@ async function ownerRoute(request, url, rawBody) {
       const kind = P.kind === 'agent' ? 'agent' : 'bench';
       const bench = P.bench_no == null || P.bench_no === '' ? null : Number(P.bench_no);
       if (kind === 'bench' && !(Number.isInteger(bench) && bench >= 1 && bench <= 99)) return fail('bench_no 1–99 required');
+      // An agent's bench_no = the bench whose label printer it drives; none = a sticker-printer-only agent.
+      if (kind === 'agent' && bench !== null && !(Number.isInteger(bench) && bench >= 1 && bench <= 99)) return fail('bench_no 1–99 or empty');
       const label = String(P.label || '').trim().slice(0, 60) || (kind === 'agent' ? 'Print agent' : `Bench ${bench}`);
       const cfg = await vendorCfg(vendorId);
       if (!cfg) return fail('set up the vendor first', 400);
       for (let attempt = 0; attempt < 3; attempt++) {
         const code = mintDigits(CODE_DIGITS);
-        const r = await ins('device_enrolments', { vendor_id: vendorId, kind, bench_no: kind === 'bench' ? bench : null,
+        const r = await ins('device_enrolments', { vendor_id: vendorId, kind, bench_no: bench,
           label, code_hash: await codeHash(ENV.OUTPOST_PEPPER, 'enrol', code), created_by: me.userId,
           expires_at: new Date(Date.now() + CODE_TTL_HOURS * 3_600_000).toISOString() });
         if (r.ok) {
@@ -910,5 +999,7 @@ export default {
     if (!env.SUPABASE_SERVICE_KEY) return;
     const r = await rpc('auth_housekeeping', {});
     if (!r.ok) console.error('auth_housekeeping failed', r.status, r.data);
+    const p = await rpc('print_housekeeping', {});
+    if (!p.ok) console.error('print_housekeeping failed', p.status, p.data);
   },
 };

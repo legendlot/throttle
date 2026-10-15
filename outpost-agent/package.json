@@ -1,0 +1,15 @@
+{
+  "name": "outpost-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Outpost vendor print agent: leased print jobs from outpostops to the bench TE244 and the sticker printers",
+  "scripts": {
+    "start": "node agent.mjs run",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "optionalDependencies": {
+    "@thiagoelg/node-printer": "^0.6.2"
+  }
+}
