@@ -54,7 +54,8 @@ const sqlMsg = r => {
 // A refused outpost.* RPC → the caller's response. Only a genuine concurrency loser is a 409 the app retries with the
 // SAME idempotency key: two first-packs racing to open a bench's carton (that unique index ONLY — any other unique
 // violation would fail the same way every time), a deadlock / serialization failure, or a lock wait that timed out
-// (authenticator lock_timeout 8 s). Anything unexpected stays generic.
+// (authenticator lock_timeout 8 s). A consignment whose cartons changed between dispatch's read and its locks raises
+// 40001 too. Anything unexpected stays generic.
 const FORBIDDEN_MSGS = new Set(['paused', 'vendor not active', 'operator not active',
   'not an active bench of this vendor', 'supervisor approval required']);
 const rpcFail = r => {
@@ -369,7 +370,7 @@ async function vendorRoute(request, url, rawBody, ip) {
     // Empty ones (emptied by unpack) are hidden: an open one is refilled by the bench's next pack for that order.
     const r = await op(`/rest/v1/cartons?vendor_id=eq.${ctx.vendorId}&status=in.(open,closed)&unit_count=gt.0` +
       `&select=id,ctn_no,sku,channel,capacity,unit_count,status,manifest_version,bench_no,opened_at,closed_at,` +
-      `work_orders(wo_no)&order=id.desc&limit=200`);
+      `work_orders(wo_no),consignment:consignments(csg_no,status)&order=id.desc&limit=200`);
     return r.ok ? ok(r.data) : fail('outpost_unavailable', 503);
   }
 
@@ -381,6 +382,101 @@ async function vendorRoute(request, url, rawBody, ip) {
       `work_orders(wo_no),carton_units(car_upc,remote_upc,batch_label,added_at)`);
     if (!c.ok) return fail('outpost_unavailable', 503);
     return c.data[0] ? ok(c.data[0]) : fail('not_found', 404);
+  }
+
+  // ── Consignments (O4) ── supervisor only. A draft collects CLOSED cartons; dispatch records the vendor's own
+  // delivery challan + vehicle (+ e-way bill) and moves every member unit to vendor_in_transit in one transaction.
+  const CSG_WRITES = {
+    consignment_create:   { fn: 'create_consignment',        fields: ['notes'] },
+    consignment_add:      { fn: 'consignment_add_carton',    fields: ['csg_no', 'ctn_no'] },
+    consignment_remove:   { fn: 'consignment_remove_carton', fields: ['csg_no', 'ctn_no'] },
+    consignment_cancel:   { fn: 'cancel_consignment',        fields: ['csg_no'] },
+    consignment_dispatch: { fn: 'dispatch_consignment',
+      fields: ['csg_no', 'challan_no', 'challan_date', 'vehicle_no', 'eway_bill_no', 'transporter'] },
+  };
+  if (CSG_WRITES[route] && request.method === 'POST') {
+    if (ctx.deviceKind !== 'bench') return fail('not_a_bench', 403);
+    if (ctx.operator.role !== 'supervisor') return fail('supervisor_only', 403);
+    const spec = CSG_WRITES[route];
+    const vals = {};
+    for (const f of spec.fields) {
+      const v = body[f];
+      if (v !== undefined && v !== null && typeof v !== 'string') return fail(`${f} must be text`);
+      vals[f] = v ?? null;
+    }
+    if (spec.fields.includes('csg_no') && !vals.csg_no) return fail('csg_no required');
+    if (spec.fields.includes('ctn_no') && !vals.ctn_no) return fail('ctn_no required');
+    if (route === 'consignment_dispatch') {
+      const d = vals.challan_date || '';
+      const t = /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(`${d}T00:00:00Z`) : null;
+      if (!t || Number.isNaN(t.getTime()) || t.toISOString().slice(0, 10) !== d) return fail('challan_date YYYY-MM-DD required');
+    }
+    const args = { p_vendor_id: ctx.vendorId, p_device_id: ctx.deviceId, p_operator_id: ctx.operator.id,
+      p_idem_key: idemKey(body), p_request_hash: await sha256Hex(JSON.stringify({ route, ...vals })) };
+    for (const f of spec.fields) args[`p_${f}`] = vals[f];
+    const r = await rpc(spec.fn, args);
+    return r.ok ? ok(r.data) : rpcFail(r);
+  }
+
+  if (route === 'consignments' && request.method === 'GET') {
+    // Dispatched rows carry frozen totals; only drafts (a handful) get live counts from their cartons.
+    const r = await op(`/rest/v1/consignments?vendor_id=eq.${ctx.vendorId}` +
+      `&select=id,csg_no,status,challan_no,challan_date,vehicle_no,eway_bill_no,transporter,carton_count,unit_count,` +
+      `notes,created_at,dispatched_at&order=id.desc&limit=100`);
+    if (!r.ok) return fail('outpost_unavailable', 503);
+    const drafts = r.data.filter(c => c.status === 'draft').map(c => c.id);
+    if (drafts.length) {
+      const ct = await op(`/rest/v1/cartons?vendor_id=eq.${ctx.vendorId}&consignment_id=in.(${drafts.join(',')})` +
+        `&select=consignment_id,unit_count`);
+      if (!ct.ok) return fail('outpost_unavailable', 503);
+      for (const c of r.data.filter(x => x.status === 'draft')) {
+        const mine = ct.data.filter(x => Number(x.consignment_id) === Number(c.id));
+        c.carton_count = mine.length;
+        c.unit_count = mine.reduce((s, x) => s + Number(x.unit_count), 0);
+      }
+    }
+    return ok(r.data.map(({ id, ...rest }) => rest));
+  }
+
+  // One consignment with everything its packing note needs: cartons, per-SKU lines (frozen at dispatch, live for a
+  // draft), product names + EAN + HSN, and the consignor (the vendor). The GST delivery challan is the vendor's own
+  // document — Outpost records its number; this is the packing note that travels with it.
+  if (route === 'consignment' && request.method === 'GET') {
+    const csg = String(url.searchParams.get('csg_no') || '').trim().toUpperCase();
+    if (!/^CSG-\d{5,}$/.test(csg)) return fail('csg_no required');
+    const c = await op(`/rest/v1/consignments?vendor_id=eq.${ctx.vendorId}&csg_no=eq.${csg}` +
+      `&select=csg_no,status,challan_no,challan_date,vehicle_no,eway_bill_no,transporter,carton_count,unit_count,summary,` +
+      `notes,created_at,dispatched_at,cartons(ctn_no,sku,channel,unit_count,status,manifest_version)`);
+    if (!c.ok) return fail('outpost_unavailable', 503);
+    const row = c.data[0];
+    if (!row) return fail('not_found', 404);
+    row.cartons.sort((a, b) => a.ctn_no.localeCompare(b.ctn_no));
+    let lines = row.summary?.lines;
+    if (!lines) {
+      const by = new Map();
+      for (const ct of row.cartons) {
+        const k = `${ct.sku}\u0000${ct.channel}`;
+        const l = by.get(k) || { sku: ct.sku, channel: ct.channel, cartons: 0, units: 0 };
+        l.cartons += 1; l.units += Number(ct.unit_count);
+        by.set(k, l);
+      }
+      lines = [...by.values()].sort((a, b) => a.sku.localeCompare(b.sku) || a.channel.localeCompare(b.channel));
+    }
+    const skus = [...new Set(lines.map(l => l.sku))];
+    const [pm, v] = await Promise.all([
+      skus.length ? pub(`/rest/v1/product_master?product_code=in.(${q(skus.map(pgrstQuote).join(','))})` +
+        `&component_type=eq.car&select=product_code,product,model,color,ean,hsn_code`) : Promise.resolve({ ok: true, data: [] }),
+      st(`/rest/v1/vendors?id=eq.${ctx.vendorId}&select=vendor_name,address,gstin`),
+    ]);
+    if (!pm.ok || !v.ok) return fail('outpost_unavailable', 503);
+    const prod = new Map(pm.data.map(p => [String(p.product_code).toUpperCase(), p]));
+    const { summary, ...rest } = row;
+    return ok({ ...rest, lines: lines.map(l => ({ ...l, ...(prod.get(l.sku) ? {
+      product: prod.get(l.sku).product, model: prod.get(l.sku).model, color: prod.get(l.sku).color,
+      ean: prod.get(l.sku).ean, hsn_code: prod.get(l.sku).hsn_code } : {}) })),
+      total_cartons: row.summary ? row.carton_count : row.cartons.length,
+      total_units: row.summary ? row.unit_count : lines.reduce((s, l) => s + l.units, 0),
+      consignor: v.data[0] || null });
   }
 
   if (route === 'batches' && request.method === 'GET') {
