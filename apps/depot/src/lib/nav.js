@@ -2,6 +2,7 @@ import {
   Gauge, Send, Network, FileText, PackageCheck,
   Undo2, RefreshCw, ArrowLeftRight, BarChart3,
   LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag, ClipboardCheck, BookOpen, Inbox, Barcode, Package,
+  Factory, Store,
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════
@@ -49,6 +50,15 @@ export const NAV_PRIMARY = [
       { id: 'stock-audit',     label: 'Stock Audit',     route: '/dispatch-audits', icon: ClipboardCheck },
       { id: 'dispatch-roster', label: 'Dispatch Roster', route: '/dispatch-roster', icon: ClipboardList },
       { id: 'manpower',        label: 'Manpower',        route: '/manpower',        icon: Users },
+    ],
+  },
+  {
+    // Outpost (S422 O7) — vendors that PACK finished units at their own site. Owner-only: the outpostops
+    // worker checks `outpost_owner`; the pages say so to anyone without it.
+    id: 'outpost', label: 'Outpost', icon: Factory,
+    children: [
+      { id: 'outpost-vendors', label: 'Vendors & Devices', route: '/outpost-vendors', icon: Store },
+      { id: 'outpost-orders',  label: 'Work Orders',       route: '/outpost-orders',  icon: ClipboardList },
     ],
   },
 ];

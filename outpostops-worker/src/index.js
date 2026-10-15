@@ -774,14 +774,16 @@ async function ownerRoute(request, url, rawBody) {
       return ok({ revoked: true });
     }
     case 'POST revokeDevice': {
-      const id = Number(P.id);
-      const r = await patch('devices', `id=eq.${id}&status=eq.active`,
-        { status: 'revoked', revoked_at: new Date().toISOString(), revoked_by: me.userId });
-      if (!r.ok || !r.data[0]) return fail('not found or already revoked', 404);
-      if (!(await revokeSessions(`device_id=eq.${id}`, 'device_revoked'))) return fail('revoke_failed', 502);
+      // One transaction (outpost.revoke_device): device revoked, its sessions revoked, and every non-empty carton it
+      // had open closed short + labelled — an open carton is keyed on the device, so it would otherwise be stranded.
+      const id = wholeNumber(P.id);
+      if (!(id >= 1)) return fail('id required');
+      const r = await rpc('revoke_device', { p_device_id: id, p_by: me.userId });
+      if (!r.ok) { const m = sqlMsg(r); return fail(m || 'write_failed', m ? 404 : 502); }
       cache.device.delete(id);
-      await lot(r.data[0].vendor_id, 'device_revoked', { device_id: id, label: r.data[0].label });
-      return ok({ revoked: true });
+      await lot(r.data.vendor_id, 'device_revoked', { device_id: id, label: r.data.label,
+        sessions_revoked: r.data.sessions_revoked, closed_cartons: r.data.closed_cartons.map(c => c.ctn_no) });
+      return ok({ revoked: true, closed_cartons: r.data.closed_cartons });
     }
     case 'POST unlockDevice': {
       const r = await patch('devices', `id=eq.${Number(P.id)}`, { pin_failures: 0, pin_locked_until: null });
@@ -844,9 +846,11 @@ async function ownerRoute(request, url, rawBody) {
       const r = await patch('operators', `id=eq.${id}`, { pin_hash: await hashPin(pin, ENV.OUTPOST_PEPPER),
         pin_failures: 0, pin_locked_until: null, updated_at: new Date().toISOString() });
       if (!r.ok || !r.data[0]) return fail('not found', 404);
-      if (!(await revokeSessions(`operator_id=eq.${id}`, 'pin_reset'))) return fail('revoke_failed', 502);
-      await lot(r.data[0].vendor_id, 'pin_reset', { operator_id: id });
-      return ok({ id, op_code: r.data[0].op_code, pin });
+      // The PIN has ALREADY changed: a failed session revoke must still hand back the new PIN (else the old one is dead
+      // and the new one was never seen). The caller is told the live sessions may still be running.
+      const ended = await revokeSessions(`operator_id=eq.${id}`, 'pin_reset');
+      await lot(r.data[0].vendor_id, 'pin_reset', { operator_id: id, sessions_ended: ended });
+      return ok({ id, op_code: r.data[0].op_code, pin, sessions_not_ended: !ended });
     }
     case 'POST createLoginCode': {
       const id = Number(P.operator_id);
@@ -910,8 +914,21 @@ async function ownerRoute(request, url, rawBody) {
     }
     case 'GET getWorkOrders': {
       if (!needVendor()) return fail('vendor_id required');
-      const status = ['open', 'closed', 'cancelled'].includes(P.status) ? `&status=eq.${P.status}` : '';
-      const r = await op(`/rest/v1/work_orders?vendor_id=eq.${vendorId}${status}&select=*&order=id.desc&limit=500`);
+      const r = await rpc('owner_work_orders', { p_vendor_id: vendorId,
+        p_status: ['open', 'closed', 'cancelled'].includes(P.status) ? P.status : null });
+      if (!r.ok) return fail('read_failed', 502);
+      return ok(r.data);
+    }
+    case 'GET getOrderOptions': {
+      // The new-order form: the vendor's active packed car codes + its live PO lines that match one.
+      if (!needVendor()) return fail('vendor_id required');
+      const r = await rpc('owner_order_options', { p_vendor_id: vendorId });
+      if (!r.ok) return fail('read_failed', 502);
+      return ok(r.data);
+    }
+    case 'GET getStoreVendors': {
+      // The "add a vendor to Outpost" picker: active store.vendors (Snorkel's vendor master).
+      const r = await st('/rest/v1/vendors?active=is.true&select=id,vendor_code,vendor_name,location,process_type&order=vendor_name');
       if (!r.ok) return fail('read_failed', 502);
       return ok(r.data);
     }
