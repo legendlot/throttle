@@ -1,0 +1,68 @@
+name: Deploy Outpost
+
+# The VENDOR app. It must never carry a Supabase key or a LOT login: no NEXT_PUBLIC_SUPABASE_* here, ever, and the
+# build itself fails (apps/outpost/scripts/check-isolation.mjs) if a Supabase host/key or a LOT internal app ships.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/outpost/**'
+      - 'packages/ui/**'
+      - 'outpostops-worker/src/auth.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'turbo.json'
+      - '.eslintrc.ci.json'
+      - '.github/scripts/**'
+      - '.github/workflows/deploy-outpost.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (rules-of-hooks + no-undef)
+        run: npm run lint:ci
+
+      # The bench's request signature checked against the worker's own verifier, the packing note's escaping, scan rules.
+      - name: Test
+        run: npm test --workspace=@throttle/outpost
+
+      - name: Build Outpost (+ isolation check)
+        run: |
+          set -o pipefail
+          npx turbo build --filter=@throttle/outpost 2>&1 | tee /tmp/build-output.log
+          bash .github/scripts/check-build-output.sh /tmp/build-output.log
+        env:
+          NEXT_PUBLIC_OUTPOSTOPS_URL: https://outpostops.afshaan.workers.dev
+
+      - name: Deploy to legendlot/outpost
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          deploy_key: ${{ secrets.DEPLOY_KEY_OUTPOST }}
+          external_repository: legendlot/outpost
+          publish_branch: gh-pages
+          publish_dir: apps/outpost/out
+          cname: outpost.legendoftoys.com
+          commit_message: 'deploy: Outpost (LOT Monorepo)'
+          force_orphan: true
+
+      # PATTERN-168 — a green gh-pages push is NOT a live deploy. Fail-soft on auth.
+      - name: Verify GitHub Pages published
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: bash .github/scripts/verify-pages.sh legendlot/outpost apps/outpost/out https://outpost.legendoftoys.com/

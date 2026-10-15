@@ -1,0 +1,16 @@
+{
+  "name": "@throttle/outpost",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3021",
+    "build": "next build && node scripts/check-isolation.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "next": "14.2.35",
+    "react": "^18",
+    "react-dom": "^18",
+    "@throttle/ui": "*"
+  }
+}

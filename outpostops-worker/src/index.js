@@ -523,6 +523,14 @@ async function vendorRoute(request, url, rawBody, ip) {
     return r.ok ? ok(r.data) : rpcFail(r);
   }
 
+  // The supervisor's floor board (O6): today's packs per bench (IST day), open orders with packed vs target, cartons by
+  // stage, minted stickers not yet on a unit.
+  if (route === 'floor_summary' && request.method === 'GET') {
+    if (ctx.operator.role !== 'supervisor') return fail('supervisor_only', 403);
+    const r = await rpc('floor_summary', { p_vendor_id: ctx.vendorId });
+    return r.ok ? ok(r.data) : fail('outpost_unavailable', 503);
+  }
+
   if (route === 'batches' && request.method === 'GET') {
     const r = await pub(`/rest/v1/upc_batches?vendor_id=eq.${ctx.vendorId}` +
       `&select=batch_id,product,product_code,quantity,upc_from,upc_to,status,generated_by,generated_at&order=generated_at.desc&limit=50`);
