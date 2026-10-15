@@ -373,8 +373,8 @@ async function vendorRoute(request, url, rawBody, ip) {
     // Empty ones (emptied by unpack) are hidden: an open one is refilled by the bench's next pack for that order.
     const r = await op(`/rest/v1/cartons?vendor_id=eq.${ctx.vendorId}&status=in.(open,closed)&unit_count=gt.0` +
       `&select=id,ctn_no,sku,channel,capacity,unit_count,status,manifest_version,bench_no,opened_at,closed_at,` +
-      `work_orders(wo_no),consignment:consignments(csg_no,status)&order=id.desc&limit=200`);
-    return r.ok ? ok(r.data) : fail('outpost_unavailable', 503);
+      `work_orders(wo_no),consignment:consignments(csg_no,status),device_id&order=id.desc&limit=200`);
+    return r.ok ? ok(r.data.map(withMine(ctx))) : fail('outpost_unavailable', 503);
   }
 
   if (route === 'carton' && request.method === 'GET') {
@@ -382,9 +382,9 @@ async function vendorRoute(request, url, rawBody, ip) {
     if (!/^CTN-\d{7}$/.test(ctn)) return fail('ctn_no required');
     const c = await op(`/rest/v1/cartons?vendor_id=eq.${ctx.vendorId}&ctn_no=eq.${ctn}` +
       `&select=id,ctn_no,sku,channel,capacity,unit_count,status,manifest_version,bench_no,opened_at,closed_at,` +
-      `work_orders(wo_no),carton_units(car_upc,remote_upc,batch_label,added_at)`);
+      `work_orders(wo_no),carton_units(car_upc,remote_upc,batch_label,added_at),device_id`);
     if (!c.ok) return fail('outpost_unavailable', 503);
-    return c.data[0] ? ok(c.data[0]) : fail('not_found', 404);
+    return c.data[0] ? ok(withMine(ctx)(c.data[0])) : fail('not_found', 404);
   }
 
   // ── Consignments (O4) ── supervisor only. A draft collects CLOSED cartons; dispatch records the vendor's own
@@ -585,6 +585,10 @@ async function agentRoute(request, route, body, ctx) {
 }
 
 // The vendor's active PACKED products with each car code (colour + EAN) and the shared remote code.
+// An open carton belongs to the DEVICE that opened it (close_carton matches device_id, not bench_no — two laptops can
+// share a bench number while one replaces the other). Say whether it is this device's; never send device ids out.
+const withMine = ctx => ({ device_id, ...c }) => ({ ...c, mine: Number(device_id) === Number(ctx.deviceId) });
+
 async function vendorProducts(vendorId) {
   const vp = await op(`/rest/v1/vendor_products?vendor_id=eq.${vendorId}&active=is.true&mode=eq.packed` +
     `&select=id,product,remote_code,carton_qty&order=product`);

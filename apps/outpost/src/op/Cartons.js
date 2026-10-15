@@ -83,7 +83,8 @@ export default function Cartons({ me }) {
 function CartonDetail({ ctn, me, onClose, onCloseCarton }) {
   const d = useLoad(`/v/carton?ctn_no=${encodeURIComponent(ctn)}`);
   const c = d.data;
-  const mine = c && c.status === 'open' && Number(c.bench_no) === Number(me.device.bench_no);
+  // The worker says whether THIS device opened it: close_carton matches the device, not the bench number.
+  const mine = c && c.status === 'open' && c.mine === true;
   return (
     <Modal title={ctn} onClose={onClose} wide>
       {d.loading ? <div className="empty">Loading…</div> : d.error ? <div className="err">{d.error}</div> : (
@@ -104,7 +105,7 @@ function CartonDetail({ ctn, me, onClose, onCloseCarton }) {
           </table>
           <div className="row end" style={{ marginTop: 16 }}>
             {mine && c.unit_count > 0 && <button className="btn" onClick={() => onCloseCarton(c)}>Close carton short</button>}
-            {c.status === 'open' && !mine && <span className="dim">Only bench {c.bench_no} can close this carton.</span>}
+            {c.status === 'open' && !mine && <span className="dim">Only the laptop that opened it (bench {c.bench_no}) can close this carton.</span>}
             <button className="btn" onClick={onClose}>Done</button>
           </div>
         </>

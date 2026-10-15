@@ -39,8 +39,8 @@ export default function Pack({ me }) {
     setTimeout(() => input.current?.focus(), 0);
   };
 
-  const listCarton = wo && (cartons.data || []).find(c => c.status === 'open' && Number(c.bench_no) === Number(me.device.bench_no)
-    && c.work_orders?.wo_no === wo.wo_no);
+  // This device's open carton for the order (pack_unit keys it on the device, not the bench number).
+  const listCarton = wo && (cartons.data || []).find(c => c.status === 'open' && c.mine === true && c.work_orders?.wo_no === wo.wo_no);
   const open = carton === undefined ? (listCarton ? { ctn_no: listCarton.ctn_no, unit_count: listCarton.unit_count, capacity: listCarton.capacity } : null) : carton;
 
   useScanCapture(input);
