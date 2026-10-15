@@ -51,6 +51,21 @@ const sqlMsg = r => {
   const m = String(r?.data?.message || '');
   return m.startsWith('outpost: ') ? m.slice(9) : null;
 };
+// A refused outpost.* RPC → the caller's response. Only a genuine concurrency loser is a 409 the app retries with the
+// SAME idempotency key: two first-packs racing to open a bench's carton (that unique index ONLY — any other unique
+// violation would fail the same way every time), a deadlock / serialization failure, or a lock wait that timed out
+// (authenticator lock_timeout 8 s). Anything unexpected stays generic.
+const FORBIDDEN_MSGS = new Set(['paused', 'vendor not active', 'operator not active',
+  'not an active bench of this vendor', 'supervisor approval required']);
+const rpcFail = r => {
+  const code = r?.data?.code;
+  if ((code === '23505' && String(r?.data?.message || '').includes('cartons_one_open_per_bench_order'))
+      || code === '40P01' || code === '40001' || code === '55P03') return fail('try_again', 409);
+  const m = sqlMsg(r);
+  if (!m) return fail('outpost_unavailable', 503);
+  return fail(m, FORBIDDEN_MSGS.has(m) ? 403 : 400);
+};
+const idemKey = body => (typeof body.idempotency_key === 'string' ? body.idempotency_key : null);
 const ins  = (table, row, prefer = 'return=representation') =>
   op(`/rest/v1/${table}`, { method: 'POST', body: JSON.stringify(row), prefer });
 const patch = (table, filter, body) =>
@@ -306,16 +321,66 @@ async function vendorRoute(request, url, rawBody, ip) {
     const r = await rpc('vendor_mint', { p_vendor_id: ctx.vendorId, p_device_id: ctx.deviceId,
       // The key travels INSIDE the signed body, so it is covered by the device signature. The request
       // hash is over the body minus the key: a retry with the same key + same order replays.
-      p_idem_key: typeof body.idempotency_key === 'string' ? body.idempotency_key : null,
+      p_idem_key: idemKey(body),
       p_request_hash: await sha256Hex(JSON.stringify({ product_code: body.product_code, quantity: qty,
         operator_id: ctx.operator.id })),
       p_product_code: body.product_code, p_quantity: qty, p_operator_id: ctx.operator.id,
       p_generated_by: `Outpost ${ctx.operator.op_code} ${ctx.operator.name}`.slice(0, 120) });
-    if (!r.ok) {
-      const m = sqlMsg(r);
-      return m ? fail(m, m === 'paused' || m === 'vendor not active' ? 403 : 400) : fail('outpost_unavailable', 503);
-    }
-    return ok(r.data);
+    return r.ok ? ok(r.data) : rpcFail(r);
+  }
+
+  // ── Pair & Pack (O3) ── every write is one outpost.* transaction; the idempotency key rides inside the
+  // signed body and the request hash covers the fields that define the action. Not the operator: keys are per
+  // device, and a retry after an operator change must replay the committed pack, not be refused.
+  if (route === 'pack' && request.method === 'POST') {
+    if (ctx.deviceKind !== 'bench') return fail('not_a_bench', 403);
+    const woId = wholeNumber(body.work_order_id);
+    if (!(woId > 0)) return fail('work_order_id required');
+    if (typeof body.car_upc !== 'string' || typeof body.remote_upc !== 'string') return fail('car_upc and remote_upc required');
+    const r = await rpc('pack_unit', { p_vendor_id: ctx.vendorId, p_device_id: ctx.deviceId, p_operator_id: ctx.operator.id,
+      p_idem_key: idemKey(body), p_request_hash: await sha256Hex(JSON.stringify({ work_order_id: woId,
+        car_upc: body.car_upc, remote_upc: body.remote_upc })),
+      p_work_order_id: woId, p_car_upc: body.car_upc, p_remote_upc: body.remote_upc });
+    return r.ok ? ok(r.data) : rpcFail(r);
+  }
+
+  if (route === 'unpack' && request.method === 'POST') {
+    if (ctx.deviceKind !== 'bench') return fail('not_a_bench', 403);
+    if (typeof body.upc !== 'string' || typeof body.reason !== 'string') return fail('upc and reason required');
+    if (typeof body.stepup !== 'string' || !body.stepup) return fail('supervisor approval required', 403);
+    // The step-up token is consumed INSIDE outpost.unpack_unit, so a refused unpack never burns it.
+    const r = await rpc('unpack_unit', { p_vendor_id: ctx.vendorId, p_device_id: ctx.deviceId, p_operator_id: ctx.operator.id,
+      p_idem_key: idemKey(body), p_request_hash: await sha256Hex(JSON.stringify({ upc: body.upc, reason: body.reason })),
+      p_stepup_hash: await tokenHash(body.stepup), p_upc: body.upc, p_reason: body.reason.slice(0, 300) });
+    return r.ok ? ok(r.data) : rpcFail(r);
+  }
+
+  if (route === 'close_carton' && request.method === 'POST') {
+    if (ctx.deviceKind !== 'bench') return fail('not_a_bench', 403);
+    if (typeof body.ctn_no !== 'string') return fail('ctn_no required');
+    const r = await rpc('close_carton', { p_vendor_id: ctx.vendorId, p_device_id: ctx.deviceId, p_operator_id: ctx.operator.id,
+      p_idem_key: idemKey(body), p_request_hash: await sha256Hex(JSON.stringify({ ctn_no: body.ctn_no })),
+      p_ctn_no: body.ctn_no });
+    return r.ok ? ok(r.data) : rpcFail(r);
+  }
+
+  // Cartons still at the vendor (open = filling at a bench, closed = ready for a consignment).
+  if (route === 'cartons' && request.method === 'GET') {
+    // Empty ones (emptied by unpack) are hidden: an open one is refilled by the bench's next pack for that order.
+    const r = await op(`/rest/v1/cartons?vendor_id=eq.${ctx.vendorId}&status=in.(open,closed)&unit_count=gt.0` +
+      `&select=id,ctn_no,sku,channel,capacity,unit_count,status,manifest_version,bench_no,opened_at,closed_at,` +
+      `work_orders(wo_no)&order=id.desc&limit=200`);
+    return r.ok ? ok(r.data) : fail('outpost_unavailable', 503);
+  }
+
+  if (route === 'carton' && request.method === 'GET') {
+    const ctn = String(url.searchParams.get('ctn_no') || '').trim().toUpperCase();
+    if (!/^CTN-\d{7}$/.test(ctn)) return fail('ctn_no required');
+    const c = await op(`/rest/v1/cartons?vendor_id=eq.${ctx.vendorId}&ctn_no=eq.${ctn}` +
+      `&select=id,ctn_no,sku,channel,capacity,unit_count,status,manifest_version,bench_no,opened_at,closed_at,` +
+      `work_orders(wo_no),carton_units(car_upc,remote_upc,batch_label,added_at)`);
+    if (!c.ok) return fail('outpost_unavailable', 503);
+    return c.data[0] ? ok(c.data[0]) : fail('not_found', 404);
   }
 
   if (route === 'batches' && request.method === 'GET') {
