@@ -29,7 +29,7 @@ check('vendor A has 12 car + 12 remote stickers', C.length === 12 && R.length ==
 const xSheet = await call('A1', 'GET', `/v/batch_sheet?batch_id=${state.mint.B.batches[0]}`);
 check("A reading B's batch sheet → 404", xSheet.status === 404, xSheet);
 const xMint = await call('A1', 'POST', '/v/mint', { product_code: 'GOBRX', quantity: 1, idempotency_key: idem() });
-check('mint of a code the vendor does not pack refused', !xMint.ok, xMint);
+check('mint of a code the vendor does not pack refused', xMint.status === 400 && /not a product this vendor packs|not active/.test(xMint.error || ''), xMint);
 
 // ── the same-remote race: A2 and A3 pack different cars with the SAME remote at the same instant ──
 const [r2, r3] = await Promise.all([pack('A2', WO_A, C[3], R[3]), pack('A3', WO_A, C[4], R[3])]);

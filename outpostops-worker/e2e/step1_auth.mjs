@@ -49,7 +49,7 @@ check('stale timestamp refused (clock)', stale.status === 401 && stale.error ===
 const bare = await fetch(`${BASE}/v/orders`, { headers: { 'X-Outpost-Session': state.devices.A2.session } });
 check('session token alone (unsigned) refused', bare.status === 401, bare.status);
 const stolenMe = await call('A3', 'GET', '/v/me', null, { session: state.devices.A2.session });
-check("A2's session on A3: /v/me is NOT operator 002", stolenMe.data?.operator?.op_code !== '002', stolenMe);
+check("A2's session on A3: /v/me answers with no operator", stolenMe.ok && stolenMe.data.operator === null, stolenMe);
 
 // Session-required route without a session.
 const noS = await call('A4', 'GET', '/v/orders', null, { noSession: true });
