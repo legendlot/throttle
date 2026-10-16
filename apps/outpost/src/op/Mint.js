@@ -1,12 +1,33 @@
 'use client';
-// Stickers (supervisor): mint a block of LOT UPC stickers for one car colour or the product's remote. The sheets print
-// on the site's sticker printer by themselves (one print job per 500). Stickers are bound to this vendor + that code.
+// Stickers (supervisor): mint a block of LOT UPC stickers for one car colour or the product's remote, then print the A3
+// sticker sheet from the browser, the same sheet the factory prints. Stickers are bound to this vendor + that code.
 import { useState } from 'react';
 import { useToast } from '@throttle/ui/Toast.js';
-import { act, say } from './api.js';
+import { act, get, say } from './api.js';
+import { buildStickerSheet } from './stickerSheet.mjs';
 import { Badge, Confirm, Field, fmtTime, useLoad } from './ui.js';
 
-export default function Mint({ goto }) {
+// The sheet prints itself once its QR codes are drawn, so the window is opened without printWindow's own print() call
+// (that would raise a second dialog). Reprints carry only stickers not yet on a unit.
+export async function printSheet(batchId) {
+  const w = window.open('', '_blank', 'width=900,height=700');
+  if (!w) return 'The print window was blocked. Allow pop-ups for Outpost.';
+  const r = await get(`/v/batch_sheet?batch_id=${encodeURIComponent(batchId)}`);
+  if (!r.ok) { if (!w.closed) w.close(); return say(r); }
+  if (w.closed) return null;                     // the supervisor closed it while the batch loaded
+  if (!r.data.rows.length) { w.close(); return `Every sticker in ${batchId} is already on a unit or voided.`; }
+  try {
+    w.document.write(buildStickerSheet(r.data));
+    w.document.close();
+    w.focus();
+  } catch {
+    try { w.close(); } catch { /* already gone */ }
+    return 'The print window closed before the sheet loaded. Try again.';
+  }
+  return null;
+}
+
+export default function Mint() {
   const { showToast } = useToast();
   const products = useLoad('/v/products');
   const batches = useLoad('/v/batches');
@@ -14,6 +35,7 @@ export default function Mint({ goto }) {
   const [qty, setQty] = useState('');
   const [confirm, setConfirm] = useState(false);
   const [last, setLast] = useState(null);
+  const sheet = async id => { const e = await printSheet(id); if (e) showToast(e, 'error'); };
 
   const options = [];
   for (const p of products.data || []) {
@@ -46,8 +68,8 @@ export default function Mint({ goto }) {
           <div className="result ok">
             <div className="big">{last.quantity} stickers · {last.batch_id}</div>
             <div className="mono" style={{ marginTop: 4 }}>{last.upc_from} → {last.upc_to}</div>
-            <div style={{ marginTop: 4 }}>{last.print_jobs} sheet job{last.print_jobs === 1 ? '' : 's'} sent to the sticker printer.
-              {' '}<button className="btn sm" onClick={() => goto('printing')}>Watch printing</button></div>
+            <div style={{ marginTop: 4 }}>
+              <button className="btn primary sm" onClick={() => sheet(last.batch_id)}>Print sticker sheet</button></div>
           </div>
         )}
         <p className="dim" style={{ fontSize: 13, marginTop: 14 }}>
@@ -59,22 +81,24 @@ export default function Mint({ goto }) {
         {batches.error && <div className="err">{batches.error}</div>}
         {!(batches.data || []).length ? <div className="empty">No batches yet.</div> : (
           <table className="t">
-            <thead><tr><th>Batch</th><th>Code</th><th className="n">Qty</th><th>Range</th><th>Status</th><th>When</th></tr></thead>
+            <thead><tr><th>Batch</th><th>Code</th><th className="n">Qty</th><th>Range</th><th>Status</th><th>When</th><th></th></tr></thead>
             <tbody>{batches.data.map(b => (
               <tr key={b.batch_id}><td className="mono">{b.batch_id}</td><td className="mono">{b.product_code}</td><td className="n">{b.quantity}</td>
-                <td className="mono dim" style={{ fontSize: 12 }}>{b.upc_from} → {b.upc_to}</td><td><Badge s={b.status} /></td><td className="dim">{fmtTime(b.generated_at)}</td></tr>
+                <td className="mono dim" style={{ fontSize: 12 }}>{b.upc_from} → {b.upc_to}</td><td><Badge s={b.status} /></td><td className="dim">{fmtTime(b.generated_at)}</td>
+                <td><button className="btn sm" onClick={() => sheet(b.batch_id)}>Print sheet</button></td></tr>
             ))}</tbody>
           </table>
         )}
       </div>
       {confirm && pick && (
         <Confirm title={`Mint ${n.toLocaleString('en-IN')} stickers?`} yes="Mint" onClose={() => setConfirm(false)}
-          body={`${pick.code} · ${pick.label}. They print on the sticker printer and can only be used for ${pick.code}.`}
+          body={`${pick.code} · ${pick.label}. You print them as an A3 sheet next, and they can only be used for ${pick.code}.`}
           onYes={async () => {
             const r = await act('mint', { product_code: pick.code, quantity: n });
             if (!r.ok) return say(r);
             setConfirm(false); setLast(r.data); setQty(''); batches.reload();
-            showToast(`${r.data.batch_id}: ${r.data.quantity} stickers minted`, 'success');
+            // Not opened here: after an await the browser blocks the pop-up. The result card's button opens it.
+            showToast(`${r.data.batch_id}: ${r.data.quantity} stickers minted. Print the sheet next.`, 'success');
             return null;
           }} />
       )}

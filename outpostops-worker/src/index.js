@@ -542,11 +542,24 @@ async function vendorRoute(request, url, rawBody, ip) {
     return ok(r.data);
   }
 
+  // The A3 sticker sheet, the factory's own format (Redline › UPC): the app lays it out and the supervisor prints it from
+  // the browser. outpost.batch_sheet returns the batch + its UNUSED stickers (pool generated / printed and on no unit) as
+  // one jsonb value: no 5,000-row cap, no page shifting under a concurrent pack, never a second copy of a used sticker.
+  if (route === 'batch_sheet' && request.method === 'GET') {
+    if (ctx.operator.role !== 'supervisor') return fail('supervisor_only', 403);
+    const batchId = String(url.searchParams.get('batch_id') || '').trim().toUpperCase();
+    if (!/^B-\d{1,9}$/.test(batchId)) return fail('batch_id required');
+    const r = await rpc('batch_sheet', { p_vendor_id: ctx.vendorId, p_batch_id: batchId });
+    if (!r.ok) return fail('outpost_unavailable', 503);
+    return r.data ? ok(r.data) : fail('not_found', 404);
+  }
+
   return fail('not_found', 404);
 }
 
 // ── print agent (/v/agent/*) ── an enrolled `agent` device, no operator. Claims lease jobs for its own bench (the
-// device's bench_no) and, when it drives a sticker printer, the site's sticker sheets; it reports each one exactly once.
+// device's bench_no) and, when it drives a sticker printer, the site's sticker sheets (none queued since S423 — stickers
+// print as the A3 sheet from the app); it reports each one exactly once.
 // A lost report is never a silent reprint: the lease runs out to outcome_unknown and a supervisor decides.
 const AGENT_ONLINE_MS = 90_000;
 async function agentRoute(request, route, body, ctx) {

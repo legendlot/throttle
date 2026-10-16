@@ -394,7 +394,7 @@ function DevicesTab({ vendorId }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Field name="Device"><Select value={form.kind} onChange={e => setForm(p => ({ ...p, kind: e.target.value }))}>
               <option value="bench">Bench laptop</option><option value="agent">Print agent</option></Select></Field>
-            <Field name="Bench no." hint={form.kind === 'agent' ? 'The bench whose label printer it drives; blank = sticker printers only.' : '1–99'}>
+            <Field name="Bench no." hint={form.kind === 'agent' ? 'The bench whose label printer it drives. Set it: stickers print as the A3 sheet from the vendor app, so an agent with no bench has nothing to print.' : '1–99'}>
               <Input inputMode="numeric" value={form.bench_no} onChange={e => setForm(p => ({ ...p, bench_no: e.target.value.replace(/\D/g, '').slice(0, 2) }))} /></Field>
           </div>
           <Field name="Label" hint="Optional — defaults to “Bench N” / “Print agent”." style={{ marginTop: 14 }}>
