@@ -6,7 +6,9 @@ drives the sticker printers. It holds **no database key**: it is an enrolled Out
 (`device.json`) signs every request to `outpostops`.
 
 ## Set up one agent
-1. Install Node 20+. Copy this folder onto the laptop. On Windows, run `npm install` to get the printer module.
+1. Install Node 20+ (the LTS MSI). Copy this folder to `C:\outpost-agent` and run `npm install --omit=dev`: it fetches
+   `koffi`, a prebuilt FFI the Windows driver uses to send RAW bytes through `winspool.drv` (no compiler needed).
+   Restrict the folder to Administrators + SYSTEM: `device.json` will live there.
 2. Copy `config.example.json` to `config.json`:
    - `label_printer`: `windows:<exact printer name>` for the bench TE244. Leave it out on a sticker-only PC.
    - `sticker_printer`: the 300-dpi sticker printer (`windows:<name>` or `tcp:<ip>:9100`). Leave it out on a
@@ -17,7 +19,21 @@ drives the sticker printers. It holds **no database key**: it is an enrolled Out
    `node agent.mjs enrol <8-digit code>`
 4. Check alignment with `node agent.mjs sample batch_label`. The same works for `ean_label`, `ctn_label` and
    `upc_stickers`.
-5. Run `node agent.mjs run` as a service that restarts on boot (NSSM or Task Scheduler on Windows).
+5. Run it at boot: copy the keeper script `run.ps1` (below) into the folder and register a Task Scheduler task
+   "Outpost print agent" — At startup, SYSTEM, highest, no time limit, allowed on battery — that runs
+   `powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\outpost-agent\run.ps1`. The keeper
+   restarts the agent 10 s after any exit and logs to `agent.log` (rolled to `agent.old.log` past 20 MB, checked at
+   each restart). Keep the printer queue's default "spool" setting: the driver's calls are synchronous.
+   ```powershell
+   Set-Location 'C:\outpost-agent'
+   while ($true) {
+     if ((Test-Path agent.log) -and (Get-Item agent.log).Length -gt 20MB) { Move-Item -Force agent.log agent.old.log }
+     Add-Content agent.log "[$(Get-Date -Format s)] keeper: starting agent"
+     cmd /c """C:\Program Files\nodejs\node.exe"" agent.mjs run >> agent.log 2>&1"
+     Add-Content agent.log "[$(Get-Date -Format s)] keeper: agent exited $LASTEXITCODE, restarting in 10 s"
+     Start-Sleep 10
+   }
+   ```
 
 ## What it guarantees
 - **Each job is leased to one agent:** 60 s for a label, 180 s for a sticker sheet. The agent reports each job

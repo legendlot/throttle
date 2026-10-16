@@ -10,6 +10,6 @@
   },
   "engines": { "node": ">=20" },
   "optionalDependencies": {
-    "@thiagoelg/node-printer": "^0.6.2"
+    "koffi": "2.16.3"
   }
 }
