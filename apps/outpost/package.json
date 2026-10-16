@@ -8,9 +8,10 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@throttle/ui": "*",
+    "@zxing/library": "0.23.0",
     "next": "14.2.35",
     "react": "^18",
-    "react-dom": "^18",
-    "@throttle/ui": "*"
+    "react-dom": "^18"
   }
 }

@@ -53,16 +53,37 @@ export function useScanCapture(ref, on = true, ownLayer = 0) {
   }, [ref, on, ownLayer]);
 }
 
-// Two short tones the floor can hear over a line: high = done, low buzz = refused.
+// The factory Scanner's tones (02_scanner playSuccessBeep / playErrBeep, at its default volume): done = di-di-DI, square
+// wave at 2200/2200/2600 Hz; refused = a falling 800 → 500 → 300 Hz buzz. Built to cut through a line. Plus the
+// Scanner's vibrate patterns, which a phone in hand feels before it hears. One AudioContext, woken by the first touch
+// (a phone keeps audio muted until the page has had one).
 let audio;
+const ctx = () => {
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume?.(); return audio; } catch { return null; }
+};
+if (typeof window !== 'undefined') window.addEventListener('pointerdown', ctx, { once: true, capture: true });
+const TONES = {
+  good: [{ t: 0, f: 2200, d: 0.07 }, { t: 0.11, f: 2200, d: 0.07 }, { t: 0.22, f: 2600, d: 0.15 }],
+  bad: [{ t: 0, f: 800, d: 0.12 }, { t: 0.17, f: 500, d: 0.12 }, { t: 0.34, f: 300, d: 0.15 }],
+};
 export function beep(good) {
-  try {
-    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
-    const o = audio.createOscillator(); const g = audio.createGain();
-    o.type = good ? 'sine' : 'square'; o.frequency.value = good ? 1320 : 220;
-    g.gain.value = 0.08; o.connect(g); g.connect(audio.destination);
-    o.start(); o.stop(audio.currentTime + (good ? 0.12 : 0.35));
-  } catch { /* no audio */ }
+  try { navigator.vibrate?.(good ? [50] : [100, 50, 100]); } catch { /* no vibration */ }
+  const a = ctx();
+  if (!a) return;
+  const vol = 0.6;
+  for (const { t, f, d } of TONES[good ? 'good' : 'bad']) {
+    try {
+      const o = a.createOscillator(); const g = a.createGain();
+      o.connect(g); g.connect(a.destination);
+      o.type = 'square'; o.frequency.value = f;
+      const at = a.currentTime + t;
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(vol, at + 0.005);
+      g.gain.setValueAtTime(vol, at + d - 0.008);
+      g.gain.linearRampToValueAtTime(0, at + d);
+      o.start(at); o.stop(at + d);
+    } catch { /* no audio */ }
+  }
 }
 
 export function Modal({ title, onClose, children, wide }) {

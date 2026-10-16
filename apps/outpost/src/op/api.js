@@ -53,6 +53,9 @@ const emit = e => listeners.forEach(fn => fn(e));
 
 export async function initDevice() {
   device = (await loadDevice()) || null;
+  // The device key lives in IndexedDB, which a browser may clear under storage pressure (the factory Scanner lost keys
+  // that way, S343). Ask for persistent storage: Chrome grants it to a home-screen app; a refusal changes nothing.
+  if (device) navigator.storage?.persist?.().catch(() => {});
   return device;
 }
 
@@ -64,6 +67,7 @@ export async function enrolDevice(code) {
   if (!res.ok || !out?.ok) return { ok: false, error: out?.error || `http_${res.status}` };
   device = { device_id: out.data.device_id, key: privateKey, enrolled_at: new Date().toISOString() };
   await saveDevice(device);
+  navigator.storage?.persist?.().catch(() => {});
   return { ok: true, data: out.data };
 }
 

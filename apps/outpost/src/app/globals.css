@@ -72,6 +72,18 @@ select.in { padding-right: 8px; }
 .result.bad { background: rgba(255, 107, 107, .12); border: 2px solid var(--red); color: var(--t1); }
 .result .big { font-size: 22px; font-weight: 800; }
 
+/* camera viewfinder (Camera.js): the picture fills the box; the frame marks exactly the part the engine reads */
+.cam { position: relative; width: 100%; aspect-ratio: 4 / 3; max-height: 46vh; background: #000; border-radius: 12px; overflow: hidden; }
+.cam video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cam .aim { position: absolute; left: 20%; top: 20%; width: 60%; height: 60%; border: 3px solid rgba(242, 205, 26, .85); border-radius: 10px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .28); pointer-events: none; transition: border-color .1s; }
+.cam .aim.ok { border-color: var(--green); background: rgba(52, 210, 123, .22); }
+.cam .aim.bad { border-color: var(--red); background: rgba(255, 107, 107, .25); }
+.cam .camnote { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; text-align: center; color: #fff; background: rgba(0, 0, 0, .65); font-weight: 600; cursor: pointer; }
+.cam .camtop { position: absolute; left: 0; right: 0; top: 0; padding: 8px 10px; background: linear-gradient(rgba(0, 0, 0, .65), transparent); color: #fff; font-weight: 800; }
+.cam .torch { position: absolute; right: 10px; bottom: 10px; background: rgba(0, 0, 0, .55); color: #fff; }
+.cam .torch.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.camstats { font-size: 12px; margin-top: 6px; font-family: var(--mono); }
+
 /* lists */
 table.t { width: 100%; border-collapse: collapse; font-size: 14px; }
 table.t th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--t2); padding: 8px 10px; border-bottom: 1px solid var(--border); }
@@ -94,6 +106,15 @@ table.t td.n, table.t th.n { text-align: right; font-family: var(--mono); }
 .modal h2 { font-size: 18px; margin-bottom: 14px; }
 
 @media (max-width: 640px) {
-  .main { padding: 14px; } .top, .tabs { padding-left: 14px; padding-right: 14px; }
-  .steps { grid-template-columns: 1fr; }
+  .main { padding: 10px; } .top, .tabs { padding-left: 12px; padding-right: 12px; }
+  .top { gap: 8px 12px; padding-top: 8px; padding-bottom: 8px; }
+  .card { padding: 14px; }
+  .scanbox { padding: 14px; }
+  .scanbox .prompt { font-size: 20px; }
+  .scanbox.withcam { border: 0; padding: 0; }
+  .steps { gap: 8px; margin-top: 10px; }
+  .step { padding: 8px 10px; }
+  .step .v { font-size: 15px; min-height: 20px; }
+  .result { padding: 12px 14px; margin-top: 10px; }
+  .result .big { font-size: 18px; }
 }
