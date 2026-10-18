@@ -25,6 +25,13 @@ const numTd = (n, color, bold) => ({
   color: n > 0 ? (color || 'var(--t1)') : 'var(--t4)',
 });
 
+// Outpost vendor stages (O10) — cars a vendor packed that are not LOT stock yet.
+const VCOLS = [
+  ['vendor_at', 'At vendor', 'Packed at an Outpost vendor, not dispatched to LOT yet.'],
+  ['vendor_in_transit', 'In transit', 'On a vendor consignment on the road (or short at receipt).'],
+  ['vendor_receiving', 'Receiving / QC', 'Received at LOT, waiting for the audit to pass.'],
+];
+
 export default function DispatchPipelinePage() {
   const { session } = useAuth();
   const { setRefreshing, setLastRefreshed } = useRefreshState();
@@ -93,6 +100,9 @@ export default function DispatchPipelinePage() {
     }, {}),
   };
   const grandAlloc = Object.values(totals.channels).reduce((s, v) => s + v, 0);
+  // Outpost (O10): vendor-packed cars not yet LOT stock. Shown only once there are any; never part of Unalloc / Allocated.
+  for (const [k] of VCOLS) totals[k] = products.reduce((s, p) => s + (p.totals?.[k] || 0), 0);
+  const showV = VCOLS.some(([k]) => totals[k] > 0);
 
   return (
     <div style={{ maxWidth: 1240, margin: '0 auto', fontFamily: 'var(--font-ui)' }}>
@@ -141,6 +151,7 @@ export default function DispatchPipelinePage() {
               <thead>
                 <tr ref={headRef}>
                   <th className="eyebrow" style={{ ...thStyle, minWidth: 220 }}>Product / Variant</th>
+                  {showV && VCOLS.map(([k, n, t]) => <th key={k} className="eyebrow" style={numTh} title={t}>{n}</th>)}
                   <th className="eyebrow" style={numTh}>With Production</th>
                   <th className="eyebrow" style={numTh}>Unalloc (R)</th>
                   <th className="eyebrow" style={numTh}>Unalloc (E)</th>
@@ -159,6 +170,7 @@ export default function DispatchPipelinePage() {
                   <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', ...totalsSticky }}>
                     <span className="label" style={{ fontSize: 11, color: 'var(--t2)' }}>All products</span>
                   </td>
+                  {showV && VCOLS.map(([k]) => <td key={k} className="num" style={{ ...numTd(totals[k], 'var(--t3)', true), ...totalsSticky }}>{fmtCell(totals[k])}</td>)}
                   <td className="num" style={{ ...numTd(totals.with_production, 'var(--t1)', true), ...totalsSticky }}>{fmtCell(totals.with_production)}</td>
                   <td className="num" style={{ ...numTd(totals.unallocated_retail, 'var(--yellow)', true), ...totalsSticky }}>{fmtCell(totals.unallocated_retail)}</td>
                   <td className="num" style={{ ...numTd(totals.unallocated_ecom, 'var(--yellow)', true), ...totalsSticky }}>{fmtCell(totals.unallocated_ecom)}</td>
@@ -193,6 +205,7 @@ export default function DispatchPipelinePage() {
                             <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--t1)' }}>{p.product}</span>
                           </span>
                         </td>
+                        {showV && VCOLS.map(([k]) => <td key={k} className="num" style={numTd(p.totals?.[k], 'var(--t3)')}>{fmtCell(p.totals?.[k])}</td>)}
                         <td className="num" style={numTd(p.totals?.with_production, 'var(--t1)')}>{fmtCell(p.totals?.with_production)}</td>
                         <td className="num" style={numTd(p.totals?.unallocated_retail, 'var(--yellow)')}>{fmtCell(p.totals?.unallocated_retail)}</td>
                         <td className="num" style={numTd(p.totals?.unallocated_ecom, 'var(--yellow)')}>{fmtCell(p.totals?.unallocated_ecom)}</td>
@@ -212,6 +225,7 @@ export default function DispatchPipelinePage() {
                             <td className="num" style={{ padding: '7px 14px 7px 43px', fontSize: 11.5, color: 'var(--t2)', whiteSpace: 'nowrap' }}>
                               {[v.model, v.color].filter(Boolean).join(' ') || '—'}
                             </td>
+                            {showV && VCOLS.map(([k]) => <td key={k} className="num" style={numTd(v[k], 'var(--t3)')}>{fmtCell(v[k])}</td>)}
                             <td className="num" style={numTd(v.with_production, 'var(--t1)')}>{fmtCell(v.with_production)}</td>
                             <td className="num" style={numTd(v.unallocated_retail, 'var(--yellow)')}>{fmtCell(v.unallocated_retail)}</td>
                             <td className="num" style={numTd(v.unallocated_ecom, 'var(--yellow)')}>{fmtCell(v.unallocated_ecom)}</td>

@@ -28,6 +28,8 @@ const STATUSES = [['incoming', 'Incoming'], ['accepted', 'Accepted'], ['', 'All'
 const TONE = { dispatched: 'mute', receiving: 'warn', audit: 'warn', hold: 'bad', accepted: 'ok' };
 const WORD = { dispatched: 'on the road', receiving: 'receiving', audit: 'audit QC', hold: 'on hold', accepted: 'accepted' };
 const DISPO = { rework_lot: 'Rework at LOT', return_vendor: 'Return to vendor' };
+const PHASE = { audit: 'sample', full_qc: 'full QC', late: 'late find' };
+const RESOLVED = { late_received: 'found late', released: 'released' };
 const num = v => Number(v || 0).toLocaleString('en-IN');
 const td = { padding: 8 };
 const th = { ...label, textAlign: 'left', padding: '6px 8px' };
@@ -129,6 +131,7 @@ function Receipt({ csgNo, onBack }) {
           {st === 'hold' && <HoldStep d={d} csgNo={csgNo} reload={load} />}
           {st === 'accepted' && <AcceptedStep d={d} reload={load} />}
         </div>
+        {['audit', 'hold', 'accepted'].includes(st) && <ShortUnits d={d} csgNo={csgNo} reload={load} />}
         {d.receipt && <Discrepancies list={d.discrepancies || []} />}
       </>}
     </div>
@@ -472,7 +475,7 @@ function HoldStep({ d, csgNo, reload }) {
                   <td style={{ ...mono, ...td }}>{x.ctn_no}</td>
                   <td style={{ ...mono, ...td }}>{x.batch_label || '—'}</td>
                   <td style={{ ...mono, ...td, color: 'var(--t1)' }}>{x.car_upc}</td>
-                  <td style={td}><ToneBadge tone={x.phase === 'audit' ? 'warn' : 'mute'}>{x.phase === 'audit' ? 'sample' : 'full QC'}</ToneBadge></td>
+                  <td style={td}><ToneBadge tone={x.phase === 'audit' ? 'warn' : 'mute'}>{PHASE[x.phase] || x.phase}</ToneBadge></td>
                   <td style={{ ...text, ...td }}>{x.reason}</td>
                   <td style={{ ...td, textAlign: 'right' }}>
                     <button style={smallBtn} disabled={!!busyKey} onClick={() => undo(x)}>{busyKey === x.car_upc ? '…' : 'Undo'}</button>
@@ -581,7 +584,7 @@ function AcceptedStep({ d, reload }) {
                   <td style={{ ...mono, ...td }}>{x.ctn_no}</td>
                   <td style={{ ...mono, ...td, color: 'var(--t1)' }}>{x.car_upc}</td>
                   <td style={{ ...mono, ...td }}>{x.remote_upc || '—'}</td>
-                  <td style={td}><ToneBadge tone={x.phase === 'audit' ? 'warn' : 'mute'}>{x.phase === 'audit' ? 'sample' : 'full QC'}</ToneBadge></td>
+                  <td style={td}><ToneBadge tone={x.phase === 'audit' ? 'warn' : 'mute'}>{PHASE[x.phase] || x.phase}</ToneBadge></td>
                   <td style={{ ...text, ...td }}>{x.reason}</td>
                   <td style={td}>{x.disposition
                     ? <span style={text}><ToneBadge tone="ok">{DISPO[x.disposition] || x.disposition}</ToneBadge> <span style={{ fontSize: 11.5, color: 'var(--t3)' }}>{fmtIST(x.disposed_at)}</span></span>
@@ -614,12 +617,119 @@ function Discrepancies({ list }) {
               {xs.map(x => (
                 <span key={`${x.upc}|${x.ctn_no}`} title={[x.detail, fmtIST(x.at)].filter(Boolean).join(' · ')}
                   style={{ ...mono, fontSize: 11.5, padding: '2px 7px', borderRadius: 3, background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
-                  {x.upc}{x.ctn_no && <span style={{ color: 'var(--t3)' }}> · {x.ctn_no}</span>}</span>
+                  {x.upc}{x.ctn_no && <span style={{ color: 'var(--t3)' }}> · {x.ctn_no}</span>}
+                  {x.resolution && <span style={{ color: 'var(--ok-fg)' }}> · {RESOLVED[x.resolution] || x.resolution}</span>}</span>
               ))}
             </div>
           </div>
         );
       })}
     </Panel>
+  );
+}
+
+/* Short units (O10): a manifest unit not found at Finish stays "in transit" and is never credited until it is resolved.
+   Found late → before Accept it joins this receipt (and is accepted with the rest); after Accept it is checked here
+   (pass = dispatchable stock + its own GRN, fail = a reject to dispose). Released → it is lost or never left the vendor:
+   the package is undone and the vendor can re-pack the same stickers. */
+function ShortUnits({ d, csgNo, reload }) {
+  const { session } = useAuth();
+  const { showToast } = useToast();
+  const [sel, setSel] = useState(() => new Set());
+  const [modal, setModal] = useState(null);
+  const st = d.consignment.status;
+  const shorts = (d.discrepancies || []).filter(x => x.kind === 'short');
+  if (!shorts.length) return null;
+  const open = shorts.filter(x => !x.resolution);
+  const picked = open.filter(x => sel.has(x.upc));
+  const toggle = u => setSel(p => { const n = new Set(p); n.has(u) ? n.delete(u) : n.add(u); return n; });
+  const done = async msg => { showToast(msg, 'success', 6000); setSel(new Set()); setModal(null); await reload(); };
+  return (
+    <Panel title={`Short units (${open.length} open of ${shorts.length})`} pad={12} style={{ marginTop: 14 }} action={!!open.length && (
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <button style={smallBtn} disabled={!picked.length || !!modal} onClick={() => setModal('receive')}>Found — receive</button>
+        <button style={smallBtn} disabled={!picked.length || !!modal} onClick={() => setModal('release')}>Release to vendor</button>
+      </div>
+    )}>
+      <div style={{ ...text, marginBottom: 8 }}>On the manifest but not found when receiving finished — not credited.
+        {st === 'accepted' ? ' A unit found now is checked here and booked on its own GRN.' : ' A unit found now joins this receipt and the audit sample — check it before accepting.'}
+        {' '}"found on CSG-…" = it was scanned as extra on another consignment, so it is at LOT: receive it, don't release it.</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {shorts.map(x => (
+          <label key={x.upc} style={{ ...mono, fontSize: 12, padding: '3px 8px', borderRadius: 3, display: 'inline-flex', gap: 6, alignItems: 'center',
+            background: 'var(--surface-2)', border: '1px solid var(--border)', cursor: x.resolution ? 'default' : 'pointer' }}>
+            {!x.resolution && <input type="checkbox" checked={sel.has(x.upc)} onChange={() => toggle(x.upc)} aria-label={`Select ${x.upc}`} />}
+            {x.upc}<span style={{ color: 'var(--t3)' }}>{x.ctn_no}</span>
+            {!x.resolution && x.seen_on && <ToneBadge tone="warn">found on {x.seen_on}</ToneBadge>}
+            {x.resolution && <ToneBadge tone={x.resolution === 'released' ? 'mute' : 'ok'}>{RESOLVED[x.resolution] || x.resolution}{x.resolution === 'late_received' && x.resolved_note ? ` · ${x.resolved_note}` : ''}</ToneBadge>}
+          </label>
+        ))}
+      </div>
+      {modal === 'receive' && <LateReceiveModal csgNo={csgNo} units={picked} qc={st === 'accepted'} onClose={() => setModal(null)}
+        onSubmit={async fails => {
+          const r = await opPost('resolveShort', { csg_no: csgNo, codes: picked.map(x => x.upc), how: 'receive', fails, expect_status: st }, session);
+          await done(r.already ? `${r.count} already received${r.grn_no ? ` · ${r.grn_no}` : ''}`
+            : r.grn_no ? `${r.count} found late — ${r.passed} accepted, ${r.failed} rejected · ${r.grn_no}`
+            : `${r.count} found late — added to this receipt${r.added_to_sample ? ' and to the audit sample (check them)' : ''}`);
+        }} />}
+      {modal === 'release' && <ReleaseModal count={picked.length} onClose={() => setModal(null)}
+        onSubmit={async reason => {
+          const r = await opPost('resolveShort', { csg_no: csgNo, codes: picked.map(x => x.upc), how: 'release', reason, expect_status: st }, session);
+          await done(r.already ? `${r.count} already released` : `${r.count} released — the vendor can re-pack the stickers`);
+        }} />}
+    </Panel>
+  );
+}
+
+function LateReceiveModal({ csgNo, units, qc, onClose, onSubmit }) {
+  const [fails, setFails] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const bad = Object.values(fails).some(v => v.trim().length < 3 || v.trim().length > 300);
+  const nFail = Object.keys(fails).length;
+  return (
+    <Modal open onClose={busy ? undefined : onClose} title={`Found ${units.length} short unit${units.length > 1 ? 's' : ''} on ${csgNo}`}
+      confirmLabel={busy ? 'Working…' : qc ? `Accept ${units.length - nFail} · reject ${nFail}` : 'Add to the receipt'} loading={busy} error={err}
+      dismissOnBackdrop={false} confirmDisabled={qc && bad} onConfirm={async () => {
+        if (busy) return;
+        setBusy(true); setErr(null);
+        try { await onSubmit(Object.fromEntries(Object.entries(fails).map(([k, v]) => [k, v.trim()]))); }
+        catch (e) { setErr(e.message); } finally { setBusy(false); }
+      }}>
+      <div style={{ ...text, marginBottom: 10 }}>{qc
+        ? <>This consignment is already accepted, so check each unit now. Passed units become dispatchable stock and are booked on a new GRN; a failed one becomes a reject to dispose.</>
+        : <>The units join this receipt as received and are added to the audit sample — mark each one pass or fail before accepting.</>}</div>
+      {qc && units.map(x => (
+        <div key={x.upc} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
+          <span style={{ ...mono, minWidth: 120 }}>{x.upc}</span>
+          <label style={{ ...text, display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <input type="checkbox" checked={x.upc in fails} onChange={() => setFails(p => {
+              const n = { ...p }; if (x.upc in n) delete n[x.upc]; else n[x.upc] = ''; return n; })} />fail</label>
+          {x.upc in fails && <Input style={{ flex: 1, minWidth: 180 }} value={fails[x.upc]} maxLength={300} placeholder="What is wrong? (3+ characters)"
+            onChange={e => setFails(p => ({ ...p, [x.upc]: e.target.value }))} />}
+        </div>
+      ))}
+    </Modal>
+  );
+}
+
+function ReleaseModal({ count, onClose, onSubmit }) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const r = reason.trim();
+  return (
+    <Modal open onClose={busy ? undefined : onClose} title={`Release ${count} short unit${count > 1 ? 's' : ''}?`} confirmLabel={busy ? 'Working…' : 'Release'}
+      confirmColor="var(--bad-fg)" loading={busy} error={err} dismissOnBackdrop={false} confirmDisabled={r.length < 3 || r.length > 300}
+      onConfirm={async () => {
+        if (busy) return;
+        setBusy(true); setErr(null);
+        try { await onSubmit(r); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+      }}>
+      <div style={{ ...text, marginBottom: 10 }}>The units are never credited. Their package is undone (car and remote back to the vendor as unpacked
+        stickers), so if the vendor still has them they can re-pack them onto a new consignment.</div>
+      <Field name="Why?" hint="3–300 characters, e.g. lost in transit, never loaded."><Input autoFocus value={reason} maxLength={300}
+        onChange={e => setReason(e.target.value)} /></Field>
+    </Modal>
   );
 }

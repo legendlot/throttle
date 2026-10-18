@@ -711,6 +711,21 @@ const CARTON_DEFAULTS = { Gator: 18, Shadow: 24 };
 const VENDOR_CFG_FIELDS = ['active', 'killed', 'defect_tolerance_pct', 'pickup_address',
   'leak_unused_sticker_days', 'leak_packed_undispatched_days', 'leak_over_po_pct'];
 
+// An offboarded vendor that is still stopped gets nothing new (codes, operators): read fresh, not from the 30 s cache.
+// (A login code needs an active supervisor, and offboarding deactivates every operator.)
+async function isOffboarded(vendorId) {
+  const r = await op(`/rest/v1/vendor_config?vendor_id=eq.${vendorId}&select=offboarded_at,killed`);
+  return !r.ok || !!(r.data[0] && r.data[0].offboarded_at && r.data[0].killed);
+}
+const OFFBOARDED = 'this vendor is offboarded — release its kill switch first to work with it again';
+// YYYY-MM-DD that is a real calendar day, else null.
+const isoDay = v => {
+  const s = String(v || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s ? null : s;
+};
+
 async function ownerRoute(request, url, rawBody) {
   const me = await verifyOwner(request.headers.get('Authorization'));
   if (!me) return fail('forbidden', 403);
@@ -774,6 +789,7 @@ async function ownerRoute(request, url, rawBody) {
       const label = String(P.label || '').trim().slice(0, 60) || (kind === 'agent' ? 'Print agent' : `Bench ${bench}`);
       const cfg = await vendorCfg(vendorId);
       if (!cfg) return fail('set up the vendor first', 400);
+      if (await isOffboarded(vendorId)) return fail(OFFBOARDED, 400);
       for (let attempt = 0; attempt < 3; attempt++) {
         const code = mintDigits(CODE_DIGITS);
         const r = await ins('device_enrolments', { vendor_id: vendorId, kind, bench_no: bench,
@@ -827,6 +843,7 @@ async function ownerRoute(request, url, rawBody) {
     }
     case 'POST createOperator': {
       if (!needVendor()) return fail('vendor_id required');
+      if (await isOffboarded(vendorId)) return fail(OFFBOARDED, 400);
       const name = String(P.name || '').trim().slice(0, 80);
       const role = P.role === 'supervisor' ? 'supervisor' : 'operator';
       if (!name) return fail('name required');
@@ -993,7 +1010,8 @@ async function ownerRoute(request, url, rawBody) {
     case 'POST finishReceipt':
     case 'POST auditMark':
     case 'POST acceptConsignment':
-    case 'POST setDisposition': {
+    case 'POST setDisposition':
+    case 'POST resolveShort': {
       const csg = String(P.csg_no || '');
       const call = {
         startReceipt: () => rpc('receive_start', { p_csg_no: csg, p_by: me.userId }),
@@ -1011,9 +1029,20 @@ async function ownerRoute(request, url, rawBody) {
           if (!ids.length || ids.some(i => !(i >= 1))) return null;
           return rpc('set_disposition', { p_ids: ids, p_disposition: String(P.disposition || ''), p_by: me.userId });
         },
+        // O10: a unit left short at Finish — found late (receive; after accept, `fails` {upc: reason} = rejects) or released.
+        resolveShort: () => {
+          const codes = Array.isArray(P.codes) ? P.codes.filter(c => typeof c === 'string').map(c => c.slice(0, 64)) : [];
+          if (!codes.length || codes.length !== P.codes.length || codes.length > 500) return null;
+          const fails = P.fails && typeof P.fails === 'object' && !Array.isArray(P.fails) ? P.fails : {};
+          // expect_status = the consignment status the owner SAW (audit / hold / accepted): the post-accept branch passes
+          // every unit not in `fails`, so a consignment accepted meanwhile must be a refusal, not a silent QC pass.
+          return rpc('short_resolve', { p_csg_no: csg, p_codes: codes, p_action: String(P.how || ''), p_fails: fails,
+            p_expect_status: String(P.expect_status || ''),
+            p_reason: P.reason ? String(P.reason).slice(0, 300) : null, p_by: me.userId, p_by_name: me.fullName || me.email || null });
+        },
       }[action];
       const pending = call();
-      if (!pending) return fail('ids required');
+      if (!pending) return fail(action === 'resolveShort' ? 'codes required (1–500)' : 'ids required');
       const r = await pending;
       if (!r.ok) {
         const code = r?.data?.code;
@@ -1021,6 +1050,39 @@ async function ownerRoute(request, url, rawBody) {
         const m = sqlMsg(r);
         return fail(m || 'write_failed', m ? 400 : 502);
       }
+      return ok(r.data);
+    }
+    // ── Offboarding (O10): one transaction — kill switch, devices / operators / sessions / codes revoked, open orders
+    //    closed, unused stickers voided, the reconciliation kept in the event log (the SQL writes it). Nothing deleted. ──
+    case 'GET getOffboardPreview': {
+      if (!needVendor()) return fail('vendor_id required');
+      const r = await rpc('offboard_preview', { p_vendor_id: vendorId });
+      if (!r.ok) return fail('read_failed', 502);
+      return ok(r.data);
+    }
+    case 'POST offboardVendor': {
+      if (!needVendor()) return fail('vendor_id required');
+      const r = await rpc('offboard_vendor', { p_vendor_id: vendorId, p_by: me.userId, p_reason: P.reason ? String(P.reason).slice(0, 300) : null });
+      cache.vendor.delete(vendorId);
+      if (!r.ok) { const m = sqlMsg(r); return fail(m || 'write_failed', m ? 400 : 502); }
+      return ok(r.data);
+    }
+    // ── Monitor + reports (O10): read-only. ──
+    case 'GET getUnits': {
+      if (!needVendor()) return fail('vendor_id required');
+      const day = isoDay;
+      const before = /^LOT-\d{8}$/.test(String(P.before || '')) ? String(P.before) : null;
+      const r = await rpc('owner_units', { p_vendor_id: vendorId, p_before: before, p_limit: wholeNumber(P.limit) || 200,
+        p_status: P.status ? String(P.status).slice(0, 40) : null, p_q: P.q ? String(P.q).slice(0, 64) : null,
+        p_from: day(P.from), p_to: day(P.to) });
+      if (!r.ok) return fail('read_failed', 502);
+      return ok(r.data);
+    }
+    case 'GET getSummary': {
+      if (!needVendor()) return fail('vendor_id required');
+      const day = isoDay;
+      const r = await rpc('owner_summary', { p_vendor_id: vendorId, p_from: day(P.from), p_to: day(P.to) });
+      if (!r.ok) { const m = sqlMsg(r); return fail(m || 'read_failed', m ? 404 : 502); }
       return ok(r.data);
     }
     case 'GET getEvents': {

@@ -73,7 +73,8 @@ function VendorsInner() {
             style={{ ...btnGhost, borderColor: v.vendor_id === V.vendorId ? 'var(--yellow)' : 'var(--border-2)',
               color: v.vendor_id === V.vendorId ? 'var(--t1)' : 'var(--t2)' }}>
             {v.vendor_name || `Vendor ${v.vendor_id}`}
-            <ToneBadge tone={v.killed ? 'bad' : v.active ? 'ok' : 'mute'}>{v.killed ? 'stopped' : v.active ? 'live' : 'off'}</ToneBadge>
+            <ToneBadge tone={v.offboarded_at && v.killed ? 'mute' : v.killed ? 'bad' : v.active ? 'ok' : 'mute'}>
+              {v.offboarded_at && v.killed ? 'offboarded' : v.killed ? 'stopped' : v.active ? 'live' : 'off'}</ToneBadge>
           </button>
         ))}
         <div style={{ flex: 1 }} />
@@ -200,8 +201,76 @@ function SetupTab({ vendor, onSaved }) {
         </div>
       </Panel>
       <ProductsPanel vendorId={vendor.vendor_id} />
+      <OffboardPanel vendor={vendor} onDone={onSaved} />
       <Confirm ask={ask} onClose={() => setAsk(null)} />
     </div>
+  );
+}
+
+// ── Offboarding (O10): one action, nothing deleted. Shows the reconciliation first; the owner types the vendor's name. ──
+const OFF_ROWS = [
+  ['devices', 'Benches + agents revoked'], ['operators', 'Operators deactivated'], ['open_codes', 'Unused codes cancelled'],
+  ['open_orders', 'Open work orders closed'], ['stickers_to_void', 'Unused stickers voided'], ['print_jobs_open', 'Unprinted labels cancelled'],
+];
+const OFF_WARN = [
+  ['still_out', 'units still at the vendor, on the road or in QC — collect / receive them; they are not moved'],
+  ['cartons_open', 'cartons packed but not on a consignment'], ['draft_consignments', 'draft consignments (never dispatched)'],
+  ['consignments_in_qc', 'consignments not yet accepted'], ['shorts_open', 'short units not resolved (Receiving)'],
+  ['rejects_undisposed', 'rejects without a disposition (Receiving)'],
+];
+function OffboardPanel({ vendor, onDone }) {
+  const { session } = useAuth();
+  const { showToast } = useToast();
+  const [pv, setPv] = useState(null);
+  const [err, setErr] = useState(null);
+  const [name, setName] = useState('');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const preview = async () => {
+    setErr(null); setPv(null); setOpen(true);
+    try { setPv(await opGet('getOffboardPreview', { vendor_id: vendor.vendor_id }, session)); } catch (e) { setErr(e.message); }
+  };
+  const want = (vendor.vendor_name || `Vendor ${vendor.vendor_id}`).trim();
+  const ok = name.trim().toLowerCase() === want.toLowerCase() && reason.trim().length >= 3;
+  return (
+    <Panel title="Offboard vendor" icon="alert" pad={18}>
+      {vendor.offboarded_at && vendor.killed
+        ? <div style={text}>Offboarded {fmtIST(vendor.offboarded_at)} — the reconciliation is on the Activity tab ("vendor_offboarded").
+            To work with this vendor again, release its kill switch, then enrol new benches and add operators.</div>
+        : <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ ...text, flex: 1, minWidth: 260 }}>Ends the vendor in one step: kill switch on, every bench, agent, operator, session and unused
+              code revoked, open work orders closed, unused stickers voided, and a final reconciliation saved. Nothing is deleted; consignments
+              already sent can still be received and accepted.</div>
+            <button style={dangerBtn} onClick={preview}>Review offboarding…</button>
+          </div>}
+      {open && (
+        <Modal open onClose={busy ? undefined : () => setOpen(false)} title={`Offboard ${want}?`} confirmLabel={busy ? 'Working…' : 'Offboard vendor'}
+          confirmColor="var(--bad-fg)" loading={busy} error={err} dismissOnBackdrop={false} confirmDisabled={!pv || !ok}
+          onConfirm={async () => {
+            if (busy) return;
+            setBusy(true); setErr(null);
+            try {
+              const r = await opPost('offboardVendor', { vendor_id: vendor.vendor_id, reason: reason.trim() }, session);
+              showToast(r.already ? `${want} was already offboarded` : `${want} offboarded — ${r.devices_revoked} devices, ${r.operators_deactivated} operators, ${r.stickers_voided} stickers voided`, 'success', 8000);
+              setOpen(false); await onDone();
+            } catch (e) { setErr(e.message); } finally { setBusy(false); }
+          }}>
+          {!pv ? (err ? null : <Spinner />) : <>
+            <div style={{ ...label, marginTop: 2 }}>What happens</div>
+            {OFF_ROWS.map(([k, n]) => <div key={k} style={text}><span className="num" style={{ color: 'var(--t1)', fontWeight: 600 }}>{pv[k]}</span> · {n}</div>)}
+            <div style={{ ...text, marginTop: 6 }}>Stickers: {pv.stickers?.minted} minted = {pv.stickers?.applied} applied + {pv.stickers?.voided} void + {pv.stickers?.damaged} damaged + {pv.stickers?.outstanding} outstanding.</div>
+            {OFF_WARN.some(([k]) => Number(pv[k]) > 0) && <>
+              <div style={{ ...label, marginTop: 12, color: 'var(--warn-fg)' }}>Still open — offboarding does not change these</div>
+              {OFF_WARN.filter(([k]) => Number(pv[k]) > 0).map(([k, n]) => <div key={k} style={{ ...text, color: 'var(--warn-fg)' }}>
+                <span className="num" style={{ fontWeight: 600 }}>{pv[k]}</span> {n}</div>)}
+            </>}
+            <Field name={`Type the vendor's name (${want})`} style={{ marginTop: 14 }}><Input value={name} onChange={e => setName(e.target.value)} /></Field>
+            <Field name="Why?" hint="3–300 characters, kept in the event log." style={{ marginTop: 10 }}><Input value={reason} maxLength={300} onChange={e => setReason(e.target.value)} /></Field>
+          </>}
+        </Modal>
+      )}
+    </Panel>
   );
 }
 

@@ -285,6 +285,8 @@ export default function DepotOverview() {
   }).filter(r => r.onHand + r.allocated > 0)
     .sort((a, b) => (b.onHand + b.allocated) - (a.onHand + a.allocated));
   const stockOnHandTotal = stockRows.reduce((s, r) => s + r.onHand, 0);
+  // Outpost (O10): vendor cars on their way to LOT stock — not on hand, so a card of their own (only once there are any).
+  const vendorPipe = (stock || []).reduce((s, p) => s + (p.totals?.vendor_at || 0) + (p.totals?.vendor_in_transit || 0) + (p.totals?.vendor_receiving || 0), 0);
 
   // ── Pipeline stat cards (live state + today throughput) ─────
   const statCards = [
@@ -292,6 +294,8 @@ export default function DepotOverview() {
       sub: pendingReqs ? 'Awaiting accept / reject →' : 'None pending',
       color: pendingReqs ? 'var(--red)' : 'var(--border)', tag: 'open',
       onClick: () => router.push('/fulfilment-requests') },
+    ...(vendorPipe > 0 ? [{ label: 'At Vendors', value: vendorPipe, sub: 'Outpost — packed, on the road or in QC →', color: 'var(--t3)', tag: 'now',
+      onClick: () => router.push('/outpost-monitor') }] : []),
     { label: 'With Production', value: c.rtd_count,         sub: 'Awaiting handover',   color: 'var(--amber)',  tag: 'now' },
     { label: 'With Dispatch',   value: c.handed_over_count, sub: 'Awaiting allocation', color: 'var(--yellow)', tag: 'now' },
     { label: 'Allocated',       value: c.allocated_count,   sub: 'Awaiting ship',       color: 'var(--blue)',   tag: 'now' },
