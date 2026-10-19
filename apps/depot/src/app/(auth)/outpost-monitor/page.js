@@ -30,14 +30,14 @@ const TABS = [['overview', 'Overview'], ['units', 'Units'], ['reports', 'Reports
 // Unit stages, in the order a unit walks them.
 const STAGES = [
   ['vendor_packed', 'Packed at vendor', 'At the vendor, in a carton', 'mute'],
-  ['vendor_in_transit', 'On the road', 'Dispatched on a consignment (or short at receipt)', 'warn'],
-  ['vendor_received', 'In QC at LOT', 'Received, waiting for the audit', 'warn'],
-  ['lot', 'LOT stock and beyond', 'Accepted — dispatchable, allocated or shipped', 'ok'],
+  ['vendor_in_transit', 'On the road', 'Dispatched on a consignment (or short at check-in)', 'warn'],
+  ['vendor_received', 'Checked in at LOT', 'Through the gate, waiting for DTK (not paid yet)', 'warn'],
+  ['lot', 'LOT stock and beyond', 'Through DTK (paid) — dispatchable, allocated or shipped', 'ok'],
   ['vendor_rejected', 'Rejected', 'Failed QC, waiting for a disposition', 'bad'],
   ['vendor_unpacked', 'Back with the vendor', 'Un-packed, returned or released — stickers to re-pack', 'mute'],
 ];
 const STATUS_WORD = {
-  vendor_packed: 'packed at vendor', vendor_in_transit: 'on the road', vendor_received: 'in QC', vendor_rejected: 'rejected',
+  vendor_packed: 'packed at vendor', vendor_in_transit: 'on the road', vendor_received: 'checked in', vendor_rejected: 'rejected',
   vendor_unpacked: 'back with vendor', handed_over: 'LOT stock', allocated: 'allocated', packed_dispatch: 'packed for dispatch',
   shipped: 'shipped', qc_fail: 'rework at LOT',
 };
