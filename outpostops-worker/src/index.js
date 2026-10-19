@@ -972,14 +972,17 @@ async function ownerRoute(request, url, rawBody) {
     }
     case 'POST createWorkOrder': {
       if (!needVendor()) return fail('vendor_id required');
-      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(P.channel_id || ''))) return fail('channel_id required');
+      // A channel, or none (LOT: the sales channel is chosen at ALLOC) with the packaging type the bench packs into.
+      const lotOrder = P.channel_id == null || P.channel_id === '';
+      if (!lotOrder && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(P.channel_id))) return fail('channel_id must be a channel id');
+      if (lotOrder && !['ecom', 'retail', 'export'].includes(P.pack_type)) return fail('choose a channel, or LOT with a packaging type');
       const tq = wholeNumber(P.target_qty);
       if (!(tq >= 1 && tq <= 1_000_000)) return fail('target_qty must be a whole number 1–1,000,000');
       if (P.po_line_id != null && P.po_line_id !== '' && !(wholeNumber(P.po_line_id) >= 1)) {
         return fail('po_line_id must be a PO line id');
       }
       const r = await rpc('create_work_order', { p_vendor_id: vendorId, p_sku: String(P.sku || ''),
-        p_channel_id: P.channel_id || null, p_target_qty: wholeNumber(P.target_qty),
+        p_channel_id: lotOrder ? null : P.channel_id, p_pack_type: lotOrder ? P.pack_type : null, p_target_qty: wholeNumber(P.target_qty),
         p_po_line_id: P.po_line_id ? Number(P.po_line_id) : null, p_created_by: me.userId, p_notes: P.notes || null });
       if (!r.ok) { const m = sqlMsg(r); return fail(m || 'write_failed', m ? 400 : 502); }
       return ok(r.data);

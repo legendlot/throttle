@@ -2,7 +2,9 @@
 /* ════════════════════════════════════════════════════════════
    OUTPOST › WORK ORDERS — what a vendor may pack (O7, S422).
 
-   An order (OWO-NNNNN) locks ONE car colourway + ONE channel; its
+   An order (OWO-NNNNN) locks ONE car colourway + ONE channel — or LOT
+   (no channel yet: packed as ecom / retail / export, sales channel
+   chosen at ALLOC in LOT's warehouse, S428); its
    quantity is a TARGET, not a cap (the floor keeps packing past it —
    the over-PO leakage flag watches that). Linking a PO line is
    optional; the line must be the same product / model / colour on
@@ -119,10 +121,12 @@ function OrdersInner() {
   );
 }
 
+const LOT = 'LOT';
+
 function NewOrder({ vendorId, onClose, onCreated }) {
   const { session } = useAuth();
   const [opts, setOpts] = useState(null);
-  const [f, setF] = useState({ sku: '', channel_id: '', target_qty: '', po_line_id: '', notes: '' });
+  const [f, setF] = useState({ sku: '', channel_id: '', pack_type: '', target_qty: '', po_line_id: '', notes: '' });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   useEffect(() => { opGet('getOrderOptions', { vendor_id: vendorId }, session).then(setOpts).catch(e => setErr(e.message)); /* eslint-disable-next-line */ }, [vendorId]);
@@ -131,14 +135,18 @@ function NewOrder({ vendorId, onClose, onCreated }) {
   // Only channels a bench can pack (ecom / retail / export) — the server's list; create_work_order refuses the rest.
   const live = opts?.channels || [];
   const qty = Number(f.target_qty);
-  const ok = f.sku && f.channel_id && Number.isInteger(qty) && qty >= 1 && qty <= 1_000_000;
+  // LOT = no sales channel yet: the units come to LOT's warehouse and the channel is chosen at ALLOC, as for in-house
+  // stock. The bench still needs the packaging type (the batch label's E / R / X).
+  const lotOrder = f.channel_id === LOT;
+  const ok = f.sku && f.channel_id && (!lotOrder || f.pack_type) && Number.isInteger(qty) && qty >= 1 && qty <= 1_000_000;
 
   return (
     <Modal open onClose={onClose} title="New work order" confirmLabel="Raise order" loading={busy} error={err} dismissOnBackdrop={false}
       confirmDisabled={!ok} size="lg" onConfirm={async () => {
         setBusy(true); setErr(null);
         try {
-          onCreated(await opPost('createWorkOrder', { vendor_id: vendorId, sku: f.sku, channel_id: f.channel_id, target_qty: qty,
+          onCreated(await opPost('createWorkOrder', { vendor_id: vendorId, sku: f.sku, target_qty: qty,
+            ...(lotOrder ? { channel_id: null, pack_type: f.pack_type } : { channel_id: f.channel_id }),
             po_line_id: f.po_line_id || null, notes: f.notes.trim() || null }, session));
         } catch (e) { setErr(e.message); } finally { setBusy(false); }
       }}>
@@ -151,8 +159,13 @@ function NewOrder({ vendorId, onClose, onCreated }) {
             {opts.cars.map(c => <option key={c.code} value={c.code}>{c.code} — {c.product} {c.model} {c.color}{c.ean_ok ? '' : ' (NO VALID EAN — packing will be refused)'}</option>)}
           </Select></Field>
           <Field name="Channel"><Select value={f.channel_id} onChange={set('channel_id')}>
-            <option value="">Choose…</option>{live.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <option value="">Choose…</option>
+            <option value={LOT}>LOT warehouse — channel chosen at allocation</option>
+            {live.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select></Field>
+          {lotOrder && <Field name="Packaging" hint="The box the vendor packs into (E / R / X on the batch label)."><Select value={f.pack_type} onChange={set('pack_type')}>
+            <option value="">Choose…</option><option value="ecom">Ecom</option><option value="retail">Retail</option><option value="export">Export</option>
+          </Select></Field>}
           <Field name="Target quantity" hint="A target, not a cap: benches can pack past it."><Input inputMode="numeric" value={f.target_qty}
             onChange={e => setF(p => ({ ...p, target_qty: e.target.value.replace(/\D/g, '').slice(0, 7) }))} /></Field>
           <Field name="PO line (optional)" hint={f.sku && !lines.length ? 'No live PO line of this vendor matches this colourway.' : 'Feeds the GRN at LOT receiving.'}>
