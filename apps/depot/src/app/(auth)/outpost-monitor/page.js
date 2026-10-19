@@ -10,7 +10,8 @@
    carton, consignment, operator, status — searchable, CSV export.
    Reports: sticker reconciliation (minted = applied + void + damaged +
    outstanding), output per day from the immutable pack history,
-   consignments sent → received → accepted with the PO value payable,
+   consignments sent → checked in → through DTK with the PO value payable
+   (DTK writes the GRN — decisions §S428-DTK),
    and defects against the vendor's tolerance.
    ════════════════════════════════════════════════════════════ */
 import { useEffect, useState } from 'react';
@@ -112,8 +113,11 @@ function Overview({ s }) {
     { on: Number(L.packed_undispatched?.count) > 0, tone: 'warn', title: `Packed but not dispatched for more than ${t.packed_undispatched_days} days`,
       body: <>{num(L.packed_undispatched?.count)} unit{Number(L.packed_undispatched?.count) === 1 ? '' : 's'} — oldest {fmtIST(L.packed_undispatched?.oldest)}.
         {!!L.packed_undispatched?.cartons?.length && <> Cartons: <span style={mono}>{L.packed_undispatched.cartons.join(', ')}</span></>}</> },
-    ...(L.over_po || []).map(o => ({ on: true, tone: 'bad', title: `Packing past the PO — ${o.po_number}`,
-      body: <>{[o.product, o.variant, o.color].filter(Boolean).join(' · ')}: {num(o.packed)} packed against {num(o.ordered)} ordered (+{o.over_pct}%, limit {t.over_po_pct}%).</> })),
+    ...(L.over_po || []).map(o => ({ on: true, tone: 'bad', title: `Coming in past the PO — ${[o.product, o.variant, o.color].filter(Boolean).join(' · ')}`,
+      body: <>{num(o.pipeline)} unit{Number(o.pipeline) === 1 ? '' : 's'} packed or on the way, against {num(o.open)} still open on the vendor's live PO lines
+        ({num(o.ordered)} ordered, {num(o.received)} received; limit {t.over_po_pct}% of ordered). The extra will reach DTK with no PO line — raise or extend the PO.</> })),
+    { on: Number(L.no_po?.count) > 0, tone: 'bad', title: 'Handed over with no open PO line',
+      body: <>{num(L.no_po?.count)} unit{Number(L.no_po?.count) === 1 ? '' : 's'} ({(L.no_po?.skus || []).join(', ')}) went through DTK when the vendor had no live PO line with open qty for the colour — they are on a GRN with no PO (oldest {fmtIST(L.no_po?.oldest)}). Raise or extend the PO.</> },
   ].filter(f => f.on);
   const agents = (s.devices || []).filter(d => d.kind === 'agent');
   const benches = (s.devices || []).filter(d => d.kind === 'bench');
@@ -125,7 +129,7 @@ function Overview({ s }) {
       </div>
       <Panel title={`Leakage flags (${flags.length})`} pad={12}>
         {!flags.length ? <div style={text}>Nothing flagged. Limits for this vendor: stickers unused {t.unused_sticker_days} days ·
-          packed not dispatched {t.packed_undispatched_days} days · packed {t.over_po_pct}% past the PO line (set under Vendors &amp; Devices).</div>
+          packed not dispatched {t.packed_undispatched_days} days · coming in {t.over_po_pct}% past the open PO qty (set under Vendors &amp; Devices).</div>
           : flags.map((f, i) => (
             <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '8px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
               <ToneBadge tone={f.tone}>flag</ToneBadge>
@@ -321,7 +325,7 @@ function Reports({ s }) {
         {!cs.length ? <div style={{ ...text, padding: 12 }}>No consignment dispatched in this range.</div> : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
-              <thead><tr>{['Consignment', 'Dispatched', 'Status', 'Sent', 'Received', 'Short open', 'Accepted', 'Rejected', 'GRN', 'Payable (PO price, ex-GST)'].map(h =>
+              <thead><tr>{['Consignment', 'Dispatched', 'Status', 'Sent', 'Checked in', 'Short open', 'Through DTK', 'Rejected', 'GRN (at DTK)', 'Payable (PO price, ex-GST)'].map(h =>
                 <th key={h} style={th}>{h}</th>)}</tr></thead>
               <tbody>{cs.map(c => (
                 <tr key={c.csg_no} style={{ borderTop: '1px solid var(--border)' }}>
@@ -331,10 +335,10 @@ function Reports({ s }) {
                   <td className="num" style={td}>{num(c.sent)}</td>
                   <td className="num" style={td}>{c.received == null ? '—' : num(c.received)}</td>
                   <td className="num" style={{ ...td, color: Number(c.short_open) ? 'var(--warn-fg)' : undefined }}>{num(c.short_open)}</td>
-                  <td className="num" style={td}>{c.accepted == null ? '—' : num(c.accepted)}</td>
+                  <td className="num" style={td}>{num(c.dtk)}</td>
                   <td className="num" style={td}>{c.rejected == null ? '—' : num(c.rejected)}</td>
-                  <td style={{ ...mono, ...td }}>{[c.grn_no, ...(c.late_grns || [])].filter(Boolean).join(', ') || '—'}</td>
-                  <td className="num" style={td}>{c.status !== 'accepted' ? '—' : <>{rupees(c.payable)}{Number(c.unpriced) > 0 &&
+                  <td style={{ ...mono, ...td }}>{(c.dtk_grns || []).join(', ') || '—'}</td>
+                  <td className="num" style={td}>{!Number(c.dtk) ? '—' : <>{rupees(c.payable)}{Number(c.unpriced) > 0 &&
                     <span style={{ color: 'var(--warn-fg)' }}> · {num(c.unpriced)} without a PO line</span>}</>}</td>
                 </tr>
               ))}</tbody>
@@ -342,14 +346,14 @@ function Reports({ s }) {
           </div>
         )}
       </Panel>
-      <Panel title="Defects — consignments decided in range" pad={12}>
+      <Panel title="Defects — consignments checked in in range" pad={12}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10, marginBottom: 10 }}>
-          <KpiTile label="Accepted" value={num(D.accepted)} />
+          <KpiTile label="Through DTK" value={num(D.accepted)} />
           <KpiTile label="Rejected" value={num(D.rejected)} tone={Number(D.rejected) ? 'warn' : undefined} />
           <KpiTile label="Defect rate" value={D.pct == null ? '—' : `${D.pct}%`} sub={`of what QC checked · tolerance ${D.tolerance_pct}%`} tone={D.pct == null ? undefined : over ? 'bad' : 'ok'} />
         </div>
         <div style={{ ...text, fontSize: 12, marginBottom: 8 }}>Rate per consignment = fails in the audit sample (plus units found late and checked)
-          ÷ units checked; a consignment on hold = rejected ÷ received. Weighted by units received. Accepted / rejected above are unit counts.</div>
+          ÷ units checked; a consignment in full QC = rejected ÷ received. Weighted by units received. Through DTK / rejected above are unit counts.</div>
         {over && <div style={{ ...text, color: 'var(--bad-fg)', marginBottom: 8 }}>Above the vendor's tolerance — an SLA breach for this period.</div>}
         {!!(D.reasons || []).length && <>
           <div style={label}>Top reasons</div>

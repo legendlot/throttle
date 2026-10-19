@@ -93,7 +93,7 @@ function CartonDetail({ ctn, me, onClose, onCloseCarton }) {
             <Badge s={c.status}>{c.status === 'open' ? 'filling' : c.status}</Badge>
             <span className="mono">{c.sku}</span><span className="muted">{c.channel}</span>
             <span className="mono">{c.unit_count}/{c.capacity}</span>
-            <span className="dim">bench {c.bench_no ?? '—'} · {c.work_orders?.wo_no} · label v{c.manifest_version}</span>
+            <span className="dim">bench {c.bench_no ?? '—'} · {c.work_orders?.wo_no || `no order · ${c.pack_type}`} · label v{c.manifest_version}</span>
           </div>
           <table className="t">
             <thead><tr><th>Batch label</th><th>Car</th><th>Remote</th><th>Added</th></tr></thead>

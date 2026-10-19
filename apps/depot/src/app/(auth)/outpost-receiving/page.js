@@ -1,18 +1,19 @@
 'use client';
 /* ════════════════════════════════════════════════════════════
-   OUTPOST › RECEIVING — LOT takes in a vendor consignment (O8, S422).
+   OUTPOST › RECEIVING — LOT takes in a vendor consignment (O8, S422; reworked O12, S428).
 
-   A consignment (CSG-NNNNN) arrives on a challan. Start receiving,
-   then scan each carton label (CTN-…) and every unit in it; anything
-   not on the manifest is an alert to set aside (extra / wrong vendor),
-   a unit found in the wrong carton is noted. Finish receiving: every
-   manifest unit not scanned is SHORT (never credited) and the system
-   draws a random audit sample from what actually arrived. Open each
-   sample unit and mark it pass / fail; at the hold threshold the
-   consignment goes on HOLD and every received unit is inspected (scan
-   only the rejects). Accept → the good units become dispatchable stock
-   and one GRN is booked against the PO. Rejects are then disposed:
-   rework at LOT or return to the vendor.
+   A consignment (CSG-NNNNN) arrives on a challan. CHECK IN at the gate:
+   scan each carton label (CTN-…) — that checks in every unit in the
+   sealed carton; open a carton and scan its boxes only when it looks
+   wrong (a box not on the manifest is an alert to set aside). Finish:
+   a carton never scanned is SHORT and the system draws a random
+   spot-check sample. Packed units then go through DTK at dispatch like
+   factory output — DTK hands them over AND books the GRN, so the vendor
+   is paid for what reaches dispatch (decisions §S428-DTK). The spot check
+   holds nothing up: a failed unit is quarantined at once (DTK refuses
+   it); at the hold threshold the consignment goes into full QC. Close QC
+   is bookkeeping. Rejects are disposed any time: rework at LOT or
+   return to the vendor.
    ════════════════════════════════════════════════════════════ */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
@@ -24,9 +25,9 @@ import {
   Confirm, ErrorPanel, Field, Input, OwnerGate, Select, dangerBtn, label, mono, smallBtn, text, useOutpostVendors,
 } from '../../../components/outpost/OutpostKit.js';
 
-const STATUSES = [['incoming', 'Incoming'], ['accepted', 'Accepted'], ['', 'All']];
+const STATUSES = [['incoming', 'Incoming'], ['accepted', 'QC closed'], ['', 'All']];
 const TONE = { dispatched: 'mute', receiving: 'warn', audit: 'warn', hold: 'bad', accepted: 'ok' };
-const WORD = { dispatched: 'on the road', receiving: 'receiving', audit: 'audit QC', hold: 'on hold', accepted: 'accepted' };
+const WORD = { dispatched: 'on the road', receiving: 'checking in', audit: 'spot check', hold: 'full QC', accepted: 'QC closed' };
 const DISPO = { rework_lot: 'Rework at LOT', return_vendor: 'Return to vendor' };
 const PHASE = { audit: 'sample', full_qc: 'full QC', late: 'late find' };
 const RESOLVED = { late_received: 'found late', released: 'released' };
@@ -89,8 +90,8 @@ function ReceivingInner() {
                     <td style={{ ...text, ...td }}>{fmtIST(c.dispatched_at)}</td>
                     <td style={td}><ToneBadge tone={TONE[c.status]}>{WORD[c.status] || c.status}</ToneBadge></td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                      {c.status === 'accepted' && <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)', marginRight: 8 }}>
-                        {num(c.accepted_units)} ok / {num(c.rejected_units)} rej · <span style={mono}>{c.grn_no || '—'}</span></span>}
+                      {['audit', 'hold', 'accepted'].includes(c.status) && <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)', marginRight: 8 }}>
+                        {num(c.dtk_units)} / {num(c.received_units)} through DTK{Number(c.short_units) > 0 ? ` · ${num(c.short_units)} short` : ''}</span>}
                       {Number(c.undisposed) > 0 && <ToneBadge tone="warn">{c.undisposed} reject{c.undisposed > 1 ? 's' : ''} to dispose</ToneBadge>}
                     </td>
                   </tr>
@@ -131,6 +132,8 @@ function Receipt({ csgNo, onBack }) {
           {st === 'hold' && <HoldStep d={d} csgNo={csgNo} reload={load} />}
           {st === 'accepted' && <AcceptedStep d={d} reload={load} />}
         </div>
+        {['audit', 'hold', 'accepted'].includes(st) && <DtkPanel d={d} />}
+        {['audit', 'hold'].includes(st) && !!(d.rejections || []).length && <Rejects d={d} reload={load} />}
         {['audit', 'hold', 'accepted'].includes(st) && <ShortUnits d={d} csgNo={csgNo} reload={load} />}
         {d.receipt && <Discrepancies list={d.discrepancies || []} />}
       </>}
@@ -179,13 +182,13 @@ function StartStep({ csgNo, reload }) {
   const [busy, setBusy] = useState(false);
   return (
     <Panel pad={18}>
-      <div style={{ ...text, marginBottom: 12 }}>This consignment is on the road. When the vehicle is at the dock, start receiving and scan every carton and unit.</div>
+      <div style={{ ...text, marginBottom: 12 }}>This consignment is on the road. When the vehicle is at the gate, start the check-in and scan every carton label.</div>
       <button style={btnPrimary} disabled={busy} onClick={async () => {
         if (busy) return;
         setBusy(true);
-        try { await opPost('startReceipt', { csg_no: csgNo }, session); showToast(`${csgNo} — receiving started`, 'success'); await reload(); }
+        try { await opPost('startReceipt', { csg_no: csgNo }, session); showToast(`${csgNo} — check-in started`, 'success'); await reload(); }
         catch (e) { showToast(e.message, 'error'); } finally { setBusy(false); }
-      }}>{busy ? 'Starting…' : 'Start receiving'}</button>
+      }}>{busy ? 'Starting…' : 'Start check-in'}</button>
     </Panel>
   );
 }
@@ -222,7 +225,12 @@ function ReceiveStep({ d, setD, csgNo, reload }) {
   const scanOne = async code => {
     try {
       const r = await opPost('receiveScan', { csg_no: csgNo, ctn_no: cur.current, code }, session);
-      if (r.kind === 'carton') { cur.current = r.ctn_no; setCtn(r); await reload(); return; }
+      if (r.kind === 'carton') {
+        cur.current = r.ctn_no; setCtn(r);
+        if (Number(r.checked_in) > 0) showToast(`${r.ctn_no} checked in — ${r.checked_in} unit${r.checked_in > 1 ? 's' : ''}`, 'success');
+        else alert('already', `${r.ctn_no} was already checked in`);
+        await reload(); return;
+      }
       if (r.result === 'ok' || r.result === 'already') {
         // Tick it locally on its home carton; the full receipt is re-read on the next carton scan only.
         if (r.result === 'ok') setD(p => ({ ...p, cartons: p.cartons.map(c => c.ctn_no !== r.ctn_no ? c
@@ -242,13 +250,13 @@ function ReceiveStep({ d, setD, csgNo, reload }) {
   const open = ctn && d.cartons.find(c => c.ctn_no === ctn.ctn_no);
   const units = open ? open.units : ctn?.units || [];
   const finish = () => setAsk({
-    title: `Finish receiving ${csgNo}?`, yes: 'Finish receiving',
-    body: <>Expected <strong className="num">{num(expected)}</strong>, scanned <strong className="num">{num(received)}</strong>.{' '}
-      {expected > received && <><strong className="num">{num(expected - received)}</strong> unit{expected - received > 1 ? 's' : ''} not scanned will be recorded SHORT and not credited. </>}
-      Cartons not received intact can't be moved as a whole carton later. The audit sample is drawn next.</>,
+    title: `Finish the check-in of ${csgNo}?`, yes: 'Finish check-in',
+    body: <>Expected <strong className="num">{num(expected)}</strong>, checked in <strong className="num">{num(received)}</strong>.{' '}
+      {expected > received && <><strong className="num">{num(expected - received)}</strong> unit{expected - received > 1 ? 's' : ''} not checked in will be recorded SHORT (a short unit that turns up later is received at DTK). </>}
+      Cartons not checked in whole can't be moved as a whole carton later. The spot-check sample is drawn next; the units can go to DTK straight away.</>,
     onYes: async () => {
       const r = await opPost('finishReceipt', { csg_no: csgNo }, session);
-      showToast(`${csgNo} received — ${r.received} in, ${r.short} short; audit ${r.sample} unit(s)`, 'success', 6000);
+      showToast(`${csgNo} checked in — ${r.received} in, ${r.short} short; spot check ${r.sample} unit(s)`, 'success', 6000);
       await reload();
     },
   });
@@ -258,16 +266,17 @@ function ReceiveStep({ d, setD, csgNo, reload }) {
       <Panel pad={16}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap', marginBottom: 12 }}>
           <div className="num" style={{ fontSize: 28, fontWeight: 700, color: 'var(--t1)' }}>{num(received)} <span style={{ color: 'var(--t3)', fontSize: 18 }}>/ {num(expected)}</span></div>
-          <div style={text}>units received{pending > 0 && <> · <span className="num">{pending}</span> scan{pending > 1 ? 's' : ''} in flight</>}</div>
+          <div style={text}>units checked in{pending > 0 && <> · <span className="num">{pending}</span> scan{pending > 1 ? 's' : ''} in flight</>}</div>
           <div style={{ flex: 1 }} />
-          <button style={btnPrimary} disabled={pending > 0 || !!ask} onClick={finish}>Finish receiving</button>
+          <button style={btnPrimary} disabled={pending > 0 || !!ask} onClick={finish}>Finish check-in</button>
         </div>
-        <ScanBox inputRef={inp} onScan={onScan} placeholder={ctn ? `Scan a unit in ${ctn.ctn_no}, or the next carton label` : 'Scan a carton label (CTN-…) first'} />
+        <div style={{ ...text, marginBottom: 10 }}>Scan each carton label: that checks in every unit in the sealed carton. Open a carton and scan its boxes only when it looks wrong.</div>
+        <ScanBox inputRef={inp} onScan={onScan} placeholder={ctn ? `Scan the next carton label, or a box in ${ctn.ctn_no}` : 'Scan a carton label (CTN-…)'} />
       </Panel>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 14 }}>
         <Panel title={ctn ? `${ctn.ctn_no} · ${ctn.sku} · ${ctn.channel}` : 'Current carton'} pad={10}>
-          {!ctn ? <div style={{ ...text, padding: 8 }}>Scan a carton label to open its manifest.</div> : (
+          {!ctn ? <div style={{ ...text, padding: 8 }}>Scan a carton label to check it in and see its manifest.</div> : (
             <div style={{ maxHeight: 360, overflowY: 'auto' }}>
               {units.map(u => (
                 <div key={u.car_upc} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 6px', borderTop: '1px solid var(--border)' }}>
@@ -361,6 +370,7 @@ function AuditStep({ d, csgNo, reload }) {
 
   const mark = async (s, result, reason) => {
     const r = await opPost('auditMark', { csg_no: csgNo, code: s.car_upc, result, ...(reason ? { reason } : {}) }, session);
+    if (result === 'fail' && r.already_handed_over) showToast(`${s.car_upc} counted as a sample fail — it was already through DTK, so pull it out through the in-house QC flow`, 'warning', 8000);
     if (r.status === 'hold') showToast(`${csgNo} is ON HOLD — ${r.sample_fails} of ${r.sample_size} sample units failed. Inspect every unit.`, 'warning', 8000);
     await reload();
   };
@@ -377,12 +387,12 @@ function AuditStep({ d, csgNo, reload }) {
     document.getElementById(`smp-${s.car_upc}`)?.scrollIntoView({ block: 'nearest' });
   };
   const accept = () => setAsk({
-    title: `Accept ${csgNo}?`, yes: 'Accept consignment',
-    body: <><strong className="num">{num(Number(d.receipt.received_units) - fails)}</strong> accepted units become dispatchable stock; a GRN is booked against the PO.
-      {fails > 0 && <> <strong className="num">{fails}</strong> failed sample unit{fails > 1 ? 's are' : ' is'} rejected (dispose of {fails > 1 ? 'them' : 'it'} next).</>}</>,
+    title: `Close QC on ${csgNo}?`, yes: 'Close QC',
+    body: <>Closes the spot check. Nothing moves and no GRN is written here — DTK hands the units over and books the GRN.
+      {fails > 0 && <> <strong className="num">{fails}</strong> failed sample unit{fails > 1 ? 's stay' : ' stays'} quarantined until disposed of.</>}</>,
     onYes: async () => {
       const r = await opPost('acceptConsignment', { csg_no: csgNo }, session);
-      showToast(`${csgNo} accepted — GRN ${r.grn_no || '—'} · ${r.accepted} accepted, ${r.rejected} rejected`, 'success', 8000);
+      showToast(`${csgNo} QC closed — ${r.dtk} through DTK so far, ${r.rejected} rejected`, 'success', 8000);
       await reload();
     },
   });
@@ -390,13 +400,14 @@ function AuditStep({ d, csgNo, reload }) {
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <Panel pad={16}>
-        <div style={{ ...text, marginBottom: 10 }}>Open these <strong className="num">{size}</strong> units (picked at random by the system) and check each one.
-          The consignment goes on hold at <strong className="num">{holdAt}</strong> failure{holdAt > 1 ? 's' : ''}.</div>
+        <div style={{ ...text, marginBottom: 10 }}>Spot check — nothing waits on it: the units can go to DTK now. Open these <strong className="num">{size}</strong> units
+          (picked at random by the system) before they reach DTK and check each one; a failed unit is quarantined at once and DTK refuses it.
+          At <strong className="num">{holdAt}</strong> failure{holdAt > 1 ? 's' : ''} the consignment goes into full QC.</div>
         <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
           <div style={text}>Checked <strong className="num" style={{ color: 'var(--t1)' }}>{checked} / {samples.length}</strong></div>
           <div style={text}>Fails <strong className="num" style={{ color: fails ? 'var(--bad-fg)' : 'var(--t1)' }}>{fails} / {holdAt}</strong></div>
           <div style={{ flex: 1 }} />
-          <button style={{ ...btnPrimary, opacity: canAccept ? 1 : 0.5 }} disabled={!canAccept || !!ask} onClick={accept}>Accept consignment</button>
+          <button style={{ ...btnPrimary, opacity: canAccept ? 1 : 0.5 }} disabled={!canAccept || !!ask} onClick={accept}>Close QC</button>
         </div>
         <ScanBox inputRef={inp} onScan={onScan} placeholder="Scan a sample unit's label to find it in the list" />
       </Panel>
@@ -458,65 +469,47 @@ function HoldStep({ d, csgNo, reload }) {
     <div style={{ display: 'grid', gap: 14 }}>
       <Panel pad={16} style={{ borderColor: 'var(--bad-fg)' }}>
         <div style={{ ...text, color: 'var(--bad-fg)', fontWeight: 600, marginBottom: 6 }}>
-          Failed the audit (<span className="num">{sFails}</span> of <span className="num">{samples.length}</span> sampled failed, hold at <span className="num">{d.receipt.hold_at}</span>).</div>
-        <div style={{ ...text, marginBottom: 12 }}>Inspect EVERY received unit (<span className="num">{num(received)}</span>). Scan or type only the rejects.</div>
+          Full QC — the spot check failed (<span className="num">{sFails}</span> of <span className="num">{samples.length}</span> sampled failed, full QC at <span className="num">{d.receipt.hold_at}</span>).</div>
+        <div style={{ ...text, marginBottom: 12 }}>Inspect every received unit not yet through DTK (<span className="num">{num(received)}</span> received). Scan or type only the rejects — each is quarantined at once. DTK is not blocked; a unit already handed over is pulled out through the in-house QC flow instead.</div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <div style={{ flex: '1 1 280px' }}><ScanBox inputRef={inp} disabled={!!failCode} onScan={setFailCode} placeholder="Scan a rejected unit's label" /></div>
-          <button style={btnPrimary} disabled={qc || !!busyKey} onClick={() => setQc(true)}>Finish full QC and accept</button>
+          <button style={btnPrimary} disabled={qc || !!busyKey} onClick={() => setQc(true)}>Finish full QC and close</button>
         </div>
       </Panel>
-      <Panel title={`Rejections (${rej.length})`} pad={8}>
-        {!rej.length ? <div style={{ ...text, padding: 12 }}>No rejects yet.</div> : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
-              <thead><tr>{['Carton', 'Batch label', 'Car UPC', 'Phase', 'Reason', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-              <tbody>{rej.map(x => (
-                <tr key={x.id} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={{ ...mono, ...td }}>{x.ctn_no}</td>
-                  <td style={{ ...mono, ...td }}>{x.batch_label || '—'}</td>
-                  <td style={{ ...mono, ...td, color: 'var(--t1)' }}>{x.car_upc}</td>
-                  <td style={td}><ToneBadge tone={x.phase === 'audit' ? 'warn' : 'mute'}>{PHASE[x.phase] || x.phase}</ToneBadge></td>
-                  <td style={{ ...text, ...td }}>{x.reason}</td>
-                  <td style={{ ...td, textAlign: 'right' }}>
-                    <button style={smallBtn} disabled={!!busyKey} onClick={() => undo(x)}>{busyKey === x.car_upc ? '…' : 'Undo'}</button>
-                  </td>
-                </tr>
-              ))}</tbody>
-            </table>
-          </div>
-        )}
-      </Panel>
+      {!rej.length && <Panel pad={12}><div style={text}>No rejects yet.</div></Panel>}
+      {!!rej.length && <div style={{ ...text, fontSize: 12.5 }}>Undo a reject that is not yet disposed of from the list below.</div>}
+      <UndoList rej={rej} busyKey={busyKey} undo={undo} />
       {failCode && <ReasonModal title={`Reject ${failCode}`} onClose={() => { setFailCode(null); refocus(); }}
         onSubmit={async reason => {
           await opPost('auditMark', { csg_no: csgNo, code: failCode, result: 'fail', reason }, session);
           showToast(`${failCode} rejected`, 'success');
           await reload();
         }} />}
-      {qc && <FullQcModal csgNo={csgNo} accepted={received - rej.length} rejected={rej.length} onClose={() => { setQc(false); refocus(); }} reload={reload} />}
+      {qc && <FullQcModal csgNo={csgNo} rejected={rej.length} onClose={() => { setQc(false); refocus(); }} reload={reload} />}
     </div>
   );
 }
 
-// Accepting a held consignment needs the person to say every unit was inspected (the SQL refuses without it).
-function FullQcModal({ csgNo, accepted, rejected, onClose, reload }) {
+// Closing a consignment in full QC needs the person to say every unit was inspected (the SQL refuses without it).
+function FullQcModal({ csgNo, rejected, onClose, reload }) {
   const { session } = useAuth();
   const { showToast } = useToast();
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   return (
-    <Modal open onClose={busy ? undefined : onClose} title={`Accept ${csgNo} after full QC?`} confirmLabel={busy ? 'Working…' : 'Accept consignment'}
+    <Modal open onClose={busy ? undefined : onClose} title={`Close QC on ${csgNo}?`} confirmLabel={busy ? 'Working…' : 'Close QC'}
       loading={busy} error={err} dismissOnBackdrop={false} confirmDisabled={!done} onConfirm={async () => {
         if (busy || !done) return;
         setBusy(true); setErr(null);
         try {
           const r = await opPost('acceptConsignment', { csg_no: csgNo, full_qc_done: true }, session);
-          showToast(`${csgNo} accepted — GRN ${r.grn_no || '—'} · ${r.accepted} accepted, ${r.rejected} rejected`, 'success', 8000);
+          showToast(`${csgNo} QC closed — ${r.dtk} through DTK so far, ${r.rejected} rejected`, 'success', 8000);
           onClose(); await reload();
         } catch (e) { setErr(e.message); } finally { setBusy(false); }
       }}>
-      <div style={{ ...text, marginBottom: 14 }}><strong className="num">{num(accepted)}</strong> accepted units become dispatchable stock; a GRN is booked against the PO.{' '}
-        <strong className="num">{num(rejected)}</strong> unit{rejected === 1 ? ' is' : 's are'} rejected (dispose of them next).</div>
+      <div style={{ ...text, marginBottom: 14 }}>Nothing moves and no GRN is written here — DTK hands the units over and books the GRN.{' '}
+        <strong className="num">{num(rejected)}</strong> unit{rejected === 1 ? ' is' : 's are'} rejected and stay{rejected === 1 ? 's' : ''} quarantined until disposed of.</div>
       <label style={{ ...text, display: 'flex', gap: 10, alignItems: 'center', color: 'var(--t1)', cursor: 'pointer' }}>
         <input type="checkbox" checked={done} onChange={e => setDone(e.target.checked)} style={{ width: 18, height: 18 }} />
         Every received unit has been inspected
@@ -526,11 +519,85 @@ function FullQcModal({ csgNo, accepted, rejected, onClose, reload }) {
 }
 
 function AcceptedStep({ d, reload }) {
+  const r = d.receipt || {};
+  return (
+    <div style={{ display: 'grid', gap: 14 }}>
+      <Panel pad={16}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 14 }}>
+          <Fact k="Checked in"><span className="num">{num(r.received_units)}</span></Fact>
+          <Fact k="Short"><span className="num" style={{ color: Number(r.short_units) ? 'var(--warn-fg)' : undefined }}>{num(r.short_units)}</span></Fact>
+          <Fact k="Rejected"><span className="num" style={{ color: Number(r.rejected_units) ? 'var(--bad-fg)' : undefined }}>{num(r.rejected_units)}</span></Fact>
+          <Fact k="QC closed">{fmtIST(r.decided_at)}</Fact>
+        </div>
+      </Panel>
+      <LateReject d={d} reload={reload} />
+      <Rejects d={d} reload={reload} />
+    </div>
+  );
+}
+
+// After Close QC a unit found faulty BEFORE it reaches DTK is still quarantined here (DTK would hand it over and pay for it).
+function LateReject({ d, reload }) {
+  const { session } = useAuth();
+  const { showToast } = useToast();
+  const inp = useRef(null);
+  const [code, setCode] = useState(null);
+  const csgNo = d.consignment.csg_no;
+  return (
+    <Panel title="Reject a faulty unit" pad={14}>
+      <div style={{ ...text, marginBottom: 10 }}>A unit of this consignment found faulty before DTK: scan it to quarantine it (DTK will refuse it). A unit already through DTK goes through the in-house QC flow.</div>
+      <ScanBox inputRef={inp} disabled={!!code} onScan={setCode} placeholder="Scan the faulty unit's label" />
+      {code && <ReasonModal title={`Reject ${code}`} onClose={() => { setCode(null); setTimeout(() => inp.current?.focus(), 0); }}
+        onSubmit={async reason => {
+          await opPost('auditMark', { csg_no: csgNo, code, result: 'fail', reason }, session);
+          showToast(`${code} quarantined`, 'success');
+          await reload();
+        }} />}
+    </Panel>
+  );
+}
+
+// What DTK has handed over and paid on this consignment (the GRN is written at DTK, one per IST day).
+function DtkPanel({ d }) {
+  const k = d.dtk || {};
+  const rcv = Number(d.receipt?.received_units || 0);
+  return (
+    <Panel title="Through DTK (paid)" pad={14} style={{ marginTop: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 14 }}>
+        <Fact k="Handed over"><span className="num" style={{ color: 'var(--ok-fg)' }}>{num(k.units)}</span><span className="num" style={{ color: 'var(--t3)' }}> / {num(rcv)}</span></Fact>
+        <Fact k="Payable">{k.payable != null ? <span className="num">₹{Number(k.payable).toLocaleString('en-IN')}</span> : '—'}
+          {Number(k.unpriced) > 0 && <span style={{ color: 'var(--warn-fg)' }}> · {k.unpriced} unpriced</span>}</Fact>
+        <Fact k="GRNs">{(k.grns || []).length ? k.grns.map(g => <div key={g.grn_no}><span style={mono}>{g.grn_no}</span>
+          <span style={{ color: 'var(--t3)' }}> · {g.grn_date} · {num(g.units)}</span></div>) : '—'}</Fact>
+        {Number(k.no_po) > 0 && <Fact k="No open PO line"><span className="num" style={{ color: 'var(--warn-fg)' }}>{num(k.no_po)}</span>
+          <div style={{ fontSize: 11.5, color: 'var(--t3)' }}>booked on the GRN with no PO — raise or extend the PO</div></Fact>}
+      </div>
+      <div style={{ ...text, fontSize: 12.5, marginTop: 10 }}>Scan the carton label (or a unit's batch label) at the Scanner's DTK station. The PO line is the vendor's oldest live line for the colour that still has open qty.</div>
+    </Panel>
+  );
+}
+
+function UndoList({ rej, busyKey, undo }) {
+  const open = rej.filter(x => !x.disposition);
+  if (!open.length) return null;
+  return (
+    <Panel title={`Undo a reject (${open.length})`} pad={8}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: 4 }}>
+        {open.map(x => (
+          <button key={x.id} style={smallBtn} disabled={!!busyKey} onClick={() => undo(x)}>
+            {busyKey === x.car_upc ? '…' : <>Undo <span style={mono}>{x.car_upc}</span></>}</button>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+// Rejections and their disposition — any time after the reject (QC no longer waits for an accept).
+function Rejects({ d, reload }) {
   const { session } = useAuth();
   const { showToast } = useToast();
   const [sel, setSel] = useState(() => new Set());
   const [ask, setAsk] = useState(null);
-  const r = d.receipt || {};
   const rej = d.rejections || [];
   const open = rej.filter(x => !x.disposition);
   const toggle = id => setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -553,17 +620,7 @@ function AcceptedStep({ d, reload }) {
   };
 
   return (
-    <div style={{ display: 'grid', gap: 14 }}>
-      <Panel pad={16}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 14 }}>
-          <Fact k="Received"><span className="num">{num(r.received_units)}</span></Fact>
-          <Fact k="Short"><span className="num" style={{ color: Number(r.short_units) ? 'var(--warn-fg)' : undefined }}>{num(r.short_units)}</span></Fact>
-          <Fact k="Accepted"><span className="num" style={{ color: 'var(--ok-fg)' }}>{num(r.accepted_units)}</span></Fact>
-          <Fact k="Rejected"><span className="num" style={{ color: Number(r.rejected_units) ? 'var(--bad-fg)' : undefined }}>{num(r.rejected_units)}</span></Fact>
-          <Fact k="GRN"><span style={mono}>{r.grn_no || '—'}</span></Fact>
-          <Fact k="Decided">{fmtIST(r.decided_at)}</Fact>
-        </div>
-      </Panel>
+    <div style={{ display: 'grid', gap: 14, marginTop: 14 }}>
       <Panel title={`Rejections (${rej.length})`} pad={8} action={!!open.length && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <button style={smallBtn} disabled={!sel.size || !!ask} onClick={() => dispose('rework_lot')}>Rework at LOT</button>
@@ -629,9 +686,9 @@ function Discrepancies({ list }) {
 }
 
 /* Short units (O10): a manifest unit not found at Finish stays "in transit" and is never credited until it is resolved.
-   Found late → before Accept it joins this receipt (and is accepted with the rest); after Accept it is checked here
-   (pass = dispatchable stock + its own GRN, fail = a reject to dispose). Released → it is lost or never left the vendor:
-   the package is undone and the vendor can re-pack the same stickers. */
+   Found late → received here (or simply scanned at DTK, which receives and pays it there); a failed one is quarantined
+   as a reject. Released → it is lost or never left the vendor: the package is undone and the vendor can re-pack the
+   same stickers. (O12 S428: no GRN here any more — DTK books it.) */
 function ShortUnits({ d, csgNo, reload }) {
   const { session } = useAuth();
   const { showToast } = useToast();
@@ -651,8 +708,8 @@ function ShortUnits({ d, csgNo, reload }) {
         <button style={smallBtn} disabled={!picked.length || !!modal} onClick={() => setModal('release')}>Release to vendor</button>
       </div>
     )}>
-      <div style={{ ...text, marginBottom: 8 }}>On the manifest but not found when receiving finished — not credited.
-        {st === 'accepted' ? ' A unit found now is checked here and booked on its own GRN.' : ' A unit found now joins this receipt and the audit sample — check it before accepting.'}
+      <div style={{ ...text, marginBottom: 8 }}>On the manifest but not checked in — not credited. A unit found now: receive it here, or just scan it at DTK
+        (it is received and paid there).{st === 'audit' ? ' Received here, it joins the spot-check sample.' : ''}
         {' '}"found on CSG-…" = it was scanned as extra on another consignment, so it is at LOT: receive it, don't release it.</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {shorts.map(x => (
@@ -665,12 +722,11 @@ function ShortUnits({ d, csgNo, reload }) {
           </label>
         ))}
       </div>
-      {modal === 'receive' && <LateReceiveModal csgNo={csgNo} units={picked} qc={st === 'accepted'} onClose={() => setModal(null)}
+      {modal === 'receive' && <LateReceiveModal csgNo={csgNo} units={picked} onClose={() => setModal(null)}
         onSubmit={async fails => {
           const r = await opPost('resolveShort', { csg_no: csgNo, codes: picked.map(x => x.upc), how: 'receive', fails, expect_status: st }, session);
-          await done(r.already ? `${r.count} already received${r.grn_no ? ` · ${r.grn_no}` : ''}`
-            : r.grn_no ? `${r.count} found late — ${r.passed} accepted, ${r.failed} rejected · ${r.grn_no}`
-            : `${r.count} found late — added to this receipt${r.added_to_sample ? ' and to the audit sample (check them)' : ''}`);
+          await done(r.already ? `${r.count} already received`
+            : `${r.count} found late — ${r.passed} received${r.failed ? `, ${r.failed} rejected` : ''}${r.added_to_sample ? ' (added to the spot check)' : ''}; DTK books the GRN`);
         }} />}
       {modal === 'release' && <ReleaseModal count={picked.length} onClose={() => setModal(null)}
         onSubmit={async reason => {
@@ -681,7 +737,7 @@ function ShortUnits({ d, csgNo, reload }) {
   );
 }
 
-function LateReceiveModal({ csgNo, units, qc, onClose, onSubmit }) {
+function LateReceiveModal({ csgNo, units, onClose, onSubmit }) {
   const [fails, setFails] = useState({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -689,17 +745,15 @@ function LateReceiveModal({ csgNo, units, qc, onClose, onSubmit }) {
   const nFail = Object.keys(fails).length;
   return (
     <Modal open onClose={busy ? undefined : onClose} title={`Found ${units.length} short unit${units.length > 1 ? 's' : ''} on ${csgNo}`}
-      confirmLabel={busy ? 'Working…' : qc ? `Accept ${units.length - nFail} · reject ${nFail}` : 'Add to the receipt'} loading={busy} error={err}
-      dismissOnBackdrop={false} confirmDisabled={qc && bad} onConfirm={async () => {
+      confirmLabel={busy ? 'Working…' : nFail ? `Receive ${units.length - nFail} · reject ${nFail}` : `Receive ${units.length}`} loading={busy} error={err}
+      dismissOnBackdrop={false} confirmDisabled={bad} onConfirm={async () => {
         if (busy) return;
         setBusy(true); setErr(null);
         try { await onSubmit(Object.fromEntries(Object.entries(fails).map(([k, v]) => [k, v.trim()]))); }
         catch (e) { setErr(e.message); } finally { setBusy(false); }
       }}>
-      <div style={{ ...text, marginBottom: 10 }}>{qc
-        ? <>This consignment is already accepted, so check each unit now. Passed units become dispatchable stock and are booked on a new GRN; a failed one becomes a reject to dispose.</>
-        : <>The units join this receipt as received and are added to the audit sample — mark each one pass or fail before accepting.</>}</div>
-      {qc && units.map(x => (
+      <div style={{ ...text, marginBottom: 10 }}>The units are received and go to DTK like the rest (DTK books the GRN). Tick any that are faulty: they are quarantined as rejects.</div>
+      {units.map(x => (
         <div key={x.upc} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
           <span style={{ ...mono, minWidth: 120 }}>{x.upc}</span>
           <label style={{ ...text, display: 'inline-flex', gap: 4, alignItems: 'center' }}>

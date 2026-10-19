@@ -213,9 +213,9 @@ function Dispatch({ c, onClose, onDone }) {
   );
 }
 
-// LOT's receipt of this consignment (O8): what was counted at LOT, what was missing, and — once LOT has accepted it —
-// the units its QC rejected with the reason. Rejects marked "return" come back to this site unpacked: fix them and
-// pack the same stickers again.
+// LOT's receipt of this consignment (O8; O12 S428): what was checked in at LOT's gate, what was missing, how many units
+// have gone through LOT's dispatch intake (DTK — that is what is paid for), and the units LOT's spot check rejected with the
+// reason. Rejects marked "return" come back to this site unpacked: fix them and pack the same stickers again.
 function Receipt({ r, status }) {
   const n = v => (v == null ? '—' : v);
   return (
@@ -223,11 +223,11 @@ function Receipt({ r, status }) {
       <h3 style={{ fontSize: 13, color: 'var(--t2)', textTransform: 'uppercase', letterSpacing: '.06em', margin: '0 0 8px' }}>Received at LOT</h3>
       <div className="row">
         <span>Sent <b className="mono">{n(r.expected)}</b></span>
-        <span>Received <b className="mono">{r.finished_at ? n(r.received) : 'counting…'}</b></span>
+        <span>Checked in <b className="mono">{r.finished_at ? n(r.received) : 'counting…'}</b></span>
         {r.short > 0 && <span className="err" style={{ padding: '2px 8px' }}>Short <b className="mono">{r.short}</b></span>}
-        {status === 'accepted' && <span>Accepted <b className="mono">{n(r.accepted)}</b></span>}
-        {status === 'accepted' && r.rejected > 0 && <span>Rejected <b className="mono">{r.rejected}</b></span>}
-        {(status === 'audit' || status === 'hold') && <span className="dim">quality check in progress</span>}
+        {r.finished_at && <span>Through LOT dispatch (paid) <b className="mono">{n(r.dtk)}</b></span>}
+        {r.rejections?.length > 0 && <span>Rejected <b className="mono">{r.rejections.length}</b></span>}
+        {(status === 'audit' || status === 'hold') && <span className="dim">spot check in progress</span>}
       </div>
       {r.short_units?.length > 0 && (
         <div className="dim" style={{ marginTop: 8, fontSize: 13 }}>Not found at LOT: {r.short_units.map(u => `${u.car_upc} (${u.ctn_no})`).join(', ')}</div>

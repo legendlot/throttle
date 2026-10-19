@@ -1,6 +1,8 @@
 'use client';
-// Pair & Pack: pick the order, scan the CAR sticker, then the REMOTE sticker → one /v/pack. The batch label + EAN label
-// print on this bench's printer; the unit goes into this bench's carton, which closes (and prints its CTN label) at capacity.
+// Pair & Pack: pick an order — or NO ORDER (S428 O12: the car sticker says what is being packed; the bench picks only the
+// packaging, ecom / retail / export) — scan the CAR sticker, then the REMOTE sticker → one /v/pack. The batch label + EAN label
+// print on this bench's printer; the unit goes into this bench's carton (per order, or per SKU × packaging with no order),
+// which closes (and prints its CTN label) at capacity.
 // Two ways to scan, chosen per device: a USB scanner (types the code + Enter) or the phone's camera (Camera.js, the
 // factory Scanner's engine). The camera runs only while an order is picked and no dialog is open.
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -11,6 +13,10 @@ import { BATCH_RE, classify, clean, UPC_RE } from './scan.mjs';
 import CameraView from './Camera.js';
 
 const WO_KEY = 'outpost.wo';
+const PT_KEY = 'outpost.pack_type';           // the packaging used with no order (per device)
+const NONE = 'none';                          // the "no order" choice in the order picker
+const NO_ORDER = { id: NONE, none: true };
+const PACK_TYPES = [['ecom', 'Ecom'], ['retail', 'Retail'], ['export', 'Export']];
 const INPUT_KEY = 'outpost.input';            // 'camera' | 'scanner'; unset = camera on a touch screen, scanner otherwise
 const QR = ['qr_code'];                       // the LOT sticker; the box's EAN barcode is never read here
 // Default input for this device: what it chose before, else camera on a phone (touch screen), else the USB scanner.
@@ -43,9 +49,10 @@ export default function Pack({ me }) {
   const [result, setResult] = useState(null);       // { ok, title, lines[] }
   const [recent, setRecent] = useState([]);
   const [progress, setProgress] = useState({});     // wo id → { packed, target_qty }
-  const [carton, setCarton] = useState(undefined);  // this bench's open carton for the order (undefined = from the list)
+  const [carton, setCarton] = useState(undefined);  // this bench's open carton for the order (undefined = from the list; always so with no order)
   const [modal, setModal] = useState(null);
   const [mode, setMode] = useInputMode();
+  const [packType, setPackType] = useState('ecom');
   const [timing, setTiming] = useState(null);       // camera: { beepMs (read → beep), serverMs (the /v/pack part) } of the last scan
   const input = useRef(null);
   const cam = useRef(null);
@@ -59,19 +66,37 @@ export default function Pack({ me }) {
   const camera = mode === 'camera';
   const putCar = v => { carRef.current = v; setCar(v); };
 
-  useEffect(() => { try { const v = Number(localStorage.getItem(WO_KEY)); if (v) setWoId(v); } catch { /* none */ } }, []);
+  useEffect(() => {
+    try {
+      const w = localStorage.getItem(WO_KEY);
+      if (w === NONE) setWoId(NONE); else if (Number(w)) setWoId(Number(w));
+      const t = localStorage.getItem(PT_KEY);
+      if (PACK_TYPES.some(([k]) => k === t)) setPackType(t);
+    } catch { /* none */ }
+  }, []);
   const list = orders.data || [];
-  const wo = list.find(o => Number(o.id) === Number(woId)) || null;
+  const wo = woId === NONE ? NO_ORDER : list.find(o => Number(o.id) === Number(woId)) || null;
   woRef.current = wo;
+  const ptRef = useRef(packType);
+  ptRef.current = packType;
+  const pickType = t => {
+    setPackType(t); setCarton(undefined); setResult(null);
+    try { localStorage.setItem(PT_KEY, t); } catch { /* none */ }
+    setTimeout(() => input.current?.focus(), 0);
+  };
   const pickWo = id => {
     setWoId(id); putCar(null); setResult(null); setCarton(undefined);
     try { localStorage.setItem(WO_KEY, String(id || '')); } catch { /* none */ }
     setTimeout(() => input.current?.focus(), 0);
   };
 
-  // This device's open carton for the order (pack_unit keys it on the device, not the bench number).
-  const listCarton = wo && (cartons.data || []).find(c => c.status === 'open' && c.mine === true && c.work_orders?.wo_no === wo.wo_no);
-  const open = carton === undefined ? (listCarton ? { ctn_no: listCarton.ctn_no, unit_count: listCarton.unit_count, capacity: listCarton.capacity } : null) : carton;
+  // This device's open carton(s) (pack_unit keys them on the device, not the bench number): one for an order; with no
+  // order, one per SKU at this packaging — the card lists them all, the last one packed into first.
+  const mineOpen = (cartons.data || []).filter(c => c.status === 'open' && c.mine === true && c.unit_count > 0
+    && (wo?.none ? !c.work_orders && c.pack_type === packType : wo && c.work_orders?.wo_no === wo.wo_no))
+    .map(c => ({ ctn_no: c.ctn_no, sku: c.sku, unit_count: c.unit_count, capacity: c.capacity }));
+  const openList = carton === undefined ? mineOpen : carton ? [carton] : [];
+  const [closing, setClosing] = useState(null);
 
   useScanCapture(input, !camera);
 
@@ -111,7 +136,8 @@ export default function Pack({ me }) {
     if (v === car) { fail('Same sticker scanned twice', 'Scan the REMOTE sticker now.'); return; }
     busyRef.current = true; setBusy(true);
     const sent = performance.now();
-    const r = await act('pack', { work_order_id: Number(wo.id), car_upc: car, remote_upc: v });
+    const r = await act('pack', wo.none ? { work_order_id: null, pack_type: ptRef.current, car_upc: car, remote_upc: v }
+                                        : { work_order_id: Number(wo.id), car_upc: car, remote_upc: v });
     busyRef.current = false; setBusy(false);
     putCar(null);
     if (!r.ok) { fail('Not packed', say(r)); return; }
@@ -119,10 +145,12 @@ export default function Pack({ me }) {
     lastPacked.current = new Set([d.car_upc, d.remote_upc]);
     beep(true); cam.current?.flash(true);
     if (at) setTiming({ beepMs: performance.now() - at, serverMs: performance.now() - sent });
-    setProgress(p => ({ ...p, [wo.id]: { packed: d.work_order.packed, target_qty: d.work_order.target_qty } }));
-    setCarton(d.carton.closed ? null : { ctn_no: d.carton.ctn_no, unit_count: d.carton.unit_count, capacity: d.carton.capacity });
+    if (d.work_order) setProgress(p => ({ ...p, [wo.id]: { packed: d.work_order.packed, target_qty: d.work_order.target_qty } }));
+    if (wo.none) cartons.reload();   // several open cartons (one per SKU): re-read rather than guess which one changed
+    setCarton(wo.none ? undefined
+      : d.carton.closed ? null : { ctn_no: d.carton.ctn_no, sku: d.sku, unit_count: d.carton.unit_count, capacity: d.carton.capacity });
     setResult({ ok: true, title: d.replayed ? `Already packed · ${d.batch_label}` : `Packed · ${d.batch_label}`,
-      lines: [`Car ${d.car_upc} + remote ${d.remote_upc}`,
+      lines: [`${d.sku}${d.color ? ` · ${d.color}` : ''} · ${d.pack_type || ''} — car ${d.car_upc} + remote ${d.remote_upc}`,
         d.carton.closed ? `Carton ${d.carton.ctn_no} is FULL (${d.carton.unit_count}) — its CTN label is printing. Seal it.`
           : `Carton ${d.carton.ctn_no}: ${d.carton.unit_count} of ${d.carton.capacity}`] });
     setRecent(x => [{ at: new Date().toISOString(), label: d.batch_label, car: d.car_upc, remote: d.remote_upc, ctn: d.carton.ctn_no }, ...x].slice(0, 12));
@@ -154,13 +182,24 @@ export default function Pack({ me }) {
       <div>
         <div className="card">
           <Field label="Order on this bench">
-            <select className="in" value={wo ? wo.id : ''} disabled={busy} onChange={e => pickWo(Number(e.target.value) || null)}>
-              <option value="">— pick the order —</option>
+            <select className="in" value={wo ? wo.id : ''} disabled={busy}
+              onChange={e => pickWo(e.target.value === NONE ? NONE : Number(e.target.value) || null)}>
+              <option value="">— pick —</option>
+              <option value={NONE}>No order — pack for LOT (the sticker says what it is)</option>
               {list.map(o => <option key={o.id} value={o.id}>{o.wo_no} · {o.sku} · {o.vendor_products?.product} · {o.channel} · target {o.target_qty}</option>)}
             </select>
           </Field>
+          {wo?.none && (
+            <Field label="Packaging">
+              <div className="row">
+                {PACK_TYPES.map(([k, l]) => (
+                  <button key={k} type="button" className={`btn sm ${packType === k ? 'primary' : ''}`} disabled={busy}
+                    onClick={() => pickType(k)}>{l}</button>
+                ))}
+              </div>
+            </Field>
+          )}
           {orders.error && <div className="err">{orders.error}</div>}
-          {!orders.loading && !list.length && !orders.error && <div className="muted" style={{ marginTop: 10 }}>No open orders. LOT opens orders in Depot.</div>}
           {prog && <div className="muted" style={{ marginTop: 10 }}>Packed on this order: <b className="mono">{prog.packed}</b> of {prog.target_qty}</div>}
         </div>
 
@@ -204,14 +243,14 @@ export default function Pack({ me }) {
 
       <div>
         <div className="card">
-          <h3>This bench’s carton</h3>
-          {open && open.unit_count > 0 ? (
-            <>
-              <div className="spread"><span className="mono" style={{ fontSize: 20 }}>{open.ctn_no}</span><span className="mono">{open.unit_count} / {open.capacity}</span></div>
-              <div className="bar" style={{ marginTop: 8 }}><i style={{ width: `${Math.min(100, (100 * open.unit_count) / open.capacity)}%` }} /></div>
-              <button className="btn sm" style={{ marginTop: 12 }} onClick={() => setModal('close')}>Close carton short</button>
-            </>
-          ) : <div className="muted">{wo ? 'The next pack opens a new carton.' : '—'}</div>}
+          <h3>{wo?.none ? `This bench’s ${packType} cartons` : 'This bench’s carton'}</h3>
+          {openList.length ? openList.map(o => (
+            <div key={o.ctn_no} style={{ marginBottom: 14 }}>
+              <div className="spread"><span className="mono" style={{ fontSize: 20 }}>{o.ctn_no}{wo?.none && o.sku ? ` · ${o.sku}` : ''}</span><span className="mono">{o.unit_count} / {o.capacity}</span></div>
+              <div className="bar" style={{ marginTop: 8 }}><i style={{ width: `${Math.min(100, (100 * o.unit_count) / o.capacity)}%` }} /></div>
+              <button className="btn sm" style={{ marginTop: 12 }} onClick={() => { setClosing(o); setModal('close'); }}>Close carton short</button>
+            </div>
+          )) : <div className="muted">{wo ? 'The next pack opens a new carton.' : '—'}</div>}
         </div>
         <div className="card">
           <h3>Fix a mistake</h3>
@@ -228,14 +267,14 @@ export default function Pack({ me }) {
         </div>
       </div>
 
-      {modal === 'close' && open && (
-        <Confirm title={`Close ${open.ctn_no}?`} yes="Close carton" onClose={() => setModal(null)}
-          body={`It has ${open.unit_count} of ${open.capacity} units. Its CTN label prints now and the next pack opens a new carton.`}
+      {modal === 'close' && closing && (
+        <Confirm title={`Close ${closing.ctn_no}?`} yes="Close carton" onClose={() => { setModal(null); setClosing(null); }}
+          body={`It has ${closing.unit_count} of ${closing.capacity} units. Its CTN label prints now and the next pack opens a new carton.`}
           onYes={async () => {
-            const r = await act('close_carton', { ctn_no: open.ctn_no });
+            const r = await act('close_carton', { ctn_no: closing.ctn_no });
             if (!r.ok) return say(r);
-            setModal(null); setCarton(null); cartons.reload();
-            showToast(`${open.ctn_no} closed with ${r.data.unit_count} units — CTN label printing`, 'success');
+            setModal(null); setCarton(undefined); setClosing(null); cartons.reload();
+            showToast(`${closing.ctn_no} closed with ${r.data.unit_count} units — CTN label printing`, 'success');
             return null;
           }} />
       )}

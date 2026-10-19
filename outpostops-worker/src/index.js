@@ -17,6 +17,7 @@ import {
   mintToken, nextOpCode, nonceOk, normaliseJwk, PIN_DIGITS, sessionLive, sha256Hex, STEPUP_PURPOSES,
   STEPUP_SECONDS, tokenHash, verifyPin, verifySignature, ipBucket,
 } from './auth.js';
+import { OPEN_CARTON_RACE_RE, packRequest } from './pack.js';
 
 const SUPABASE_URL = 'https://jkxcnjabmrkteanzoofj.supabase.co';
 const SUPABASE_PUBLISHABLE = 'sb_publishable_1Dd-r3h9Mou2Wqgn6t24Dw_lmWdBtLh'; // auth verify only
@@ -52,7 +53,7 @@ const sqlMsg = r => {
   return m.startsWith('outpost: ') ? m.slice(9) : null;
 };
 // A refused outpost.* RPC → the caller's response. Only a genuine concurrency loser is a 409 the app retries with the
-// SAME idempotency key: two first-packs racing to open a bench's carton (that unique index ONLY — any other unique
+// SAME idempotency key: two first-packs racing to open a bench's carton (those two unique indexes ONLY — any other unique
 // violation would fail the same way every time), a deadlock / serialization failure, or a lock wait that timed out
 // (authenticator lock_timeout 8 s). A consignment whose cartons changed between dispatch's read and its locks raises
 // 40001 too. Anything unexpected stays generic.
@@ -60,7 +61,7 @@ const FORBIDDEN_MSGS = new Set(['paused', 'vendor not active', 'operator not act
   'not an active bench of this vendor', 'supervisor approval required', 'not an active print agent of this vendor']);
 const rpcFail = r => {
   const code = r?.data?.code;
-  if ((code === '23505' && String(r?.data?.message || '').includes('cartons_one_open_per_bench_order'))
+  if ((code === '23505' && OPEN_CARTON_RACE_RE.test(String(r?.data?.message || '')))
       || code === '40P01' || code === '40001' || code === '55P03') return fail('try_again', 409);
   const m = sqlMsg(r);
   if (!m) return fail('outpost_unavailable', 503);
@@ -338,13 +339,13 @@ async function vendorRoute(request, url, rawBody, ip) {
   // device, and a retry after an operator change must replay the committed pack, not be refused.
   if (route === 'pack' && request.method === 'POST') {
     if (ctx.deviceKind !== 'bench') return fail('not_a_bench', 403);
-    const woId = wholeNumber(body.work_order_id);
-    if (!(woId > 0)) return fail('work_order_id required');
-    if (typeof body.car_upc !== 'string' || typeof body.remote_upc !== 'string') return fail('car_upc and remote_upc required');
+    // O12 (S428): the order is optional — with none, the car sticker names the SKU and the bench sends its
+    // packaging type (ecom / retail / export); the carton is then per bench × SKU × packaging.
+    const pr = packRequest(body);
+    if (pr.error) return fail(pr.error);
     const r = await rpc('pack_unit', { p_vendor_id: ctx.vendorId, p_device_id: ctx.deviceId, p_operator_id: ctx.operator.id,
-      p_idem_key: idemKey(body), p_request_hash: await sha256Hex(JSON.stringify({ work_order_id: woId,
-        car_upc: body.car_upc, remote_upc: body.remote_upc })),
-      p_work_order_id: woId, p_car_upc: body.car_upc, p_remote_upc: body.remote_upc });
+      p_idem_key: idemKey(body), p_request_hash: await sha256Hex(JSON.stringify(pr.hashed)),
+      p_work_order_id: pr.woId, p_car_upc: body.car_upc, p_remote_upc: body.remote_upc, p_pack_type: pr.packType });
     return r.ok ? ok(r.data) : rpcFail(r);
   }
 
@@ -370,9 +371,10 @@ async function vendorRoute(request, url, rawBody, ip) {
 
   // Cartons still at the vendor (open = filling at a bench, closed = ready for a consignment).
   if (route === 'cartons' && request.method === 'GET') {
-    // Empty ones (emptied by unpack) are hidden: an open one is refilled by the bench's next pack for that order.
+    // Empty ones (emptied by unpack) are hidden: an open one is refilled by the bench's next pack for that order
+    // (or, with no order, for that SKU × packaging).
     const r = await op(`/rest/v1/cartons?vendor_id=eq.${ctx.vendorId}&status=in.(open,closed)&unit_count=gt.0` +
-      `&select=id,ctn_no,sku,channel,capacity,unit_count,status,manifest_version,bench_no,opened_at,closed_at,` +
+      `&select=id,ctn_no,sku,channel,pack_type,capacity,unit_count,status,manifest_version,bench_no,opened_at,closed_at,` +
       `work_orders(wo_no),consignment:consignments(csg_no,status),device_id&order=id.desc&limit=200`);
     return r.ok ? ok(r.data.map(withMine(ctx))) : fail('outpost_unavailable', 503);
   }
@@ -381,7 +383,7 @@ async function vendorRoute(request, url, rawBody, ip) {
     const ctn = String(url.searchParams.get('ctn_no') || '').trim().toUpperCase();
     if (!/^CTN-\d{7}$/.test(ctn)) return fail('ctn_no required');
     const c = await op(`/rest/v1/cartons?vendor_id=eq.${ctx.vendorId}&ctn_no=eq.${ctn}` +
-      `&select=id,ctn_no,sku,channel,capacity,unit_count,status,manifest_version,bench_no,opened_at,closed_at,` +
+      `&select=id,ctn_no,sku,channel,pack_type,capacity,unit_count,status,manifest_version,bench_no,opened_at,closed_at,` +
       `work_orders(wo_no),carton_units(car_upc,remote_upc,batch_label,added_at),device_id`);
     if (!c.ok) return fail('outpost_unavailable', 503);
     return c.data[0] ? ok(withMine(ctx)(c.data[0])) : fail('not_found', 404);
