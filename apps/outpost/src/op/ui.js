@@ -2,6 +2,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { get, post, say } from './api.js';
 
+import { AUTO_ENTER_MS, wholeCodeAtEnd } from './scan.mjs';
+
 export { UPC_RE, CTN_RE, BATCH_RE, clean } from './scan.mjs';
 
 export const fmtTime = t => (t ? new Date(t).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short',
@@ -51,6 +53,19 @@ export function useScanCapture(ref, on = true, ownLayer = 0) {
     window.addEventListener('keydown', k, true);
     return () => window.removeEventListener('keydown', k, true);
   }, [ref, on, ownLayer]);
+}
+
+// A scanner with no Enter suffix just stops typing: once `value` ends in a whole code and the keys have stopped,
+// `submit(code)` as Enter would have. Every submit clears the field, so an Enter that does arrive cancels this.
+export function useAutoEnter(value, submit, on = true) {
+  const fn = useRef(submit);
+  fn.current = submit;
+  useEffect(() => {
+    const code = on ? wholeCodeAtEnd(value) : null;
+    if (!code) return undefined;
+    const t = setTimeout(() => fn.current(code), AUTO_ENTER_MS);
+    return () => clearTimeout(t);
+  }, [value, on]);
 }
 
 // The factory Scanner's tones (02_scanner playSuccessBeep / playErrBeep, at its default volume): done = di-di-DI, square

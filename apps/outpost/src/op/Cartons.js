@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useToast } from '@throttle/ui/Toast.js';
 import { act, say } from './api.js';
-import { Badge, clean, Confirm, CTN_RE, fmtTime, Modal, useLoad } from './ui.js';
+import { Badge, clean, Confirm, CTN_RE, fmtTime, Modal, useAutoEnter, useLoad } from './ui.js';
 
 const FILTERS = [
   ['all', 'All', () => true],
@@ -26,8 +26,10 @@ export default function Cartons({ me }) {
   const lookup = e => {
     e.preventDefault();
     const v = clean(q);
-    if (CTN_RE.test(v)) setOpen(v);
+    if (CTN_RE.test(v)) { setOpen(v); setQ(''); }
   };
+  // A scanner with no Enter: a whole CTN in the box opens it; the box is cleared so closing the carton doesn't reopen it.
+  useAutoEnter(q, v => { const c = clean(v); if (CTN_RE.test(c)) { setOpen(c); setQ(''); } });
 
   return (
     <div className="card">

@@ -8,8 +8,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '@throttle/ui/Toast.js';
 import { act, say } from './api.js';
-import { beep, Confirm, Field, fmtTime, StepUp, useLoad, useScanCapture } from './ui.js';
-import { BATCH_RE, classify, clean, UPC_RE } from './scan.mjs';
+import { beep, Confirm, Field, fmtTime, StepUp, useAutoEnter, useLoad, useScanCapture } from './ui.js';
+import { AUTO_ENTER_MS, BATCH_RE, classify, clean, UPC_RE, wholeCodeAtEnd } from './scan.mjs';
 import CameraView from './Camera.js';
 
 const WO_KEY = 'outpost.wo';
@@ -87,7 +87,9 @@ export default function Pack({ me }) {
   const pickWo = id => {
     setWoId(id); putCar(null); setResult(null); setCarton(undefined);
     try { localStorage.setItem(WO_KEY, String(id || '')); } catch { /* none */ }
-    setTimeout(() => input.current?.focus(), 0);
+    // Camera mode has no scan box: drop focus off the order picker, or a USB scanner's keys go into its type-to-search
+    // (changing the order) and the key listener below, which skips form fields, never sees them.
+    setTimeout(() => { if (input.current) input.current.focus(); else document.activeElement?.blur?.(); }, 0);
   };
 
   // This device's open carton(s) (pack_unit keys them on the device, not the bench number): one for an order; with no
@@ -100,20 +102,23 @@ export default function Pack({ me }) {
 
   useScanCapture(input, !camera);
 
-  // A USB scanner plugged into a camera-mode device still works: an Enter-ended burst of keys is a scan.
+  // A USB scanner plugged into a camera-mode device still works: an Enter-ended burst of keys is a scan, and so is a
+  // burst that stops on a whole code (a scanner with no Enter suffix).
   useEffect(() => {
     if (!camera || modal) return undefined;
-    let buf = '', last = 0;
+    let buf = '', last = 0, t = 0;
+    const flush = () => { const v = wholeCodeAtEnd(buf); buf = ''; onScanRef.current(v); };
     const k = e => {
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) return;
       const now = performance.now();
       if (now - last > 100) buf = '';
       last = now;
+      clearTimeout(t);
       if (e.key === 'Enter') { if (buf.length >= 6) { e.preventDefault(); onScanRef.current(buf); } buf = ''; return; }
-      if (e.key.length === 1) buf += e.key;
+      if (e.key.length === 1) { buf += e.key; if (wholeCodeAtEnd(buf)) t = setTimeout(flush, AUTO_ENTER_MS); }
     };
     window.addEventListener('keydown', k, true);
-    return () => window.removeEventListener('keydown', k, true);
+    return () => { clearTimeout(t); window.removeEventListener('keydown', k, true); };
   }, [camera, modal]);
 
   const fail = useCallback((title, why) => { beep(false); cam.current?.flash(false); setResult({ ok: false, title, lines: why ? [why] : [] }); }, []);
@@ -175,6 +180,7 @@ export default function Pack({ me }) {
   };
   const onScanRef = useRef(onScan);
   onScanRef.current = onScan;
+  useAutoEnter(scan, v => onScanRef.current(v), mode === 'scanner');
 
   const prog = wo && progress[wo.id];
   return (
@@ -218,7 +224,7 @@ export default function Pack({ me }) {
               <input ref={input} className="in" value={scan} autoFocus disabled={!wo} placeholder="scan…" autoComplete="off" spellCheck={false}
                 onChange={e => setScan(e.target.value)}
                 onKeyDown={e => {
-                  if (e.key === 'Enter') { e.preventDefault(); onScan(scan); }
+                  if (e.key === 'Enter' || (e.key === 'Tab' && scan)) { e.preventDefault(); onScan(scan); }
                   if (e.key === 'Escape') { putCar(null); setScan(''); setResult(null); }
                 }} />
             )}

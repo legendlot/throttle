@@ -6,7 +6,7 @@ import { useToast } from '@throttle/ui/Toast.js';
 import { printWindow } from '@throttle/ui/printWindow.js';
 import { act, get, say } from './api.js';
 import { buildPackingNote } from './packingNote.mjs';
-import { Badge, clean, Confirm, CTN_RE, Field, fmtTime, Modal, todayIST, useLoad, useScanCapture } from './ui.js';
+import { Badge, clean, Confirm, CTN_RE, Field, fmtTime, Modal, todayIST, useAutoEnter, useLoad, useScanCapture } from './ui.js';
 
 export async function printNote(csgNo) {
   const r = await get(`/v/consignment?csg_no=${encodeURIComponent(csgNo)}`);
@@ -105,6 +105,7 @@ function Detail({ csg, onClose }) {
     await run('consignment_add', { csg_no: csg, ctn_no: v }, `${v} added`);
     setTimeout(() => scanRef.current?.focus(), 0);
   };
+  useAutoEnter(scan, add, draft);
   const addAll = async () => {
     for (const x of ready) {
       // One at a time, each its own action: a refusal names the carton and stops there.
