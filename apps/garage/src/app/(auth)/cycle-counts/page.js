@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
 import { Modal, Spinner, useToast, EmptyState, buildCycleCountSheetHtml, printWindow } from '@throttle/ui';
@@ -55,6 +55,7 @@ export default function CycleCountsPage() {
   const [activeCount, setActiveCount] = useState(null);  // count_no for detail
   const [detail,      setDetail]      = useState(null);  // { header, lines }
   const [detailLoading, setDetailLoading] = useState(false);
+  const detailSeq = useRef(0);  // bumped by every full open, so an in-flight silent refresh can't land over it
   const [newOpen, setNewOpen] = useState(false);
   const [startingScan, setStartingScan] = useState(false);
 
@@ -88,6 +89,7 @@ export default function CycleCountsPage() {
 
   async function openDetail(count_no, opts = {}) {
     setActiveCount(count_no);
+    detailSeq.current += 1;
     setDetailLoading(true);
     setDetail(null);
     try {
@@ -95,6 +97,20 @@ export default function CycleCountsPage() {
       setDetail(r?.ok ? r.data : null);
     } catch (e) { toast(e.message || 'Could not open count', 'error'); setActiveCount(null); }
     finally { setDetailLoading(false); }
+  }
+  // Silent re-read of an open count's lines for the detail poll: no loading state and no unmount,
+  // so blind-entry drafts survive. Dropped if a full open/reload started meanwhile, or the count changed.
+  // One refresh at a time: on a link slower than the 10 s tick, an older response must not land last.
+  const refreshing = useRef(false);
+  async function refreshDetail(count_no) {
+    if (refreshing.current) return;
+    refreshing.current = true;
+    const seq = detailSeq.current;
+    try {
+      const r = await workerFetch('getCycleCount', { data: { count_no, blind: true } }, session).catch(() => null);
+      if (!r?.ok || seq !== detailSeq.current) return;
+      setDetail(prev => (prev && prev.header.count_no === count_no ? r.data : prev));
+    } finally { refreshing.current = false; }
   }
 
   if (activeCount && detail) {
@@ -105,6 +121,7 @@ export default function CycleCountsPage() {
       toast={toast}
       onBack={() => { setActiveCount(null); setDetail(null); loadList(); }}
       onReload={() => openDetail(activeCount, { blind: detail.header.status === 'in_progress' })}
+      onRefresh={refreshDetail}
       onOpen={no => { loadList(); openDetail(no, { blind: true }); }}
       canRecord={canRecord}
     />;
@@ -382,7 +399,7 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Count detail view — blind entry UX
 // ─────────────────────────────────────────────────────────────────────────────
-function CountDetailView({ header, lines, session, toast, onBack, onReload, onOpen, canRecord }) {
+function CountDetailView({ header, lines, session, toast, onBack, onReload, onRefresh, onOpen, canRecord }) {
   const [entries, setEntries] = useState({}); // part_code → counted_qty draft
   const [savingPart, setSavingPart] = useState(null);
   const [recountSel, setRecountSel] = useState(new Set());
@@ -397,12 +414,15 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onOp
 
   // Bags scanned on the floor, polled while the count is open so the person at the
   // desk watches it fill in without refreshing. Keyed by part_code → { bags, qty }.
+  // Each tick also re-reads the lines (onRefresh), so the Pending / Counted tiles and the
+  // "(N unscanned)" label follow the floor instead of staying as of page load.
   const [scanByPart, setScanByPart] = useState({});
   const [totalScans, setTotalScans] = useState(0);
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
-    const pull = async () => {
+    const pull = async (withLines) => {
+      if (withLines) onRefresh?.(header.count_no);
       const r = await workerFetch('getCycleCountScans', { data: { count_no: header.count_no } }, session).catch(() => null);
       if (cancelled || !r?.ok) return;
       const map = {};
@@ -413,7 +433,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onOp
     pull();
     // Only poll while the count is still being scanned — a finished count is static.
     if (!isInProgress) return () => { cancelled = true; };
-    const iv = setInterval(pull, 10000);
+    const iv = setInterval(() => pull(true), 10000);
     return () => { cancelled = true; clearInterval(iv); };
   }, [session, header.count_no, isInProgress, lines.length]);
 
@@ -439,6 +459,14 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onOp
   // counted lines (requestRecount also refuses anything else, with a 409), so it sends just those.
   const isRemovable = l => !['reconciled', 'cancelled'].includes(l.status) && l.adjustment_id == null;
   const selectedLines = lines.filter(l => recountSel.has(l.id));
+  // The poll swaps in fresh lines; drop any ticked line that is no longer removable (another
+  // user removed, completed or reconciled it), since its checkbox is gone and it can't be unticked.
+  useEffect(() => {
+    setRecountSel(s => {
+      const keep = new Set([...s].filter(id => lines.some(l => l.id === id && isRemovable(l))));
+      return keep.size === s.size ? s : keep;
+    });
+  }, [lines]);
   const recountIds = selectedLines.filter(l => l.status === 'counted').map(l => l.id);
 
   async function flagRecount() {
@@ -487,14 +515,14 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onOp
   // A product count lists every part of the product up front, so a part with no bag on the
   // shelf stays pending and the worker refuses to complete. Offer to take those parts off
   // (no stock change for them — same as Remove) and complete in one go. `only_pending` makes
-  // the worker skip any of them scanned since this page loaded (the scan poll does not refresh
-  // `lines`), so a just-scanned part is completed, not thrown away.
+  // the worker skip any of them scanned since the last poll (lines refresh every 10 s), so a
+  // just-scanned part is completed, not thrown away.
   async function complete() {
     const pendingLines = lines.filter(l => l.status === 'pending_count');
     const n = pendingLines.length;
     if (n) {
       const isRecount = header.count_type === 'recount' && header.recount_of;
-      const msg = `${n} part${n === 1 ? ' has' : 's have'} no bag scanned and no quantity entered (as of when this page loaded):\n\n${pendingLines.map(l => l.part_code).join(', ')}\n\n`
+      const msg = `${n} part${n === 1 ? ' has' : 's have'} no bag scanned and no quantity entered (as of the last refresh, up to 10 s ago):\n\n${pendingLines.map(l => l.part_code).join(', ')}\n\n`
         + `Complete ${header.count_no} anyway? ${n === 1 ? 'This part is' : 'These parts are'} taken off the count and NOT adjusted — no stock change is proposed for them`
         + `${isRecount ? `, and ${n === 1 ? 'its' : 'their'} recount flag goes back to ${header.recount_of}` : ''}. Any part scanned since is counted as normal. `
         + `Every other counted part gets a proposed adjustment for any variance.\n\nTo count them instead, press Cancel and scan their bags (or enter a quantity).`;
