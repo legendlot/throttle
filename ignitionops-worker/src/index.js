@@ -1782,6 +1782,14 @@ const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'S
 export function istToday(now = Date.now()) {
   return new Date(now + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 }
+// A deal's IST day for report attribution: post_date (already an IST calendar date) when posted,
+// else the IST day of created_at. created_at is UTC, so a bare .slice(0, 10) put a deal created
+// 00:00–05:29 IST on the previous day — and on the 1st, the previous month.
+export function dealIstDate(e) {
+  if (e.post_date) return String(e.post_date).slice(0, 10);
+  const t = Date.parse(e.created_at || '');
+  return Number.isFinite(t) ? istToday(t) : '';
+}
 const isRealIsoDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Date.parse(d))
   && new Date(d).toISOString().slice(0, 10) === d;
 const addDaysIso = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
@@ -2260,7 +2268,7 @@ async function getReports(url, auth, env) {
   const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.commission_amount));
   const roasOf = e => (e.actual_roas != null ? num(e.actual_roas) : (e.roas_on_ad_spend != null ? num(e.roas_on_ad_spend) : null));
 
-  // Spend / orders / views by month (post_date if posted, else created_at).
+  // Spend / orders / views by month (post_date if posted, else created_at's IST day).
   const byMonthMap = {};
   const byProductMap = {};
   let totalSpend = 0, totalOrders = 0, totalViews = 0, totalPaid = 0, totalConv = 0;
@@ -2295,7 +2303,7 @@ async function getReports(url, auth, env) {
       ugcAgg.budget_consumed += spend; ugcAgg.orders += orders; ugcAgg.conversions_value += conv;
     }
 
-    const month = (e.post_date || e.created_at || '').slice(0, 7);
+    const month = dealIstDate(e).slice(0, 7);
     if (month) {
       const m = byMonthMap[month] || (byMonthMap[month] = { month, spend: 0, orders: 0, views: 0, paid_views: 0, deals: 0 });
       m.spend += spend; m.orders += orders; m.deals += 1;   // views: per take, filled in below
@@ -4553,7 +4561,8 @@ async function assignEngagementToCampaign(body, auth, env) {
 
 // ── Monthly targets & budgets (Slice B) ──────────────────────────────────────
 // Reann sets a per-month views target + ₹ budget; we track actuals against them.
-// Actuals match the Reports by_month logic: month = post_date||created_at, spend=spendOf.
+// Actuals: month = post_date only (an unposted deal's spend is `unallocated`, S273), spend=spendOf.
+// ⚠️ Reports by_month still falls back to created_at's IST month, so the two differ by unallocated.
 // ── Reann #8 — month drill-down: the itemised rows BEHIND a month's totals ───────────────────
 // getMonthlyTargets returns aggregates only; this returns the individual spends and the individual
 // posts that compose them, so a month tile can expand into "which influencer, which deal, how much".
@@ -4707,7 +4716,7 @@ async function getCampaignSummary(url, auth, env) {
 
   const g = {};
   for (const e of (r.data || [])) {
-    const d = e.post_date || (e.created_at || '').slice(0, 10);
+    const d = dealIstDate(e);
     if (from && d && d < from) continue;
     if (to && d && d > to) continue;
     const key = e.campaign_tag || '';

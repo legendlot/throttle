@@ -49,3 +49,12 @@ test('paid views come off the month\'s views and are reported next to them', () 
   assert.equal(byMonth['2026-10'], 0, 'organic never goes below 0');
   assert.equal(rows.length, 2, 'an all-paid take is still a row (keyed on total views)');
 });
+
+test('dealIstDate: posted deal keeps post_date; unposted deal uses the IST day of created_at', async () => {
+  const { dealIstDate } = await import('../src/index.js');
+  assert.equal(dealIstDate({ post_date: '2026-09-28', created_at: '2026-08-31T20:00:00+00:00' }), '2026-09-28');
+  // 01:00 IST on 1 Oct = 19:30 UTC on 30 Sep → October, not September
+  assert.equal(dealIstDate({ post_date: null, created_at: '2026-09-30T19:30:00+00:00' }), '2026-10-01');
+  assert.equal(dealIstDate({ post_date: null, created_at: '2026-09-30T18:29:59+00:00' }), '2026-09-30');
+  assert.equal(dealIstDate({ post_date: null, created_at: null }), '');
+});
