@@ -18,6 +18,7 @@ import {
   STEPUP_SECONDS, tokenHash, verifyPin, verifySignature, ipBucket,
 } from './auth.js';
 import { OPEN_CARTON_RACE_RE, packRequest } from './pack.js';
+import { isoDay, productionRequest } from './production.js';
 
 const SUPABASE_URL = 'https://jkxcnjabmrkteanzoofj.supabase.co';
 const SUPABASE_PUBLISHABLE = 'sb_publishable_1Dd-r3h9Mou2Wqgn6t24Dw_lmWdBtLh'; // auth verify only
@@ -720,13 +721,6 @@ async function isOffboarded(vendorId) {
   return !r.ok || !!(r.data[0] && r.data[0].offboarded_at && r.data[0].killed);
 }
 const OFFBOARDED = 'this vendor is offboarded — release its kill switch first to work with it again';
-// YYYY-MM-DD that is a real calendar day, else null.
-const isoDay = v => {
-  const s = String(v || '');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
-  const d = new Date(`${s}T00:00:00Z`);
-  return Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s ? null : s;
-};
 
 async function ownerRoute(request, url, rawBody) {
   const me = await verifyOwner(request.headers.get('Authorization'));
@@ -1088,6 +1082,14 @@ async function ownerRoute(request, url, rawBody) {
       const day = isoDay;
       const r = await rpc('owner_summary', { p_vendor_id: vendorId, p_from: day(P.from), p_to: day(P.to) });
       if (!r.ok) { const m = sqlMsg(r); return fail(m || 'read_failed', m ? 404 : 502); }
+      return ok(r.data);
+    }
+    // ── Production (O13): output and pace, one vendor or all, any range or all time. Read-only. ──
+    case 'GET getProduction': {
+      const q = productionRequest(P);
+      if (q.error) return fail(q.error);
+      const r = await rpc('owner_production', { p_vendor_id: q.vendorId, p_from: q.from, p_to: q.to });
+      if (!r.ok) { const m = sqlMsg(r); return fail(m || 'read_failed', m ? 400 : 502); }
       return ok(r.data);
     }
     case 'GET getEvents': {

@@ -124,6 +124,8 @@ function Overview({ s }) {
   const P = s.print || {};
   return (
     <div style={{ display: 'grid', gap: 14 }}>
+      <div style={{ ...text, fontSize: 12 }}>All time: where every unit this vendor has ever packed is now. Output by hour or day, pace and stations are on
+        Outpost › Production.</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10 }}>
         {STAGES.map(([k, name, sub, tone]) => <KpiTile key={k} label={name} value={num(count(k))} sub={sub} tone={count(k) ? tone : undefined} />)}
       </div>

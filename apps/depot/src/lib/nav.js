@@ -2,7 +2,7 @@ import {
   Gauge, Send, Network, FileText, PackageCheck,
   Undo2, RefreshCw, ArrowLeftRight, BarChart3,
   LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag, ClipboardCheck, BookOpen, Inbox, Barcode, Package,
-  Factory, Store, PackageOpen, Activity,
+  Factory, Store, PackageOpen, Activity, TrendingUp,
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════
@@ -60,6 +60,7 @@ export const NAV_PRIMARY = [
       { id: 'outpost-vendors', label: 'Vendors & Devices', route: '/outpost-vendors', icon: Store },
       { id: 'outpost-orders',  label: 'Work Orders',       route: '/outpost-orders',  icon: ClipboardList },
       { id: 'outpost-receiving', label: 'Receiving',       route: '/outpost-receiving', icon: PackageOpen },
+      { id: 'outpost-production', label: 'Production',    route: '/outpost-production', icon: TrendingUp },
       { id: 'outpost-monitor', label: 'Monitor',           route: '/outpost-monitor', icon: Activity },
     ],
   },
