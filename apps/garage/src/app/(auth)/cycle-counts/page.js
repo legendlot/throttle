@@ -100,17 +100,22 @@ export default function CycleCountsPage() {
   }
   // Silent re-read of an open count's lines for the detail poll: no loading state and no unmount,
   // so blind-entry drafts survive. Dropped if a full open/reload started meanwhile, or the count changed.
-  // One refresh at a time: on a link slower than the 10 s tick, an older response must not land last.
-  const refreshing = useRef(false);
+  // One refresh in flight at a time, and never an older reply over a newer one. workerFetch has no
+  // timeout, so a refresh stuck for over 8 s stops blocking the next tick; a reply still lands if
+  // it is newer than the last one that landed — so a link slower than the tick still updates.
+  const refreshing = useRef({ token: 0, landed: 0, startedAt: 0, busy: false });
   async function refreshDetail(count_no) {
-    if (refreshing.current) return;
-    refreshing.current = true;
+    const f = refreshing.current;
+    if (f.busy && Date.now() - f.startedAt < 8000) return;
+    const token = ++f.token;
+    f.busy = true; f.startedAt = Date.now();
     const seq = detailSeq.current;
     try {
       const r = await workerFetch('getCycleCount', { data: { count_no, blind: true } }, session).catch(() => null);
-      if (!r?.ok || seq !== detailSeq.current) return;
+      if (token <= f.landed || !r?.ok || seq !== detailSeq.current) return;
+      f.landed = token;
       setDetail(prev => (prev && prev.header.count_no === count_no ? r.data : prev));
-    } finally { refreshing.current = false; }
+    } finally { if (token === f.token) f.busy = false; }
   }
 
   if (activeCount && detail) {
@@ -515,14 +520,14 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onRe
   // A product count lists every part of the product up front, so a part with no bag on the
   // shelf stays pending and the worker refuses to complete. Offer to take those parts off
   // (no stock change for them — same as Remove) and complete in one go. `only_pending` makes
-  // the worker skip any of them scanned since the last poll (lines refresh every 10 s), so a
-  // just-scanned part is completed, not thrown away.
+  // the worker skip any of them scanned since the last successful refresh (normally 10 s, longer
+  // if refreshes fail or the tab is hidden), so a just-scanned part is completed, not thrown away.
   async function complete() {
     const pendingLines = lines.filter(l => l.status === 'pending_count');
     const n = pendingLines.length;
     if (n) {
       const isRecount = header.count_type === 'recount' && header.recount_of;
-      const msg = `${n} part${n === 1 ? ' has' : 's have'} no bag scanned and no quantity entered (as of the last refresh, up to 10 s ago):\n\n${pendingLines.map(l => l.part_code).join(', ')}\n\n`
+      const msg = `${n} part${n === 1 ? ' has' : 's have'} no bag scanned and no quantity entered (as of the last refresh):\n\n${pendingLines.map(l => l.part_code).join(', ')}\n\n`
         + `Complete ${header.count_no} anyway? ${n === 1 ? 'This part is' : 'These parts are'} taken off the count and NOT adjusted — no stock change is proposed for them`
         + `${isRecount ? `, and ${n === 1 ? 'its' : 'their'} recount flag goes back to ${header.recount_of}` : ''}. Any part scanned since is counted as normal. `
         + `Every other counted part gets a proposed adjustment for any variance.\n\nTo count them instead, press Cancel and scan their bags (or enter a quantity).`;
