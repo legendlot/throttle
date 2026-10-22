@@ -56,3 +56,18 @@ test('the usual day (day grain) is the first day of the range only, and nothing 
   assert.equal(usual({ kind: 'day', by_day: [{ d: 'x', avg7: null }, { d: 'y', avg7: 16.5 }] }), null);
   assert.equal(usual({ kind: 'day', by_day: [{ d: 'x', avg7: 12 }] }, { allTime: true }), null);
 });
+
+test('history: days newest first, totals per day, running total of made from the first day shown, filter by product', async () => {
+  const { historyView, historyProducts } = await import('../src/lib/production.mjs');
+  const rows = [
+    { d: '2026-10-21', vendor_id: 1, product: 'Shadow', model: 'Asphalt', color: 'Black', made: 200, repacks: 1, unpacks: 1, dispatched: 0, checked_in: 0, dtk: 0 },
+    { d: '2026-10-21', vendor_id: 1, product: 'Gator', model: 'Hammer', color: 'Green', made: 50, repacks: 0, unpacks: 0, dispatched: 0, checked_in: 0, dtk: 0 },
+    { d: '2026-10-19', vendor_id: 1, product: 'Shadow', model: 'Asphalt', color: 'Black', made: 32, repacks: 0, unpacks: 0, dispatched: 0, checked_in: 0, dtk: 0 },
+  ];
+  const v = historyView(rows);
+  assert.deepEqual(v.map(d => [d.d, d.tot.made, d.running]), [['2026-10-21', 250, 282], ['2026-10-19', 32, 32]]);
+  assert.equal(v[0].rows[0].product, 'Shadow');
+  assert.equal(v[0].tot.unpacks, 1);
+  assert.deepEqual(historyView(rows, 'gator').map(d => [d.d, d.tot.made, d.running]), [['2026-10-21', 50, 50]]);
+  assert.deepEqual(historyProducts(rows), ['Gator', 'Shadow']);
+});

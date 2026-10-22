@@ -12,7 +12,7 @@
    device is bench 1 so its labels print on the one laptop).
    Plan: docs/outpost/PRODUCTION_DASHBOARD_PLAN.md.
    ════════════════════════════════════════════════════════════ */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -20,7 +20,7 @@ import { useRefreshState } from '../layout.js';
 import { Panel, FilterChip, KpiTile, istTodayISO } from '../../../components/kit/index.js';
 import { opGet, fmtIST } from '../../../lib/outpost.js';
 import { ErrorPanel, Input, OwnerGate, Select, label, mono, smallBtn, text, useOutpostVendors } from '../../../components/outpost/OutpostKit.js';
-import { addDays, axis, bucketLabel, colourway, csvCell, daysCover, OTHER, perHour, pivot, usual } from '../../../lib/production.mjs';
+import { addDays, axis, bucketLabel, colourway, csvCell, daysCover, HIST_COLS, historyProducts, historyView, OTHER, perHour, pivot, usual } from '../../../lib/production.mjs';
 
 const num = v => (v == null ? '—' : Number(v).toLocaleString('en-IN', { maximumFractionDigits: 1 }));
 const td = { padding: 8, whiteSpace: 'nowrap' };
@@ -118,12 +118,12 @@ function ProductionInner() {
       </div>
       {err && <ErrorPanel error={err} onRetry={load} />}
       {!data && !err && <div style={{ padding: 60, display: 'flex', justifyContent: 'center' }}><Spinner /></div>}
-      {data && <Production d={data} live={live} />}
+      {data && <Production d={data} live={live} onPick={id => setSel(id)} />}
     </div>
   );
 }
 
-function Production({ d, live }) {
+function Production({ d, live, onPick }) {
   const R = d.range;
   const T = d.totals || {};
   const multiVendor = (d.vendors || []).length > 1;
@@ -160,7 +160,9 @@ function Production({ d, live }) {
         <KpiTile label="Still to make on the PO" value={num(toMake)} sub={`All live PO lines, less ${num(pipeline)} packed and on the way · ${perDay ? `${num(daysCover(toMake, perDay)?.toFixed(1))} working days at this pace` : 'no pace yet'}`} />
         <KpiTile label="Un-packs" value={num(T.unpacks)} tone={Number(T.unpacks) ? 'warn' : undefined} sub="Units taken apart at the vendor in range" />
       </div>
+      {multiVendor && <Vendors d={d} vName={vName} onPick={onPick} />}
       <OutputChart d={d} buckets={buckets} multiDay={multiDay} multiVendor={multiVendor} vName={vName} />
+      <History d={d} multiVendor={multiVendor} vName={vName} />
       <StationGrid d={d} buckets={buckets} multiDay={multiDay} multiVendor={multiVendor} vName={vName} />
       <Operators d={d} multiVendor={multiVendor} vName={vName} />
       <Colourways d={d} perDay={perDay} days={Number(T.days_worked)} multiVendor={multiVendor} vName={vName} />
@@ -298,19 +300,27 @@ function Operators({ d, multiVendor, vName }) {
 // ── Colourways against the PO ───────────────────────────────
 function Colourways({ d, perDay, days, multiVendor, vName }) {
   const sk = d.skus || [];
+  // A colourway only on the PO (nothing packed, nothing in the pipeline) folds away: with several vendors those rows
+  // would bury the ones in production. "Still to make" above still counts them.
+  const [showAll, setShowAll] = useState(false);
+  const started = s => Number(s.packs) + Number(s.dtk) + Number(s.at_vendor) + Number(s.on_road) + Number(s.checked_in) + Number(s.lot) + Number(s.rejected) > 0;
+  const notStarted = sk.filter(s => !started(s)).length;
+  const shown = showAll ? sk : sk.filter(started);
+  const noPoShown = shown.some(s => !Number(s.po_open) && Number(s.at_vendor) + Number(s.on_road) + Number(s.checked_in) > 0);
   const left = s => Math.max(Number(s.po_open || 0) - Number(s.at_vendor) - Number(s.on_road) - Number(s.checked_in), 0);
   const rate = s => (days ? Number(s.packs) / days : null);
   const csv = () => downloadCsv('outpost-colourways', ['Vendor', 'Product', 'Model', 'Colour', 'Sticker code', 'Packed in range', 'At vendor', 'On the road', 'Checked in', 'Through DTK in range', 'LOT stock and beyond', 'Rejected', 'PO ordered', 'PO received', 'PO open', 'Still to make', 'Working days left at this pace'],
     sk.map(s => [vName[s.vendor_id], s.product, s.model, s.color, s.sku, s.packs, s.at_vendor, s.on_road, s.checked_in, s.dtk, s.lot, s.rejected, s.po_ordered, s.po_received, s.po_open, left(s), daysCover(left(s), rate(s))?.toFixed(1)]));
   return (
     <Panel title="Colourways — made, where they are now, and the PO" pad={8} action={sk.length ? <CsvBtn onClick={csv} /> : null}>
-      {!sk.length ? <div style={{ ...text, padding: 12 }}>Nothing made yet.</div> : (
+      {!sk.length ? <div style={{ ...text, padding: 12 }}>Nothing made yet.</div> : !shown.length ? (
+        <div style={{ ...text, padding: 12 }}>Nothing in production yet — all {sk.length} colourways are on the PO only.</div>) : (
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000 }}>
             <thead><tr><th style={th}>Colourway</th>{multiVendor && <th style={th}>Vendor</th>}
               {['Packed', 'At vendor', 'On the road', 'Checked in', 'Through DTK', 'LOT stock+', 'Rejected', 'PO ordered', 'PO open', 'Still to make', 'Days left'].map(h => <th key={h} style={thN}>{h}</th>)}</tr></thead>
-            <tbody>{sk.map(s => (
-              <tr key={`${s.vendor_id}|${colourway(s)}`} style={{ borderTop: '1px solid var(--border)' }}>
+            <tbody>{shown.map(s => (
+              <tr key={rawKey(s)} style={{ borderTop: '1px solid var(--border)' }}>
                 <td style={{ ...text, ...td, color: 'var(--t1)' }}>{colourway(s)} <span style={{ ...mono, color: 'var(--t3)' }}>{s.sku}</span></td>
                 {multiVendor && <td style={{ ...text, ...td }}>{vName[s.vendor_id]}</td>}
                 <td style={{ ...tdN, color: 'var(--t1)', fontWeight: 600 }}>{num(s.packs)}</td>
@@ -327,6 +337,13 @@ function Colourways({ d, perDay, days, multiVendor, vName }) {
               </tr>
             ))}</tbody>
           </table>
+        </div>
+      )}
+      {notStarted > 0 && (
+        <div style={{ padding: '6px 8px' }}>
+          <button style={smallBtn} onClick={() => setShowAll(v => !v)}>
+            {showAll ? 'Hide colourways not started' : `Show ${notStarted} colourway${notStarted === 1 ? '' : 's'} on the PO, not started`}</button>
+          {!showAll && noPoShown && <span style={{ ...text, fontSize: 12, marginLeft: 8 }}>A colourway marked &ldquo;no PO&rdquo; may be one of these under a different spelling on the PO line.</span>}
         </div>
       )}
       <div style={{ ...text, fontSize: 12, padding: '6px 8px' }}>
@@ -444,5 +461,119 @@ function Stickers({ d, multiVendor, vName }) {
       )}
       <div style={{ ...text, fontSize: 12, padding: '6px 8px' }}>Used per working day = over the last 7 days the vendor packed (car and remote stickers counted separately). Under 3 days of cover is amber: time to mint more.</div>
     </Panel>
+  );
+}
+
+// ── Vendors (All vendors) ───────────────────────────────────
+function Vendors({ d, vName, onPick }) {
+  const pipe = useMemo(() => {
+    const m = {};
+    for (const s of d.skus || []) {
+      const v = (m[s.vendor_id] ||= { at_vendor: 0, on_road: 0, checked_in: 0, toMake: 0 });
+      v.at_vendor += Number(s.at_vendor); v.on_road += Number(s.on_road); v.checked_in += Number(s.checked_in);
+      v.toMake += Math.max(Number(s.po_open || 0) - Number(s.at_vendor) - Number(s.on_road) - Number(s.checked_in), 0);
+    }
+    return m;
+  }, [d.skus]);
+  const rows = d.by_vendor || [];
+  const csv = () => downloadCsv('outpost-vendors', ['Vendor', 'Packs', 'New units', 'Per working day', 'Units per active hour', 'Median seconds per pack', 'Stations', 'Operators', 'At vendor now', 'On the road now', 'Checked in now', 'Still to make on the PO', 'Checked in (range)', 'Rejected (range)'],
+    rows.map(v => { const p = pipe[v.vendor_id] || {}; return [vName[v.vendor_id], v.packs, v.new_units, Number(v.days_worked) ? (v.packs / v.days_worked).toFixed(1) : '',
+      perHour(v.packs, v.active_min)?.toFixed(1), v.median_gap_s, v.stations, v.operators, p.at_vendor, p.on_road, p.checked_in, p.toMake, v.checked_in, v.rejected]; }));
+  return (
+    <Panel title={`Vendors (${rows.length})`} pad={8} action={<CsvBtn onClick={csv} />}>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+          <thead><tr><th style={th}>Vendor</th>
+            {['Packed', 'Per day', 'Per hr', 's / pack', 'Stations', 'At vendor', 'On the road', 'Checked in', 'Still to make', 'Rejected'].map(h => <th key={h} style={thN}>{h}</th>)}</tr></thead>
+          <tbody>{rows.map(v => {
+            const p = pipe[v.vendor_id] || {};
+            return (
+              <tr key={v.vendor_id} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => onPick(v.vendor_id)} title="Show this vendor only">
+                <td style={{ ...text, ...td, color: 'var(--t1)', fontWeight: 600 }}>{vName[v.vendor_id] || `Vendor ${v.vendor_id}`}</td>
+                <td style={{ ...tdN, color: 'var(--t1)', fontWeight: 600 }}>{num(v.packs)}</td>
+                <td style={tdN}>{Number(v.days_worked) ? num(Math.round(v.packs / v.days_worked)) : '—'}</td>
+                <td style={tdN}>{num(perHour(v.packs, v.active_min)?.toFixed(0))}</td>
+                <td style={tdN}>{num(v.median_gap_s == null ? null : Math.round(v.median_gap_s))}</td>
+                <td style={tdN}>{num(v.stations)}</td>
+                <td style={tdN}>{num(p.at_vendor ?? 0)}</td>
+                <td style={tdN}>{num(p.on_road ?? 0)}</td>
+                <td style={tdN}>{num(p.checked_in ?? 0)}</td>
+                <td style={tdN}>{num(p.toMake ?? 0)}</td>
+                <td style={{ ...tdN, color: Number(v.rejected) ? 'var(--bad-fg)' : undefined }}>{num(v.rejected)}</td>
+              </tr>
+            );
+          })}</tbody>
+        </table>
+      </div>
+      <div style={{ ...text, fontSize: 12, padding: '6px 8px' }}>Packed, per day, per hour and rejected are for the range; the stage columns are now. Click a vendor to see only that vendor.</div>
+    </Panel>
+  );
+}
+
+// ── Production history (Redline's, for vendors) ─────────────
+const HIST_HEAD = { made: 'Made', repacks: 'Re-packs', unpacks: 'Un-packs', dispatched: 'Dispatched', checked_in: 'Checked in', dtk: 'Through DTK' };
+function History({ d, multiVendor, vName }) {
+  const [q, setQ] = useState('');
+  const days = useMemo(() => historyView(d.history, q), [d.history, q]);
+  const [open, setOpen] = useState(() => new Set(days.length ? [days[0].d] : []));   // the newest day starts open
+  const anyOpen = days.some(x => open.has(x.d));
+  const products = useMemo(() => historyProducts(d.history), [d.history]);
+  const toggle = day => setOpen(s => { const n = new Set(s); if (n.has(day)) n.delete(day); else n.add(day); return n; });
+  const R = d.range;
+  // One row per day × colourway, then a "Day total" row carrying the running total — a running figure on a colourway row
+  // would be the day's, not the colourway's. A filtered export says so in its name.
+  const slug = q.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const csv = () => downloadCsv(`outpost-production-history-${R.from}-to-${R.to}${slug ? `-only-${slug}` : ''}`,
+    ['Date', 'Vendor', 'Product', 'Model', 'Colour', 'Made', 'Re-packs', 'Un-packs', 'Dispatched', 'Checked in', 'Through DTK (paid)', 'Made — running total'],
+    [...days].reverse().flatMap(day => [
+      ...day.rows.map(r => [r.d, vName[r.vendor_id], r.product, r.model, r.color, ...HIST_COLS.map(c => r[c]), '']),
+      [day.d, '', 'Day total', '', '', ...HIST_COLS.map(c => day.tot[c]), day.running]]));
+  const cell = (n, strong) => <td style={{ ...tdN, color: Number(n) ? (strong ? 'var(--t1)' : undefined) : 'var(--t4)', fontWeight: strong ? 600 : undefined }}>{Number(n) ? num(n) : '·'}</td>;
+  return (
+    <Panel title="Production history — day by day" pad={8} action={days.length ? <CsvBtn onClick={csv} /> : null}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 8px 8px', flexWrap: 'wrap' }}>
+        <Input list="op-hist-products" value={q} onChange={e => setQ(e.target.value)} placeholder="Filter: product, model or colour" style={{ width: 260 }} />
+        <datalist id="op-hist-products">{products.map(p => <option key={p} value={p} />)}</datalist>
+        {q && <button style={smallBtn} onClick={() => setQ('')}>Clear</button>}
+        {days.length > 0 && <button style={smallBtn} onClick={() => setOpen(anyOpen ? new Set() : new Set(days.map(x => x.d)))}>{anyOpen ? 'Collapse all' : 'Expand all'}</button>}
+      </div>
+      {!days.length ? <div style={{ ...text, padding: 12 }}>{q ? 'Nothing matches that filter in this range.' : 'Nothing happened in this range.'}</div> : (
+        <div style={{ overflowX: 'auto', maxHeight: 520 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
+            <thead><tr><th style={th}>Day · colourway</th>{multiVendor && <th style={th}>Vendor</th>}
+              {HIST_COLS.map(c => <th key={c} style={thN}>{HIST_HEAD[c]}</th>)}<th style={thN}>Running total</th></tr></thead>
+            <tbody>{days.map(day => (
+              <HistDay key={day.d} day={day} expanded={open.has(day.d)} onToggle={() => toggle(day.d)} multiVendor={multiVendor} vName={vName} cell={cell} />
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ ...text, fontSize: 12, padding: '6px 8px' }}>
+        Made = a unit packed for the first time that day. Re-packs and un-packs are units taken apart and packed again. Dispatched, checked in and through DTK
+        are the units that moved on that day, whenever they were made. Running total = units made from the first day shown. Click a day to see its colourways.
+      </div>
+    </Panel>
+  );
+}
+const rawKey = r => `${r.vendor_id}|${r.product ?? ''}|${r.model ?? ''}|${r.color ?? ''}`;
+function HistDay({ day, expanded, onToggle, multiVendor, vName, cell }) {
+  const nCw = new Set(day.rows.map(r => `${r.product ?? ''}|${r.model ?? ''}|${r.color ?? ''}`)).size;   // one colourway made by 2 vendors is 1
+  return (
+    <>
+      <tr style={{ borderTop: '1px solid var(--border-3, var(--border))', background: 'var(--surface-2, transparent)', cursor: 'pointer' }} onClick={onToggle}>
+        <td style={{ ...text, ...td, color: 'var(--t1)', fontWeight: 600 }}>{expanded ? '▾' : '▸'} {bucketLabel(day.d, 'day')} <span style={{ color: 'var(--t3)', fontWeight: 400 }}>· {nCw} colourway{nCw === 1 ? '' : 's'}</span></td>
+        {multiVendor && <td style={td} />}
+        {HIST_COLS.map(c => <React.Fragment key={c}>{cell(day.tot[c], c === 'made')}</React.Fragment>)}
+        <td style={{ ...tdN, color: 'var(--t1)' }}>{num(day.running)}</td>
+      </tr>
+      {expanded && day.rows.map(r => (
+        <tr key={rawKey(r)} style={{ borderTop: '1px solid var(--border)' }}>
+          <td style={{ ...text, ...td, paddingLeft: 26 }}>{colourway(r)}</td>
+          {multiVendor && <td style={{ ...text, ...td }}>{vName[r.vendor_id]}</td>}
+          {HIST_COLS.map(c => <React.Fragment key={c}>{cell(r[c], c === 'made')}</React.Fragment>)}
+          <td style={td} />
+        </tr>
+      ))}
+    </>
   );
 }

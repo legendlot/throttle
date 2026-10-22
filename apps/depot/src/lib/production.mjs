@@ -98,3 +98,24 @@ export function csvCell(v) {
   const s = v == null ? '' : String(v);
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
+
+// Production history (Redline's Production History, for vendors): history rows (day × vendor × colourway) → days,
+// newest first, each with its colourway rows, the day's totals and the running total of units made from the first day
+// shown. `q` filters by product / model / colour text; the running total follows the filter.
+export const HIST_COLS = ['made', 'repacks', 'unpacks', 'dispatched', 'checked_in', 'dtk'];
+export function historyView(rows, q = '') {
+  const want = String(q).trim().toLowerCase();
+  const keep = (rows || []).filter(r => !want || colourway(r).toLowerCase().includes(want));
+  const byDay = new Map();
+  for (const r of keep) {
+    if (!byDay.has(r.d)) byDay.set(r.d, { d: r.d, rows: [], tot: Object.fromEntries(HIST_COLS.map(c => [c, 0])) });
+    const day = byDay.get(r.d);
+    day.rows.push(r);
+    for (const c of HIST_COLS) day.tot[c] += Number(r[c] || 0);
+  }
+  const days = [...byDay.values()].sort((a, b) => (a.d < b.d ? -1 : 1));
+  let run = 0;
+  for (const day of days) { run += day.tot.made; day.running = run; day.rows.sort((a, b) => Number(b.made) - Number(a.made)); }
+  return days.reverse();
+}
+export const historyProducts = rows => [...new Set((rows || []).map(r => r.product).filter(Boolean))].sort();
