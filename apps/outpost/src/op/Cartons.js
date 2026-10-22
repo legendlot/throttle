@@ -12,7 +12,7 @@ const FILTERS = [
   ['csg', 'In a consignment', c => !!c.consignment],
 ];
 
-export default function Cartons({ me }) {
+export default function Cartons({ me, sup }) {
   const { showToast } = useToast();
   const cartons = useLoad('/v/cartons');
   const [filter, setFilter] = useState('all');
@@ -66,7 +66,7 @@ export default function Cartons({ me }) {
           </tbody>
         </table>
       )}
-      {open && <CartonDetail ctn={open} me={me} onClose={() => setOpen(null)} onCloseCarton={c => { setOpen(null); setClosing(c); }} />}
+      {open && <CartonDetail ctn={open} me={me} sup={sup} onClose={() => setOpen(null)} onCloseCarton={c => { setOpen(null); setClosing(c); }} />}
       {closing && (
         <Confirm title={`Close ${closing.ctn_no}?`} yes="Close carton" onClose={() => setClosing(null)}
           body={`It has ${closing.unit_count} of ${closing.capacity} units. Its CTN label prints on bench ${closing.bench_no}.`}
@@ -82,13 +82,24 @@ export default function Cartons({ me }) {
   );
 }
 
-function CartonDetail({ ctn, me, onClose, onCloseCarton }) {
+function CartonDetail({ ctn, me, sup, onClose, onCloseCarton }) {
+  const { showToast } = useToast();
   const d = useLoad(`/v/carton?ctn_no=${encodeURIComponent(ctn)}`);
   const c = d.data;
+  const [reprint, setReprint] = useState(null);   // the job as it was when the dialog opened: { id, status, bench }
   // The worker says whether THIS device opened it: close_carton matches the device, not the bench number.
   const mine = c && c.status === 'open' && c.mine === true;
+  // A faded or torn CTN label on a carton still here: reprint its CURRENT label. Only a printed one — a failed or
+  // unknown job is the Printing tab's call (look at the printer first), and an older version's label is not this carton's.
+  const lj = c?.label_job;
+  const canReprint = sup && c?.status === 'closed' && lj?.status === 'printed' && Number(lj.manifest_version) === c.manifest_version;
+  // The job prints on whichever bench its device is on NOW (agent_claim routes by devices.bench_no), not the carton's.
+  const labelBench = lj?.device?.bench_no ?? c?.bench_no;
+  const HINT = { outcome_unknown: 'Its label may not have printed — see the Printing tab.', failed: 'Its label failed to print — see the Printing tab.',
+    pending: 'Its label is waiting to print.', leased: 'Its label is printing now.', cancelled: 'No label is queued for it — tell LOT.' };
   return (
-    <Modal title={ctn} onClose={onClose} wide>
+    <>
+    <Modal title={ctn} onClose={reprint ? undefined : onClose} wide>
       {d.loading ? <div className="empty">Loading…</div> : d.error ? <div className="err">{d.error}</div> : (
         <>
           <div className="row" style={{ marginBottom: 12 }}>
@@ -108,11 +119,27 @@ function CartonDetail({ ctn, me, onClose, onCloseCarton }) {
           <div className="row end" style={{ marginTop: 16 }}>
             {mine && c.unit_count > 0 && <button className="btn" onClick={() => onCloseCarton(c)}>Close carton short</button>}
             {c.status === 'open' && !mine && <span className="dim">Only the laptop that opened it (bench {c.bench_no}) can close this carton.</span>}
+            {c.status === 'closed' && lj && HINT[lj.status] && <span className="dim">{HINT[lj.status]}</span>}
+            {canReprint && <button className="btn" onClick={() => setReprint({ id: Number(lj.id), status: lj.status, bench: labelBench })}>Reprint carton label</button>}
             <button className="btn" onClick={onClose}>Done</button>
           </div>
         </>
       )}
     </Modal>
+      {reprint && (
+        <Confirm title={`Reprint the label for ${ctn}?`} yes="Reprint" onClose={() => setReprint(null)}
+          body={`Use this when the label is faded or torn. It prints on bench ${reprint.bench ?? '—'}'s printer. Peel the old label off and stick the new one in its place — never leave two labels on one carton.`}
+          onYes={async () => {
+            // The job as it was when the dialog opened, never a reloaded one: a job that moved meanwhile is refused, and
+            // the dialog closes so a second Yes cannot reprint a label whose outcome is now unknown.
+            const r = await act('print_resolve', { job_id: reprint.id, action: 'reprint', expected_status: reprint.status });
+            setReprint(null); d.reload();
+            if (!r.ok) { showToast(`${say(r)} The carton has been refreshed.`, 'error'); return null; }
+            showToast(`${ctn} label sent to print`, 'success');
+            return null;
+          }} />
+      )}
+    </>
   );
 }
 

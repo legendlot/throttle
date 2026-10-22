@@ -387,7 +387,15 @@ async function vendorRoute(request, url, rawBody, ip) {
       `&select=id,ctn_no,sku,channel,pack_type,capacity,unit_count,status,manifest_version,bench_no,opened_at,closed_at,` +
       `work_orders(wo_no),carton_units(car_upc,remote_upc,batch_label,added_at),device_id`);
     if (!c.ok) return fail('outpost_unavailable', 503);
-    return c.data[0] ? ok(withMine(ctx)(c.data[0])) : fail('not_found', 404);
+    if (!c.data[0]) return fail('not_found', 404);
+    // The carton's newest CTN label job, so a supervisor can reprint a faded label from the carton itself (Siddhant,
+    // #bugs 1792659975.348859): the Printing tab's "Recent 100" is mostly unit labels, so a closed carton's label falls
+    // off it within hours. print_resolve still decides — it refuses a label that is no longer this carton's current one.
+    const lj = await op(`/rest/v1/print_jobs?vendor_id=eq.${ctx.vendorId}&kind=eq.ctn_label&ref=eq.${ctn}` +
+      `&select=id,status,reprints,printed_at,manifest_version:payload->>manifest_version,` +
+      `device:devices!print_jobs_device_id_fkey(bench_no)&order=id.desc&limit=1`);
+    // Optional extra: a failed label read hides the reprint button, it does not take the carton detail down with it.
+    return ok({ ...withMine(ctx)(c.data[0]), label_job: lj.ok ? (lj.data[0] || null) : null });
   }
 
   // ── Consignments (O4) ── supervisor only. A draft collects CLOSED cartons; dispatch records the vendor's own
