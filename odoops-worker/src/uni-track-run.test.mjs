@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runTrackingPages, trackingWindow, UNI_TRACK_RUN_BUDGET } from './uni-track-run.mjs';
+import { runTrackingPages, trackingWindow, UNI_TRACK_RUN_BUDGET, isUntrackedChannel, dedupePackageRows } from './uni-track-run.mjs';
 
 const page = (o = {}) => ({ window: ['a', 'b'], seen: 25, candidates: 20, fetched: 10, packages: 9,
   windowDone: false, caughtUp: false, cursor: 'c', ...o });
@@ -107,4 +107,63 @@ test('window: cold start walks from 3 days back', () => {
   const now = 100 * H;
   const w = trackingWindow({}, now, W, LAG);
   assert.equal(w.winStart, now - 3 * 24 * H);
+});
+
+// ── 2026-10-10 stall: one duplicated package_code on a page failed the bulk upsert (21000) ──
+
+const row = (code, updated, o = {}) => ({ uniware_package_code: code, uniware_updated_at: updated, ...o });
+
+test('dedupePackageRows: a duplicate in one page collapses to ONE row, the newest kept', () => {
+  const page = [
+    row('SP/26-1', '2026-10-10T00:20:48.000Z'),
+    row('AMAZ00013', '2026-10-10T00:20:48.000Z', { uniware_order_code: 'A03303491SFLURBNGKG3M' }),
+    row('SP/26-2', '2026-10-10T00:20:49.000Z'),
+    row('AMAZ00013', '2026-10-10T00:20:54.000Z', { uniware_order_code: 'A04957509XMZFY02R52W' }),
+  ];
+  const { rows, dupes } = dedupePackageRows(page);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(dupes, ['AMAZ00013']);
+  assert.equal(new Set(rows.map((r) => r.uniware_package_code)).size, rows.length);   // upsert-safe
+  assert.equal(rows.find((r) => r.uniware_package_code === 'AMAZ00013').uniware_order_code, 'A04957509XMZFY02R52W');
+});
+
+test('dedupePackageRows: an OLDER duplicate arriving later never overwrites the newer row', () => {
+  const { rows } = dedupePackageRows([
+    row('SP/26-9', '2026-10-12T10:00:00.000Z', { lifecycle: 'delivered' }),
+    row('SP/26-9', '2026-10-11T10:00:00.000Z', { lifecycle: 'in_transit' }),
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].lifecycle, 'delivered');
+});
+
+test('dedupePackageRows: a tie (or missing stamps) keeps the later row; no dupes passes through untouched', () => {
+  assert.equal(dedupePackageRows([row('X', null, { n: 1 }), row('X', null, { n: 2 })]).rows[0].n, 2);
+  const clean = [row('A', '2026-10-10T00:00:00Z'), row('B', '2026-10-10T00:00:00Z')];
+  const r = dedupePackageRows(clean);
+  assert.deepEqual(r.rows, clean);
+  assert.deepEqual(r.dupes, []);
+  assert.deepEqual(dedupePackageRows([]).rows, []);
+});
+
+test('isUntrackedChannel: every Amazon FBA fulfilment centre is skipped, every tracked channel is not', () => {
+  for (const c of ['AMAZON_FBA_IN_PNQ3', 'AMAZON_FBA_IN_XKPT', 'AMAZON_FBA_IN_HYD3', 'amazon_fba_in_blr8']) {
+    assert.equal(isUntrackedChannel(c), true, c);
+  }
+  for (const c of ['LEGEND_OF_TOYS', 'CRED', 'AMAZON', 'AMAZON_FLEX_API', 'FLIPKART', 'FIRSTCRY', 'CUSTOM', '', null, undefined]) {
+    assert.equal(isUntrackedChannel(c), false, String(c));
+  }
+});
+
+test('wiring: every ecom_shipments upsert on uniware_package_code posts dedupePackageRows output', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  const sites = [...src.matchAll(/on_conflict=uniware_package_code'[\s\S]{0,200}?body: JSON\.stringify\((\w+)\)/g)];
+  assert.equal(sites.length, 3, 'page sync, reconcile apply, refreshUniwareOrder');
+  for (const m of sites) {
+    // the posted variable must be bound from dedupePackageRows(...) in the lines just above the upsert
+    const above = src.slice(Math.max(0, m.index - 900), m.index);
+    const bound = m[1] === 'rows' ? /const \{ rows \} = dedupePackageRows\(/ : new RegExp(`\\{ rows: ${m[1]}\\b[^}]*\\} = dedupePackageRows\\(`);
+    assert.match(above, bound, `upsert posts ${m[1]} without dedupePackageRows`);
+  }
+  assert.match(src, /\.filter\(\(e\) => !isUntrackedChannel\(e\.channel\)\)/, 'FBA must be dropped before the saleorder/get');
 });

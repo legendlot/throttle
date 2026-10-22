@@ -66,6 +66,37 @@ export function trackingWindow(state, now, windowMs, edgeLagMs) {
                      : { winStart, winEnd: edge, liveEdge: true, offset: 0 };
 }
 
+// Channels whose parcels are NOT tracked. Amazon FBA (AMAZON_FBA_IN_<FC>, live in Uniware from
+// 2026-10-10) is fulfilled by Amazon: Uniware holds it as SELF / DISPATCHED forever, with no
+// courier, no tracking and no Shopify order, so nothing reads it. Worse, its package codes are
+// numbered PER FULFILMENT CENTRE (AMAZ00013 exists in both PNQ3 and XKPT), which breaks the
+// table's one-row-per-package_code identity: two such orders on one page made the bulk upsert
+// fail with 21000 and stalled the whole feed for 12 days (2026-10-10 → 10-22). Filtered on the
+// search element, before the saleorder/get, so they cost nothing.
+export function isUntrackedChannel(channel) {
+  return /^AMAZON_FBA/i.test(String(channel || ''));
+}
+
+// One upsert can't carry two rows sharing the on_conflict key (Postgres 21000, "cannot affect row
+// a second time") — and one such pair fails the WHOLE page, every tick, forever. Keep the row
+// with the newest uniware_updated_at (a tie keeps the later one, i.e. the later order on the
+// page). `dupes` lists the collided codes so the caller can log them: a collision outside the
+// FBA channels means another channel reuses codes and wants the same look.
+export function dedupePackageRows(rows) {
+  const by = new Map();
+  const dupes = [];
+  for (const r of rows) {
+    const k = r?.uniware_package_code;
+    const prev = by.get(k);
+    if (prev === undefined) { by.set(k, r); continue; }
+    dupes.push(k);
+    const tp = Date.parse(prev.uniware_updated_at || '') || 0;
+    const tr = Date.parse(r.uniware_updated_at || '') || 0;
+    if (tr >= tp) by.set(k, r);
+  }
+  return { rows: [...by.values()], dupes };
+}
+
 // saleorder/get failures tolerated per page before the page is ABORTED (thrown before the state
 // patch, so it is retried next tick). An isolated bad order must not deadlock the whole feed, so a
 // few are skipped with a warning; more than this is an outage or rate limiting, where skipping

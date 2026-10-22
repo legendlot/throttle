@@ -18,7 +18,8 @@
 // ============================================================
 
 import { WorkflowEntrypoint } from 'cloudflare:workers';
-import { runTrackingPages, trackingWindow, UNI_TRACK_RUN_BUDGET, UNI_TRACK_MAX_GET_FAILS } from './uni-track-run.mjs';
+import { runTrackingPages, trackingWindow, UNI_TRACK_RUN_BUDGET, UNI_TRACK_MAX_GET_FAILS,
+         isUntrackedChannel, dedupePackageRows } from './uni-track-run.mjs';
 import { parseReportDate, parseReportHtml, toDailyFacts, b64urlDecode, parseReportXlsx, toFsnFacts, toSkuSnapshot, stageSelloutRows } from './flipkart-sellout.mjs';
 import { UNMAPPED_QUEUE_INSERT } from './unmapped-queue.mjs';
 // Max windows a single ConnectorWorkflow instance pulls before ending (a still-backfilling
@@ -3003,6 +3004,7 @@ async function reconcileStaleShipments(env, opts = {}) {
       so = (await r.json().catch(() => ({})))?.saleOrderDTO || null;
     } catch (e) { errors.push({ code, error: String(e?.message || e) }); continue; }
     if (!so) { errors.push({ code, error: 'no_order' }); continue; }
+    if (isUntrackedChannel(so.channel)) continue;            // FBA: per-FC package codes, see uni-track-run.mjs
     for (const p of (so.shippingPackages || [])) {
       if (!p?.code) continue;
       const row = uniPackageRow(so, p);                        // writes UNIWARE's stamps, not now()
@@ -3037,12 +3039,13 @@ async function reconcileStaleShipments(env, opts = {}) {
   // APPLY. The upsert carries Uniware's own timestamps; `reconciled_at` is stamped separately so
   // it can never be mistaken for a lifecycle time (and the emitter never reads it).
   let applied = 0;
-  if (rows.length) {
+  const { rows: uniq } = dedupePackageRows(rows);   // one dup code would fail the whole upsert (21000)
+  if (uniq.length) {
     const up = await sbPublic('/rest/v1/ecom_shipments?on_conflict=uniware_package_code', {
-      method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(rows),
+      method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(uniq),
     });
     if (!up.ok) return { ok: false, error: `upsert_${up.status}`, detail: up.data };
-    applied = rows.length;
+    applied = uniq.length;
   }
   // Mark every candidate as checked — INCLUDING ones that did not change, else an unresolvable
   // parcel is re-fetched every run and the sweep never drains past it.
@@ -3101,7 +3104,7 @@ async function refreshUniwareOrder(env, orderName) {
   const j = await res.json().catch(() => ({}));
   const so = j?.saleOrderDTO;
   if (!so) return { ok: false, error: 'uniware_no_order' };
-  const rows = (so.shippingPackages || []).filter((p) => p?.code).map((p) => uniPackageRow(so, p));
+  const { rows } = dedupePackageRows((so.shippingPackages || []).filter((p) => p?.code).map((p) => uniPackageRow(so, p)));
   if (!rows.length) return { ok: true, packages: 0 };
   const up = await sbPublic('/rest/v1/ecom_shipments?on_conflict=uniware_package_code', {
     method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(rows),
@@ -3170,7 +3173,8 @@ async function syncUniwareTrackingPage(env, opts = {}) {
   const windowDone = elements.length < page;   // short page ⇒ end of this window
 
   const candidates = elements
-    .filter((e) => !UNI_TRACK_SKIP_STATUS.has(String(e.status || '').toUpperCase()));
+    .filter((e) => !UNI_TRACK_SKIP_STATUS.has(String(e.status || '').toUpperCase()))
+    .filter((e) => !isUntrackedChannel(e.channel));
 
   // 2. Skip orders already held at this same `updated` stamp — ONE query, not one per order.
   // Purely an optimisation; correctness comes from the cursor below.
@@ -3209,12 +3213,19 @@ async function syncUniwareTrackingPage(env, opts = {}) {
       console.warn('odoops (uniware tracking): skipped order', e.code, why);
       continue;
     }
+    // isUntrackedChannel again on the DETAIL: the search element's channel is the filter of record,
+    // but a missing one there must not let an FBA order's per-FC package codes through.
+    if (isUntrackedChannel(so.channel)) continue;
     for (const p of (so.shippingPackages || [])) if (p?.code) rows.push(uniPackageRow(so, p));
   }
 
-  if (rows.length) {
+  // One duplicated package_code fails the whole bulk upsert (21000) — and so the page, every tick.
+  const { rows: uniq, dupes } = dedupePackageRows(rows);
+  if (dupes.length) console.warn('odoops (uniware tracking): duplicate package codes on one page, kept newest:', dupes.join(','));
+
+  if (uniq.length) {
     const up = await sbPublic('/rest/v1/ecom_shipments?on_conflict=uniware_package_code', {
-      method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(rows),
+      method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(uniq),
     });
     if (!up.ok) throw new Error(`ecom_shipments upsert failed (${up.status}): ${JSON.stringify(up.data).slice(0, 200)}`);
   }
@@ -3232,13 +3243,13 @@ async function syncUniwareTrackingPage(env, opts = {}) {
       win_end_ms: windowDone ? null : winEnd,   // freeze the window end while paginating
       last_run_at: new Date().toISOString(), last_error: null,
       orders_seen: Number(state.orders_seen || 0) + elements.length,
-      packages_upserted: Number(state.packages_upserted || 0) + rows.length,
+      packages_upserted: Number(state.packages_upserted || 0) + uniq.length,
     }),
   });
   if (!pt.ok) throw new Error(`ecom_tracking_state patch failed (${pt.status})`);
   return { window: [uniISO(winStart), uniISO(winEnd)], offset, seen: elements.length,
            candidates: candidates.length, fetched: gets.length,
-           packages: rows.length, windowDone, caughtUp: windowDone && liveEdge,
+           packages: uniq.length, windowDone, caughtUp: windowDone && liveEdge,
            cursor: uniISO(windowDone ? winEnd : winStart) };
 }
 
