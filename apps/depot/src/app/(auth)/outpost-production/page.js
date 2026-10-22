@@ -333,7 +333,7 @@ function Colourways({ d, perDay, days, multiVendor, vName }) {
                 <td style={tdN}>{num(s.po_ordered)}</td>
                 <td style={tdN}>{num(s.po_open)}</td>
                 <td style={{ ...tdN, color: !Number(s.po_open) && Number(s.at_vendor) ? 'var(--bad-fg)' : 'var(--t1)' }}>{Number(s.po_open) ? num(left(s)) : 'no PO'}</td>
-                <td style={tdN}>{num(daysCover(left(s), rate(s))?.toFixed(1))}</td>
+                <td style={tdN}>{Number(s.po_open) ? num(daysCover(left(s), rate(s))?.toFixed(1)) : '—'}</td>
               </tr>
             ))}</tbody>
           </table>
