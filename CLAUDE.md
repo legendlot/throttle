@@ -94,4 +94,5 @@ Throttle uses a separate secret pointing to throttleops.
 - **A Worker cannot `fetch()` another Worker on the same `workers.dev` zone** — Cloudflare
   error 1042, surfacing as a 404. Cross-worker calls need a `[[services]]` binding
   (see `csops-worker/wrangler.toml`).
-- Every new `store` schema table needs: `GRANT ALL ON store.{table} TO service_role`
+- Every new `store` schema table needs: `GRANT ALL ON store.{table} TO service_role` (since S432 an event trigger,
+  `ensure_service_role_grant`, also does it for LOT's schemas — keep writing it; the trigger is the net)
