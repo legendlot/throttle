@@ -17,6 +17,7 @@ import {
   mintToken, nextOpCode, nonceOk, normaliseJwk, PIN_DIGITS, sessionLive, sha256Hex, STEPUP_PURPOSES,
   STEPUP_SECONDS, tokenHash, verifyPin, verifySignature, ipBucket,
 } from './auth.js';
+import { unitLabelCode } from './labels.js';
 import { OPEN_CARTON_RACE_RE, packRequest } from './pack.js';
 import { isoDay, productionRequest } from './production.js';
 
@@ -536,6 +537,39 @@ async function vendorRoute(request, url, rawBody, ip) {
         expected_status: body.expected_status })),
       p_job_id: jobId, p_action: body.action, p_expected_status: body.expected_status });
     return r.ok ? ok(r.data) : rpcFail(r);
+  }
+
+  // One packed unit's own labels, so a supervisor can reprint a faded or torn EAN / batch (UPC) label from the unit
+  // (Joseph, #bugs 1792739680.571429): the Printing tab only offers a reprint on a failed or unknown job. Takes the car or
+  // remote UPC, or the batch label (LOT-…-E). print_resolve still decides — it refuses once the unit is no longer packed here.
+  if (route === 'unit_labels' && request.method === 'GET') {
+    if (ctx.operator.role !== 'supervisor') return fail('supervisor_only', 403);
+    const code = unitLabelCode(url.searchParams.get('upc'));
+    if (!code) return fail('upc required');
+    // Scoped to this vendor from the first read: another vendor's unit, or one that never came through Outpost, is
+    // not found — never another vendor's detail. A remote's labels are its car's (labels are keyed on the car UPC), and
+    // the pair is read off the vendor's own unit row, not pkg_scans (a remote UPC can sit on several pkg_scans rows).
+    const UNIT = 'upc,sku,product,model,color,current_status,component_type,paired_with';
+    const s = await pub(`/rest/v1/units?upc=eq.${code}&source_vendor_id=eq.${ctx.vendorId}&select=${UNIT}`);
+    if (!s.ok) return fail('outpost_unavailable', 503);
+    let unit = s.data[0];
+    if (!unit) return fail('not_found', 404);
+    if (unit.component_type === 'remote') {
+      if (!unitLabelCode(unit.paired_with)) return fail('not_found', 404);
+      const c = await pub(`/rest/v1/units?upc=eq.${unit.paired_with}&source_vendor_id=eq.${ctx.vendorId}&select=${UNIT}`);
+      if (!c.ok) return fail('outpost_unavailable', 503);
+      if (!c.data[0]) return fail('not_found', 404);
+      unit = c.data[0];
+    }
+    const [pk, jobs] = await Promise.all([
+      pub(`/rest/v1/pkg_scans?car_upc=eq.${unit.upc}&select=batch_label&limit=1`),
+      op(`/rest/v1/print_jobs?vendor_id=eq.${ctx.vendorId}&kind=in.(ean_label,batch_label)&ref=eq.${unit.upc}` +
+        `&select=id,kind,status,late_print,reprints,printed_at,device:devices!print_jobs_device_id_fkey(bench_no)` +
+        `&order=id.desc&limit=20`)]);
+    if (!pk.ok || !jobs.ok) return fail('outpost_unavailable', 503);
+    // Newest by id is the current one: a reprint keeps its id, a re-pack queues new (higher) ones.
+    const newest = kind => jobs.data.find(j => j.kind === kind) || null;
+    return ok({ ...unit, batch_label: pk.data[0]?.batch_label || null, ean_job: newest('ean_label'), batch_job: newest('batch_label') });
   }
 
   // The supervisor's floor board (O6): today's packs per bench (IST day), open orders with packed vs target, cartons by
