@@ -134,7 +134,7 @@ function UnitLabels() {
     const c = clean(v);
     setQ('');
     if (UPC_RE.test(c) || BATCH_RE.test(c)) { setBad(null); setLook(l => ({ upc: c, n: (l?.n || 0) + 1 })); }
-    else if (c) setBad(`${c} is not a car, remote or batch label.`);
+    else if (c) { setLook(null); setBad(`${c} is not a car, remote or batch label.`); }
   };
   useAutoEnter(q, take);
   return (

@@ -45,7 +45,9 @@ export function useLoad(path, { every } = {}) {
 export function useScanCapture(ref, on = true, ownLayer = 0) {
   useEffect(() => {
     if (!on) return undefined;
-    const k = () => {
+    const k = e => {
+      // Only what a scanner types (characters + Enter): arrows, Page keys, Tab and Cmd/Ctrl shortcuts stay with the page.
+      if (e.ctrlKey || e.metaKey || e.altKey || (e.key.length !== 1 && e.key !== 'Enter')) return;
       if (document.querySelectorAll('.back').length > ownLayer) return;
       const a = document.activeElement;
       if (!a || !/^(INPUT|TEXTAREA)$/.test(a.tagName)) ref.current?.focus();
