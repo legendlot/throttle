@@ -4,7 +4,7 @@ import { get, post, say } from './api.js';
 
 import { AUTO_ENTER_MS, wholeCodeAtEnd } from './scan.mjs';
 
-export { UPC_RE, CTN_RE, BATCH_RE, clean } from './scan.mjs';
+export { UPC_RE, CTN_RE, BATCH_RE, STICKER_TEXT_RE, clean } from './scan.mjs';
 
 export const fmtTime = t => (t ? new Date(t).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short',
   hour: '2-digit', minute: '2-digit' }) : '—');

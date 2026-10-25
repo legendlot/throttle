@@ -4,7 +4,7 @@
 import { useRef, useState } from 'react';
 import { useToast } from '@throttle/ui/Toast.js';
 import { act, say } from './api.js';
-import { ago, Badge, BATCH_RE, clean, Confirm, fmtTime, UPC_RE, useAutoEnter, useLoad, useScanCapture } from './ui.js';
+import { ago, Badge, BATCH_RE, clean, Confirm, fmtTime, STICKER_TEXT_RE, UPC_RE, useAutoEnter, useLoad, useScanCapture } from './ui.js';
 
 const KIND = { batch_label: 'Batch label', ean_label: 'EAN label', ctn_label: 'Carton label', upc_stickers: 'Sticker sheet' };
 const kindText = j => (j.kind === 'upc_stickers' && j.parts > 1 ? `${KIND[j.kind]} ${j.part}/${j.parts}` : KIND[j.kind] || j.kind);
@@ -133,8 +133,8 @@ function UnitLabels() {
   const take = v => {
     const c = clean(v);
     setQ('');
-    if (UPC_RE.test(c) || BATCH_RE.test(c)) { setBad(null); setLook(l => ({ upc: c, n: (l?.n || 0) + 1 })); }
-    else if (c) { setLook(null); setBad(`${c} is not a car, remote or batch label.`); }
+    if (UPC_RE.test(c) || BATCH_RE.test(c) || STICKER_TEXT_RE.test(c)) { setBad(null); setLook(l => ({ upc: c, n: (l?.n || 0) + 1 })); }
+    else if (c) { setLook(null); setBad(`${c} is not a car, remote or batch label. Scan the QR, or type the code printed under it.`); }
   };
   useAutoEnter(q, take);
   return (
@@ -142,7 +142,7 @@ function UnitLabels() {
       <div className="spread" style={{ marginBottom: 12 }}>
         <h2 style={{ margin: 0 }}>Reprint a unit’s labels</h2>
         <form onSubmit={e => { e.preventDefault(); take(q); }} className="row">
-          <input ref={input} autoFocus className="in mono" style={{ width: 260 }} placeholder="Scan the car, remote or batch label" value={q} onChange={e => setQ(e.target.value)} />
+          <input ref={input} autoFocus className="in mono" style={{ width: 260 }} placeholder="Scan or type the car, remote or batch label" value={q} onChange={e => setQ(e.target.value)} />
           <button className="btn sm" type="submit">Find</button>
         </form>
       </div>

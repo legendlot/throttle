@@ -3,6 +3,10 @@
 export const UPC_RE = /^LOT-\d{8}$/;
 export const BATCH_RE = /^LOT-\d{8}-[ERX]$/;
 export const CTN_RE = /^CTN-\d{7}$/;
+// The text printed under a sticker's QR: its product code + the same 8 digits (SHAK00517082 = LOT-00517082). Typed by
+// hand when the QR is out of a scanner's reach (Joseph, #bugs 1792913884.132369). Only the reprint lookup takes it, and
+// the server checks the prefix against the sticker's own batch, so a wrong prefix finds nothing.
+export const STICKER_TEXT_RE = /^[A-Z]{4,5}\d{8}$/;
 export const clean = s => String(s || '').trim().toUpperCase();
 
 export function classify(v) {

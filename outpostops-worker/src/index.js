@@ -17,7 +17,7 @@ import {
   mintToken, nextOpCode, nonceOk, normaliseJwk, PIN_DIGITS, sessionLive, sha256Hex, STEPUP_PURPOSES,
   STEPUP_SECONDS, tokenHash, verifyPin, verifySignature, ipBucket,
 } from './auth.js';
-import { unitLabelCode } from './labels.js';
+import { printedStickerCode, stickerPoolPath, unitLabelCode } from './labels.js';
 import { OPEN_CARTON_RACE_RE, packRequest } from './pack.js';
 import { isoDay, productionRequest } from './production.js';
 
@@ -544,8 +544,17 @@ async function vendorRoute(request, url, rawBody, ip) {
   // remote UPC, or the batch label (LOT-…-E). print_resolve still decides — it refuses once the unit is no longer packed here.
   if (route === 'unit_labels' && request.method === 'GET') {
     if (ctx.operator.role !== 'supervisor') return fail('supervisor_only', 403);
-    const code = unitLabelCode(url.searchParams.get('upc'));
+    const raw = url.searchParams.get('upc');
+    const printed = unitLabelCode(raw) ? null : printedStickerCode(raw);
+    const code = unitLabelCode(raw) || printed?.upc;
     if (!code) return fail('upc required');
+    // Typed from the sticker's printed text: the prefix must be that sticker's own product code (Joseph, #bugs
+    // 1792913884.132369), else a mistyped prefix with right digits would open a different product's unit.
+    if (printed) {
+      const p = await pub(stickerPoolPath(printed, ctx.vendorId));
+      if (!p.ok) return fail('outpost_unavailable', 503);
+      if (!p.data[0]) return fail('sticker_mismatch', 404);
+    }
     // Scoped to this vendor from the first read: another vendor's unit, or one that never came through Outpost, is
     // not found — never another vendor's detail. A remote's labels are its car's (labels are keyed on the car UPC), and
     // the pair is read off the vendor's own unit row, not pkg_scans (a remote UPC can sit on several pkg_scans rows).

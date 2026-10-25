@@ -154,6 +154,7 @@ const MESSAGES = {
   replay: 'Request repeated. Try again.',
   bad_signature: 'This device’s key was refused. Enrol it again.',
   not_found: 'Not found.',
+  sticker_mismatch: 'No sticker of ours has those letters with that number. Check the code printed under the QR.',
 };
 export function say(r) {
   if (!r) return 'Something went wrong.';
