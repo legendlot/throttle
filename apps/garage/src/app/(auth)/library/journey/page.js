@@ -7,6 +7,7 @@ import { Spinner, useToast, EmptyState, Combobox } from '@throttle/ui';
 const EVENT_TYPES = [
   { id: 'GRN',           label: 'GRN',           tone: 'green'  },
   { id: 'ISSUE',         label: 'Issuance',      tone: 'blue'   },
+  { id: 'DIRECT_ISSUE',  label: 'Direct Issue',  tone: 'blue'   },
   { id: 'FLUSH',         label: 'Line Flush',    tone: 'yellow' },
   { id: 'DAMAGE',        label: 'Damage Logged', tone: 'red'    },
   { id: 'DAMAGE_ACTION', label: 'Damage Action', tone: 'orange' },
@@ -56,7 +57,7 @@ function TypeBadge({ type }) {
 
 function DirectionArrow({ direction, delta }) {
   if (direction === 'in')  return <span style={{ color: '#4ade80', fontFamily: 'var(--mono)', fontWeight: 700 }}>+{fmtQty(delta)}</span>;
-  if (direction === 'out') return <span style={{ color: '#ff7070', fontFamily: 'var(--mono)', fontWeight: 700 }}>-{fmtQty(delta || 0)}</span>;
+  if (direction === 'out') return <span style={{ color: '#ff7070', fontFamily: 'var(--mono)', fontWeight: 700 }}>-{fmtQty(Math.abs(delta || 0))}</span>;
   return <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)' }}>—</span>;
 }
 
@@ -78,7 +79,7 @@ export default function PartJourneyPage() {
   const [partCode, setPartCode] = useState('');
   const [journey,  setJourney]  = useState(null);
   const [loading,  setLoading]  = useState(false);
-  const [typeFilter, setTypeFilter] = useState(() => new Set(['GRN','ISSUE','FLUSH','DAMAGE','DAMAGE_ACTION'])); // hide BAG_GEN + RUN_PICK by default
+  const [typeFilter, setTypeFilter] = useState(() => new Set(['GRN','ISSUE','DIRECT_ISSUE','FLUSH','DAMAGE','DAMAGE_ACTION'])); // hide BAG_GEN + RUN_PICK by default
   const [showBalance, setShowBalance] = useState(true);
 
   // Parts catalogue for the combobox — TWO sources, merged.
