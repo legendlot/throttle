@@ -413,8 +413,14 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onRe
   const [completing, setCompleting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [removing,   setRemoving]   = useState(false);
+  const [correcting, setCorrecting] = useState(null); // { line, qty, reason } while the correction dialog is open
+  const [correctBusy, setCorrectBusy] = useState(false);
 
   const isInProgress = header.status === 'in_progress';
+  // A counted (or recount-flagged) figure can be corrected by hand while the count is open —
+  // worker correctCycleCountLine (reason required, logged on the count, later scans refused).
+  const canCorrect = l => canRecord && header.status === 'in_progress'
+    && ['counted', 'recount_required'].includes(l.status) && l.adjustment_id == null;
   const isBlind      = isInProgress; // server already redacted
 
   // Bags scanned on the floor, polled while the count is open so the person at the
@@ -496,6 +502,25 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onRe
     setRecountReason('');
     setRecountOpen(false);
     onReload();
+  }
+
+  async function saveCorrection() {
+    const c = correcting;
+    if (!c) return;
+    const qty = Number(c.qty);
+    if (c.qty === '' || !isFinite(qty) || qty < 0) { toast('Enter the correct count', 'error'); return; }
+    if (!c.reason.trim()) { toast('Reason required', 'error'); return; }
+    setCorrectBusy(true);
+    try {
+      const r = await workerFetch('correctCycleCountLine', {
+        data: { count_no: header.count_no, line_id: c.line.id, counted_qty: qty, reason: c.reason.trim() },
+      }, session);
+      if (!r?.ok) { toast(r?.data?.error || r?.error || 'Correction failed', 'error'); return; }
+      toast(`${c.line.part_code}: ${fmtNum(r.data.was)} → ${fmtNum(r.data.counted_qty)}${r.data.warning ? ` — ${r.data.warning}` : ''}`, r.data.warning ? 'warning' : 'success');
+      setCorrecting(null);
+      onReload();
+    } catch (e) { toast(e.message || 'Correction failed', 'error'); onReload(); }
+    finally { setCorrectBusy(false); }
   }
 
   // Take parts off the count (e.g. only partly scanned) so the rest can complete. Removed
@@ -714,7 +739,13 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onRe
                       </td>
                       <td style={{ ...td, textAlign: 'center', fontWeight: 700, fontSize: 10, color: l.abc_class === 'A' ? '#ff7070' : l.abc_class === 'B' ? '#fbbf24' : l.abc_class === 'C' ? '#7b93ff' : 'var(--t3)' }}>{l.abc_class || '—'}</td>
                       <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)', color: erpVisible ? 'var(--t2)' : 'var(--t3)' }}>
-                        {erpVisible ? fmtNum(l.erp_qty_at_print) : <span style={{ filter: 'blur(4px)', userSelect: 'none' }}>—</span>}
+                        {/* Once counted, the variance is against the system qty AT THE COUNT (S436), so show that
+                            figure; the print-time figure stays on hover when stock moved in between. */}
+                        {erpVisible
+                          ? (l.erp_qty_at_count != null && Number(l.erp_qty_at_count) !== Number(l.erp_qty_at_print)
+                              ? <span title={`System qty when this part was counted. When the count was opened: ${fmtNum(l.erp_qty_at_print)}`}>{fmtNum(l.erp_qty_at_count)}*</span>
+                              : fmtNum(l.erp_qty_at_count ?? l.erp_qty_at_print))
+                          : <span style={{ filter: 'blur(4px)', userSelect: 'none' }}>—</span>}
                       </td>
                       {/* Where the number came from: bag scans vs typed by hand. */}
                       <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
@@ -738,7 +769,16 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onRe
                             <button onClick={() => saveLine(l)} disabled={savingPart === l.part_code} style={{ ...btnS, padding: '4px 8px', fontSize: 10 }}>{savingPart === l.part_code ? '…' : '↵'}</button>
                           </div>
                         ) : (
-                          <span style={{ fontWeight: 700, color: 'var(--t1)' }}>{fmtNum(l.counted_qty)}</span>
+                          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
+                            {l.reason_code === 'physical_recount_correction' && (
+                              <span title={l.notes || 'Corrected by hand'} style={{ fontSize: 9, color: '#fbbf24', letterSpacing: '.05em' }}>HAND</span>
+                            )}
+                            <span style={{ fontWeight: 700, color: 'var(--t1)' }}>{fmtNum(l.counted_qty)}</span>
+                            {canCorrect(l) && (
+                              <button onClick={() => setCorrecting({ line: l, qty: l.counted_qty == null ? '' : String(Number(l.counted_qty)), reason: '' })}
+                                title="Correct this count by hand" style={{ ...btnS, padding: '2px 6px', fontSize: 10 }}>✎</button>
+                            )}
+                          </span>
                         )}
                       </td>
                       <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)', fontWeight: 700, color: l.variance == null ? 'var(--t3)' : Math.abs(parseFloat(l.variance)) < 0.001 ? '#4ade80' : parseFloat(l.variance) > 0 ? '#ff7070' : '#fbbf24' }}>
@@ -761,6 +801,30 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, onRe
           </div>
         </div>
       </div>
+
+      {correcting && (
+        <Modal open onClose={() => !correctBusy && setCorrecting(null)} size="md" title={`Correct ${correcting.line.part_code}`}
+               confirmLabel={correctBusy ? 'SAVING…' : 'SAVE CORRECTION'} onConfirm={saveCorrection} loading={correctBusy}>
+          <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--t2)' }}>
+            Counted so far: <strong>{fmtNum(correcting.line.counted_qty)}</strong>. Count this part on the shelf again
+            now and enter what is there now — the difference is measured against the system stock at this moment.
+            The correction is logged on this count with your name and reason, and later bag scans of this part on
+            this count are not added. Any difference still goes for approval as usual.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 10 }}>
+            <div>
+              <label style={lbl}>Correct count</label>
+              <input type="number" min={0} step="any" value={correcting.qty} autoFocus
+                onChange={e => setCorrecting(c => ({ ...c, qty: e.target.value }))} style={{ ...input, width: '100%', textAlign: 'right' }} />
+            </div>
+            <div>
+              <label style={lbl}>Reason</label>
+              <input value={correcting.reason} onChange={e => setCorrecting(c => ({ ...c, reason: e.target.value }))}
+                placeholder="e.g. recounted the shelf, one bag was short" style={{ ...input, width: '100%' }} />
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {recountOpen && (
         <Modal open onClose={() => setRecountOpen(false)} size="md" title={`Flag ${recountIds.length} line(s) for recount`}
