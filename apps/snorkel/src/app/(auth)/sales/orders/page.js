@@ -71,12 +71,13 @@ export default function SalesOrdersPage() {
     return <div style={{ padding: 24, color: 'var(--text-3)' }}>Access restricted.</div>;
   }
 
-  // The date is a CLIENT filter on order_date (getSalesOrders has no date param). `dated` is
-  // channel/status (server) + date — what the value tiles describe; `filtered` adds the on-screen
-  // search / fulfilment / overdue chips on top, and feeds the table and every export.
   // Fulfilment choices are the statuses these orders actually carry (Ram, #bugs 1793103961): the list was the
   // four pre-cutover labels, so "Awaiting acceptance" and the other request-flow statuses could not be picked.
   const fulfilmentOptions = Object.keys(FULFILMENT).filter(k => k === filters.fulfilment || rows.some(r => r.fulfilment_status === k));
+
+  // The date is a CLIENT filter on order_date (getSalesOrders has no date param). `dated` is
+  // channel/status (server) + date — what the value tiles describe; `filtered` adds the on-screen
+  // search / fulfilment / overdue chips on top, and feeds the table and every export.
   const dated = rows.filter(r => inDateRange(r, range));
   let filtered = dated;
   if (filters.fulfilment) filtered = filtered.filter(r => r.fulfilment_status === filters.fulfilment);
