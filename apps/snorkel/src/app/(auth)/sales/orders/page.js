@@ -7,7 +7,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Plus, Download } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, inrCompact } from '@/components/format.js';
-import { orderStatusLabel, ORDER_STATUS_TONES, fulfilmentMeta, paymentMeta, inr, fyLabel, csvCell } from '@/lib/sales';
+import { orderStatusLabel, ORDER_STATUS_TONES, FULFILMENT, fulfilmentMeta, paymentMeta, inr, fyLabel, csvCell } from '@/lib/sales';
 import { todayStr, istRangePresets } from '@throttle/domain';
 import { buildSoLinesCsv, buildSoSkuSummaryCsv } from '@/lib/soExport.js';
 import { useSessionState } from '@/lib/useSessionState.js';
@@ -74,6 +74,9 @@ export default function SalesOrdersPage() {
   // The date is a CLIENT filter on order_date (getSalesOrders has no date param). `dated` is
   // channel/status (server) + date — what the value tiles describe; `filtered` adds the on-screen
   // search / fulfilment / overdue chips on top, and feeds the table and every export.
+  // Fulfilment choices are the statuses these orders actually carry (Ram, #bugs 1793103961): the list was the
+  // four pre-cutover labels, so "Awaiting acceptance" and the other request-flow statuses could not be picked.
+  const fulfilmentOptions = Object.keys(FULFILMENT).filter(k => k === filters.fulfilment || rows.some(r => r.fulfilment_status === k));
   const dated = rows.filter(r => inDateRange(r, range));
   let filtered = dated;
   if (filters.fulfilment) filtered = filtered.filter(r => r.fulfilment_status === filters.fulfilment);
@@ -237,7 +240,8 @@ export default function SalesOrdersPage() {
               <option value="">All statuses</option><option value="draft">Draft</option><option value="confirmed">Confirmed</option><option value="cancelled">Cancelled</option>
             </select>
             <select value={filters.fulfilment} onChange={e => setFilters(f => ({ ...f, fulfilment: e.target.value }))} className="sel">
-              <option value="">All fulfilment</option><option value="not_dispatched">Not dispatched</option><option value="pending">Pending</option><option value="in_progress">In progress</option><option value="fulfilled">Fulfilled</option>
+              <option value="">All fulfilment</option>
+              {fulfilmentOptions.map(k => <option key={k} value={k}>{FULFILMENT[k].label}</option>)}
             </select>
             <select value={filters.channel_key} onChange={e => setFilters(f => ({ ...f, channel_key: e.target.value }))} className="sel">
               <option value="">All channels</option>
