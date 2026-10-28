@@ -851,7 +851,8 @@ export default function CampaignsPage() {
     // a 300k-member segment that is 40–60 s inside this one request (measured 2026-10-28). With
     // nothing on screen people refreshed at about a minute, which cancels the request and leaves
     // the campaign exactly as it was — so say what is happening and what not to do.
-    showToast('Checking the audience and today\'s limits — up to a minute for a large list. Please don\'t refresh.', 'info');
+    // 60 s, not the 3.5 s default: the toast has to outlive the wait it is warning about.
+    showToast('Checking the audience and today\'s limits — up to a minute for a large list. Please don\'t refresh.', 'info', 60000);
     try {
       const r = await workerFetch('sendCampaign', { id: c.id }, session);
       showToast(r?.data?.building
@@ -1421,7 +1422,7 @@ export default function CampaignsPage() {
             {c.status === 'stopped' && (
               <>
                 <Badge label="stopped mid-send" tone="red" dot />
-                {canSend && <Btn kind="primary" onClick={() => sendNow({ resume: true })} disabled={busy}><Send size={14} /> Resume sending</Btn>}
+                {canSend && <Btn kind="primary" onClick={() => sendNow({ resume: true })} disabled={busy}><Send size={14} /> {busy ? 'Checking…' : 'Resume sending'}</Btn>}
               </>
             )}
             {c.status === 'building_roster' && (
