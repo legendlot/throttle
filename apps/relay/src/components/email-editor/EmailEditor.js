@@ -2,6 +2,7 @@
 import { useEffect, useRef } from 'react';
 import grapesjs from 'grapesjs';
 import grapesjsMjml from 'grapesjs-mjml';
+import mjml2html from 'mjml-browser';
 import 'grapesjs/dist/css/grapes.min.css';
 import { supabase, garageFetch, workerFetch } from '@throttle/db';
 import { useToast } from '@throttle/ui';
@@ -9,9 +10,15 @@ import { exportEmail } from './exportEmail.js';
 import { BLANK_MJML } from './blankScaffold.js';
 import { EMAIL_FONTS, FONT_CSS_URL, addFontOptions } from './fonts.js';
 
-// The plugin's `fonts` is what its per-component canvas conversion hands to mjml2html; without
-// it a custom face renders as the fallback in the canvas while exporting fine (see fonts.js).
-const mjmlPlugin = (editor) => grapesjsMjml(editor, { fonts: EMAIL_FONTS });
+// The plugin hands `fonts` to mjml2html for its own conversions (mj-font, the code/export views);
+// the canvas face itself comes from FONT_CSS_URL below. ⚠️ mjml2html MUTATES the fonts object
+// it is given — an `<mj-font name href>` in a template is written into it — so every call gets a
+// fresh copy, or one template's font URL would leak into every later export in the tab
+// (hostile review 2026-10-28; mjml-browser 4.18 repro).
+const mjmlPlugin = (editor) => grapesjsMjml(editor, {
+  fonts: { ...EMAIL_FONTS },
+  mjmlParser: (mjml, opts) => mjml2html(mjml, { ...opts, fonts: { ...(opts?.fonts || EMAIL_FONTS) } }),
+});
 
 const BUCKET = 'relay-email-assets';
 const MAX_BYTES = 5 * 1024 * 1024;

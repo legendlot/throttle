@@ -46,7 +46,8 @@ export function exportEmail(editor) {
   const compile = mjml2html.default || mjml2html;
   // `fonts` restates MJML's defaults plus the builder's added faces (fonts.js): MJML emits the
   // <link>/@import only for a font some font-family in the compiled mail actually names.
-  const { html, errors } = compile(mjml, { validationLevel: 'soft', minify: false, fonts: EMAIL_FONTS });
+  // A copy per call: mjml2html writes any <mj-font> it meets into the object it is given.
+  const { html, errors } = compile(mjml, { validationLevel: 'soft', minify: false, fonts: { ...EMAIL_FONTS } });
   const warnings = Array.isArray(errors) ? errors : [];
   if (warnings.length) console.warn('[email-editor] MJML warnings', warnings);
   return {
