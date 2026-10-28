@@ -1,5 +1,6 @@
 import mjml2html from 'mjml-browser';
 import { htmlToPlain } from './htmlToPlain.js';
+import { EMAIL_FONTS } from './fonts.js';
 
 // GrapesJS parses MJML with an HTML parser, and an HTML parser does not honour the XML
 // self-closing slash on unknown elements. So a perfectly good head like
@@ -43,7 +44,9 @@ export function normaliseMjAttributes(mjml) {
 export function exportEmail(editor) {
   const mjml = normaliseMjAttributes(editor.getHtml());
   const compile = mjml2html.default || mjml2html;
-  const { html, errors } = compile(mjml, { validationLevel: 'soft', minify: false });
+  // `fonts` restates MJML's defaults plus the builder's added faces (fonts.js): MJML emits the
+  // <link>/@import only for a font some font-family in the compiled mail actually names.
+  const { html, errors } = compile(mjml, { validationLevel: 'soft', minify: false, fonts: EMAIL_FONTS });
   const warnings = Array.isArray(errors) ? errors : [];
   if (warnings.length) console.warn('[email-editor] MJML warnings', warnings);
   return {

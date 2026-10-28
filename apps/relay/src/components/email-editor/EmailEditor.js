@@ -7,6 +7,11 @@ import { supabase, garageFetch, workerFetch } from '@throttle/db';
 import { useToast } from '@throttle/ui';
 import { exportEmail } from './exportEmail.js';
 import { BLANK_MJML } from './blankScaffold.js';
+import { EMAIL_FONTS, FONT_CSS_URL, addFontOptions } from './fonts.js';
+
+// The plugin's `fonts` is what its per-component canvas conversion hands to mjml2html; without
+// it a custom face renders as the fallback in the canvas while exporting fine (see fonts.js).
+const mjmlPlugin = (editor) => grapesjsMjml(editor, { fonts: EMAIL_FONTS });
 
 const BUCKET = 'relay-email-assets';
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -32,7 +37,8 @@ export default function EmailEditor({ initialDesign, initialMjml, session, onRea
       height: '640px',
       fromElement: false,
       storageManager: false,
-      plugins: [grapesjsMjml],
+      plugins: [mjmlPlugin],
+      canvas: { styles: [FONT_CSS_URL] },
       assetManager: {
         uploadFile: async (e) => {
           const files = e.dataTransfer ? e.dataTransfer.files : e.target.files;
@@ -48,6 +54,9 @@ export default function EmailEditor({ initialDesign, initialMjml, session, onRea
         },
       },
     });
+    // After the plugin's own onReady: grapesjs-mjml RESETS the sectors there (style.ts), so an
+    // append made synchronously here would be wiped. Listeners fire in registration order.
+    editor.onReady(() => addFontOptions(editor));
     // Load order matters. A saved design_json is the editor's own round-trippable state, so it
     // always wins. Failing that, MJML SOURCE is loadable too — `setComponents` parses it into
     // real components, which is how a template authored outside the canvas can still be opened,
