@@ -4287,6 +4287,7 @@ export default {
                 component_type: l.component_type||null,
                 receive_format: l.receive_format || null,
                 remote_qty: parseInt(l.remote_qty) || 0,
+                pack_type: ['ecom', 'retail', 'export'].includes(l.pack_type) ? l.pack_type : null,   // Outpost packing: ecom / retail / export (Joseph 2026-10-28)
                 hsn_code: l.hsn_code || null,
                 gst_percent: l.gst_percent != null ? parseFloat(l.gst_percent) : null,
                 mould_no: l.mould_no || null,
@@ -4627,6 +4628,7 @@ export default {
                 component_type: l.component_type||null,
                 receive_format: l.receive_format || null,
                 remote_qty: parseInt(l.remote_qty) || 0,
+                pack_type: ['ecom', 'retail', 'export'].includes(l.pack_type) ? l.pack_type : null,   // Outpost packing: ecom / retail / export (Joseph 2026-10-28)
                 hsn_code: l.hsn_code || null,
                 gst_percent: l.gst_percent != null ? parseFloat(l.gst_percent) : null,
                 mould_no: l.mould_no || null,
@@ -4801,6 +4803,7 @@ export default {
               color: l.color||null, component_type: l.component_type||null,
               receive_format: l.receive_format || null,
               remote_qty: parseInt(l.remote_qty) || 0,
+              pack_type: ['ecom', 'retail', 'export'].includes(l.pack_type) ? l.pack_type : null,   // Outpost packing: ecom / retail / export (Joseph 2026-10-28)
               hsn_code: l.hsn_code || null,
               gst_percent: l.gst_percent != null && l.gst_percent !== '' ? parseFloat(l.gst_percent) : null,
               mould_no: l.mould_no || null,

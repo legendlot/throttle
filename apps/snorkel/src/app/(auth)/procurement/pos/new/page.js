@@ -56,6 +56,9 @@ const BOM_GROUPS = [
 // to count 4,080 of "Shipping Charges" off a truck. A Charge line still needs an HSN/SAC code and
 // a GST % under RULE-PO-001.
 const ITEM_TYPES = ['Part', 'Other', 'FBU Unit', 'Ecom Packaging', 'Comic', 'Consumable', 'Charge'];
+// Packaging a unit line is packed into at the vendor — the Outpost work order's pack_type (E / R / X on the batch label).
+const PACK_TYPES = ['ecom', 'retail', 'export'];
+const PACK_LABEL = { ecom: 'Ecom', retail: 'Retail', export: 'Export' };
 
 const TONE_STYLES = {
   yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.2)' },
@@ -533,7 +536,8 @@ function NewPOPage() {
     // (most common case for China procurement).
     setUnitsRows((prev) => {
       const lastFormat = prev.length ? (prev[prev.length - 1].receive_format || 'FBU') : 'FBU';
-      return [...prev, { variant: '', color: '', qty: '', remote_qty: '', unit_price: '', receive_format: lastFormat }];
+      const lastPack = prev.length ? (prev[prev.length - 1].pack_type || '') : '';
+      return [...prev, { variant: '', color: '', qty: '', remote_qty: '', unit_price: '', receive_format: lastFormat, pack_type: lastPack }];
     });
   }
   function updateUnitRow(i, field, value) {
@@ -602,6 +606,10 @@ function NewPOPage() {
         const rq = parseInt(u.remote_qty, 10) || 0;
         const rf = u.receive_format || 'FBU';
         const remoteLabel = rq > 0 ? ` (+${rq} remote)` : '';
+        // Packaging the vendor packs into (Outpost vendors pack finished boxes: ecom / retail / export). Stored on
+        // the line for the work order to inherit, and spelled out in the description so the printed PO says it.
+        const pack = PACK_TYPES.includes(u.pack_type) ? u.pack_type : null;
+        const packLabel = pack ? ` — ${PACK_LABEL[pack]} packaging` : '';
         // The price is PER PRODUCT UNIT INCLUDING its remote — remote_qty stays a
         // quantity on this same line and is never priced separately.
         lines.push({
@@ -612,11 +620,12 @@ function NewPOPage() {
           qty_ordered:    q,
           remote_qty:     rq,
           receive_format: rf,
+          pack_type:      pack,
           unit:           'units',
           unit_price:     u.unit_price,
           hsn_code:       currency === 'INR' ? unitHsn : '',
           gst_percent:    currency === 'INR' && unitGst != null ? String(unitGst) : '',
-          description:    `${fbuProduct} ${u.variant || ''} ${u.color || ''} [${rf}]${remoteLabel}`.trim().replace(/\s+/g, ' '),
+          description:    `${fbuProduct} ${u.variant || ''} ${u.color || ''} [${rf}]${remoteLabel}${packLabel}`.trim().replace(/\s+/g, ' '),
         });
       });
     }
@@ -656,6 +665,7 @@ function NewPOPage() {
         color:          l.color || null,
         receive_format: l.receive_format || null,
         remote_qty:     parseInt(l.remote_qty, 10) || 0,
+        pack_type:      PACK_TYPES.includes(l.pack_type) ? l.pack_type : null,
         hsn_code:       l.hsn_code || null,
         gst_percent:    l.gst_percent !== '' && l.gst_percent != null ? parseFloat(l.gst_percent) : null,
         mould_no:       l.mould_no || null,
@@ -1470,6 +1480,7 @@ function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote =
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
             <th style={tableThStyle}>Format</th>
+            <th style={tableThStyle}>Packaging</th>
             <th style={tableThStyle}>Variant</th>
             <th style={tableThStyle}>Colour</th>
             <th style={tableThStyle}>Product Qty</th>
@@ -1495,6 +1506,17 @@ function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote =
                     >
                       <option value="FBU">FBU</option>
                       <option value="CKD">CKD</option>
+                    </select>
+                  </td>
+                  <td style={tableTdStyle}>
+                    {/* The box the vendor packs into. Blank = not decided on the PO (the work order asks). */}
+                    <select
+                      value={r.pack_type || ''}
+                      onChange={(e) => updateUnitRow(i, 'pack_type', e.target.value)}
+                      style={{ ...selectStyle, width: 96 }}
+                    >
+                      <option value="">—</option>
+                      {PACK_TYPES.map((t) => <option key={t} value={t}>{PACK_LABEL[t]}</option>)}
                     </select>
                   </td>
                   <td style={tableTdStyle}>

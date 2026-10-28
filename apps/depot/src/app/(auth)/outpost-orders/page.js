@@ -122,6 +122,7 @@ function OrdersInner() {
 }
 
 const LOT = 'LOT';
+const PACK = { ecom: 'Ecom', retail: 'Retail', export: 'Export' };
 
 function NewOrder({ vendorId, onClose, onCreated }) {
   const { session } = useAuth();
@@ -132,6 +133,13 @@ function NewOrder({ vendorId, onClose, onCreated }) {
   useEffect(() => { opGet('getOrderOptions', { vendor_id: vendorId }, session).then(setOpts).catch(e => setErr(e.message)); /* eslint-disable-next-line */ }, [vendorId]);
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value, ...(k === 'sku' ? { po_line_id: '' } : {}) }));
   const lines = useMemo(() => (opts?.po_lines || []).filter(l => l.sku === f.sku), [opts, f.sku]);
+  // A PO line that names its packaging (Snorkel, Joseph 2026-10-28) pre-fills LOT + that packaging when no channel
+  // is chosen yet; a channel already picked is left alone (its type is the packaging).
+  const pickLine = e => {
+    const id = e.target.value;
+    const l = lines.find(x => String(x.id) === String(id));
+    setF(p => ({ ...p, po_line_id: id, ...(l?.pack_type && PACK[l.pack_type] && !p.channel_id ? { channel_id: LOT, pack_type: l.pack_type } : {}) }));
+  };
   // Only channels a bench can pack (ecom / retail / export) — the server's list; create_work_order refuses the rest.
   const live = opts?.channels || [];
   const qty = Number(f.target_qty);
@@ -169,9 +177,9 @@ function NewOrder({ vendorId, onClose, onCreated }) {
           <Field name="Target quantity" hint="A target, not a cap: benches can pack past it."><Input inputMode="numeric" value={f.target_qty}
             onChange={e => setF(p => ({ ...p, target_qty: e.target.value.replace(/\D/g, '').slice(0, 7) }))} /></Field>
           <Field name="PO line (optional)" hint={f.sku && !lines.length ? 'No live PO line of this vendor matches this colourway.' : 'Feeds the GRN at LOT receiving.'}>
-            <Select value={f.po_line_id} onChange={set('po_line_id')} disabled={!lines.length}>
+            <Select value={f.po_line_id} onChange={pickLine} disabled={!lines.length}>
               <option value="">None</option>
-              {lines.map(l => <option key={l.id} value={l.id}>{l.po_number} · line {l.line_no} · {Number(l.qty_received || 0)}/{Number(l.qty_ordered || 0)} received · {l.status}</option>)}
+              {lines.map(l => <option key={l.id} value={l.id}>{l.po_number} · line {l.line_no} · {Number(l.qty_received || 0)}/{Number(l.qty_ordered || 0)} received · {l.status}{PACK[l.pack_type] ? ` · ${PACK[l.pack_type]} packaging` : ''}</option>)}
             </Select></Field>
           <Field name="Notes (optional)" style={{ gridColumn: '1 / -1' }}><Input value={f.notes} maxLength={300} onChange={set('notes')} /></Field>
         </div>
