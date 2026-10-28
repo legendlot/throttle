@@ -133,15 +133,22 @@ function NewOrder({ vendorId, onClose, onCreated }) {
   useEffect(() => { opGet('getOrderOptions', { vendor_id: vendorId }, session).then(setOpts).catch(e => setErr(e.message)); /* eslint-disable-next-line */ }, [vendorId]);
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value, ...(k === 'sku' ? { po_line_id: '' } : {}) }));
   const lines = useMemo(() => (opts?.po_lines || []).filter(l => l.sku === f.sku), [opts, f.sku]);
-  // A PO line that names its packaging (Snorkel, Joseph 2026-10-28) pre-fills LOT + that packaging when no channel
-  // is chosen yet; a channel already picked is left alone (its type is the packaging).
+  // A PO line that names its packaging (Snorkel, Joseph 2026-10-28) pre-fills LOT + that packaging when no sales
+  // channel is chosen yet — and keeps following the line while the order is still LOT, so picking a second line
+  // with a different packaging moves the pre-fill with it (hostile review 2026-10-28). A named channel wins: its
+  // type is the packaging, and a mismatch with the PO line is shown below the picker rather than overridden.
   const pickLine = e => {
     const id = e.target.value;
     const l = lines.find(x => String(x.id) === String(id));
-    setF(p => ({ ...p, po_line_id: id, ...(l?.pack_type && PACK[l.pack_type] && !p.channel_id ? { channel_id: LOT, pack_type: l.pack_type } : {}) }));
+    setF(p => ({ ...p, po_line_id: id,
+      ...(l?.pack_type && PACK[l.pack_type] && (!p.channel_id || p.channel_id === LOT) ? { channel_id: LOT, pack_type: l.pack_type } : {}) }));
   };
   // Only channels a bench can pack (ecom / retail / export) — the server's list; create_work_order refuses the rest.
   const live = opts?.channels || [];
+  const pickedLine = lines.find(x => String(x.id) === String(f.po_line_id));
+  const pickedChannel = live.find(c => c.id === f.channel_id);
+  const packMismatch = pickedLine?.pack_type && pickedChannel?.type && pickedChannel.type !== pickedLine.pack_type
+    ? `The PO line says ${PACK[pickedLine.pack_type]} packaging; ${pickedChannel.name} packs ${PACK[pickedChannel.type] || pickedChannel.type}.` : null;
   const qty = Number(f.target_qty);
   // LOT = no sales channel yet: the units come to LOT's warehouse and the channel is chosen at ALLOC, as for in-house
   // stock. The bench still needs the packaging type (the batch label's E / R / X).
@@ -176,7 +183,7 @@ function NewOrder({ vendorId, onClose, onCreated }) {
           </Select></Field>}
           <Field name="Target quantity" hint="A target, not a cap: benches can pack past it."><Input inputMode="numeric" value={f.target_qty}
             onChange={e => setF(p => ({ ...p, target_qty: e.target.value.replace(/\D/g, '').slice(0, 7) }))} /></Field>
-          <Field name="PO line (optional)" hint={f.sku && !lines.length ? 'No live PO line of this vendor matches this colourway.' : 'Feeds the GRN at LOT receiving.'}>
+          <Field name="PO line (optional)" hint={packMismatch || (f.sku && !lines.length ? 'No live PO line of this vendor matches this colourway.' : 'Feeds the GRN at LOT receiving.')}>
             <Select value={f.po_line_id} onChange={pickLine} disabled={!lines.length}>
               <option value="">None</option>
               {lines.map(l => <option key={l.id} value={l.id}>{l.po_number} · line {l.line_no} · {Number(l.qty_received || 0)}/{Number(l.qty_ordered || 0)} received · {l.status}{PACK[l.pack_type] ? ` · ${PACK[l.pack_type]} packaging` : ''}</option>)}

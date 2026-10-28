@@ -211,7 +211,7 @@ const INPUT_KEY = 'depot.receiving.input';
 // The camera passes every code in view: take a carton label, a unit sticker or a batch label (what receive_scan
 // understands — the same shapes as Outpost's scan.mjs); the box's EAN and anything else in the frame stay unread.
 const CODE_RE = /^(CTN-\d{7}|LOT-\d{8}(-[ERX])?)$/;
-const pickCode = vals => vals.map(v => String(v).trim().toUpperCase()).find(v => CODE_RE.test(v));
+const pickCodes = vals => [...new Set(vals.map(v => String(v).trim().toUpperCase()).filter(v => CODE_RE.test(v)))];
 
 const ALERT_TONE = { extra: 'warn', wrong_vendor: 'bad', already: 'mute', wrong_carton: 'warn', refused: 'bad' };
 const ALERT_WORD = { extra: 'extra', wrong_vendor: 'wrong vendor', already: 'already', wrong_carton: 'wrong carton', refused: 'refused' };
@@ -229,6 +229,9 @@ function ReceiveStep({ d, setD, csgNo, reload }) {
   const [input, setInput] = useState(null);      // 'camera' | 'scanner' — read after mount (static export: no window in render)
   const camOn = useRef(false);
   camOn.current = input === 'camera';
+  const cam = useRef(null);                      // CameraScan ref: flash(ok)
+  const [camNote, setCamNote] = useState(null);  // 'Two labels in view' — under the viewfinder, not in the alerts list
+  const lastTwo = useRef(0);
 
   useEffect(() => {
     let v = null;
@@ -302,7 +305,20 @@ function ReceiveStep({ d, setD, csgNo, reload }) {
         )}
         {input === 'camera' && (
           <div style={{ marginBottom: 10 }}>
-            <CameraScan formats={ALL_FORMATS} onCodes={vals => { const c = pickCode(vals); if (c) { onScan(c); return true; } return false; }} />
+            {/* Off while the Finish confirm is up (its numbers must not move under it). One label at a time, as on
+                Pair & Pack: two stacked cartons or two boxes side by side are refused aloud and left unread, so the
+                one that stays is read the moment the other leaves the view — a stray CTN must never switch the
+                open carton mid-count. */}
+            <CameraScan ref={cam} on={!ask} formats={ALL_FORMATS} onCodes={vals => {
+              const codes = pickCodes(vals);
+              if (!codes.length) return true;
+              if (codes.length > 1) {
+                if (performance.now() - lastTwo.current > 1500) { lastTwo.current = performance.now(); setCamNote('Two labels in view — show the camera one at a time.'); cam.current?.flash(false); }
+                return false;
+              }
+              setCamNote(null); cam.current?.flash(true); onScan(codes[0]); return true;
+            }} />
+            {camNote && <div style={{ ...text, color: 'var(--bad-fg)', marginTop: 6 }}>{camNote}</div>}
           </div>
         )}
         <ScanBox inputRef={inp} onScan={onScan} placeholder={ctn ? `Scan the next carton label, or a box in ${ctn.ctn_no}` : 'Scan a carton label (CTN-…)'} />

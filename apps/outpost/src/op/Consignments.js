@@ -6,7 +6,7 @@ import { useToast } from '@throttle/ui/Toast.js';
 import { printWindow } from '@throttle/ui/printWindow.js';
 import { act, get, say } from './api.js';
 import { buildPackingNote } from './packingNote.mjs';
-import { Badge, clean, Confirm, CTN_RE, Field, fmtTime, Modal, todayIST, useAutoEnter, useLoad, useScanCapture } from './ui.js';
+import { Badge, beep, clean, Confirm, CTN_RE, Field, fmtTime, Modal, todayIST, useAutoEnter, useLoad, useScanCapture } from './ui.js';
 import CameraView from './Camera.js';
 import { ALL_FORMATS } from './camera.mjs';
 import { useInputMode } from './Pack.js';
@@ -91,6 +91,11 @@ function Detail({ csg, onClose }) {
   // by camera here). Camera mode keeps the typed box too: a USB scanner's keys still land in it.
   const [mode, setMode] = useInputMode();
   const camera = mode === 'camera';
+  const cam = useRef(null);
+  const lastTwo = useRef(0);
+  // In camera mode the typed box is a fallback only: refocusing it after every add would raise the phone's keyboard
+  // over the viewfinder.
+  const refocus = () => { if (!camera) setTimeout(() => scanRef.current?.focus(), 0); };
   useScanCapture(scanRef, draft, 1);              // this detail is itself a dialog (layer 1)
   const ready = (cartons.data || []).filter(x => x.status === 'closed' && !x.consignment);
 
@@ -101,7 +106,7 @@ function Detail({ csg, onClose }) {
     if (!r.ok) { setErr(say(r)); return false; }
     if (okMsg) showToast(okMsg, 'success');
     d.reload(); cartons.reload();
-    setTimeout(() => scanRef.current?.focus(), 0);           // a removed row took focus with it: back to the scanner
+    refocus();                                               // a removed row took focus with it: back to the scanner
     return true;
   };
   const add = async raw => {
@@ -109,8 +114,9 @@ function Detail({ csg, onClose }) {
     setScan('');
     if (busy) { setErr(`Still working — ${v || 'that scan'} was not added. Scan it again.`); return; }
     if (!CTN_RE.test(v)) { setErr('Scan a carton label (CTN-…).'); return; }
-    await run('consignment_add', { csg_no: csg, ctn_no: v }, `${v} added`);
-    setTimeout(() => scanRef.current?.focus(), 0);
+    const ok = await run('consignment_add', { csg_no: csg, ctn_no: v }, `${v} added`);
+    if (camera) { beep(ok); cam.current?.flash(ok); }
+    refocus();
   };
   useAutoEnter(scan, add, draft);
   const addAll = async () => {
@@ -156,11 +162,16 @@ function Detail({ csg, onClose }) {
             <div className="card" style={{ background: 'var(--surface2)' }}>
               {camera && !modal && (
                 <div style={{ marginBottom: 10 }}>
-                  <CameraView formats={ALL_FORMATS} onCodes={vals => {
-                    // Only a carton label counts here; a unit sticker or the box EAN in the frame is left unread.
-                    const v = vals.map(clean).find(x => CTN_RE.test(x));
-                    if (!v || busy) return false;
-                    add(v);
+                  <CameraView ref={cam} formats={ALL_FORMATS} onCodes={vals => {
+                    // Only carton labels count here (a unit sticker or the box EAN in the frame is left unread), and one
+                    // at a time as on Pair & Pack: two labels in view are refused aloud and stay unread until one leaves.
+                    const labels = [...new Set(vals.map(clean).filter(x => CTN_RE.test(x)))];
+                    if (!labels.length || busy) return false;
+                    if (labels.length > 1) {
+                      if (performance.now() - lastTwo.current > 1500) { lastTwo.current = performance.now(); setErr('Two carton labels in view — show the camera one at a time.'); beep(false); cam.current?.flash(false); }
+                      return false;
+                    }
+                    add(labels[0]);
                     return true;
                   }} />
                 </div>
