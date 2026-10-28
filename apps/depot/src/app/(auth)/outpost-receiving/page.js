@@ -18,8 +18,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Modal, Spinner, useToast } from '@throttle/ui';
+import CameraScan from '@throttle/ui/CameraScan.js';
+import { ALL_FORMATS } from '@throttle/ui/camera.mjs';
 import { useRefreshState } from '../layout.js';
-import { Panel, FilterChip, ToneBadge, btnPrimary, inputStyle } from '../../../components/kit/index.js';
+import { Panel, FilterChip, ToneBadge, btnGhost, btnPrimary, inputStyle } from '../../../components/kit/index.js';
 import { opGet, opPost, fmtIST } from '../../../lib/outpost.js';
 import {
   Confirm, ErrorPanel, Field, Input, OwnerGate, Select, dangerBtn, label, mono, smallBtn, text, useOutpostVendors,
@@ -204,6 +206,13 @@ function ScanBox({ inputRef, onScan, placeholder, disabled }) {
   );
 }
 
+// Gate check-in input: the phone camera or a USB scanner. Default camera on a touch screen; the choice is remembered.
+const INPUT_KEY = 'depot.receiving.input';
+// The camera passes every code in view: take a carton label, a unit sticker or a batch label (what receive_scan
+// understands — the same shapes as Outpost's scan.mjs); the box's EAN and anything else in the frame stay unread.
+const CODE_RE = /^(CTN-\d{7}|LOT-\d{8}(-[ERX])?)$/;
+const pickCode = vals => vals.map(v => String(v).trim().toUpperCase()).find(v => CODE_RE.test(v));
+
 const ALERT_TONE = { extra: 'warn', wrong_vendor: 'bad', already: 'mute', wrong_carton: 'warn', refused: 'bad' };
 const ALERT_WORD = { extra: 'extra', wrong_vendor: 'wrong vendor', already: 'already', wrong_carton: 'wrong carton', refused: 'refused' };
 
@@ -217,6 +226,21 @@ function ReceiveStep({ d, setD, csgNo, reload }) {
   const [pending, setPending] = useState(0);
   const [alerts, setAlerts] = useState([]);
   const [ask, setAsk] = useState(null);
+  const [input, setInput] = useState(null);      // 'camera' | 'scanner' — read after mount (static export: no window in render)
+  const camOn = useRef(false);
+  camOn.current = input === 'camera';
+
+  useEffect(() => {
+    let v = null;
+    try { v = localStorage.getItem(INPUT_KEY); } catch { /* none */ }
+    if (v !== 'camera' && v !== 'scanner') v = window.matchMedia?.('(pointer: coarse)').matches ? 'camera' : 'scanner';
+    setInput(v);
+  }, []);
+  const flipInput = () => {
+    const v = input === 'camera' ? 'scanner' : 'camera';
+    setInput(v);
+    try { localStorage.setItem(INPUT_KEY, v); } catch { /* none */ }
+  };
 
   const expected = Number(d.receipt?.expected_units ?? d.consignment.unit_count);
   const received = useMemo(() => d.cartons.reduce((a, c) => a + c.units.filter(u => u.scanned).length, 0), [d.cartons]);
@@ -244,7 +268,7 @@ function ReceiveStep({ d, setD, csgNo, reload }) {
   // Scans run one at a time in arrival order (a scanner can fire faster than the round trip) — none dropped, none doubled.
   const onScan = code => {
     setPending(p => p + 1);
-    queue.current = queue.current.then(() => scanOne(code)).finally(() => { setPending(p => p - 1); inp.current?.focus(); });
+    queue.current = queue.current.then(() => scanOne(code)).finally(() => { setPending(p => p - 1); if (!camOn.current) inp.current?.focus(); });
   };
 
   const open = ctn && d.cartons.find(c => c.ctn_no === ctn.ctn_no);
@@ -271,6 +295,16 @@ function ReceiveStep({ d, setD, csgNo, reload }) {
           <button style={btnPrimary} disabled={pending > 0 || !!ask} onClick={finish}>Finish check-in</button>
         </div>
         <div style={{ ...text, marginBottom: 10 }}>Scan each carton label: that checks in every unit in the sealed carton. Open a carton and scan its boxes only when it looks wrong.</div>
+        {input && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+            <button type="button" style={btnGhost} onClick={flipInput}>{input === 'camera' ? 'Use scanner' : 'Use camera'}</button>
+          </div>
+        )}
+        {input === 'camera' && (
+          <div style={{ marginBottom: 10 }}>
+            <CameraScan formats={ALL_FORMATS} onCodes={vals => { const c = pickCode(vals); if (c) { onScan(c); return true; } return false; }} />
+          </div>
+        )}
         <ScanBox inputRef={inp} onScan={onScan} placeholder={ctn ? `Scan the next carton label, or a box in ${ctn.ctn_no}` : 'Scan a carton label (CTN-…)'} />
       </Panel>
 

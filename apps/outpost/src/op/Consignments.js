@@ -7,6 +7,9 @@ import { printWindow } from '@throttle/ui/printWindow.js';
 import { act, get, say } from './api.js';
 import { buildPackingNote } from './packingNote.mjs';
 import { Badge, clean, Confirm, CTN_RE, Field, fmtTime, Modal, todayIST, useAutoEnter, useLoad, useScanCapture } from './ui.js';
+import CameraView from './Camera.js';
+import { ALL_FORMATS } from './camera.mjs';
+import { useInputMode } from './Pack.js';
 
 export async function printNote(csgNo) {
   const r = await get(`/v/consignment?csg_no=${encodeURIComponent(csgNo)}`);
@@ -84,6 +87,10 @@ function Detail({ csg, onClose }) {
   const scanRef = useRef(null);
   const c = d.data;
   const draft = c?.status === 'draft';
+  // Same device-wide choice as Pair & Pack (Joseph, 2026-10-28: a phone on the floor had no way to add a carton
+  // by camera here). Camera mode keeps the typed box too: a USB scanner's keys still land in it.
+  const [mode, setMode] = useInputMode();
+  const camera = mode === 'camera';
   useScanCapture(scanRef, draft, 1);              // this detail is itself a dialog (layer 1)
   const ready = (cartons.data || []).filter(x => x.status === 'closed' && !x.consignment);
 
@@ -147,12 +154,26 @@ function Detail({ csg, onClose }) {
           {c.receipt && <Receipt r={c.receipt} status={c.status} />}
           {draft && (
             <div className="card" style={{ background: 'var(--surface2)' }}>
+              {camera && !modal && (
+                <div style={{ marginBottom: 10 }}>
+                  <CameraView formats={ALL_FORMATS} onCodes={vals => {
+                    // Only a carton label counts here; a unit sticker or the box EAN in the frame is left unread.
+                    const v = vals.map(clean).find(x => CTN_RE.test(x));
+                    if (!v || busy) return false;
+                    add(v);
+                    return true;
+                  }} />
+                </div>
+              )}
               <div className="spread">
                 <form className="row" onSubmit={e => { e.preventDefault(); add(scan); }}>
-                  <input ref={scanRef} className="in mono" style={{ width: 240 }} placeholder="scan a carton label" value={scan} onChange={e => setScan(e.target.value)} autoFocus />
+                  <input ref={scanRef} className="in mono" style={{ width: 240 }} placeholder={camera ? 'or type a carton label' : 'scan a carton label'} value={scan} onChange={e => setScan(e.target.value)} autoFocus={!camera} />
                   <button className="btn" disabled={!scan}>Add</button>
                 </form>
-                <button className="btn sm" disabled={busy || !ready.length} onClick={addAll}>Add all ready ({ready.length})</button>
+                <div className="row">
+                  {mode && <button type="button" className="btn sm" disabled={busy} onClick={() => setMode(camera ? 'scanner' : 'camera')}>{camera ? 'Use scanner' : 'Use camera'}</button>}
+                  <button className="btn sm" disabled={busy || !ready.length} onClick={addAll}>Add all ready ({ready.length})</button>
+                </div>
               </div>
               {ready.length > 0 && <div className="dim" style={{ marginTop: 8, fontSize: 13 }}>Ready: {ready.map(x => x.ctn_no).join(', ')}</div>}
             </div>
