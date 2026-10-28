@@ -116,10 +116,33 @@ async function materializeExclusions(env, camp) {
 // message, and is therefore what audience_snapshot and the approval threshold are judged on —
 // approving "25,067" for a send that reaches 2,571 is approving a number that does not exist.
 // The count and the fan-out share ONE predicate (comms.campaign_excluded) so they cannot drift.
+// Reuse a rebuild done moments ago. Measured 2026-10-28 on `All customers_WA` (310k members):
+// materialize_segment 15–21 s + campaign_reach 12–20 s, BOTH inside the Send press's own HTTP
+// request, so the button sat grey for 40–60 s with nothing to look at. Two presses that day
+// (11:24 and 11:33 UTC) completed the rebuild and then vanished before campaign_reach — the
+// author refreshed the page, which cancels the Worker mid-pre-flight and leaves the campaign
+// `approved` with no message. Submit had already rebuilt the same segment minutes earlier.
+// Same definition + younger than MATERIALIZE_REUSE_MS → the rows are what a rebuild would write.
+const MATERIALIZE_REUSE_MS = 10 * 60 * 1000;
+function isFreshMaterialization(seg, now = Date.now(), maxAgeMs = MATERIALIZE_REUSE_MS) {
+  if (!seg || seg.kind !== 'dynamic' || !seg.materialized_at) return false;
+  const at = Date.parse(seg.materialized_at);
+  if (!Number.isFinite(at) || now - at < 0 || now - at > maxAgeMs) return false;
+  // Both sides are jsonb from the same row, so key order is canonical and a string compare holds.
+  return JSON.stringify(seg.materialized_def ?? null) === JSON.stringify(seg.definition ?? null);
+}
+async function segmentFreshlyMaterialized(env, segmentId) {
+  const r = await A.sbComms(
+    `/rest/v1/segments?id=eq.${A.enc(segmentId)}&select=kind,definition,materialized_at,materialized_def&limit=1`, env);
+  return isFreshMaterialization(r.ok && Array.isArray(r.data) ? r.data[0] : null);
+}
+
 async function reachableCount(env, camp) {
   const segmentId = camp.segment_id;
-  // materialize first so the counts reflect the live segments, target + exclusions
-  await A.sbComms('/rest/v1/rpc/materialize_segment', env, { method: 'POST', body: JSON.stringify({ p_segment_id: segmentId }) });
+  // materialize first so the counts reflect the live segments, target + exclusions — unless a
+  // rebuild of this exact rule landed in the last few minutes (see isFreshMaterialization).
+  if (!(await segmentFreshlyMaterialized(env, segmentId)))
+    await A.sbComms('/rest/v1/rpc/materialize_segment', env, { method: 'POST', body: JSON.stringify({ p_segment_id: segmentId }) });
   await materializeExclusions(env, camp);
   const r = await A.sbComms('/rest/v1/rpc/campaign_reach', env, {
     method: 'POST',
@@ -873,7 +896,7 @@ async function sendCampaignTest(env, { id, to, draft, variantId }) {
   return { ok: true, results, capped: (Array.isArray(to) ? to.length : list.length) > MAX_TEST_RECIPIENTS };
 }
 
-module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBudget, minutesUntilQuiet, THROUGHPUT_PER_HOUR_PER_CHAIN, QUIET_MARGIN_MINUTES, startCampaign, processBuildChunk, stallCampaign, processQueueMessage, sendCampaignTest,
+module.exports = { getCampaign, setStatus, needsApproval, reachableCount, isFreshMaterialization, MATERIALIZE_REUSE_MS, sendBudget, minutesUntilQuiet, THROUGHPUT_PER_HOUR_PER_CHAIN, QUIET_MARGIN_MINUTES, startCampaign, processBuildChunk, stallCampaign, processQueueMessage, sendCampaignTest,
   // Exported for the fan-out tests ONLY. The continuation test is `recs.length === SENDS_PER_MSG`,
   // so a test that wants to exercise "a FULL page was processed" has to build a page of exactly
   // this size. It used to hardcode 4 next to a `// == SENDS_PER_MSG` comment, which silently

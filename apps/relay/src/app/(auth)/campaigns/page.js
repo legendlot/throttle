@@ -847,6 +847,11 @@ export default function CampaignsPage() {
       cancelLabel: "Don't send",
     }))) return;
     setBusy(true);
+    // The worker counts the live audience and today's limits BEFORE it claims the campaign, and on
+    // a 300k-member segment that is 40–60 s inside this one request (measured 2026-10-28). With
+    // nothing on screen people refreshed at about a minute, which cancels the request and leaves
+    // the campaign exactly as it was — so say what is happening and what not to do.
+    showToast('Checking the audience and today\'s limits — up to a minute for a large list. Please don\'t refresh.', 'info');
     try {
       const r = await workerFetch('sendCampaign', { id: c.id }, session);
       showToast(r?.data?.building
@@ -1404,7 +1409,7 @@ export default function CampaignsPage() {
                     {canBuild && <button className="badge-btn" onClick={cancelSchedule} disabled={busy} style={{ marginLeft: 8 }}>cancel schedule</button>}
                   </span>
                 )}
-                {canSend && <Btn kind="primary" onClick={() => sendNow()} disabled={busy}><Send size={14} /> Send now</Btn>}
+                {canSend && <Btn kind="primary" onClick={() => sendNow()} disabled={busy}><Send size={14} /> {busy ? 'Checking…' : 'Send now'}</Btn>}
               </>
             )}
             {c.status === 'sending' && (
