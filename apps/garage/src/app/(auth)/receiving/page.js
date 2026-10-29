@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { EmptyState, Spinner, useToast, printWindow, buildBagLabelsHtml } from '@throttle/ui';
@@ -990,12 +990,17 @@ export default function ReceivingPage() {
   }
 
   // ── Raise GRN from receiving ──────────────────────────────────────────────────
+  // One raise at a time: a double click sent two requests that both booked the same lines
+  // (GRN-2502/2503, 155,645 units twice). The worker now refuses the second; this stops it leaving.
+  const grnInFlight = useRef(false);
+  const [grnBusy, setGrnBusy] = useState(false);
   async function raiseGRN(force = false) {
-    if (!shipmentData) return;
+    if (!shipmentData || grnInFlight.current) return;
     const ids = (shipmentData.lines || [])
       .filter(l => (parseInt(l.qty_counted) || 0) > (parseInt(l.qty_grn) || 0))
       .map(l => l.line_id);
     if (!ids.length) { showToast('No counted lines ready for GRN', 'error'); return; }
+    grnInFlight.current = true; setGrnBusy(true);
     try {
       const res = await workerFetch('raiseGRNFromReceiving', {
         data: { shipment_id: currentShipmentId, line_ids: ids, force }
@@ -1008,10 +1013,12 @@ export default function ReceivingPage() {
       // code and returns a `GRN_CODE_GUARD:` message. Offer an informed override.
       if (!force && msg.startsWith('GRN_CODE_GUARD:')) {
         const clean = msg.replace(/^GRN_CODE_GUARD:\s*/, '');
-        if (window.confirm(`Heads up — ${clean}\n\nPost anyway?`)) return raiseGRN(true);
+        if (window.confirm(`Heads up — ${clean}\n\nPost anyway?`)) { grnInFlight.current = false; return await raiseGRN(true); }
         return;
       }
       showToast(msg, 'error');
+    } finally {
+      grnInFlight.current = false; setGrnBusy(false);
     }
   }
 
@@ -1412,7 +1419,7 @@ export default function ReceivingPage() {
           {/* Action bar */}
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
             {hasQtyForGRN && (
-              <button style={btnPri} onClick={() => raiseGRN()}>Raise GRN</button>
+              <button style={btnPri} onClick={() => raiseGRN()} disabled={grnBusy}>{grnBusy ? 'Raising…' : 'Raise GRN'}</button>
             )}
             {showBagButtons && (
               <>
