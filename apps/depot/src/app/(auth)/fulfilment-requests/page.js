@@ -7,7 +7,8 @@
    cancels the Snorkel sales order). Accepted requests spawn child
    shipments that show on the Shipments screen.
    Reads: getFulfilmentRequests (list) · getFulfilmentRequest (detail).
-   Writes: acceptFulfilmentFull · acceptFulfilmentSplit · rejectFulfilment.
+   Writes: acceptFulfilmentFull · acceptFulfilmentSplit · rejectFulfilment · markShippedByVendor
+   (an order the vendor sent straight to the partner: closes as shipped, moves no stock).
    ════════════════════════════════════════════════════════════ */
 import { useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
@@ -79,6 +80,10 @@ export default function FulfilmentRequestsPage() {
   // reject modal
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  // shipped-by-vendor modal
+  const [vendorOpen, setVendorOpen] = useState(false);
+  const [vendorName, setVendorName] = useState('');
+  const [vendorDate, setVendorDate] = useState('');
   // split modal
   const [splitOpen, setSplitOpen] = useState(false);
   const [splits, setSplits] = useState([]);            // [{ scheduled_date, qty:{ [key]: n } }]
@@ -126,6 +131,25 @@ export default function FulfilmentRequestsPage() {
     } catch (e) { setMsg('Reject failed: ' + (e.message || e)); }
     finally { setBusy(false); }
   }
+
+  async function submitVendor() {
+    if (!sel?.request || !vendorName.trim()) return;
+    setBusy(true);
+    try {
+      const r = await workerFetch('markShippedByVendor',
+        { request_id: sel.request.id, vendor: vendorName.trim(), shipped_date: vendorDate || undefined }, session);
+      if (r?.ok === false) throw new Error(r?.data || 'failed');
+      setVendorOpen(false);
+      setMsg(`Marked shipped by ${vendorName.trim()} — ${fmt(r?.data?.units || 0)} units. No stock was moved.`);
+      await loadList(); await openDetail(sel.request.id);
+    } catch (e) { setMsg('Shipped by vendor failed: ' + (e.message || e)); }
+    finally { setBusy(false); }
+  }
+  // Pending, or accepted with a shipment still open (or none live at all): the vendor can have
+  // sent either. Mirrors the worker's vendorShipPlan (01_worker lib/dispatch.js).
+  const liveShips = (sel?.shipments || []).filter(s => s.status !== 'cancelled');
+  const canVendorShip = !!sel?.request && (sel.request.status === 'pending' ||
+    (sel.request.status === 'accepted' && (!liveShips.length || liveShips.some(s => s.status !== 'shipped'))));
 
   // ── Split builder ──────────────────────────────────────────
   function openSplit() {
@@ -239,11 +263,16 @@ export default function FulfilmentRequestsPage() {
                 {sel.request.request_no} · {sel.request.sales_order_no} · <StatusPill status={sel.request.status} />
               </div>
             </div>
-            {sel.request.status === 'pending' && (
+            {(sel.request.status === 'pending' || canVendorShip) && (
               <div style={{ display: 'flex', gap: 8 }}>
+                {sel.request.status === 'pending' && (<>
                 <button disabled={busy} onClick={acceptFull} style={btnPrimary}>Accept — Full</button>
                 <button disabled={busy} onClick={openSplit} style={btnGhost}>Accept — Split</button>
                 <button disabled={busy} onClick={() => { setRejectReason(''); setRejectOpen(true); }} style={{ ...btnGhost, color: 'var(--red)', borderColor: 'var(--red)' }}>Reject</button>
+                </>)}
+                {canVendorShip && (
+                  <button disabled={busy} onClick={() => { setVendorName(''); setVendorDate(istTodayISO()); setVendorOpen(true); }} style={btnGhost}>Shipped by vendor</button>
+                )}
               </div>
             )}
           </div>
@@ -339,6 +368,20 @@ export default function FulfilmentRequestsPage() {
         </p>
         <textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)} rows={3}
           placeholder="Reason for rejection" style={{ ...inputStyle, width: '100%', resize: 'vertical' }} />
+      </Modal>
+
+      {/* ── Shipped-by-vendor modal ────────────────────────── */}
+      <Modal open={vendorOpen} onClose={() => setVendorOpen(false)} title="Shipped by vendor"
+        confirmLabel="Mark shipped" loading={busy} onConfirm={submitVendor}>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 13.5, color: 'var(--t2)', marginTop: 0 }}>
+          Use this when the vendor sent this order straight to the customer and it never came into our stock.
+          The order closes as shipped in full. No units are allocated and no stock is moved.
+        </p>
+        <input value={vendorName} onChange={e => setVendorName(e.target.value)} placeholder="Vendor who shipped it (e.g. ESRDNS)"
+          style={{ ...inputStyle, width: '100%', marginBottom: 10 }} />
+        <label style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Shipped on</label>
+        <input type="date" value={vendorDate} max={istTodayISO()} onChange={e => setVendorDate(e.target.value)}
+          style={{ ...inputStyle, width: '100%', marginTop: 4 }} />
       </Modal>
 
       {/* ── Split builder modal ────────────────────────────── */}
