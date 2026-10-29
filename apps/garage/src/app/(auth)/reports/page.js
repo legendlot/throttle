@@ -10,6 +10,7 @@ import {
   ShieldAlert, AlertOctagon, ListChecks, Hourglass,
 } from 'lucide-react';
 import { todayStr } from '@throttle/domain';
+import { usePartLine, inPartLine, countPartLines, PartLineSwitch, PART_LINES } from '../../../lib/partLine.js';
 
 // Lucide-react icons replace decorative emoji per DESIGN.md "mechanical not
 // decorative" rule. Rendered as outline icons at size 28 in --t2 so they
@@ -54,6 +55,10 @@ const REPORT_DOWNLOADS = {
     { type: 'audit_findings',    Icon: ListChecks,    title: 'QC Audit Findings',  desc: 'Audit round findings: open, resolved, confirmed' },
   ],
 };
+
+// The two part-level CSVs: their rows carry part_code + product, so the LOT Cars · LOT Build ·
+// Common switch can scope them. Every other report is per GRN / run / unit, not per part.
+const PART_LINE_REPORTS = new Set(['stock', 'reorder']);
 
 const TONE_STYLES = {
   yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.2)' },
@@ -174,7 +179,7 @@ export default function ReportsPage() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
-  const [invData, setInvData] = useState(null);
+  const [invRows, setInvRows] = useState(null);   // raw getStock rows; summarised per line below
   const [grnData, setGrnData] = useState(null);
   const [prodData, setProdData] = useState(null); // { runs, issues }
   const [flushRpt, setFlushRpt] = useState(null); // { summary, flushes, issues }
@@ -192,8 +197,26 @@ export default function ReportsPage() {
 
   const setTabLoading = (tab, val) => setLoading((l) => ({ ...l, [tab]: val }));
 
+  // LOT Cars · LOT Build · Common (Kaushik #bugs 1793020805.494419) — Inventory tab only.
+  const [line, setLine] = usePartLine('reports', session?.user?.id);
+  const invCounts = useMemo(() => countPartLines(invRows || []), [invRows]);
+  const invData = useMemo(() => {
+    if (invRows === null) return null;
+    const map = {};
+    invRows.filter((r) => inPartLine(r, line)).forEach((r) => {
+      const p = r.product || '—';
+      if (!map[p]) map[p] = { product: p, parts: 0, stocked: 0, reorder: 0, received: 0, issued: 0 };
+      map[p].parts += 1;
+      if ((r.closing_stock || 0) > 0) map[p].stocked += 1;
+      if ((r.reorder_level || 0) > 0 && (r.closing_stock || 0) <= (r.reorder_level || 0)) map[p].reorder += 1;
+      map[p].received += parseFloat(r.total_received) || 0;
+      map[p].issued += parseFloat(r.total_issued) || 0;
+    });
+    return Object.values(map).sort((a, b) => a.product.localeCompare(b.product));
+  }, [invRows, line]);
+
   function refreshCurrent() {
-    if (activeTab === 'inventory')   { setInvData(null); setAgingData(null); }
+    if (activeTab === 'inventory')   { setInvRows(null); setAgingData(null); }
     if (activeTab === 'inward')      setGrnData(null);
     if (activeTab === 'production')  setProdData(null);
     if (activeTab === 'lineflush')   setFlushRpt(null);
@@ -290,12 +313,13 @@ export default function ReportsPage() {
       if (fromDate) params.from = fromDate;
       if (toDate)   params.to   = toDate;
       const data = await garageFetch('downloadReport', params, session);
-      const rows = data?.rows || [];
+      const scoped = PART_LINE_REPORTS.has(type) && line !== 'all';
+      const rows = (data?.rows || []).filter((r) => !scoped || inPartLine(r, line));
       if (!rows.length) {
-        showToast('No data in selected date range', 'info');
+        showToast(scoped ? 'No parts in this line' : 'No data in selected date range', 'info');
         return;
       }
-      downloadCsv(rows, type);
+      downloadCsv(rows, scoped ? `${type}_${line}` : type);
       showToast(`Downloaded: ${type} (${rows.length} rows)`, 'success');
     } catch (e) {
       showToast(e.message || 'Download failed', 'error');
@@ -307,21 +331,10 @@ export default function ReportsPage() {
     setTabLoading('inventory', true);
     try {
       const rows = await garageFetch('getStock', {}, session);
-      const arr = Array.isArray(rows) ? rows : [];
-      const map = {};
-      arr.forEach((r) => {
-        const p = r.product || '—';
-        if (!map[p]) map[p] = { product: p, parts: 0, stocked: 0, reorder: 0, received: 0, issued: 0 };
-        map[p].parts += 1;
-        if ((r.closing_stock || 0) > 0) map[p].stocked += 1;
-        if ((r.reorder_level || 0) > 0 && (r.closing_stock || 0) <= (r.reorder_level || 0)) map[p].reorder += 1;
-        map[p].received += parseFloat(r.total_received) || 0;
-        map[p].issued += parseFloat(r.total_issued) || 0;
-      });
-      setInvData(Object.values(map).sort((a, b) => a.product.localeCompare(b.product)));
+      setInvRows(Array.isArray(rows) ? rows : []);
     } catch (e) {
       showToast(e.message || 'Failed to load inventory summary', 'error');
-      setInvData([]);
+      setInvRows([]);
     } finally {
       setTabLoading('inventory', false);
     }
@@ -478,6 +491,13 @@ export default function ReportsPage() {
         <button style={btnSecondary} onClick={clearDates}>Clear</button>
       </div>
 
+      {activeTab === 'inventory' && (
+        <div style={{ marginBottom: 16 }}>
+          <span style={labelStyle}>Product line — Stock Position, Reorder Flags and Inventory by Product</span>
+          <PartLineSwitch value={line} onChange={setLine} counts={invRows ? invCounts : undefined} />
+        </div>
+      )}
+
       {/* Download cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12, marginBottom: 16 }}>
         {cards.map((c) => (
@@ -498,7 +518,8 @@ export default function ReportsPage() {
       </div>
 
       {/* Tab summary */}
-      {activeTab === 'inventory'   && <InventorySummary data={invData}   loading={loading.inventory}   load={loadInventory} />}
+      {activeTab === 'inventory'   && <InventorySummary data={invData}   loading={loading.inventory}   load={loadInventory}
+        lineLabel={line !== 'all' ? PART_LINES.find((l) => l.key === line)?.label : null} />}
       {activeTab === 'inventory'   && <StalledSummary   data={agingData} loading={loading.aging}       load={loadAging} />}
       {activeTab === 'inward'      && <InwardSummary    data={grnData}   loading={loading.inward}      load={loadInward} />}
       {activeTab === 'production'  && <ProductionSummary data={prodData} loading={loading.production}  load={loadProduction} />}
@@ -612,9 +633,10 @@ function StalledSummary({ data, loading, load }) {
   );
 }
 
-function InventorySummary({ data, loading, load }) {
+function InventorySummary({ data, loading, load, lineLabel }) {
   return (
-    <SummaryShell title="Inventory by Product" data={data} loading={loading} load={load} empty="No stock data">
+    <SummaryShell title={lineLabel ? `Inventory by Product · ${lineLabel}` : 'Inventory by Product'} data={data} loading={loading} load={load}
+      empty={lineLabel ? `No ${lineLabel} parts` : 'No stock data'}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr>
           <th style={tableThStyle}>Product</th>

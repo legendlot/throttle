@@ -6,6 +6,7 @@ import { EmptyState, Spinner, Combobox, Panel, Chip, StatusBadge, ProductTag } f
 import { Search, Download } from 'lucide-react';
 import { useProducts } from '../../../hooks/useProducts.js';
 import { todayStr } from '@throttle/domain';
+import { usePartLine, inPartLine, countPartLines, PartLineSwitch } from '../../../lib/partLine.js';
 
 // Stock Ledger — restyled to the S128 visual system. All filter / tab / CSV /
 // common-parts logic is unchanged; only the chrome (type roles, chips, panel,
@@ -250,6 +251,9 @@ export default function StockPage() {
   // Default to picked-only: an unpicked part's bad balance is real but nothing consumes
   // it, so leading with it would bury the 28 rows that actually block production.
   const [integrityPickedOnly, setIntegrityPickedOnly] = useState(true);
+  // LOT Cars · LOT Build · Common (Kaushik #bugs 1793020805.494419). Scopes Components and
+  // Integrity; FBU Units are built cars, not parts, so that tab ignores it.
+  const [line, setLine] = usePartLine('stock', session?.user?.id);
 
   // The worker decides who sees part cost (01_worker lib/poprice.js — store, admin, Finance): it
   // REMOVES unit_cost for everyone else. So show the column when the rows carry the key, not on
@@ -296,17 +300,23 @@ export default function StockPage() {
     loadSupply();
   }, [session]);
 
+  const lineRows = useMemo(() => stockData.filter(r => inPartLine(r, line)), [stockData, line]);
+  const lineCounts = useMemo(() => countPartLines(stockData), [stockData]);
+
   const stockProducts = useMemo(() => [...new Set(stockData.map(r => r.product).filter(Boolean))].sort(), [stockData]);
   const products = useMemo(() => {
+    // Under a line, offer only the products that line's parts carry — the catalogue has
+    // no category, so it cannot be split, and a Cars product under LOT Build matches nothing.
+    if (line !== 'all') return [...new Set(lineRows.map(r => r.product).filter(Boolean))].sort();
     const fromCatalogue = (CATALOGUE_PRODUCTS && CATALOGUE_PRODUCTS.length) ? CATALOGUE_PRODUCTS : stockProducts;
     return [...new Set([...fromCatalogue, ...stockProducts])].sort();
-  }, [CATALOGUE_PRODUCTS, stockProducts]);
-  const categories = useMemo(() => [...new Set(stockData.map(r => r.category).filter(Boolean))].sort(), [stockData]);
-  const types = useMemo(() => [...new Set(stockData.map(r => r.part_type).filter(Boolean))].sort(), [stockData]);
+  }, [CATALOGUE_PRODUCTS, stockProducts, line, lineRows]);
+  const categories = useMemo(() => [...new Set(lineRows.map(r => r.category).filter(Boolean))].sort(), [lineRows]);
+  const types = useMemo(() => [...new Set(lineRows.map(r => r.part_type).filter(Boolean))].sort(), [lineRows]);
 
   const filteredStock = useMemo(() => {
     const tokens = (search || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
-    return stockData.filter(r => {
+    return lineRows.filter(r => {
       if (tokens.length) {
         const fields = [r.part_code, r.part_name, r.product, r.category, r.part_type]
           .map((v) => (v || '').toLowerCase());
@@ -333,7 +343,7 @@ export default function StockPage() {
       }
       return true;
     });
-  }, [stockData, search, productFilter, categoryFilter, typeFilter, statusFilter]);
+  }, [lineRows, search, productFilter, categoryFilter, typeFilter, statusFilter]);
 
   const sortedStock = useMemo(() => {
     const acc = STOCK_SORT[sort.key] || STOCK_SORT.part;
@@ -359,6 +369,12 @@ export default function StockPage() {
     );
   }, [fbuData, fbuSearch]);
 
+  // A product / category picked under one line would silently match nothing under another,
+  // with the picker no longer offering it to clear — so switching line drops both.
+  function changeLine(v) {
+    setLine(v); setProductFilter(''); setCategoryFilter('');
+  }
+
   function clearFilters() {
     setSearch(''); setProductFilter(''); setCategoryFilter(''); setTypeFilter(''); setStatusFilter('');
   }
@@ -367,14 +383,14 @@ export default function StockPage() {
     const today = todayStr();
     const slug = productFilter
       ? productFilter.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-      : 'all';
+      : (line !== 'all' ? line : 'all');
     downloadCsv(sortedStock, `stock-ledger-${slug}-${today}.csv`, showCost, supplyMap);
   }
 
-  const lowCount = useMemo(() => stockData.filter(r => {
+  const lowCount = useMemo(() => lineRows.filter(r => {
     const c = Number(r.closing_stock) || 0, ro = Number(r.reorder_level) || 0;
     return ro > 0 && c <= ro;
-  }).length, [stockData]);
+  }).length, [lineRows]);
 
   // live code → deprecated codes still holding positive stock. Built from the full ledger
   // (not getSupplyStatus, which only knows codes carrying an open PO) so a dead code with
@@ -389,9 +405,11 @@ export default function StockPage() {
     return m;
   }, [stockData]);
 
+  // deadHolders stays built from the FULL ledger: the dead ancestor is looked up by code,
+  // whatever line it sits in.
   const integrityAll = useMemo(() => {
     const out = [];
-    stockData.forEach(r => {
+    lineRows.forEach(r => {
       const _i = classifyIntegrity(r, deadHolders, supplyMap[r.part_code]);
       if (_i) out.push({ ...r, _i });
     });
@@ -403,7 +421,7 @@ export default function StockPage() {
       return (a.part_code || '').localeCompare(b.part_code || '');
     });
     return out;
-  }, [stockData, deadHolders, supplyMap]);
+  }, [lineRows, deadHolders, supplyMap]);
 
   const integrityRows = useMemo(() => {
     const tokens = (integritySearch || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
@@ -449,16 +467,19 @@ export default function StockPage() {
           <h1 className="title" style={{ fontSize: 27, lineHeight: 1, margin: 0 }}>Stock Ledger</h1>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <span className="num" style={{ fontSize: 12, color: 'var(--t3)' }}>{stockData.length} parts · {lowCount} at reorder</span>
+          <span className="num" style={{ fontSize: 12, color: 'var(--t3)' }}>{lineRows.length} parts · {lowCount} at reorder</span>
           {tab === 'components' && <button style={btnSec} onClick={handleDownloadCsv} disabled={filteredStock.length === 0}><Download size={14} strokeWidth={1.75} />Export</button>}
           {tab === 'integrity' && <button style={btnSec} onClick={() => downloadIntegrityCsv(integrityRows, `stock-integrity-${todayStr()}.csv`)} disabled={integrityRows.length === 0}><Download size={14} strokeWidth={1.75} />Export</button>}
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 7, marginBottom: 14 }}>
+      <div style={{ display: 'flex', gap: 7, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
         <Chip active={tab === 'components'} onClick={() => setTab('components')}>Components</Chip>
         <Chip active={tab === 'fbu'} onClick={() => setTab('fbu')}>FBU Units</Chip>
         <Chip active={tab === 'integrity'} onClick={() => setTab('integrity')} count={integrityCounts.blocking || undefined}>Integrity</Chip>
+        {tab !== 'fbu' && (
+          <PartLineSwitch pill value={line} onChange={changeLine} counts={lineCounts} style={{ marginLeft: 'auto' }} />
+        )}
       </div>
 
       {tab === 'components' ? (
@@ -472,7 +493,7 @@ export default function StockPage() {
               <Combobox
                 value={productFilter}
                 options={[
-                  { value: COMMON_PRODUCT_KEY, label: 'Common (UNV/HW)', hint: 'cross-product' },
+                  ...(line === 'all' || line === 'common' ? [{ value: COMMON_PRODUCT_KEY, label: 'Common (UNV/HW)', hint: 'cross-product' }] : []),
                   ...products.map((p) => ({ value: p, label: p })),
                 ]}
                 onChange={(v) => setProductFilter(v)}
@@ -494,9 +515,9 @@ export default function StockPage() {
           {/* category filter chips */}
           {categories.length > 0 && (
             <div style={{ display: 'flex', gap: 7, marginBottom: 14, flexWrap: 'wrap' }}>
-              <Chip pill active={!categoryFilter} onClick={() => setCategoryFilter('')} count={stockData.length}>All</Chip>
+              <Chip pill active={!categoryFilter} onClick={() => setCategoryFilter('')} count={lineRows.length}>All</Chip>
               {categories.map(c => (
-                <Chip key={c} pill active={categoryFilter === c} onClick={() => setCategoryFilter(c)} count={stockData.filter(r => r.category === c).length}>{c}</Chip>
+                <Chip key={c} pill active={categoryFilter === c} onClick={() => setCategoryFilter(c)} count={lineRows.filter(r => r.category === c).length}>{c}</Chip>
               ))}
             </div>
           )}
