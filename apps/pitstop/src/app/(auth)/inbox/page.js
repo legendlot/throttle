@@ -1517,6 +1517,16 @@ export default function InboxPage() {
             the list — which is the entire point of the change. */}
         <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
           background: 'var(--surface)', borderRight: '1px solid var(--border)' }}>
+          {/* The collapsed rail is itself the way back: the bar's toggle sits at its far right
+              end and is easy to lose, which read as "the inbox is empty" (Pruthvi #bugs 1793254200). */}
+          {listCollapsed && (
+            <button className="ps-ibtn" onClick={toggleListCollapse} title="Expand conversation list"
+              aria-label="Expand conversation list"
+              style={{ flex: 1, width: '100%', display: 'flex', justifyContent: 'center', paddingTop: 10,
+                border: 0, background: 'transparent', color: 'var(--t2)', cursor: 'pointer' }}>
+              <ChevronRight size={14} />
+            </button>
+          )}
           {!listCollapsed && (
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {loadingList ? (
