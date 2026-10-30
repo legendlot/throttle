@@ -11,10 +11,32 @@
 <p>Authorising a Direct Issuance in Garage records the intent and approver and prints the sticker, but deliberately moves <strong>no stock</strong>. The stock only leaves when someone physically scans the sticker at this station. A scan cannot be invented; a desk click can. So the scan is the ground truth of what actually went out.</p>
 
 <ol class="steps">
-  <li><span class="s-title">Approve the DI in Garage.</span> On <strong>Direct Issuance</strong>, approve it (this prints the <code>DI-NNN</code> sticker).</li>
-  <li><span class="s-title">Scan the sticker here.</span> The hint reads &ldquo;scan DI-NNN sticker to issue out&rdquo;. The units are re-checked at scan time (a unit may have moved since approval), then issued.</li>
-  <li><span class="s-title">Done.</span> Stock is debited and the units flip to direct-issued.</li>
+  <li><span class="s-title">Approve the DI in Garage.</span> On <strong>Direct Issuance</strong>, approve it (this prints the <code>DI-NNN</code> sticker). Approving does not issue anything.</li>
+  <li><span class="s-title">Scan the DI sticker.</span> This selects the DI and shows its parts and how many of each are still needed. The hint reads &ldquo;SCAN DI STICKER &rarr; SCAN ITS BAGS &rarr; SCAN DI STICKER AGAIN TO ISSUE&rdquo;.</li>
+  <li><span class="s-title">Scan each bag.</span> Scan the <code>BAG-&hellip;</code> QR of a bag for each part on the list. The count of what is still needed goes down as you go.</li>
+  <li><span class="s-title">Scan the same DI sticker again.</span> Only now does stock move. The units are re-checked at scan time (a unit may have moved since approval), then issued: stock is debited and the units flip to direct-issued.</li>
 </ol>
+
+<h2 class="sec">When a bag is refused</h2>
+<ul>
+  <li>Its part is not on the DI.</li>
+  <li>It holds more than the DI still needs (<strong>BAG TOO BIG</strong>). Make a smaller bag in Garage first (manual bags), then scan that one.</li>
+  <li>It was already scanned on this DI.</li>
+  <li>It is already counted on another DI.</li>
+</ul>
+<p>The second sticker scan is refused while any part is still short, and the message names the short parts. Scan the missing bags, then scan the sticker again.</p>
+
+<h2 class="sec">Starting over</h2>
+<ul>
+  <li><strong>RESET BAGS</strong> forgets every bag counted on the DI so they can be scanned again.</li>
+  <li><strong>&times;</strong> only clears the selection on the handset; bags already counted stay counted.</li>
+  <li>If the DI is edited in Garage after its bags were scanned, the sticker is refused (&ldquo;DI CHANGED&rdquo;). Tap <strong>RESET BAGS</strong> and scan the bags again.</li>
+</ul>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Units only, and no connection</div>
+  <p>A DI with only units (no parts) still issues on the first sticker scan, as before. Direct Issue needs a live connection; it does not queue offline.</p>
+</div>
 
 <div class="callout note">
   <div class="c-title">&#9432; The deskside exception</div>

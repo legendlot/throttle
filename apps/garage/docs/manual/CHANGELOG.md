@@ -6,6 +6,15 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## 1.31.0 - 2026-10-30
+
+- **Scan: Direct Issue**: rewritten for the new flow (asked by Piyush). Scan the DI sticker, scan each
+  bag for its parts, scan the sticker again to issue. Added when a bag is refused (wrong part, BAG TOO
+  BIG, already on this DI, on another DI), the short-parts refusal, RESET BAGS vs the clear button, the
+  "DI CHANGED" refusal, units-only DIs, and no offline queue.
+- **Direct Issuance (Store)**: the one-step "Approve & Issue" is retired; the chapter now says approve,
+  then scan at Direct Issue.
+
 ## 1.30.1 - 2026-10-13
 
 - **Cycle Counts**: new "Recounting lines" section. Flagging lines for recount, the new

@@ -11,7 +11,7 @@
 <ol class="steps">
   <li><span class="s-title">+ New Issue.</span> Pick a purpose, <strong>pick a vendor</strong>, optionally say who it is going to and their phone, then <strong>Create Draft</strong>.</li>
   <li><span class="s-title">Add lines.</span> Add part lines (with quantities) and unit lines (by UPC), and save.</li>
-  <li><span class="s-title">Approve &amp; Issue.</span> An approver confirms; this deducts the parts from stock, flips the units to &ldquo;direct issued&rdquo;, stamps the issuer, and opens an accountability sticker to print.</li>
+  <li><span class="s-title">Approve, then scan.</span> An approver confirms; this authorises the DI and opens an accountability sticker to print, but moves no stock. The store then scans the sticker at <strong>Direct Issue</strong> on the scanner (for parts: the sticker, then each bag, then the sticker again). That scan deducts the parts from stock, flips the units to &ldquo;direct issued&rdquo; and stamps the issuer.</li>
   <li><span class="s-title">Mark Closed</span> when items return, optionally logging a GRN reference.</li>
 </ol>
 <p>The list filters by status (Draft, Issued, Closed, Cancelled) and by purpose. A draft can be edited or cancelled; once issued, the header and lines lock.</p>
@@ -44,5 +44,5 @@
 
 <div class="callout danger">
   <div class="c-title">&#9940; Issuing is irreversible</div>
-  <p>Stock moves when the DI sticker is <strong>scanned at the DSP Issue station</strong>, not when someone clicks approve. Approving authorises it and prints the sticker. (A supervisor can force-issue without a scan when a hand-over genuinely cannot pass a scanner; that is logged with a reason.) Once it moves, it cannot be undone in the app; to reverse it you would book the items back via a GRN. Closing does <em>not</em> auto-return stock either: a physical return goes through the normal GRN flow. Creating and filling a draft needs request access; approving and issuing needs approve access, so a requester cannot issue their own draft without an approver.</p>
+  <p>Stock moves when the DI sticker is <strong>scanned at the Direct Issue station</strong> (after its bags are scanned, for part lines), not when someone clicks approve. Approving authorises it and prints the sticker. (A supervisor can force-issue without a scan when a hand-over genuinely cannot pass a scanner; that is logged with a reason.) Once it moves, it cannot be undone in the app; to reverse it you would book the items back via a GRN. Closing does <em>not</em> auto-return stock either: a physical return goes through the normal GRN flow. Creating and filling a draft needs request access; approving and issuing needs approve access, so a requester cannot issue their own draft without an approver.</p>
 </div>
