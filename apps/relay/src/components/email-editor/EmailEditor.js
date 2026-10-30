@@ -9,15 +9,25 @@ import { useToast } from '@throttle/ui';
 import { exportEmail } from './exportEmail.js';
 import { BLANK_MJML } from './blankScaffold.js';
 import { EMAIL_FONTS, FONT_CSS_URL, addFontOptions } from './fonts.js';
+import {
+  EMPTY_COLUMN_CSS, canvasParity, headAttributes, loadMjTable, prepareDesign, styleDefaultsFrom,
+  syncPaddingShorthands, withHead,
+} from './canvasParity.js';
 
 // The plugin hands `fonts` to mjml2html for its own conversions (mj-font, the code/export views);
 // the canvas face itself comes from FONT_CSS_URL below. ⚠️ mjml2html MUTATES the fonts object
 // it is given — an `<mj-font name href>` in a template is written into it — so every call gets a
 // fresh copy, or one template's font URL would leak into every later export in the tab
 // (hostile review 2026-10-28; mjml-browser 4.18 repro).
+// mjmlParser is the CANVAS compile only (export calls mjml2html itself); withHead gives each
+// block the template's <mj-attributes> so the canvas matches the mail — see canvasParity.js.
+// columnsPadding '' — the plugin's default pads every canvas column `10px 0` as a drop target,
+// 20px per column that the mail never has (Mishica, #bugs 1793025099.434369).
 const mjmlPlugin = (editor) => grapesjsMjml(editor, {
+  columnsPadding: '',
+  customComponents: [loadMjTable],
   fonts: { ...EMAIL_FONTS },
-  mjmlParser: (mjml, opts) => mjml2html(mjml, { ...opts, fonts: { ...(opts?.fonts || EMAIL_FONTS) } }),
+  mjmlParser: (mjml, opts) => mjml2html(withHead(mjml, headAttributes(editor)), { ...opts, fonts: { ...(opts?.fonts || EMAIL_FONTS) } }),
 });
 
 const BUCKET = 'relay-email-assets';
@@ -44,7 +54,8 @@ export default function EmailEditor({ initialDesign, initialMjml, session, onRea
       height: '640px',
       fromElement: false,
       storageManager: false,
-      plugins: [mjmlPlugin],
+      plugins: [mjmlPlugin, canvasParity],
+      canvasCss: EMPTY_COLUMN_CSS,
       canvas: { styles: [FONT_CSS_URL] },
       assetManager: {
         uploadFile: async (e) => {
@@ -70,9 +81,14 @@ export default function EmailEditor({ initialDesign, initialMjml, session, onRea
     // edited and cloned instead of showing a blank email. Only with neither do we scaffold.
     // (2026-08-10: added so there is one canvas-native launch template to copy from — building
     // each new campaign from the blank scaffold was the actual cost being paid.)
-    if (initialDesign && Object.keys(initialDesign).length) editor.loadProjectData(initialDesign);
-    else if (initialMjml && initialMjml.trim()) editor.setComponents(initialMjml);
-    else editor.setComponents(BLANK_MJML);
+    // Every path ends in prepareDesign (canvas/mail parity — see canvasParity.js): MJML is parsed
+    // first, then reloaded as project data, so all three are born the same way.
+    const prepare = (d) => prepareDesign(d, styleDefaultsFrom(editor));
+    if (initialDesign && Object.keys(initialDesign).length) editor.loadProjectData(prepare(initialDesign));
+    else {
+      editor.setComponents(initialMjml && initialMjml.trim() ? initialMjml : BLANK_MJML);
+      editor.loadProjectData(prepare(editor.getProjectData()));
+    }
 
     // Seed the asset manager from the shared library (S251).
     //
@@ -99,7 +115,8 @@ export default function EmailEditor({ initialDesign, initialMjml, session, onRea
       }
     })();
     const api = {
-      export: () => exportEmail(editor),
+      // design is what save() stores as design_json — its shorthands synced (canvasParity.js).
+      export: () => { const ex = exportEmail(editor); return { ...ex, design: syncPaddingShorthands(ex.design) }; },
       setDevice: (name) => editor.setDevice(name),
       getEditor: () => editor,
     };
