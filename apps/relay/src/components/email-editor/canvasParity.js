@@ -39,9 +39,9 @@ import { normaliseMjAttributes } from './exportEmail.js';
 //
 // Measured in a browser harness 2026-10-30 (canvas vs export, block by block): BASE and both of
 // Mishica's FFS/Upshift templates open with canvas = mail, and re-saving one unedited moves 0
-// blocks of its send. ⚠️ Still unmatched: templates whose dividers were loaded from SELF-CLOSING
-// MJML (`<mj-divider … />` — BASE, HP Crest, Roxie) carry the following blocks NESTED inside the
-// divider in their saved design_json; that is a separate, older defect.
+// blocks of its send. Blocks swallowed by a self-closing `<mj-image … />` (BASE, HP Crest, Roxie)
+// and Style Manager rules on inner elements were fixed after (2026-10-31 — see dropSwallowedBlocks
+// below and authorCss in exportEmail.js).
 
 const SIDES = ['padding-top', 'padding-right', 'padding-bottom', 'padding-left'];
 const LENGTH = /^-?[\d.]+(px|%|em|rem)?$/;
@@ -107,6 +107,49 @@ export function syncPaddingShorthands(design) {
   });
 }
 
+// The same HTML-parser defect as normaliseMjAttributes (exportEmail.js), in the BODY: the parser
+// ignores the self-closing slash on `<mj-image … />` / `<mj-divider … />`, so every block after
+// it in the column is parsed as its CHILD. MJML ignores an image's/divider's body, so those blocks
+// have NEVER been in the mail; on the canvas they sit inside the image's row at 0×0 — invisible,
+// but listed in the Layer Manager. Two halves:
+//   - expandSelfClosingMj: GrapesJS's `preParser` hook (canvasParity) writes `<mj-x … />` as
+//     `<mj-x …></mj-x>` before any parse — setComponents, the Import MJML modal, a paste — so a
+//     template authored as MJML keeps every block where it was written;
+//   - dropSwallowedBlocks (prepareDesign): already-saved designs lose the swallowed blocks.
+//     DROPPED, not moved back out (measured 2026-10-31): BASE, Roxie Final and all four HP Crest
+//     templates carry 8 such blocks each — Roxie's colourway captions ("Navigate Blue / Hardtop
+//     wagon"). In HP Crest those sit under Harry Potter images; moving them out would have put
+//     Roxie captions into the next HP Crest send. Dropping changes no mail by a byte, since MJML
+//     never rendered them, and the canvas and layers stop listing what was never sent.
+// Only tags whose MJML body is discarded. A block swallowed by an mj-text/mj-button reaches the
+// mail as raw HTML, so removing it WOULD change a send — none is saved today; the preParser stops new ones.
+const BODYLESS = new Set(['mj-image', 'mj-divider', 'mj-spacer']);
+
+const ATTR = `\\s+[^\\s"'<>/=]+(?:\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s"'<>]+))?`;
+const SELF_CLOSING_MJ = new RegExp(`<(mj-[a-z0-9-]+)((?:${ATTR})*)\\s*/>`, 'gi');
+export function expandSelfClosingMj(html) {
+  return String(html).replace(SELF_CLOSING_MJ, '<$1$2></$1>');
+}
+
+const tagOf = (n) => (n && typeof n === 'object' ? String(n.tagName || n.type || '').toLowerCase() : '');
+// Deep copy; a bodyless tag keeps its children up to its first mj-* child (whitespace, in practice).
+export function dropSwallowedBlocks(design) {
+  if (!design || typeof design !== 'object') return design;
+  const copy = JSON.parse(JSON.stringify(design));
+  const walk = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (tagOf(node) === 'mj-head') return; // normaliseMjAttributes flattens the head at export
+    if (BODYLESS.has(tagOf(node)) && Array.isArray(node.components)) {
+      const cut = node.components.findIndex((k) => /^mj-/.test(tagOf(k)));
+      if (cut >= 0) node.components = node.components.slice(0, cut);
+    }
+    Object.keys(node).forEach((k) => { if (k !== 'attributes' && k !== 'style') walk(node[k]); });
+  };
+  walk(copy);
+  return copy;
+}
+
 // Prepare project data (design_json) for LOAD; returns a deep copy, the caller's object is left
 // alone. Done on the JSON, not the live components: an addAttributes made right after
 // loadProjectData is silently undone by the plugin's style<->attribute sync (measured in the
@@ -114,17 +157,18 @@ export function syncPaddingShorthands(design) {
 //   - mj-table retype: saved design_json stores every mj-table as `{type:'text',
 //     tagName:'mj-table'}` (parsed before loadMjTable existed), and GrapesJS trusts a stored
 //     `type` — isComponent never runs. (Retyped wherever it sits; it only ever sits in a column.)
+//   - blocks swallowed by a self-closing image/divider dropped (dropSwallowedBlocks);
 //   - seedLonghands on every body block, then the shorthand synced to the result.
 // `defaultsFor(type)` → that type's `style-default` (EmailEditor reads it off the registry).
 export function prepareDesign(design, defaultsFor) {
-  const retyped = JSON.parse(JSON.stringify(design || {}));
+  if (!design || typeof design !== 'object') return design;
+  const retyped = dropSwallowedBlocks(design);
   const retype = (node) => {
     if (!node || typeof node !== 'object') return;
     if (Array.isArray(node)) { node.forEach(retype); return; }
     if (node.tagName === 'mj-table' && node.type !== 'mj-table') node.type = 'mj-table';
     Object.values(node).forEach(retype);
   };
-  if (!design || typeof design !== 'object') return design;
   retype(retyped);
   return mapBody(retyped, (node) => {
     const set = seedLonghands(node.attributes, defaultsFor(node.type));
@@ -240,6 +284,9 @@ export const EMPTY_COLUMN_CSS = '[data-gjs-type="mj-column"]:not(:has([data-gjs-
 // GrapesJS plugin — must run AFTER grapesjs-mjml has registered its types.
 export function canvasParity(editor) {
   const { Components } = editor;
+  const html = editor.Parser.getConfig().optionsHtml;
+  const prior = html.preParser;
+  html.preParser = (input, opts) => expandSelfClosingMj(typeof prior === 'function' ? prior(input, opts) : input);
   Components.getTypes().forEach((t) => {
     if (!/^mj-/.test(t.id)) return;
     const proto = t.model && t.model.prototype;
