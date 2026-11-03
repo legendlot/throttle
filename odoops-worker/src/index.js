@@ -80,6 +80,23 @@ async function rpcSales(fn, body) {
   return sbSales(`/rest/v1/rpc/${fn}`, { method: 'POST', body: JSON.stringify(body) });
 }
 
+// f_sales_rollup has one row per day x channel x variant, so a 90-day or FY range runs past
+// PostgREST's 5,000-row cap, which truncates with no error (FY today: 16,407 rows, 29% of Cars
+// units returned). Page it on the function's own grouping key. All or nothing: a failed page
+// fails the read, because a partial sum reads as a real total.
+const ROLLUP_PAGE = 5000;
+async function rpcSalesRollupAll(body) {
+  const rows = [];
+  for (let offset = 0; offset < ROLLUP_PAGE * 40; offset += ROLLUP_PAGE) {
+    const r = await sbSales(`/rest/v1/rpc/f_sales_rollup?order=sale_date,channel_id,product_code&limit=${ROLLUP_PAGE}&offset=${offset}`,
+      { method: 'POST', body: JSON.stringify(body) });
+    if (!r.ok) return r;
+    rows.push(...(r.data || []));
+    if ((r.data || []).length < ROLLUP_PAGE) return { ok: true, data: rows };
+  }
+  return { ok: false, data: { message: 'rollup exceeded the page guard' } };
+}
+
 // Chunked INSERT that THROWS on any failed chunk. A single large array POST (e.g. a wide
 // Shopify re-pull whose line rows each carry the full `raw` JSON) can exceed the request-body
 // limit and fail — and a plain sbSales POST whose result is ignored drops the whole batch
@@ -5242,7 +5259,7 @@ export default {
           case 'getSales': {
             if (!canView(P)) return err('No permission', 403);
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
-            const r = await rpcSales('f_sales_rollup', {
+            const r = await rpcSalesRollupAll({
               p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(),
               p_channels: chans.length ? chans : null, p_product_code: qp('product_code') || null, p_group: qp('group') || 'variant',
             });
@@ -5924,7 +5941,7 @@ export default {
           case 'getSalesExport': {
             if (!canView(P)) return err('No permission', 403);
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
-            const r = await rpcSales('f_sales_rollup', {
+            const r = await rpcSalesRollupAll({
               p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(),
               p_channels: chans.length ? chans : null, p_product_code: qp('product_code') || null, p_group: qp('group') || 'variant',
             });
@@ -5994,7 +6011,7 @@ export default {
           }
           case 'getVariants': {  // for the mapping picker
             if (!canView(P)) return err('No permission', 403);
-            const r = await sbPublic('/rest/v1/product_master?is_active=eq.true&select=product_code,product,model,color,sku,ean&order=product.asc');
+            const r = await sbPublic('/rest/v1/product_master?is_active=eq.true&select=product_code,product,model,color,sku,ean,category&order=product.asc');
             return ok({ rows: r.ok ? r.data : [] });
           }
           case 'amazonPeek': {  // diagnostic: inspect a report's status + raw document head (real headers / row count)

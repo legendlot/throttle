@@ -21,6 +21,8 @@ const GROUPS = [
   { key: 'date',    label: 'By Day' },
   { key: 'channel', label: 'By Channel' },
 ];
+// product_master.category values, byte-exact (RULE-TAXONOMY-001). DIY is here so the three add up to All.
+const CATEGORY_OPTS = [['all', 'All'], ['L.O.T Cars', 'Cars'], ['L.O.T Build', 'Build'], ['L.O.T DIY', 'DIY']];
 
 // relative "time ago" for connector freshness
 function ago(iso) {
@@ -65,6 +67,9 @@ export default function Dashboard() {
   // asked for) — the KPIs, mix board and movers above stay whole-catalogue, so the panel head
   // names the selection loudly enough that the two are never read as the same number.
   const [productFilter, setProductFilter] = useState('');
+  // Detail-only category switch (Karan, #bugs 1793710445.319899). 'all' = no restriction, else a
+  // product_master.category value. Same Detail-only scope as productFilter above.
+  const [categoryFilter, setCategoryFilter] = useState('all');
   const [rows, setRows] = useState([]);
   const [prevRows, setPrevRows] = useState([]);
   const [segRows, setSegRows] = useState([]);        // order-grain (f_order_rollup) — headline only
@@ -253,9 +258,12 @@ export default function Dashboard() {
   // same-group options must stay adjacent). Colour and model live in the label; the product
   // name and the codes ride in `search`, which is matched but never rendered — so typing a
   // product ("Flare"), a variant ("Base"), a colour ("Red") or a code all find the same rows.
+  const catVariants = useMemo(
+    () => (categoryFilter === 'all' ? variants : variants.filter(v => v.category === categoryFilter)),
+    [variants, categoryFilter]);
   const productOptions = useMemo(() => {
     const byProduct = new Map();
-    for (const v of variants) {
+    for (const v of catVariants) {
       const p = v.product || v.product_code;
       if (!p) continue;
       if (!byProduct.has(p)) byProduct.set(p, []);
@@ -285,22 +293,26 @@ export default function Dashboard() {
       }
     }
     return out;
-  }, [variants]);
+  }, [catVariants]);
 
   // The set of product_codes the Detail table is restricted to — null when unfiltered.
   // Built from product_master, NOT from the codes present in `rows`, so selecting a product
   // that sold nothing in the range correctly yields an EMPTY table rather than silently
   // falling back to everything.
   const filterCodes = useMemo(() => {
-    if (!productFilter) return null;
+    if (!productFilter) return categoryFilter === 'all' ? null : new Set(catVariants.map(v => v.product_code));
     if (productFilter.startsWith('v:')) return new Set([productFilter.slice(2)]);
     const p = productFilter.slice(2);
-    return new Set(variants.filter(v => (v.product || v.product_code) === p).map(v => v.product_code));
-  }, [productFilter, variants]);
+    return new Set(catVariants.filter(v => (v.product || v.product_code) === p).map(v => v.product_code));
+  }, [productFilter, categoryFilter, catVariants]);
 
   const filterLabel = useMemo(
-    () => (productFilter ? (productOptions.find(o => o.value === productFilter)?.label || '') : ''),
-    [productFilter, productOptions]);
+    () => (productFilter
+      ? (productOptions.find(o => o.value === productFilter)?.label || '')
+      : (CATEGORY_OPTS.find(([k]) => k === categoryFilter && k !== 'all')?.[1] || '')),
+    [productFilter, categoryFilter, productOptions]);
+  // A product picked under one category is not on the list under another, so a switch clears it.
+  const pickCategory = (c) => { setCategoryFilter(c); setProductFilter(''); };
 
   // drill table (re-aggregate rows on the chosen axis)
   const table = useMemo(() => {
@@ -588,6 +600,8 @@ export default function Dashboard() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 {/* `portal` is REQUIRED here — the dropdown lives inside .so-card, which clips
                     and establishes its own stacking/transform context (PATTERN-160). */}
+                {/* No category on the rows (variants failed to load) would read as a false zero. */}
+                {variants.some(v => v.category) && <SegmentedToggle options={CATEGORY_OPTS} value={categoryFilter} onChange={pickCategory} size="sm" />}
                 <div style={{ minWidth: 250 }}>
                   <Combobox options={productOptions} value={productFilter} onChange={setProductFilter}
                     placeholder="Search product, variant or colour…" portal />
@@ -603,7 +617,7 @@ export default function Dashboard() {
               <span><b style={{ color: 'var(--t1)' }}>{inr(tableTotals.gross)}</b> gross</span>
               {tableTotals.retU > 0 && <span>{fmtInt(tableTotals.retU)} returned</span>}
               <span style={{ color: 'var(--t4)' }}>· {rangeLabel} · this panel only, the figures above are all products</span>
-              <button className="so-btn ghost" style={{ marginLeft: 'auto' }} onClick={() => setProductFilter('')}>Clear</button>
+              <button className="so-btn ghost" style={{ marginLeft: 'auto' }} onClick={() => pickCategory('all')}>Clear</button>
             </div>
           )}
           {table.length === 0 ? (
