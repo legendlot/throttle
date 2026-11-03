@@ -23,6 +23,7 @@ import { ALL_FORMATS } from '@throttle/ui/camera.mjs';
 import { useRefreshState } from '../layout.js';
 import { Panel, FilterChip, ToneBadge, btnGhost, btnPrimary, inputStyle } from '../../../components/kit/index.js';
 import { opGet, opPost, fmtIST } from '../../../lib/outpost.js';
+import { parseRejectLines, groupReasons } from '../../../lib/bulkReject.mjs';
 import {
   Confirm, ErrorPanel, Field, Input, OwnerGate, Select, dangerBtn, label, mono, smallBtn, text, useOutpostVendors,
 } from '../../../components/outpost/OutpostKit.js';
@@ -393,6 +394,92 @@ function ReasonModal({ title, onSubmit, onClose }) {
   );
 }
 
+// Many rejects at once (Rahul, #bugs 1793603016.636369: 288 of 1,664 one by one). Each line goes
+// through the same auditMark as a scan, one at a time, so a refusal costs that line only. Whatever
+// did not quarantine stays in the box. `noUndo`: on a closed consignment this screen has no undo.
+function BulkReject({ csgNo, reload, noUndo = false, onBusy }) {
+  const { session } = useAuth();
+  const { showToast } = useToast();
+  const [raw, setRaw] = useState('');
+  const [fallback, setFallback] = useState('');
+  const [progress, setProgress] = useState(null);
+  const [failed, setFailed] = useState([]);
+  const [confirming, setConfirming] = useState(false);
+  const stop = useRef(false);
+  const lines = useMemo(() => parseRejectLines(raw, fallback), [raw, fallback]);
+  const problems = lines.filter(l => l.problem);
+  const busy = progress !== null;
+
+  useEffect(() => {
+    onBusy?.(busy);
+    if (!busy) return undefined;
+    const warn = e => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [busy, onBusy]);
+
+  const run = async () => {
+    setConfirming(false);
+    setFailed([]);
+    stop.current = false;
+    const quarantined = new Set();
+    const updated = new Set();
+    const left = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (stop.current) { left.push(...lines.slice(i).map(l => ({ ...l, why: null }))); break; }
+      setProgress(`${num(i + 1)} of ${num(lines.length)}`);
+      try {
+        const r = await opPost('auditMark', { csg_no: csgNo, code: lines[i].code, result: 'fail', reason: lines[i].reason }, session);
+        if (r.quarantined) quarantined.add(r.car_upc);
+        else if (r.already_handed_over) left.push({ ...lines[i], why: 'already through DTK, not quarantined: pull it out through the in-house QC flow' });
+        else updated.add(r.car_upc);
+      } catch (e) { left.push({ ...lines[i], why: e.message }); }
+    }
+    setProgress(null);
+    setFailed(left.filter(l => l.why));
+    setRaw(left.map(l => `${l.code}, ${l.reason}`).join('\n'));
+    const parts = [`${num(quarantined.size)} rejected`];
+    if (updated.size) parts.push(`${num(updated.size)} already rejected, reason updated`);
+    if (left.length) parts.push(`${num(left.length)} left in the box`);
+    showToast(parts.join(', '), left.length ? 'error' : 'success', 8000);
+    await reload();
+  };
+
+  return (
+    <Panel title="Reject many units" pad={14}>
+      <div style={{ ...text, marginBottom: 10 }}>Paste one unit per line: the label, then what is wrong. Paste only the rejects. The vendor sees the reason. Each unit is quarantined as it goes.</div>
+      <textarea value={raw} disabled={busy} rows={6} onChange={e => setRaw(e.target.value)}
+        placeholder={'LOT-12345678, Paint chipped on roof\nLOT-12345679, Remote not pairing'}
+        style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', height: 'auto', padding: 10, resize: 'vertical', fontFamily: 'var(--mono)', fontSize: 12.5 }} />
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 10 }}>
+        <div style={{ flex: '1 1 260px' }}><Field name="Reason for lines without one" hint="Optional, 3–300 characters."><Input value={fallback} maxLength={300} disabled={busy} onChange={e => setFallback(e.target.value)} /></Field></div>
+        {busy
+          ? <button style={btnGhost} onClick={() => { stop.current = true; }}>Stop ({progress})</button>
+          : <button style={btnPrimary} disabled={!lines.length || problems.length > 0} onClick={() => setConfirming(true)}>Review {num(lines.length)} unit{lines.length === 1 ? '' : 's'}</button>}
+      </div>
+      {problems.length > 0 && <div style={{ marginTop: 10 }}>
+        <div style={{ ...text, color: 'var(--warn-fg)', marginBottom: 4 }}>Fix {num(problems.length)} line{problems.length === 1 ? '' : 's'} first:</div>
+        {problems.slice(0, 20).map(l => <div key={l.code} style={{ ...text, fontSize: 12 }}><span className="num">{l.code}</span>: {l.problem}</div>)}
+        {problems.length > 20 && <div style={{ ...text, fontSize: 12 }}>and {num(problems.length - 20)} more</div>}
+      </div>}
+      {failed.length > 0 && <div style={{ marginTop: 10 }}>
+        <div style={{ ...text, color: 'var(--bad-fg)', marginBottom: 4 }}>{num(failed.length)} not quarantined, left in the box:</div>
+        <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+          {failed.map(b => <div key={b.code} style={{ ...text, fontSize: 12 }}><span className="num">{b.code}</span>: {b.why}</div>)}
+        </div>
+      </div>}
+      {confirming && <Modal open onClose={() => setConfirming(false)} title={`Reject ${num(lines.length)} unit${lines.length === 1 ? '' : 's'} on ${csgNo}?`}
+        confirmLabel={`Reject ${num(lines.length)}`} confirmColor="var(--bad-fg)" dismissOnBackdrop={false} onConfirm={run}>
+        <div style={{ ...text, marginBottom: 10 }}>Each unit is quarantined at once and DTK will refuse it.{noUndo ? ' QC is closed on this consignment, so there is no undo here: a rejected unit can only go to rework or back to the vendor.' : ' Undoing a reject later leaves its carton opened.'}</div>
+        <div style={{ ...label, marginBottom: 4 }}>Reasons</div>
+        {groupReasons(lines).slice(0, 10).map(([reason, n]) => <div key={reason} style={{ ...text, fontSize: 12.5 }}><span className="num">{num(n)}</span> · {reason}</div>)}
+        <div style={{ ...label, margin: '10px 0 4px' }}>First lines</div>
+        {lines.slice(0, 3).map(l => <div key={l.code} style={{ ...text, fontSize: 12.5 }}><span className="num">{l.code}</span> · {l.reason}</div>)}
+      </Modal>}
+    </Panel>
+  );
+}
+
 // Every way a scanned label names a car: the car UPC, its remote UPC, or a batch label (LOT-NNNNNNNN-E|R|X).
 function carIndex(cartons) {
   const m = new Map();
@@ -501,6 +588,7 @@ function HoldStep({ d, csgNo, reload }) {
   const [failCode, setFailCode] = useState(null);
   const [busyKey, setBusyKey] = useState(null);
   const [qc, setQc] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const samples = d.samples || [];
   const sFails = samples.filter(s => s.result === 'fail').length;
@@ -523,9 +611,10 @@ function HoldStep({ d, csgNo, reload }) {
         <div style={{ ...text, marginBottom: 12 }}>Inspect every received unit not yet through DTK (<span className="num">{num(received)}</span> received). Scan or type only the rejects — each is quarantined at once. DTK is not blocked; a unit already handed over is pulled out through the in-house QC flow instead.</div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <div style={{ flex: '1 1 280px' }}><ScanBox inputRef={inp} disabled={!!failCode} onScan={setFailCode} placeholder="Scan a rejected unit's label" /></div>
-          <button style={btnPrimary} disabled={qc || !!busyKey} onClick={() => setQc(true)}>Finish full QC and close</button>
+          <button style={btnPrimary} disabled={qc || !!busyKey || bulkBusy} onClick={() => setQc(true)}>Finish full QC and close</button>
         </div>
       </Panel>
+      <BulkReject csgNo={csgNo} reload={reload} onBusy={setBulkBusy} />
       {!rej.length && <Panel pad={12}><div style={text}>No rejects yet.</div></Panel>}
       {!!rej.length && <div style={{ ...text, fontSize: 12.5 }}>Undo a reject that is not yet disposed of from the list below.</div>}
       <UndoList rej={rej} busyKey={busyKey} undo={undo} />
@@ -581,6 +670,7 @@ function AcceptedStep({ d, reload }) {
         </div>
       </Panel>
       <LateReject d={d} reload={reload} />
+      <BulkReject csgNo={d.consignment.csg_no} reload={reload} noUndo />
       <Rejects d={d} reload={reload} />
     </div>
   );
