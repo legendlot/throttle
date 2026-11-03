@@ -418,6 +418,9 @@ function BulkReject({ csgNo, reload, noUndo = false, onBusy }) {
     return () => window.removeEventListener('beforeunload', warn);
   }, [busy, onBusy]);
 
+  // Leaving the screen ends the run: past this point there is no Stop button and nothing shows what is left.
+  useEffect(() => () => { stop.current = true; }, []);
+
   const run = async () => {
     setConfirming(false);
     setFailed([]);

@@ -21,6 +21,14 @@ test('a QC result column is refused, a real reason containing the word is not', 
   assert.equal(parseRejectLines('LOT-00000001, Good paint but cracked roof')[0].problem, null);
 });
 
+test('a clean result in any column is refused, in any wording', () => {
+  for (const l of ['LOT-00000001\tFlare Race Grey\tPass', 'LOT-00000001, Flare Race Grey, OK', 'LOT-00000001\t"Pass"',
+    'LOT-00000001\tPassed QC', 'LOT-00000001\tNo issue', 'LOT-00000001\tN/A', 'LOT-00000001\tNil', 'LOT-00000001\tApproved'])
+    assert.match(parseRejectLines(l)[0].problem, /says the unit passed/, l);
+  assert.equal(parseRejectLines('LOT-00000001\tFlare Race Grey\tPaint chipped')[0].problem, null);
+  assert.equal(parseRejectLines('LOT-00000001, No issue with paint but roof cracked')[0].problem, null);
+});
+
 test('a second label on the line is refused', () => {
   for (const l of ['LOT-00000001, LOT-00000002, paint', 'LOT-00000001\tLOT-00000002', 'LOT-00000001 is fine but LOT00000002 has a chip'])
     assert.match(parseRejectLines(l)[0].problem, /more than one label/, l);
