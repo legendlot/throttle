@@ -4,6 +4,7 @@ import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
 import { Modal, Spinner, useToast, EmptyState, buildCycleCountSheetHtml, printWindow } from '@throttle/ui';
 import { useProducts } from '../../../hooks/useProducts.js';
+import { parsePartCodes } from '../../../lib/partCodes.mjs';
 
 const STATUS_TABS = [
   { id: 'in_progress', label: 'In Progress',  tone: 'yellow' },
@@ -219,9 +220,12 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
   const [notes,       setNotes]       = useState('');
   const [creating,    setCreating]    = useState(false);
   // 'due' = pick from the due schedule (as before) · 'product' = every active BOM part of one
-  // product, resolved by the worker from bom_register (Piyush, #bugs 1791365201.610259).
+  // product, resolved by the worker from bom_register (Piyush, #bugs 1791365201.610259) · 'parts' =
+  // any codes pasted in, for a part that is neither due nor on an active BOM (Neeraj, #bugs 1793681398.903919).
   const [scope,       setScope]       = useState('due');
   const [product,     setProduct]     = useState('');
+  const [pasted,      setPasted]      = useState('');
+  const pastedCodes = useMemo(() => parsePartCodes(pasted), [pasted]);
   const { PRODUCTS, loading: productsLoading } = useProducts();
 
   useEffect(() => {
@@ -265,14 +269,18 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
 
   async function submit() {
     const byProduct = scope === 'product';
+    const byPaste = scope === 'parts';
     if (byProduct && !product) { toast('Pick a product', 'error'); return; }
-    if (!byProduct && selected.size === 0) { toast('Select at least one part', 'error'); return; }
+    if (byPaste && pastedCodes.length === 0) { toast('Paste at least one part code', 'error'); return; }
+    if (scope === 'due' && selected.size === 0) { toast('Select at least one part', 'error'); return; }
     setCreating(true);
     try {
       const r = await workerFetch('createCycleCount', {
         data: {
           // Product mode sends no part list — the worker resolves the product's BOM itself.
-          ...(byProduct ? { product, count_type: 'ad_hoc' } : { part_codes: [...selected], count_type: 'scheduled' }),
+          ...(byProduct ? { product, count_type: 'ad_hoc' }
+            : byPaste ? { part_codes: pastedCodes, count_type: 'ad_hoc' }
+            : { part_codes: [...selected], count_type: 'scheduled' }),
           area:       area.trim() || null,
           notes:      counterName ? `Counter: ${counterName.trim()}${notes ? ' · ' + notes.trim() : ''}` : (notes.trim() || null),
         },
@@ -292,14 +300,43 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
     <Modal open onClose={onClose} size="lg" title="New cycle count"
            confirmLabel={creating ? 'CREATING…' : scope === 'product'
              ? `CREATE COUNT · ${product || 'pick a product'}`
-             : `CREATE COUNT · ${selected.size} part${selected.size === 1 ? '' : 's'}`}
+             : `CREATE COUNT · ${scope === 'parts' ? pastedCodes.length : selected.size} part${(scope === 'parts' ? pastedCodes.length : selected.size) === 1 ? '' : 's'}`}
            onConfirm={submit} loading={creating}>
       <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-        {[['due', 'Due parts'], ['product', 'By product']].map(([id, label]) => (
+        {[['due', 'Due parts'], ['product', 'By product'], ['parts', 'By part code']].map(([id, label]) => (
           <button key={id} onClick={() => setScope(id)} style={{ ...btnS, ...(scope === id ? { background: 'rgba(33,60,226,.2)', color: '#7b93ff', borderColor: 'rgba(33,60,226,.35)', fontWeight: 700 } : {}) }}>{label.toUpperCase()}</button>
         ))}
       </div>
-      {scope === 'product' ? (
+      {scope === 'parts' ? (
+        <>
+          <div style={{ marginBottom: 12, padding: '8px 10px', background: 'var(--surface2)', borderRadius: 3, fontSize: 11, color: 'var(--t2)' }}>
+            Counts exactly the parts you paste, including parts that are not due and not on any active BOM.
+            One part per line. A line can have a name and a number on it, only the first part code is read: check
+            the list below before creating. Quantities are entered on the count itself, and a difference is
+            handled like on every other count.
+          </div>
+          <label style={lbl}>Part codes</label>
+          <textarea value={pasted} onChange={e => setPasted(e.target.value)} rows={8}
+                    placeholder={'FL-PP-09\nFL-PB-42\nFL-PB-55'} style={{ ...input, width: '100%', fontFamily: 'var(--mono, monospace)', marginBottom: 6 }} />
+          <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 12, wordBreak: 'break-word' }}>
+            {pastedCodes.length ? `${pastedCodes.length} part${pastedCodes.length === 1 ? '' : 's'}: ${pastedCodes.join(', ')}` : 'No part codes yet'}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+            <div>
+              <label style={lbl}>Area / Zone</label>
+              <input value={area} onChange={e => setArea(e.target.value)} placeholder="optional" style={{ ...input, width: '100%' }} />
+            </div>
+            <div>
+              <label style={lbl}>Counter Name</label>
+              <input value={counterName} onChange={e => setCounterName(e.target.value)} placeholder="written on count sheet" style={{ ...input, width: '100%' }} />
+            </div>
+            <div>
+              <label style={lbl}>Notes</label>
+              <input value={notes} onChange={e => setNotes(e.target.value)} style={{ ...input, width: '100%' }} />
+            </div>
+          </div>
+        </>
+      ) : scope === 'product' ? (
         <>
           <div style={{ marginBottom: 12, padding: '8px 10px', background: 'var(--surface2)', borderRadius: 3, fontSize: 11, color: 'var(--t2)' }}>
             Counts every active BOM part of one product, including shared screws and universal parts on its BOM.
