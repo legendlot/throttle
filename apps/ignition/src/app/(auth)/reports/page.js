@@ -1,12 +1,12 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState } from '@throttle/ui';
-import { BarChart3, Download } from 'lucide-react';
+import { BarChart3, Download, RefreshCw } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell,
 } from 'recharts';
-import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
+import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
 import { istToday } from '../../../lib/istDate.js';
 import { Card, Segmented, Tile } from '../../../components/ui/index.js';
 
@@ -18,6 +18,7 @@ function spendHint(data) {
   if (wait?.deals) parts.push(`leaves out ${inr(wait.spend)} on ${wait.deals} created in range, not posted yet`);
   return parts.join(' · ');
 }
+const syncedLabel = iso => new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 function cpm(n) { return n == null ? '—' : `₹${Number(n).toFixed(0)}`; }
 function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
 const TIER_LABELS = { nano: 'Nano', micro: 'Micro', macro: 'Macro', brand: 'Brand', store: 'Store', untyped: 'Untyped' };
@@ -46,6 +47,7 @@ const CPM_TONES = ['var(--state-success-fg)', 'var(--state-success-fg)', 'var(--
 export default function ReportsPage() {
   const { session, perms } = useAuth();
   const canView = !!perms?.ignition_reports_view;
+  const canSync = !!perms?.ignition_manage;
 
   const today = istToday();
   const [from, setFrom] = useState(() => presetRange('ytd', istToday())[0]);
@@ -55,6 +57,9 @@ export default function ReportsPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const sweepFrom = useRef(undefined);
+  const [sync, setSync] = useState(null);   // { running, synced, failed, remaining, error }
 
   useEffect(() => {
     if (!session || !canView) { setLoading(false); return; }
@@ -65,7 +70,31 @@ export default function ReportsPage() {
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, from, to, canView]);
+  }, [session, from, to, canView, reloadKey]);
+
+  // Sync all (Reann #9). The worker does a batch per request and the page loops, so the status line
+  // shows real progress on 600+ codes. `sweepFrom` is kept after a stop: pressing again carries on
+  // with what is left and retries what failed, instead of walking every code again.
+  async function syncAll() {
+    let before = sweepFrom.current, synced = 0, failed = 0;
+    setSync({ running: true, synced: 0, failed: 0, remaining: null });
+    try {
+      for (;;) {
+        const r = await ignitionopsPost('syncCouponRedemptions', { before, skip: failed }, session);
+        before = r.before;
+        sweepFrom.current = before;
+        synced += r.synced || 0;
+        failed += r.failed || 0;
+        if (r.done) break;
+        setSync({ running: true, synced, failed, remaining: Math.max(0, (r.remaining ?? 0) - failed) });
+      }
+      if (!failed) sweepFrom.current = undefined;
+      setSync({ running: false, synced, failed, remaining: 0 });
+    } catch (e) {
+      setSync({ running: false, synced, failed, remaining: null, error: e.message });
+    }
+    setReloadKey(k => k + 1);
+  }
 
   function exportCsv() {
     if (!data) return;
@@ -116,9 +145,25 @@ export default function ReportsPage() {
           <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={dateInput} />
           <span style={lbl}>To</span>
           <input type="date" value={to} onChange={e => setTo(e.target.value)} style={dateInput} />
+          {canSync && (
+            <button onClick={syncAll} disabled={sync?.running} style={{ ...btnGhost, opacity: sync?.running ? 0.6 : 1, cursor: sync?.running ? 'not-allowed' : 'pointer' }}
+              title="Refresh sales and orders for every active code from Shopify">
+              <RefreshCw size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />{sync?.running ? 'Syncing…' : 'Sync all'}
+            </button>
+          )}
           <button onClick={exportCsv} disabled={!data} style={btnGhost}><Download size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />CSV</button>
         </div>
       </div>
+
+      {sync && (
+        <div role="status" style={{ fontSize: 13, marginBottom: 12, color: sync.error || sync.failed ? 'var(--state-warning-fg)' : 'var(--text-2)' }}>
+          {sync.running
+            ? `Syncing codes: ${sync.synced} done${sync.remaining != null ? `, ${sync.remaining} to go` : ''}${sync.failed ? `, ${sync.failed} could not be read` : ''}. Keep this page open.`
+            : sync.error
+              ? `Sync stopped after ${sync.synced} codes: ${sync.error}. Press Sync all to carry on.`
+              : `Synced ${sync.synced} codes.${sync.failed ? ` ${sync.failed} could not be read from Shopify. Press Sync all to try them again.` : ''}`}
+        </div>
+      )}
 
       <p style={{ color: 'var(--text-3)', fontSize: 13, margin: '-6px 0 14px' }}>
         Deals created use the date the deal was created. Everything else uses the date the video went live.
@@ -136,7 +181,8 @@ export default function ReportsPage() {
             <Tile size={22} label="Total spend" value={inr(data.totals.spend)} color={ORANGE}
               hint={spendHint(data)} />
             <Tile size={22} label="Orders" value={data.totals.orders.toLocaleString()} hint="post date" />
-            <Tile size={22} label="Sales (coupon, net)" value={inr(data.totals.conversions_value)} hint="post date" />
+            <Tile size={22} label="Sales (coupon, net)" value={inr(data.totals.conversions_value)}
+              hint={`post date · ${data.sales_synced_at ? `active codes synced by ${syncedLabel(data.sales_synced_at)}` : 'some codes never synced'}`} />
             <Tile size={22} label="Sales per ₹1" value={data.totals.sales_per_rupee != null ? `₹${data.totals.sales_per_rupee.toFixed(2)}` : '—'} hint="sales ÷ spend, post date" />
             <Tile size={22} label="Blended CPM" value={cpm(data.totals.blended_cpm)} hint="video post date" />
             <Tile size={22} label="Median CPM" value={cpm(data.totals.median_cpm)} hint={data.totals.cpm_deals != null ? `over ${data.totals.cpm_deals} deals with views` : undefined} />

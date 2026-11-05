@@ -2452,7 +2452,11 @@ async function getReports(url, auth, env) {
   // Spend the post-date totals cannot place yet. Said on the page, so the total never quietly omits it.
   const unposted = A.created.filter(e => !e.post_date && !NEVER_POSTS.has(e.stage));
   const cpm = cpmStats(cpmRows);
+  // The code that has waited longest: every affiliate code, so all sales, are at least this fresh.
+  const sr = await sb(`/rest/v1/coupon_codes?status=eq.active&kind=eq.affiliate&select=last_synced_at&order=last_synced_at.asc.nullsfirst&limit=1`, env);
+  const sales_synced_at = sr.ok ? (sr.data?.[0]?.last_synced_at || null) : null;
   return ok({
+    sales_synced_at,
     range: { from, to, total_deals: A.created.length },
     totals: {
       deals: A.created.length,
@@ -3320,7 +3324,11 @@ async function assignDiscountCode(body, auth, env) {
 // Spec: docs/superpowers/specs/2026-06-28-ignition-reann-batch-b-coupon-attribution-design.md
 // ─────────────────────────────────────────────────────────────────────────────
 
-const COUPON_SYNC_MAX = 6;   // active codes per "sync all" pass (50-subrequest budget; cron drains over days)
+// Codes per request from the Sync all button (the page loops until none are left, so one failed request
+// loses one batch). The daily cron passes the whole list: at 6 codes a day, the old cap inherited from the
+// Free-plan subrequest limit, a full sweep of 612 codes took 3 months (Reann #9).
+const COUPON_SYNC_BATCH = 24;
+const COUPON_SYNC_CONCURRENCY = 4;
 
 const shopifyConfigured = (env) => !!(env.SHOPIFY_STORE_DOMAIN && env.SHOPIFY_CLIENT_ID && env.SHOPIFY_CLIENT_SECRET);
 
@@ -3534,6 +3542,9 @@ async function syncOneCoupon(env, coupon, maxPages) {
   // on 2026-10-09 — one page). Reading only since the last sync left an order synced before its window opened,
   // moved or closed — or refunded later — on its stale eligibility/net forever (S413 review).
   const ord = await shopifyOrdersForCode(env, coupon.code, null, maxPages);
+  // A failed read changes nothing, last_synced_at included: that stamp is what "Synced at" tells the
+  // team, and the code stays oldest in line for the next pass.
+  if (!ord.ok) return { ok: false, count: 0, error: ord.error };
   const rows = (ord.orders || []).map(o => {
     const net = Math.max(0, o.gross - o.refunded);
     const eligible = coupon.kind === 'affiliate' && couponInWindow(o.date, win.from, win.to);
@@ -3546,14 +3557,16 @@ async function syncOneCoupon(env, coupon, maxPages) {
     };
   });
   if (rows.length) {
-    await sb(`/rest/v1/coupon_redemptions?on_conflict=coupon_code_id,shopify_order_id`, env, {
+    const up = await sb(`/rest/v1/coupon_redemptions?on_conflict=coupon_code_id,shopify_order_id`, env, {
       method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify(rows),
     });
+    if (!up.ok) return { ok: false, count: 0, error: 'db_error' };
   }
   const all = await sb(`/rest/v1/coupon_redemptions?coupon_code_id=eq.${coupon.id}&select=gross_value,net_value,commission_amount`, env);
+  if (!all.ok) return { ok: false, count: 0, error: 'db_error' };
   const reds = all.data || [];
   const sum = (k) => reds.reduce((s, r) => s + Number(r[k] || 0), 0);
-  await sb(`/rest/v1/coupon_codes?id=eq.${coupon.id}`, env, {
+  const stamped = await sb(`/rest/v1/coupon_codes?id=eq.${coupon.id}`, env, {
     method: 'PATCH', prefer: 'return=minimal',
     body: JSON.stringify({
       redemptions: reds.length, attributed_revenue: sum('gross_value'),
@@ -3561,7 +3574,9 @@ async function syncOneCoupon(env, coupon, maxPages) {
       last_synced_at: nowIso(),
     }),
   });
-  return { ok: ord.ok, count: rows.length, error: ord.error };
+  // Unstamped, the code would stay in the Sync all query, so it must count as failed or the page never ends.
+  if (!stamped.ok) return { ok: false, count: 0, error: 'db_error' };
+  return { ok: true, count: rows.length };
 }
 
 // Roll an engagement's AFFILIATE coupons up onto conversions_value + commission_earned + orders.
@@ -3571,6 +3586,7 @@ async function syncOneCoupon(env, coupon, maxPages) {
 async function recomputeEngagementAttribution(env, engagementId) {
   if (!engagementId) return;
   const cs = await sb(`/rest/v1/coupon_codes?engagement_id=eq.${engagementId}&kind=eq.affiliate&select=id,attributed_revenue_net,commission_accrued`, env);
+  if (!cs.ok) return;   // a failed read is not "no codes": it must not write sales of 0
   const rows = cs.data || [];
   let orders = null;
   if (rows.length) {
@@ -3591,24 +3607,59 @@ async function recomputeEngagementAttribution(env, engagementId) {
 async function syncCouponRedemptions(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!shopifyConfigured(env)) return err('shopify_not_configured', 503);
-  let coupons;
   if (body.coupon_code_id) {
     const r = await sb(`/rest/v1/coupon_codes?id=eq.${body.coupon_code_id}&select=*&limit=1`, env);
-    coupons = r.data || [];
-  } else {
-    const r = await sb(`/rest/v1/coupon_codes?status=eq.active&select=*&order=last_synced_at.asc.nullsfirst&limit=${COUPON_SYNC_MAX}`, env);
-    coupons = r.data || [];
+    const res = await syncCouponBatch(env, r.data || [], 10);
+    return ok({ coupons: (r.data || []).length, synced: res.synced });
   }
-  const maxPages = body.coupon_code_id ? 10 : 3;
-  const touched = new Set();
+  // Sync all. `before` is when the sweep started, fixed by the first request, so the page walks each
+  // code once: anything synced since then is out of the query, and a code that fails is passed over
+  // through `skip` rather than being retried forever at the head of the line. Affiliate codes come
+  // first (asc sorts affiliate before gift) because they are the ones that move sales.
+  const before = body.before && Number.isFinite(Date.parse(body.before)) ? new Date(body.before).toISOString() : nowIso();
+  const skip = Math.max(0, Number(body.skip) || 0);
+  const notYet = `status=eq.active&or=(last_synced_at.is.null,last_synced_at.lt.${encodeURIComponent(before)})`;
+  const r = await sb(`/rest/v1/coupon_codes?${notYet}&select=*&order=kind.asc,last_synced_at.asc.nullsfirst,id.asc&limit=${COUPON_SYNC_BATCH}&offset=${skip}`, env);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const coupons = r.data || [];
+  const res = await syncCouponBatch(env, coupons, 3);
+  const left = await sb(`/rest/v1/coupon_codes?${notYet}&select=id&limit=1`, env, { prefer: 'count=exact' });
+  return ok({
+    before, coupons: coupons.length, synced: res.synced, failed: coupons.length - res.synced,
+    remaining: rangeTotal(left.range),
+    done: coupons.length === 0,
+  });
+}
+
+// The daily sweep: every active code, in batches, re-rolling each batch's deals as it goes, so a
+// sweep cut off at the cron's time limit keeps what it finished; the next starts from the oldest.
+async function syncAllActiveCoupons(env) {
+  if (!shopifyConfigured(env)) return { synced: 0, failed: 0 };
+  const r = await sb(`/rest/v1/coupon_codes?status=eq.active&select=*&order=kind.asc,last_synced_at.asc.nullsfirst&limit=5000`, env);
+  const all = r.data || [];
   let synced = 0;
-  for (const c of coupons) {
-    const res = await syncOneCoupon(env, c, maxPages);
-    if (res.ok) synced += 1;
-    if (c.engagement_id) touched.add(c.engagement_id);
+  for (let i = 0; i < all.length; i += COUPON_SYNC_BATCH) {
+    synced += (await syncCouponBatch(env, all.slice(i, i + COUPON_SYNC_BATCH), 3)).synced;
   }
-  for (const eid of touched) await recomputeEngagementAttribution(env, eid);
-  return ok({ coupons: coupons.length, synced });
+  return { synced, failed: all.length - synced };
+}
+
+async function syncCouponBatch(env, coupons, maxPages) {
+  const touched = new Set();
+  let synced = 0, next = 0;
+  await Promise.all(Array.from({ length: COUPON_SYNC_CONCURRENCY }, async () => {
+    while (next < coupons.length) {
+      const c = coupons[next++];
+      const res = await syncOneCoupon(env, c, maxPages).catch(() => ({ ok: false }));
+      if (res.ok) {
+        synced += 1;
+        // Only affiliate codes feed the deal's sales. Rolling a gift code's deal up would zero them.
+        if (c.engagement_id && c.kind === 'affiliate') touched.add(c.engagement_id);
+      }
+    }
+  }));
+  for (const eid of touched) await recomputeEngagementAttribution(env, eid).catch(e => console.error('[coupon-sync] rollup', eid, e));
+  return { synced };
 }
 
 // ── COGS lookup (Reann #2, S273) ─────────────────────────────────────────────────────────────
@@ -5995,12 +6046,11 @@ export default {
       return;
     }
 
-    // 08:40 IST daily — reconcile coupon redemptions off Shopify (S214). Drains
-    // COUPON_SYNC_MAX active codes/pass (oldest-synced first); refund-aware. No-op if
-    // Shopify unconfigured (the action returns a 503 that just resolves here).
+    // 08:40 IST daily — reconcile every active code's redemptions off Shopify (S214, Reann #9).
+    // Refund-aware. No-op if Shopify is unconfigured.
     if (cron === '10 3 * * *') {
-      ctx.waitUntil(syncCouponRedemptions({}, CRON_AUTH, env).then(
-        () => console.log('[coupon-sync] cron done'),
+      ctx.waitUntil(syncAllActiveCoupons(env).then(
+        res => console.log(`[coupon-sync] cron done, synced ${res.synced}, failed ${res.failed}`),
         e => console.error('[coupon-sync] cron error', e),
       ));
       return;
