@@ -2,7 +2,7 @@
   "title": "Ignition",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to influencer deals, engagements, codes and campaigns at Legend of Toys.",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "date": "2026-11-05",
   "app_url": "ignition.legendoftoys.com",
   "owner": "Legend of Toys",
@@ -131,6 +131,16 @@
           ]
         },
         {
+          "id": "contract",
+          "title": "The Deal Contract",
+          "file": "work-contract.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
           "id": "payments",
           "title": "Payments",
           "route": "/payments",
@@ -244,7 +254,7 @@
     },
     {
       "part": "Admin",
-      "subtitle": "Where user roles are managed, and how the legacy sheet is imported.",
+      "subtitle": "Where user roles are managed, the contract wording is published, and the legacy sheet is imported.",
       "chapters": [
         {
           "id": "users",
@@ -260,6 +270,15 @@
           "title": "Sheet Import",
           "route": "/admin/import",
           "file": "admin-import.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "contract-wording",
+          "title": "Contract Wording",
+          "route": "/admin/contract",
+          "file": "admin-contract.html",
           "roles": [
             "adm"
           ]

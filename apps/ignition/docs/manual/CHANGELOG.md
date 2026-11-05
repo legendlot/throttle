@@ -3,6 +3,14 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.18.0] - 2026-11-05
+### Added
+- The Deal Contract chapter: Send contract, checking and editing the text, Resend (clears an earlier acceptance, reason needed), Mark accepted by hand (reason needed), Allow bank details update (7 days, one change), what the creator sees, the Shipping lock.
+- Contract Wording chapter under Admin (admins only). The feature is off until the wording is published.
+- Deliverables field on Deal Terms and the New deal form.
+### Removed
+- The deal page Brief button and its section.
+
 ## [1.17.0] - 2026-11-05
 ### Changed
 - POC is now Owner: required on new deals, picked from the influencer team, editable on the deal page (new Owner section); older deals with none can be given one.
