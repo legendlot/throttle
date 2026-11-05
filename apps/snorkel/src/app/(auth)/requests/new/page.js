@@ -1,6 +1,6 @@
 'use client';
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { useToast, Combobox } from '@throttle/ui';
@@ -15,10 +15,13 @@ function FormField({ label, children, full }) {
   return <div className={`ff ${full ? 'ff-full' : ''}`}><label className="kv-k">{label}</label>{children}</div>;
 }
 
-export default function NewRequestPage() {
+function RequestForm({ editNo }) {
   const { session, userId } = useAuth();
   const { showToast } = useToast();
   const router = useRouter();
+  const [editLoading, setEditLoading] = useState(!!editNo);
+  const [editBlocked, setEditBlocked] = useState('');
+  const editLoaded = useRef(false);
 
   const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
@@ -58,6 +61,45 @@ export default function NewRequestPage() {
 
   useEffect(() => { loadItems(); }, [loadItems]);
 
+  // Once only, keyed on userId: a token refresh must not overwrite what is being typed.
+  useEffect(() => {
+    if (!editNo || !session || editLoaded.current) return;
+    editLoaded.current = true;
+    (async () => {
+      try {
+        const res = await garageFetch('getRequest', { request_no: editNo }, session);
+        const r = res?.request;
+        if (!r) { setEditBlocked('Request not found.'); return; }
+        if (r.status !== 'pending') { setEditBlocked(`${editNo} is ${r.status}, so it can no longer be edited.`); return; }
+        if (res.has_live_po) { setEditBlocked(`Procurement has already started a PO from ${editNo}. Ask them to change it.`); return; }
+        const reqLines = Array.isArray(res.lines) ? res.lines : [];
+        setTitle(r.title || '');
+        setDetails(r.details || '');
+        setCategory(r.category || '');
+        setSuggestedVendor(r.suggested_vendor || '');
+        setEstCost(!reqLines.length && r.estimated_cost != null ? String(r.estimated_cost) : '');
+        setCurrency(r.currency || 'INR');
+        setUrgency(r.urgency || 'Normal');
+        setNeededBy(r.needed_by ? String(r.needed_by).slice(0, 10) : '');
+        setNotes(r.notes || '');
+        setLines(reqLines.map((l) => ({
+          part_code: l.part_code || '',
+          description: l.description || '',
+          item_type: l.item_type || 'Part',
+          qty: l.qty != null ? String(Number(l.qty)) : '',
+          unit: l.unit || 'pcs',
+          unit_price: l.unit_price != null ? String(Number(l.unit_price)) : '',
+          hsn_code: l.hsn_code ?? null,
+          gst_percent: l.gst_percent ?? null,
+        })));
+      } catch (e) {
+        setEditBlocked(e.message || 'Could not load the request.');
+      } finally {
+        setEditLoading(false);
+      }
+    })();
+  }, [userId, editNo]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const itemOptions = useMemo(() => (items || []).map((it) => ({
     value: it.part_code,
     label: it.part_code,
@@ -76,6 +118,14 @@ export default function NewRequestPage() {
   function updateLine(i, field, value) {
     setLines((prev) => prev.map((l, j) => (j === i ? { ...l, [field]: value } : l)));
   }
+  // A description that is just the old part's name goes with the part, or an edit that corrects a
+  // part prints part B described as part A. One the requester typed stays.
+  function nextDescription(l, opt) {
+    if (!opt) return l.description;
+    const prev = itemOptions.find((o) => o.value === l.part_code);
+    const typed = l.description && l.description !== prev?.part_name && l.description !== l.part_code;
+    return typed ? l.description : (opt.part_name || opt.value || '');
+  }
   function removeLine(i) {
     setLines((prev) => prev.filter((_, j) => j !== i));
   }
@@ -84,7 +134,7 @@ export default function NewRequestPage() {
     setLines((prev) => prev.map((l, j) => (j === i ? {
       ...l,
       part_code: opt?.value || '',
-      description: l.description || opt?.part_name || opt?.value || '',
+      description: nextDescription(l, opt),
       hsn_code: opt?.hsn_code ?? null,
       gst_percent: opt?.gst_percent ?? null,
     } : l)));
@@ -129,8 +179,9 @@ export default function NewRequestPage() {
     }
     setSubmitting(true);
     try {
-      const res = await workerFetch('postRequest', {
+      const res = await workerFetch(editNo ? 'updateRequest' : 'postRequest', {
         data: {
+          ...(editNo ? { request_no: editNo } : {}),
           title: title.trim(), details: details.trim(),
           category: category.trim() || null,
           suggested_vendor: suggestedVendor.trim() || null,
@@ -145,6 +196,7 @@ export default function NewRequestPage() {
           lines: filled.map(l => ({
             part_code: l.part_code || null,
             description: l.description.trim() || l.part_code,
+            item_type: l.item_type || 'Part',
             qty: Number(l.qty),
             unit: l.unit || 'pcs',
             unit_price: l.unit_price !== '' ? Number(l.unit_price) : null,
@@ -152,17 +204,32 @@ export default function NewRequestPage() {
         },
       }, session);
       const result = res.data || res;
-      showToast(`${result.request_no} submitted`, 'success');
+      showToast(`${result.request_no} ${editNo ? 'updated' : 'submitted'}`, 'success');
       router.push(`/requests/detail?request_no=${encodeURIComponent(result.request_no)}`);
     } catch (e) {
-      showToast(e.message || 'Failed to submit request', 'error');
+      showToast(e.message || `Failed to ${editNo ? 'save' : 'submit'} request`, 'error');
       setSubmitting(false);
     }
   }
 
+  const backTo = editNo ? `/requests/detail?request_no=${encodeURIComponent(editNo)}` : '/requests';
+
+  if (editBlocked) {
+    return (
+      <div className="pg" style={{ maxWidth: 760 }}>
+        <PageHead title={`Edit ${editNo}`} sub={editBlocked} />
+        <Btn onClick={() => router.push(backTo)}>Back to the request</Btn>
+      </div>
+    );
+  }
+  if (editLoading) return <div className="pg" style={{ color: 'var(--t3)' }}>Loading…</div>;
+
   return (
     <div className="pg" style={{ maxWidth: 760 }}>
-      <PageHead title="New PO Request" sub="Tell procurement what you need. The more context, the faster they can raise a PO." />
+      <PageHead
+        title={editNo ? `Edit ${editNo}` : 'New PO Request'}
+        sub={editNo ? 'You can change this until procurement starts a PO from it.' : 'Tell procurement what you need. The more context, the faster they can raise a PO.'}
+      />
       <Panel title="Request details" pad>
         <div className="form-grid">
           <FormField label="Title" full><input className="f-inp" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. 20× ceiling fans for the new floor" disabled={submitting} /></FormField>
@@ -237,6 +304,7 @@ export default function NewRequestPage() {
                           inputStyle={{ fontFamily: 'var(--mono)' }}
                           commitOnTab
                           portal
+                          freeTextValue
                         />
                       </td>
                       <td><input className="f-inp" value={l.description} onChange={(e) => updateLine(i, 'description', e.target.value)} placeholder="What is it?" disabled={submitting} /></td>
@@ -290,10 +358,27 @@ export default function NewRequestPage() {
         </div>
 
         <div className="form-foot">
-          <Btn onClick={() => router.push('/requests')} disabled={submitting}>Cancel</Btn>
-          <Btn kind="primary" onClick={submit} disabled={submitting}><Send size={14} /> {submitting ? 'Submitting…' : 'Submit request'}</Btn>
+          <Btn onClick={() => router.push(backTo)} disabled={submitting}>Cancel</Btn>
+          <Btn kind="primary" onClick={submit} disabled={submitting}><Send size={14} /> {submitting ? (editNo ? 'Saving…' : 'Submitting…') : (editNo ? 'Save changes' : 'Submit request')}</Btn>
         </div>
       </Panel>
     </div>
+  );
+}
+
+// ?edit=PR-NNN reuses this form to change a pending request; the worker holds the real rule. The key
+// remounts it when that changes: the sidebar's New Request keeps this page mounted, which would file
+// PR-NNN's contents as a new request.
+function RequestFormRoute() {
+  const searchParams = useSearchParams();
+  const editNo = searchParams?.get('edit') || null;
+  return <RequestForm key={editNo || 'new'} editNo={editNo} />;
+}
+
+export default function NewRequestPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: 'var(--t3)' }}>Loading…</div>}>
+      <RequestFormRoute />
+    </Suspense>
   );
 }

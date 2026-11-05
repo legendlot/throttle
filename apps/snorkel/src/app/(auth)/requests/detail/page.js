@@ -98,6 +98,9 @@ function RequestDetail() {
           {isPending && canAccept && !rejecting && (
             <button style={btnDanger} onClick={() => setRejecting(true)}>Reject</button>
           )}
+          {isPending && isOwner && !data.has_live_po && (
+            <button style={btnSecondary} onClick={() => router.push(`/requests/new/?edit=${encodeURIComponent(r.request_no)}`)} disabled={busy}>Edit request</button>
+          )}
           {isPending && isOwner && (
             <button style={btnSecondary} onClick={doCancel} disabled={busy}>Cancel request</button>
           )}
@@ -204,13 +207,22 @@ function RequestDetail() {
                 <span style={{ color: 'var(--t2)', marginLeft: 10 }}>{linked.vendor_name}</span>
                 <span style={{ marginLeft: 10 }}><StatusBadge label={linked.status} tone="blue" /></span>
               </div>
-              {/* The PO page needs procurement_view (worker + PODetailClient) — a requester
-                  without it only got "Access restricted" behind this button. */}
-              {perms?.procurement_view && (
-                <button style={btnSecondary} onClick={() => router.push(`/procurement/pos/detail/?po_number=${encodeURIComponent(linked.po_number)}`)}>
-                  Open PO →
-                </button>
-              )}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {/* The requester has no procurement_view, but the worker lets them print the PO
+                    raised from their own request. Opens the print view: Save as PDF from there. */}
+                {(perms?.procurement_view || isOwner) && linked.status !== 'Cancelled' && (
+                  <button style={btnSecondary} onClick={() => window.open(`/procurement/pos/print?po_number=${encodeURIComponent(linked.po_number)}`, '_blank')}>
+                    Download PO
+                  </button>
+                )}
+                {/* The PO page needs procurement_view (worker + PODetailClient) — a requester
+                    without it only got "Access restricted" behind this button. */}
+                {perms?.procurement_view && (
+                  <button style={btnSecondary} onClick={() => router.push(`/procurement/pos/detail/?po_number=${encodeURIComponent(linked.po_number)}`)}>
+                    Open PO →
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

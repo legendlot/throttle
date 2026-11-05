@@ -653,6 +653,7 @@ function NewPOPage() {
       delivery_address_id: deliveryAddressId ? parseInt(deliveryAddressId, 10) : null,
       notes: notes || null,
       source_request_no: requestParam || null,
+      source_request_updated_at: linkedRequest?.updated_at || null,
       lines: lines.map((l) => ({
         part_code:      l.part_code || null,
         description:    l.description || null,

@@ -842,6 +842,81 @@ function resolveRequestLineTax(lines, master) {
   });
 }
 
+// The two paths that write request lines (postRequest, updateRequest) share these, so a rule added
+// to one cannot miss the other. test/po-request-edit.test.mjs lifts this block out of the source.
+// Normalise BEFORE validating: neither endpoint has a permission key, so a hand-rolled call is a
+// first-class input, not a theoretical one.
+function normaliseRequestLines(raw) {
+  const lines = (Array.isArray(raw) ? raw : [])
+    .filter(l => l && typeof l === 'object')
+    .map(l => ({
+      part_code:   String(l.part_code ?? '').trim(),
+      description: String(l.description ?? '').trim(),
+      item_type:   String(l.item_type ?? '').trim() || 'Part',
+      qty:         Number(l.qty),
+      unit:        String(l.unit ?? '').trim() || 'pcs',
+      unit_price:  (l.unit_price === '' || l.unit_price == null) ? null : Number(l.unit_price),
+    }))
+    .filter(l => l.description || l.part_code);
+  for (const l of lines) {
+    // Number.isFinite, not `> 0`: Infinity passes `> 0` and JSON.stringify()s to `null`, which
+    // violates the NOT NULL on qty AFTER the parent row is already written. Same for NaN.
+    if (!Number.isFinite(l.qty) || l.qty <= 0) return { lines: [], error: 'every line needs a quantity greater than zero' };
+    if (l.unit_price !== null && (!Number.isFinite(l.unit_price) || l.unit_price < 0)) {
+      return { lines: [], error: 'a line price cannot be negative' };
+    }
+  }
+  return { lines, error: null };
+}
+
+// estimated_cost is DERIVED once lines exist. A line with no price contributes nothing rather than
+// blocking the sum. Falls back to the typed value only when there are no lines at all.
+// ⚠️ 0 is NOT the same as "no estimate". Every unpriced line contributes 0, so an itemised request
+// with no prices derives 0 — and 0 is `!= null`, so the queue, the request detail and the PO side
+// panel would all print "INR 0" where a prose request correctly prints "—". Fall back to NULL.
+function requestEstimatedCost(lines, typed) {
+  if (lines.length) {
+    const derived = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
+    return derived > 0 ? derived : null;
+  }
+  return typed != null && typed !== '' ? Number(typed) : null;
+}
+
+// Already trimmed and coerced by normaliseRequestLines; '' becomes NULL rather than reaching the
+// column as an empty string.
+function requestLineRow(l, i) {
+  return {
+    line_no: i + 1,
+    part_code: l.part_code || null,
+    description: l.description || l.part_code,
+    item_type: l.item_type || 'Part',
+    qty: Number(l.qty),
+    unit: l.unit || 'pcs',
+    unit_price: l.unit_price != null && l.unit_price !== '' ? Number(l.unit_price) : null,
+    hsn_code: l.hsn_code,
+    gst_percent: l.gst_percent,
+    needs_hsn_review: l.needs_hsn_review,
+  };
+}
+// End of the shared request-line block.
+
+// A requester holds no procurement_view but may print the PO raised from their OWN request
+// (Kirti, #bugs 1793862537.994069). Only the PO that request links to: PO numbers are sequential,
+// so this must never become "any requester can read any PO".
+// What the requester path may not carry: who paid and how it was routed. She has no other route to
+// these, and the print view renders none of them. payment_terms stays: it prints on the PO.
+function stripPoForRequester(row) {
+  return Object.fromEntries(Object.entries(row || {}).filter(([k]) =>
+    !/^(payment_(?!terms$)|paid_|cancellation_reason$)/.test(k)));
+}
+
+async function ownsRequestForPO(poNumber, userId) {
+  if (!poNumber || !userId) return false;
+  const r = await query('po_requests',
+    `?linked_po_number=eq.${encodeURIComponent(poNumber)}&requested_by_user_id=eq.${encodeURIComponent(userId)}&select=request_no&limit=1`);
+  return r.ok && Array.isArray(r.data) && r.data.length > 0;
+}
+
 // The part side runs the SAME master-wins planner as sales orders (S358 hostile review, #9):
 // planHsnSync(rawLines, partMaster, prevByPartCode, canSyncPartHsnMaster(P), PART_HSN_OPTS) then
 // syncHsnToMaster(plan, actor, role, poNumber, 'part'). Keyed on part_code — one row, no fan-out.
@@ -3335,14 +3410,19 @@ export default {
             // Was ungated: any login could walk the sequential PO numbers and read every price
             // and line. The PO pages have required procurement_view on screen since 2026-06-02
             // (PODetailClient 'Access restricted'); every payment_route / asset_view role holds it.
-            if (!canView(P)) return err('No permission', 403);
+            // Exception: the requester of the request this PO was raised from (see ownsRequestForPO).
+            // The China strip and the Soft refusal below still apply to them.
+            const viaOwnRequest = !canView(P);
+            if (viaOwnRequest && !(await ownsRequestForPO(po, userId))) return err('No permission', 403);
             const [headerR, linesR, regR] = await Promise.all([
               query('purchase_orders', `?po_number=eq.${encodeURIComponent(po)}&limit=1`),
               query('po_lines', `?po_number=eq.${encodeURIComponent(po)}&order=line_no.asc`),
               query('company_addresses', `?is_registered_office=eq.true&limit=1`),
             ]);
             if (!headerR.ok || !headerR.data[0]) return err('PO not found');
-            const poRow  = headerR.data[0];
+            // A cancelled PO must not reach a vendor from a requester's download.
+            if (viaOwnRequest && headerR.data[0].status === 'Cancelled') return err('This PO was cancelled');
+            const poRow = viaOwnRequest ? stripPoForRequester(headerR.data[0]) : headerR.data[0];
             const company = regR.data?.[0] || null;
             let vendor = null;
             if (poRow.vendor_code) {
@@ -3467,7 +3547,11 @@ export default {
             const rlR = await query('po_request_lines',
               `?request_no=eq.${encodeURIComponent(no)}&order=line_no.asc`);
             if (!rlR.ok) return err('Could not read the lines for ' + no + ': ' + JSON.stringify(rlR.data));
-            return ok({ request: r.data[0], linked_po: linkedPo, lines: rlR.data || [] });
+            // Only tells the page not to offer Edit. A failed read reads as false on purpose:
+            // store.update_po_request refuses the save itself.
+            const livePo = await query('purchase_orders',
+              `?source_request_no=eq.${encodeURIComponent(no)}&status=neq.Cancelled&select=po_number&limit=1`);
+            return ok({ request: r.data[0], linked_po: linkedPo, lines: rlR.data || [], has_live_po: !!livePo.data?.[0] });
           }
 
           // ── Payment queue (Approved POs to route / mark paid) ──
@@ -4212,6 +4296,15 @@ export default {
             if (!canRaisePO(P)) return err('No permission to raise POs', 403);
             const d = body.data;
             if (!d.vendor_name||!d.source||!d.order_type) return err('vendor_name, source, order_type required');
+            // The form copies the request's lines once, and a requester can edit until a PO row
+            // exists. Refuse a copy older than the request, or the edit is silently lost.
+            if (d.source_request_no && d.source_request_updated_at) {
+              const srcR = await query('po_requests',
+                `?request_no=eq.${encodeURIComponent(d.source_request_no)}&select=updated_at&limit=1`);
+              if (srcR.ok && srcR.data?.[0] && srcR.data[0].updated_at !== d.source_request_updated_at) {
+                return err(`${d.source_request_no} was changed after you opened this form. Reload the page to get the latest version.`);
+              }
+            }
             const isChina = d.source === 'China';
             const isSoft = d.status === 'Soft';
             if (isChina && !canRaiseChinaPO(P)) return err('China POs require po_china permission', 403);
@@ -5047,49 +5140,11 @@ export default {
 
             // Line items (S340). Optional — a request filed by an older client, or one
             // that genuinely is just a paragraph, still works exactly as before.
-            // Normalise BEFORE validating. This endpoint has no permission key, so a
-            // hand-rolled call is a first-class input, not a theoretical one.
-            // ⚠️ trim() here is the 4th line-write site: the other three trim `unit`
-            // (added in 63b94022, S294, because dirty units corrupted per-piece
-            // derivation). Shipping a 4th that did not would be PATTERN-218 — a rule
-            // taught to N−1 of N sites — and would silently falsify the backlog's own
-            // claim that "snorkelops now trims unit at all 3 line-write sites".
-            const rawReqLines = (Array.isArray(d.lines) ? d.lines : [])
-              .filter(l => l && typeof l === 'object')
-              .map(l => ({
-                part_code:   String(l.part_code ?? '').trim(),
-                description: String(l.description ?? '').trim(),
-                item_type:   String(l.item_type ?? '').trim() || 'Part',
-                qty:         Number(l.qty),
-                unit:        String(l.unit ?? '').trim() || 'pcs',
-                unit_price:  (l.unit_price === '' || l.unit_price == null) ? null : Number(l.unit_price),
-              }))
-              .filter(l => l.description || l.part_code);
-            for (const l of rawReqLines) {
-              // Number.isFinite, not `> 0`: Infinity passes `> 0` and JSON.stringify()s
-              // to `null`, which violates the NOT NULL on qty AFTER the parent row is
-              // already written. Same for NaN.
-              if (!Number.isFinite(l.qty) || l.qty <= 0) return err('every line needs a quantity greater than zero');
-              if (l.unit_price !== null && (!Number.isFinite(l.unit_price) || l.unit_price < 0)) {
-                return err('a line price cannot be negative');
-              }
-            }
+            const { lines: rawReqLines, error: reqLineErr } = normaliseRequestLines(d.lines);
+            if (reqLineErr) return err(reqLineErr);
             const reqLines = rawReqLines.length
               ? resolveRequestLineTax(rawReqLines, await partHsnMasterAll())
               : [];
-
-            // estimated_cost is DERIVED once lines exist — the requester no longer types
-            // one guessed number for the whole request. A line with no price contributes
-            // nothing rather than blocking the sum. Falls back to the typed value only
-            // when there are no lines at all, which keeps older callers working.
-            // ⚠️ 0 is NOT the same as "no estimate". Every unpriced line contributes 0, so
-            // an itemised request with no prices at all derives 0 — and 0 is `!= null`, so
-            // the queue, the request detail and the PO side panel would all print "INR 0"
-            // where a prose request correctly prints "—". The requester cannot even correct
-            // it: the Estimated cost field is hidden once a line exists. Fall back to NULL.
-            const derivedCostRaw = reqLines.reduce(
-              (s, l) => s + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
-            const derivedCost = derivedCostRaw > 0 ? derivedCostRaw : null;
 
             const reqNo = await nextSeq('po_request', 'PR-');
             const r = await insert('po_requests', {
@@ -5097,9 +5152,7 @@ export default {
               title: d.title, details: d.details,
               category: d.category || null,
               suggested_vendor: d.suggested_vendor || null,
-              estimated_cost: reqLines.length
-                ? derivedCost
-                : (d.estimated_cost != null && d.estimated_cost !== '' ? Number(d.estimated_cost) : null),
+              estimated_cost: requestEstimatedCost(reqLines, d.estimated_cost),
               currency: d.currency || 'INR',
               urgency: d.urgency || 'Normal',
               needed_by: d.needed_by || null,
@@ -5113,21 +5166,7 @@ export default {
 
             // Array insert, not a loop — never loop awaits per row (BUSINESS_RULES.md).
             if (reqLines.length) {
-              const li = await insert('po_request_lines', reqLines.map((l, i) => ({
-                request_no: reqNo,
-                line_no: i + 1,
-                // Already trimmed and coerced above; '' becomes NULL rather than reaching
-                // the column as an empty string.
-                part_code: l.part_code || null,
-                description: l.description || l.part_code,
-                item_type: l.item_type || 'Part',
-                qty: Number(l.qty),
-                unit: l.unit || 'pcs',
-                unit_price: l.unit_price != null && l.unit_price !== '' ? Number(l.unit_price) : null,
-                hsn_code: l.hsn_code,
-                gst_percent: l.gst_percent,
-                needs_hsn_review: l.needs_hsn_review,
-              })));
+              const li = await insert('po_request_lines', reqLines.map((l, i) => ({ request_no: reqNo, ...requestLineRow(l, i) })));
               // The parent is already written. A failed line insert would leave a request
               // that looks complete and silently isn't, so say so loudly rather than
               // returning ok with the lines missing.
@@ -5139,6 +5178,54 @@ export default {
               `PO request ${reqNo} filed — ${d.title}${reqLines.length ? ` (${reqLines.length} line${reqLines.length === 1 ? '' : 's'}${flagged ? `, ${flagged} needing HSN review` : ''})` : ''}`,
               { urgency: d.urgency || 'Normal', lines: reqLines.length, needs_hsn_review: flagged });
             return ok({ request_no: reqNo, lines: reqLines.length, needs_hsn_review: flagged });
+          }
+
+          // Edit a request until procurement starts on it (Kirti, #bugs 1793862584.463369). Same
+          // gate as cancelRequest. store.update_po_request re-checks pending under a row lock and
+          // refuses once a live PO exists, and writes header + lines as one step.
+          case 'updateRequest': {
+            const d = body.data || {};
+            if (!d.request_no) return err('request_no required');
+            const title = String(d.title ?? '').trim();
+            const details = String(d.details ?? '').trim();
+            if (!title || !details) return err('title and details required');
+            // Absent lines would read as "delete them all" on a hand-rolled call.
+            if (!Array.isArray(d.lines)) return err('lines required');
+            const ex = await query('po_requests', `?request_no=eq.${encodeURIComponent(d.request_no)}&limit=1`);
+            if (!ex.ok || !ex.data[0]) return err('Request not found');
+            const req = ex.data[0];
+            if (req.requested_by_user_id !== userId && !canSnorkelAdmin(P))
+              return err('Only the requester or an admin can edit a request', 403);
+            if (req.status !== 'pending') return err('Only pending requests can be edited');
+
+            const { lines: rawLines, error: lineErr } = normaliseRequestLines(d.lines);
+            if (lineErr) return err(lineErr);
+            const reqLines = rawLines.length ? resolveRequestLineTax(rawLines, await partHsnMasterAll()) : [];
+            // Kept in the activity log: the edit replaces these rows.
+            const prevLines = await query('po_request_lines', `?request_no=eq.${encodeURIComponent(d.request_no)}&order=line_no.asc`);
+            if (!prevLines.ok) return err('Could not read the lines for ' + d.request_no);
+
+            const r = await rpc('update_po_request', {
+              p_request_no: d.request_no,
+              p_header: {
+                title, details,
+                category: d.category || null,
+                suggested_vendor: d.suggested_vendor || null,
+                estimated_cost: requestEstimatedCost(reqLines, d.estimated_cost),
+                currency: d.currency || req.currency || 'INR',
+                urgency: d.urgency || req.urgency || 'Normal',
+                needed_by: d.needed_by || null,
+                notes: d.notes || null,
+              },
+              p_lines: reqLines.map(requestLineRow),
+            });
+            if (!r.ok) return err(r.data?.message || 'Could not save the request');
+
+            const flagged = reqLines.filter(l => l.needs_hsn_review).length;
+            await logActivity(authResult?.fullName || postRole, postRole, 'PO_REQUEST_EDITED', 'po_request', d.request_no,
+              `PO request ${d.request_no} edited (${reqLines.length} line${reqLines.length === 1 ? '' : 's'})`,
+              { before: { ...req, lines: prevLines.data || [] } });
+            return ok({ request_no: d.request_no, lines: reqLines.length, needs_hsn_review: flagged });
           }
 
           case 'cancelRequest': {
