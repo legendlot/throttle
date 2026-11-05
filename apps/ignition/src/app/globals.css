@@ -316,3 +316,9 @@ button { font-family: inherit; }
 /* S412 review — the body font is now proportional (Hanken Grotesk, was mono); keep digits in
    right-aligned number columns lining up. */
 td, th, .num { font-variant-numeric: tabular-nums; }
+
+/* Native dropdown lists are drawn by the browser on white unless told otherwise, while their <option>s
+   inherit a select's near-white text, so on Windows the list read white on white (Reann #12). Every
+   <select> in the app is dark, so this is the one place to say it. */
+select { color-scheme: dark; }
+select option, select optgroup { background: var(--menu); color: var(--text-1); }
