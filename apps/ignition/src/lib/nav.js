@@ -1,7 +1,7 @@
 import {
   Inbox, Users, Flame, Star, ListChecks, BarChart3, Plus,
   Settings, Layers, FileSpreadsheet, CircleUser, CalendarDays, Wallet, Target,
-  BookOpen, Gauge, Megaphone,
+  BookOpen, Gauge, Megaphone, FileText,
 } from 'lucide-react';
 import { isPartnerPerms, partnerRouteAllowed } from './partner.js';
 
@@ -46,6 +46,7 @@ export const NAV_GROUPS = [
     items: [
       { id: 'users',  label: 'Users',  route: '/admin/users',  icon: CircleUser,      requires: 'ignition_admin' },
       { id: 'import', label: 'Import', route: '/admin/import', icon: FileSpreadsheet, requires: 'ignition_admin' },
+      { id: 'contract', label: 'Contract', route: '/admin/contract', icon: FileText, requires: 'ignition_admin' },
     ],
   },
 ];

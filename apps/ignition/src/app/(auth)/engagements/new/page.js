@@ -147,6 +147,9 @@ export default function NewEngagementPage() {
           <DealField label="Expected post date">
             <input type="date" value={form.expected_post_date} onChange={e => setField('expected_post_date', e.target.value)} style={ctl} />
           </DealField>
+          <DealField label="Deliverables">
+            <input value={form.deliverables} onChange={e => setField('deliverables', e.target.value)} placeholder="e.g. 1 reel, 3 stories" style={ctl} />
+          </DealField>
           <DealField label="Campaign">
             <select value={form.campaign_id} onChange={e => setField('campaign_id', e.target.value)} style={ctl}>
               <option value="">— none —</option>

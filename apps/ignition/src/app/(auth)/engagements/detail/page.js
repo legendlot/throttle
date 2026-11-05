@@ -12,6 +12,7 @@ import { DetailHeader } from './components/DetailHeader.js';
 import { PipelineCard } from './components/PipelineCard.js';
 import { ProductsCard } from './components/ProductsCard.js';
 import { DealTermsCard } from './components/DealTermsCard.js';
+import { ContractCard } from './components/ContractCard.js';
 import { CostsCard } from './components/CostsCard.js';
 import { OwnerCard } from './components/OwnerCard.js';
 import { PostLiveCard } from './components/PostLiveCard.js';
@@ -89,6 +90,8 @@ function EngagementDetailPageBody() {
         toast('Has payments — cancel/close it instead of deleting.', 'error');
       } else if (/has_ad_payments_cannot_delete/.test(e.message)) {
         toast('Has ad payments — cancel/close it instead of deleting.', 'error');
+      } else if (/has_accepted_contract_cannot_delete/.test(e.message)) {
+        toast('Has an accepted contract or an invoice — cancel/close it instead of deleting.', 'error');
       } else {
         toast(e.message, 'error');
       }
@@ -166,6 +169,11 @@ function EngagementDetailPageBody() {
       {/* Card grid — auto-fit columns that fall to one below ~650px of content width. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))', gap: 14, alignItems: 'start' }}>
         <DealTermsCard e={e} paidTotal={data.paid_total} canEdit={canManage} locked={locked} session={session} onSaved={reload} />
+
+        {/* Reann #1 — the worker omits `contract` for partners and UGC deals; the guards just say so. */}
+        {!partner && e.engagement_type !== 'ugc' && (
+          <ContractCard e={e} contract={data.contract} canManage={canManage} canAdmin={!!perms?.ignition_admin} session={session} onSaved={reload} />
+        )}
 
         <ProductsCard
           products={data.products || []}

@@ -4,7 +4,6 @@ import { DealPill } from '../../../../../components/ui/DealPill.js';
 import { Avatar } from '../../../../../components/ui/Avatar.js';
 import OpenPitstopButton from '../../../../../components/OpenPitstopButton.js';
 import { CompletenessPill } from './CompletenessPill.js';
-import { BriefPreviewButton } from './BriefPreviewButton.js';
 
 const primaryBtnLg = { height: 40, padding: '0 18px', background: 'var(--accent)', color: 'var(--accent-fg)', border: 'none', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700 };
 const dangerGhostLg = { height: 40, padding: '0 14px', background: 'transparent', color: 'var(--state-error-fg)', border: '1px solid rgba(255,123,123,.4)', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, cursor: 'pointer' };
@@ -45,9 +44,8 @@ export function DetailHeader({ e, inf, data, completeness, session, reload, setA
             real text rather than an aria-label on a bare glyph (S346 review). */}
         <CompletenessPill completeness={completeness} />
       </div>
-      {/* External partner (S419): read-only — no brief, Pitstop or Advance actions. */}
+      {/* External partner (S419): read-only — no Pitstop or Advance actions. */}
       {!partner && <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <BriefPreviewButton engagementId={e.id} session={session} />
         <OpenPitstopButton engagement={e} onLinked={reload} />
         <button
           type="button"

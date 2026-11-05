@@ -78,6 +78,9 @@ export const PARTNER_ALWAYS_STRIP = [
   'created_by', 'poc_user_id', 'poc_name', 'approved_by', 'approved_by_name', 'unlocked_by',
   'unlocked_by_name', 'decided_by', 'disabled_by', 'assigned_by', 'actor', 'actor_name',
   'note', 'decision_note', 'proof_path', 'brief_path', 'brief_name', 'brief_mime',
+  // Deal contract (Reann #1): staff-side only. getEngagement already omits `contract` for a partner;
+  // this also keeps the two new engagements columns off every select=* a partner can reach.
+  'contract', 'contract_required', 'deliverables',
 ];
 
 // Influencer contact + shipping/courier identifiers — stripped unless partner_contacts.
@@ -131,7 +134,7 @@ export function stripPartnerFields(value, perms = {}, strip = partnerStripSet(pe
 // trail, internal notes, files, the payment ledgers, UGC briefs and named-staff actor maps.
 export const PARTNER_ENGAGEMENT_DROP = [
   'history', 'notes', 'attachments', 'payments', 'ad_payments', 'ugc_briefs',
-  'approved_by_name', 'unlocked_by_name',
+  'approved_by_name', 'unlocked_by_name', 'contract',
 ];
 
 export function partnerEngagementView(out) {

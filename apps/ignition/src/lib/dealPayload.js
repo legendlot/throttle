@@ -13,6 +13,7 @@ export function initialDealForm(extra = {}) {
   return {
     engagement_type: 'video_tracking', deal_type: 'paid',
     expected_post_date: '',
+    deliverables: '',
     campaign_id: '',
     payment_amount: '', payment_terms: 'advance', affiliate_pct: '',
     poc_user_id: null, poc_name: null,
@@ -24,6 +25,8 @@ export function initialDealForm(extra = {}) {
 export function dealPayload(form, influencerId, products = []) {
   const payload = { influencer_id: influencerId, ...form };
   if (!payload.expected_post_date) delete payload.expected_post_date;
+  if (String(payload.deliverables ?? '').trim()) payload.deliverables = payload.deliverables.trim();
+  else delete payload.deliverables;
   if (!payload.campaign_id) delete payload.campaign_id;
   // Compensation only applies to paid deals; affiliate % only to affiliate deals.
   // A paid deal with the amount left blank keeps the terms that were picked (S412 review: the old

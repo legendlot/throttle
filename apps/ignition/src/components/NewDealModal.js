@@ -98,6 +98,9 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
           <DealField label="Expected post date">
             <input type="date" value={form.expected_post_date} onChange={e => setField('expected_post_date', e.target.value)} style={ctl} />
           </DealField>
+          <DealField label="Deliverables">
+            <input value={form.deliverables} onChange={e => setField('deliverables', e.target.value)} placeholder="e.g. 1 reel, 3 stories" style={ctl} />
+          </DealField>
           {/* Reann #3 (S273) — a real campaign, not a typed tag. The free-text campaign_tag it
               replaced produced 4 spellings of 3 campaigns; picking from the list keeps one truth. */}
           <DealField label="Campaign">

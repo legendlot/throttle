@@ -19,6 +19,11 @@ import {
   ROSTER_STAGES, PARTNER_TOGGLES, isPartner, partnerScoped, partnerGetRefusal, stripPartnerFields,
   partnerEngagementView, partnerEmailRefusal, partnerExpiry, partnerParamRefusal,
 } from './partner.js';
+import {
+  SHIP_LOCK_STAGES, INVOICE_MIMES, composeContract, renderContractEmail, shipLockRefusal, wordingPublished,
+  validateBank, maskBank, needsPayment, isDeadStage, isTerminalStage, invoicePathOk, validEmail,
+  newToken, hashToken, tokenShapeOk,
+} from './contract.js';
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 
@@ -943,6 +948,9 @@ async function getEngagement(url, auth, env) {
   const notes = nr.data || [];
   const unlockOpen = !!eng.unlocked_by && unlockActive(eng);
   const ids = actorIds(eng, history, notes, { unlockOpen });
+  // Deal contract: staff only, video only, and not on a partner's wire at all. A failed read is null.
+  const contract = isPartner(auth) || eng.engagement_type === 'ugc' ? undefined : await loadContractSummary(env, eng);
+  for (const a of [contract?.sent_by, contract?.by_hand_by]) if (a && UUID_RE.test(a) && !ids.includes(a)) ids.push(a);
   const nameOf = {};
   if (ids.length) {
     try {
@@ -993,6 +1001,13 @@ async function getEngagement(url, auth, env) {
     ads: adr.ok ? (adr.data || []).map(a => ({ ...a, approve_gate: adApprovalGate(adTake(a, vr.data || [])) })) : null,
     ad_payments: apr.ok ? (apr.data || []) : null,
   };
+  if (contract !== undefined) {
+    out.contract = contract && {
+      ...contract,
+      sent_by_name: contract.sent_by ? (nameOf[contract.sent_by] || null) : null,
+      by_hand_by_name: contract.by_hand_by ? (nameOf[contract.by_hand_by] || null) : null,
+    };
+  }
   // Partner (S419): no audit trail, notes, files, payment ledgers or staff names — whatever the
   // toggles. Money/contact keys left on `engagement` go through the dispatcher's field strip.
   return ok(isPartner(auth) ? partnerEngagementView(out) : out);
@@ -2656,6 +2671,9 @@ const ENGAGEMENT_FIELDS = [
   // cpm is worker-computed (recomputeCpm), not a manual field (theme ④ B13).
   'compliance_caption_link','compliance_coupon_verbal','compliance_car_motion',
   'expected_post_date','post_date','delivered_date','video_link','utm_link',
+  // What the creator owes (Reann #1). Printed in the contract; `contract_required` is NOT here:
+  // only the worker sets it, or an ordinary patch could lift the Shipping lock.
+  'deliverables',
   'utm_source','utm_medium','utm_campaign',
   // S351 (multiple videos, slice 3): views / likes / comments / shares / impressions / saves /
   // reposts / followers_gained / follower_count_at_post / metric_gaps are PER-VIDEO now and the
@@ -2803,16 +2821,27 @@ async function createEngagement(body, auth, env) {
   if (!body.deal_type) return err('deal_type required', 400);
   if (!body.poc_user_id) return err('Pick an owner for this deal', 400);   // Reann #11
 
+  // Reann #5 — all new deals start at 'proposed' and need approval to move on.
+  const startStage = STAGES.includes(body.stage) ? body.stage : 'proposed';
+  // Shipping lock, second door (Reann #1): no app surface sends `stage`, but this action accepts it,
+  // so a deal could otherwise be born past the lock. Refused once the wording is published. Before
+  // that it has "already moved on" exactly like the backfilled deals, so it is exempt, not stranded.
+  const isUgcDeal = body.engagement_type === 'ugc';
+  const bornPastLock = !isUgcDeal && SHIP_LOCK_STAGES.includes(startStage);
+  if (bornPastLock) {
+    const refused = await contractLockRefusal(env, null, { engagement_type: body.engagement_type }, startStage);
+    if (refused) return refused;
+  }
+
   const eno = await mintEngagementNo(env);
   if (!eno) return err('failed_to_mint_engagement_no', 500);
 
-  // Reann #5 — all new deals start at 'proposed' and need approval to move on.
-  const startStage = STAGES.includes(body.stage) ? body.stage : 'proposed';
   const row = {
     engagement_no: eno,
     influencer_id: body.influencer_id,
     stage: startStage,
     created_by: auth.userId,
+    contract_required: !isUgcDeal && !bornPastLock,   // UGC keeps generateUgcBrief, never the lock
   };
   for (const k of ENGAGEMENT_FIELDS) if (k in body) row[k] = body[k];
 
@@ -2897,6 +2926,13 @@ async function deleteEngagement(body, auth, env) {
   const apr = await sb(`/rest/v1/ad_payments?engagement_id=eq.${body.engagement_id}&select=id&limit=1`, env);
   if (!apr.ok) return err('db_error', 500);
   if (apr.data?.[0]) return err('has_ad_payments_cannot_delete', 409);
+  // Reann #1: an acceptance and a creator's invoice are records too, and both tables CASCADE.
+  const [cr, ir] = await Promise.all([
+    sb(`/rest/v1/deal_contracts?engagement_id=eq.${body.engagement_id}&status=in.(accepted,accepted_by_hand)&select=id&limit=1`, env),
+    sb(`/rest/v1/deal_invoices?engagement_id=eq.${body.engagement_id}&select=id&limit=1`, env),
+  ]);
+  if (!cr.ok || !ir.ok) return err('db_error', 500);
+  if (cr.data?.[0] || ir.data?.[0]) return err('has_accepted_contract_cannot_delete', 409);
   // Detach discount codes (one-way utilized stays), then remove children + the deal.
   await sb(`/rest/v1/discount_codes?engagement_id=eq.${body.engagement_id}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ engagement_id: null }) }).catch(() => {});
   for (const child of ['engagement_products', 'engagement_attachments', 'engagement_notes', 'engagement_history']) {
@@ -2917,10 +2953,13 @@ async function clearedPostDateRefusal(env, engagementId, patch) {
   return null;
 }
 
-async function updateEngagement(body, auth, env) {
+export async function updateEngagement(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
   const patch = pickPatch(body, ENGAGEMENT_FIELDS);
+  // Set at creation, never changed: UGC is exempt from the Shipping lock, so flipping a deal to UGC
+  // and back would walk around it. No screen sends this.
+  delete patch.engagement_type;
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
   // Reann #11: an owner can be changed, never removed. Old deals with none stay as they are until
@@ -3087,7 +3126,7 @@ async function advanceStage(body, auth, env) {
   if (!body.to_stage) return err('to_stage required', 400);
 
   const cur = await sb(
-    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url,affiliate_active_from,post_date,approved_at&limit=1`, env,
+    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url,affiliate_active_from,post_date,approved_at,contract_required&limit=1`, env,
   );
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
   // COMPLETE-deal lock (S373): the stage move itself stays open, but this action also accepts
@@ -3119,6 +3158,16 @@ async function advanceStage(body, auth, env) {
   // an explicit, recorded decision point, which is what "cannot be skipped" actually asks for.
   if (from === 'proposed' && !TERMINAL_FAIL.has(body.to_stage) && !cur.data[0].approved_at) {
     return err('approval_required: approve this deal before moving it out of Proposed', 422);
+  }
+
+  // ── Reann #1: the Shipping lock ─────────────────────────────────────────────────────────────
+  // Before any write (the rating PATCH further down), and on the destination, because transitions
+  // are free: `planning → live` must not walk around it. closeEngagement delegates here. The other
+  // two stage writers: createEngagement refuses a post-ship start; approveEngagement only ever
+  // writes planning or outreach, neither of which is locked.
+  if (!isUgc && SHIP_LOCK_STAGES.includes(body.to_stage) && cur.data[0].contract_required !== false) {
+    const refused = await contractLockRefusal(env, body.engagement_id, cur.data[0], body.to_stage);
+    if (refused) return refused;
   }
 
   // Going live requires a video link (Reann #4) — accepted inline or already set.
@@ -3201,6 +3250,7 @@ async function advanceStage(body, auth, env) {
   }
   // Allow incidental field updates in the same call (e.g. video_link on go-live).
   const extra = pickPatch(body, ENGAGEMENT_FIELDS);
+  delete extra.engagement_type;   // see updateEngagement: the lock above read the deal's real type
   Object.assign(patch, extra);
   const dateRefusal = await clearedPostDateRefusal(env, body.engagement_id, patch); if (dateRefusal) return dateRefusal;
 
@@ -4119,92 +4169,477 @@ async function mintTrackingLinkFor(env, engagementId, { target, force } = {}) {
     ...(staleTarget ? { target_stale: true, current_target: staleTarget } : {}) } };
 }
 
-// ── Batch B ① — deal brief + post reminder, DRAFT AND INERT (S313) ──────────────────────────
-//
-// ⚠️ NOTHING HERE SENDS ANYTHING, and that is the decision, not an omission (Afshaan
-// 2026-08-26: "build a draft first, ship inert, Reann edits real content before anything is
-// armed"). These endpoints COMPOSE and RETURN text. Wiring them to commsops `/send` is a
-// separate phase with two hard prerequisites that do not exist yet:
-//   · `/send` resolves a Relay TEMPLATE (`template_not_found` without one) — the brief has to
-//     become a real template, authored by whoever owns the words;
-//   · influencers are not `comms.profiles` yet, so there is no profile/consent record to send
-//     against, and the send gate is what makes suppressions work.
-// Building the send first would mean inventing the copy AND the consent story. Compose first,
-// let Reann edit, then arm.
-//
-// Wording note: this draft is deliberately plain and slightly under-written. It is meant to be
-// argued with, not shipped as-is.
-function composeDealBrief(eng, products, coupons) {
-  const inf = eng.influencer || {};
-  const who = inf.person_name || inf.channel_name || 'there';
-  const items = (products || [])
-    .map(p => `· ${[p.product_code, p.product_variant].filter(Boolean).join(' ')}${Number(p.quantity) > 1 ? ` ×${p.quantity}` : ''}`)
-    .join('\n') || '· (product to be confirmed)';
-  const code = (coupons || []).find(c => c.kind === 'affiliate' && c.status === 'active');
-  const lines = [
-    `Hi ${who},`,
-    '',
-    `Here are the details for your collaboration with Legend of Toys (${eng.engagement_no}).`,
-    '',
-    'What we are sending you:',
-    items,
-    '',
-  ];
-  if (eng.expected_post_date) lines.push(`When we would like it live: ${eng.expected_post_date}`, '');
-  if (eng.utm_link) {
-    lines.push(
-      'Your tracking link — please use this one, it is how your results are credited to you:',
-      eng.utm_link, '',
-    );
-  }
-  if (code) {
-    lines.push(`Your discount code for your audience: ${code.code}`, '');
-  }
-  // The checklist only asks for things this deal actually has. Telling a creator to "put the
-  // tracking link in your caption" on a deal with no link is an instruction they cannot follow,
-  // and it is the kind of detail that makes a brief look automated.
-  lines.push('A few things to include:');
-  if (code) lines.push('· mention the discount code out loud, not only on screen');
-  lines.push('· show the car actually moving for 15–20 seconds');
-  if (eng.utm_link) lines.push('· put the tracking link in your caption or bio');
-  lines.push(
-    '',
-    'Anything unclear, just reply to this email.',
-    '',
-    'Thanks,',
-    'Legend of Toys',
-  );
-  // Gaps worth seeing BEFORE the thing is sent, rather than discovering them in a creator's inbox.
-  const warnings = [];
-  if (!inf.email) warnings.push('This influencer has no email address on record — there is nowhere to send this.');
-  if (!eng.utm_link) warnings.push('No tracking link on this deal yet — the brief will not carry one.');
-  if (!code) warnings.push('No active affiliate code on this deal — the brief will not carry one.');
-  if (!eng.expected_post_date) warnings.push('No expected post date set, so the brief does not ask for one.');
+// ── Deal contract (Reann #1, #bugs 1793690997.941679) ───────────────────────────────────────────
+// Replaces the S313 inert brief. Mail goes from partners@ through Gmail, inside csops, over the
+// existing bridge: GOOGLE_SA_JSON lives only there, a contract needs replies and a Sent copy, and
+// comms.legendoftoys.com is marketing only. The rules are pure, in contract.js. Reann's words are
+// still what arms it: nothing sends and nothing locks until contract_settings is published.
+const DEAL_LINK_BASE = 'https://ignition.legendoftoys.com/deal/?t=';
+const INVOICE_BUCKET = 'ignition-creator-invoices';
+const CONTRACT_SETTINGS_COLS = 'subject,dos_and_donts,terms,published_at,published_by,updated_at,updated_by';
+const SEND_DEDUPE_MS = 60 * 1000;
+const STUCK_SENDING_MS = 5 * 60 * 1000;
+const BANK_REOPEN_MS = 7 * 24 * 3600 * 1000;
+const MAX_INVOICES_PER_DEAL = 20;
+// File names under this deal's folder in the invoice bucket. undefined = the read failed.
+async function invoiceObjectNames(env, engagementId) {
+  const r = await storageFetch(`/object/list/${INVOICE_BUCKET}`, env, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prefix: `${engagementId}/`, limit: MAX_INVOICES_PER_DEAL + 1, offset: 0 }),
+  });
+  return r.ok && Array.isArray(r.data) ? r.data.map(o => o.name) : undefined;
+}
+
+async function readContractSettings(env) {
+  const r = await sb(`/rest/v1/contract_settings?id=eq.1&select=${CONTRACT_SETTINGS_COLS}&limit=1`, env);
+  return r.ok ? (r.data?.[0] || null) : undefined;   // undefined = the read failed
+}
+
+// The lock's reads. A failed read REFUSES: a database hiccup must not walk a deal past the lock.
+// `engagementId` null = a deal not created yet, so nothing can have been accepted.
+async function contractLockRefusal(env, engagementId, deal, toStage) {
+  const [settings, ar] = await Promise.all([
+    readContractSettings(env),
+    engagementId
+      ? sb(`/rest/v1/deal_contracts?engagement_id=eq.${encodeURIComponent(engagementId)}&status=in.(accepted,accepted_by_hand)&select=id&limit=1`, env)
+      : Promise.resolve({ ok: true, data: [] }),
+  ]);
+  if (settings === undefined || !ar.ok) return err('Could not check the contract for this deal. Please try again.', 502);
+  const refusal = shipLockRefusal({ deal, settings, accepted: (ar.data || []).length > 0, toStage });
+  return refusal ? err(refusal, 422) : null;
+}
+
+// What the deal page's card shows. Never token_hash, never full bank details. A failed send does
+// not hide an older live or accepted row, it rides along as `last_failed`.
+async function loadContractSummary(env, eng) {
+  const COLS = 'id,status,to_email,subject,body,gmail_message_id,error,sent_by,sent_at,accepted_at,by_hand_reason,by_hand_by,created_at';
+  const [cr, br, ir, settings] = await Promise.all([
+    sb(`/rest/v1/deal_contracts?engagement_id=eq.${eng.id}&select=${COLS}&order=created_at.desc&limit=20`, env),
+    eng.influencer_id
+      ? sb(`/rest/v1/influencer_bank_details?influencer_id=eq.${eng.influencer_id}&select=account_number,ifsc,bank_name,submitted_at,editable_until&limit=1`, env)
+      : Promise.resolve({ ok: true, data: [] }),
+    sb(`/rest/v1/deal_invoices?engagement_id=eq.${eng.id}&select=id,file_name,mime,uploaded_at&order=uploaded_at.desc&limit=${MAX_INVOICES_PER_DEAL}`, env),
+    readContractSettings(env),
+  ]);
+  if (!cr.ok || !br.ok || !ir.ok || settings === undefined) return null;
+  const rows = cr.data || [];
+  const current = rows.find(c => !['failed', 'superseded'].includes(c.status)) || null;
+  const bankRow = br.data?.[0] || null;
   return {
-    to: inf.email || null,
-    subject: `Your Legend of Toys collaboration — ${eng.engagement_no}`,
-    body: lines.join('\n'),
-    warnings,
+    ...(current || { status: null }),
+    accepted: !!current && ['accepted', 'accepted_by_hand'].includes(current.status),
+    last_failed: rows[0]?.status === 'failed' ? { error: rows[0].error, created_at: rows[0].created_at } : null,
+    bank: maskBank(bankRow),
+    bank_editable_until: bankRow?.editable_until || null,
+    invoices: ir.data || [],
+    settings_published: wordingPublished(settings),
+    required: eng.contract_required !== false,
+    needs_payment: needsPayment(eng),
   };
 }
 
-async function getDealBriefPreview(url, auth, env) {
-  const id = url.searchParams.get('engagement_id');
-  if (!id) return err('engagement_id required', 400);
-  const r = await sb(`/rest/v1/engagements?id=eq.${id}&select=*,influencer:influencer_id(*)&limit=1`, env);
-  const eng = r.ok ? r.data?.[0] : null;
-  if (!eng) return err('not_found', 404);
-  const [pr, cr] = await Promise.all([
-    sb(`/rest/v1/engagement_products?engagement_id=eq.${id}&select=*&order=sort_order.asc`, env),
-    sb(`/rest/v1/coupon_codes?engagement_id=eq.${id}&select=code,kind,status`, env),
-  ]);
-  const draft = composeDealBrief(eng, pr.data || [], cr.data || []);
-  // `armed:false` is load-bearing in the response: the UI must be able to say plainly that this
-  // is a preview of something that cannot currently be sent, rather than implying a Send button
-  // is one click away.
-  return ok({ ...draft, armed: false });
+async function getContractSettings(url, auth, env) {
+  const gate = requirePerm('ignition_view', auth); if (gate) return gate;
+  const [settings, probe] = await Promise.all([readContractSettings(env), csopsBridge(env, 'partnerMailboxProbe')]);
+  if (settings === undefined) return err('db_error', 500);
+  return ok({
+    settings: settings || {},
+    published: wordingPublished(settings),
+    mailbox: probe.ok
+      ? { ok: true, address: probe.data?.address || null }
+      : { ok: false, error: probe.raw?.error || `csops bridge returned ${probe.status}` },
+  });
 }
 
+// ⚠️ ignition_admin, like the Users page: publishing arms the lock on every video deal, so the gate
+// on the API must match the gate on the page rather than rely on the nav hiding it.
+const textOrNull = (v) => { const s = v == null ? '' : String(v).trim(); return s || null; };
+async function saveContractSettings(body, auth, env) {
+  const gate = requirePerm('ignition_admin', auth); if (gate) return gate;
+  const cur = await readContractSettings(env);
+  if (cur === undefined) return err('db_error', 500);
+  const patch = {
+    subject: textOrNull(body.subject), dos_and_donts: textOrNull(body.dos_and_donts), terms: textOrNull(body.terms),
+    updated_at: nowIso(), updated_by: auth.userId,
+  };
+  // Once published, blanking a section would silently switch sending and the lock back off.
+  if (cur?.published_at && (!patch.dos_and_donts || !patch.terms)) {
+    return err("Published wording cannot be emptied. Keep dos and don'ts and terms filled in.", 422);
+  }
+  const r = await sb(`/rest/v1/contract_settings?id=eq.1`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok || !r.data?.[0]) return err('Could not save the wording. Has the migration been applied?', 500);
+  return ok({ settings: r.data[0], published: wordingPublished(r.data[0]) });
+}
+
+export async function publishContractSettings(body, auth, env) {
+  const gate = requirePerm('ignition_admin', auth); if (gate) return gate;
+  const cur = await readContractSettings(env);
+  if (cur === undefined) return err('db_error', 500);
+  if (!textOrNull(cur?.dos_and_donts) || !textOrNull(cur?.terms)) {
+    return err("Add dos and don'ts and terms, and save them, before publishing.", 422);
+  }
+  // First publish only: a deal that moved past Planning while the lock was off has already moved on,
+  // and must not be stuck at its next stage. Same rule as the migration's backfill. Not on a
+  // re-publish, or moving a deal to On hold first would become a way round the lock.
+  if (!cur?.published_at) {
+    const ex = await sb(`/rest/v1/engagements?contract_required=eq.true&stage=not.in.(proposed,planning)`, env, {
+      method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ contract_required: false }),
+    });
+    if (!ex.ok) return err('Could not prepare existing deals, so nothing was published. Please try again.', 500);
+  }
+  const at = nowIso();
+  const r = await sb(`/rest/v1/contract_settings?id=eq.1`, env, {
+    method: 'PATCH', body: JSON.stringify({ published_at: at, published_by: auth.userId, updated_at: at, updated_by: auth.userId }),
+  });
+  if (!r.ok || !r.data?.[0]) return err('db_error', 500);
+  return ok({ settings: r.data[0], published: true });
+}
+
+// Everything composeContract reads, in one fan-out. null = no such deal; undefined = a read failed.
+async function loadContractInputs(env, engagementId) {
+  const id = encodeURIComponent(engagementId);
+  const [er, pr, cr, settings] = await Promise.all([
+    sb(`/rest/v1/engagements?id=eq.${id}&select=*,influencer:influencer_id(*),campaign:campaign_id(id,name)&limit=1`, env),
+    sb(`/rest/v1/engagement_products?engagement_id=eq.${id}&select=*&order=sort_order.asc`, env),
+    sb(`/rest/v1/coupon_codes?engagement_id=eq.${id}&select=code,kind,status`, env),
+    readContractSettings(env),
+  ]);
+  if (!er.ok || !pr.ok || !cr.ok || settings === undefined) return undefined;
+  const deal = er.data?.[0];
+  if (!deal) return null;
+  return { deal, products: pr.data || [], coupons: cr.data || [], settings };
+}
+
+async function getDealContractDraft(url, auth, env) {
+  const gate = requirePerm('ignition_view', auth); if (gate) return gate;
+  const id = url.searchParams.get('engagement_id');
+  if (!id) return err('engagement_id required', 400);
+  const inp = await loadContractInputs(env, id);
+  if (inp === undefined) return err('db_error', 500);
+  if (inp === null) return err('not_found', 404);
+  return ok(composeContract(inp.deal, inp.products, inp.coupons, inp.deal.campaign, inp.settings));
+}
+
+export async function sendDealContract(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const eid = encodeURIComponent(body.engagement_id);
+  const inp = await loadContractInputs(env, body.engagement_id);
+  if (inp === undefined) return err('db_error', 500);
+  if (inp === null) return err('not_found', 404);
+  const { deal } = inp;
+
+  const to = String(body.to ?? '').trim();
+  const subject = String(body.subject ?? '').replace(/[\r\n]+/g, ' ').trim();
+  const text = String(body.body ?? '').trim();
+  // Server-side re-check. The `to` being sent is what must be valid, not the one on file.
+  const { blockers } = composeContract(
+    { ...deal, influencer: { ...(deal.influencer || {}), email: to } }, inp.products, inp.coupons, deal.campaign, inp.settings);
+  if (!subject || subject.length > 300) blockers.push('Add a subject (300 characters at most).');
+  if (!text || text.length > 50000) blockers.push('Add the contract text (50,000 characters at most).');
+  if (blockers.length) return err(blockers.join(' '), 422);
+
+  // Accepted already: a resend clears that, so it is a stated decision with a reason on the record.
+  const ar = await sb(`/rest/v1/deal_contracts?engagement_id=eq.${eid}&status=in.(accepted,accepted_by_hand)&select=id&limit=1`, env);
+  if (!ar.ok) return err('db_error', 500);
+  const wasAccepted = (ar.data || []).length > 0;
+  const forceNote = String(body.note ?? '').trim();
+  if (wasAccepted && body.force_resend !== true) {
+    return err('This contract is already accepted. Resending clears that, so choose it on purpose.', 409);
+  }
+  if (wasAccepted && !forceNote) return err('Say why you are resending an accepted contract.', 422);
+
+  const bodySha = await hashToken(text);
+  const since = new Date(Date.now() - SEND_DEDUPE_MS).toISOString();
+  const dupe = await sb(
+    `/rest/v1/deal_contracts?engagement_id=eq.${eid}&body_sha256=eq.${bodySha}&status=in.(sending,sent)&created_at=gt.${encodeURIComponent(since)}&select=id&limit=1`, env);
+  if (!dupe.ok) return err('db_error', 500);
+  if (dupe.data?.[0]) return err('This exact contract went out less than a minute ago.', 409);
+
+  // A worker that died mid-send leaves `sending`, which would block the deal forever.
+  const stuck = new Date(Date.now() - STUCK_SENDING_MS).toISOString();
+  await sb(`/rest/v1/deal_contracts?engagement_id=eq.${eid}&status=eq.sending&created_at=lt.${encodeURIComponent(stuck)}`, env, {
+    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'failed', error: 'The send never finished.' }),
+  });
+
+  const token = newToken();
+  const ins = await sb(`/rest/v1/deal_contracts`, env, {
+    method: 'POST',
+    body: JSON.stringify([{
+      engagement_id: deal.id, influencer_id: deal.influencer_id, status: 'sending', to_email: to, subject,
+      body: text, body_sha256: bodySha, token_hash: await hashToken(token), sent_by: auth.userId,
+    }]),
+  });
+  if (!ins.ok) {
+    // deal_contracts_one_sending_idx: the other click got there first.
+    if (ins.status === 409) return err('A send for this deal is already in progress.', 409);
+    return err(`db_error: ${JSON.stringify(ins.data)}`, 500);
+  }
+  const row = ins.data[0];
+
+  // A stated resend clears the earlier acceptance BEFORE the mail, and a failure stops the send: the
+  // other order could mail a new contract while the old acceptance still opened Shipping.
+  if (wasAccepted) {
+    const cleared = await sb(`/rest/v1/deal_contracts?engagement_id=eq.${eid}&id=neq.${row.id}&status=in.(accepted,accepted_by_hand)`, env, {
+      method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'superseded' }),
+    });
+    if (!cleared.ok) {
+      await sb(`/rest/v1/deal_contracts?id=eq.${row.id}`, env, {
+        method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'failed', error: 'Could not clear the earlier acceptance.' }),
+      });
+      return err('Could not clear the earlier acceptance, so nothing was sent. Please try again.', 500);
+    }
+    await writeHistory(env, deal.id, 'contract_acceptance_cleared', null, null, forceNote, auth.userId);
+  }
+
+  const mail = renderContractEmail(text, `${DEAL_LINK_BASE}${token}`);
+  const br = await csopsBridge(env, 'sendPartnerEmail', { to, subject, text: mail.text, html: mail.html });
+  if (!br.ok) {
+    const why = String(br.raw?.error || `The mail service returned ${br.status}`).slice(0, 500);
+    await sb(`/rest/v1/deal_contracts?id=eq.${row.id}`, env, {
+      method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'failed', error: why }),
+    });
+    return err(`The contract did not go out: ${why}${wasAccepted ? ' The earlier acceptance has been cleared, so please send it again.' : ''}`, 502);
+  }
+
+  // The status move is guarded: the creator (or a by-hand record) can accept while the mail is on
+  // its way, and marking it `sent` regardless would undo that and put the lock back on.
+  const at = nowIso();
+  const stamp = await sb(`/rest/v1/deal_contracts?id=eq.${row.id}`, env, {
+    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ sent_at: at, gmail_message_id: br.data?.message_id || null }),
+  });
+  const sentPatch = await sb(`/rest/v1/deal_contracts?id=eq.${row.id}&status=eq.sending`, env, {
+    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'sent' }),
+  });
+  if (!stamp.ok || !sentPatch.ok) console.error('[sendDealContract] mail sent but row not marked', row.id);
+  // Older links die now, on a send that really happened. Waiting ones only: an acceptance that
+  // landed after the check above is a real acceptance, and only a stated resend clears those.
+  const older = await sb(`/rest/v1/deal_contracts?engagement_id=eq.${eid}&id=neq.${row.id}&status=in.(sending,sent)`, env, {
+    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'superseded' }),
+  });
+  await writeHistory(env, deal.id, wasAccepted ? 'contract_resent' : 'contract_sent', null, null,
+    `To ${to}${older.ok ? '' : '. An older link could not be cancelled and may still work.'}`, auth.userId);
+  if (body.save_email === true && deal.influencer_id && validEmail(to) && deal.influencer?.email !== to) {
+    await sb(`/rest/v1/influencers?id=eq.${deal.influencer_id}`, env, {
+      method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ email: to, updated_at: at }),
+    });
+  }
+  return ok({ id: row.id, status: 'sent', sent_at: at });
+}
+
+async function markContractAcceptedByHand(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const reason = String(body.reason ?? '').trim();
+  if (!reason) return err('Say why this is being recorded by hand.', 422);
+  const eid = encodeURIComponent(body.engagement_id);
+  const [er, cr] = await Promise.all([
+    sb(`/rest/v1/engagements?id=eq.${eid}&select=id,influencer_id,engagement_type&limit=1`, env),
+    sb(`/rest/v1/deal_contracts?engagement_id=eq.${eid}&status=in.(sending,sent,accepted,accepted_by_hand)&select=id,status&order=created_at.desc&limit=1`, env),
+  ]);
+  if (!er.ok || !cr.ok) return err('db_error', 500);
+  const deal = er.data?.[0];
+  if (!deal) return err('not_found', 404);
+  if (deal.engagement_type === 'ugc') return err('UGC deals do not use this contract.', 422);
+  const live = cr.data?.[0];
+  if (live && ['accepted', 'accepted_by_hand'].includes(live.status)) return ok({ already_accepted: true });
+  const fields = { status: 'accepted_by_hand', accepted_at: nowIso(), by_hand_reason: reason, by_hand_by: auth.userId };
+  // On the link's own row when one exists, so the creator can still give bank details through it.
+  const r = live
+    ? await sb(`/rest/v1/deal_contracts?id=eq.${live.id}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(fields) })
+    : await sb(`/rest/v1/deal_contracts`, env, {
+      method: 'POST', prefer: 'return=minimal',
+      body: JSON.stringify([{ engagement_id: deal.id, influencer_id: deal.influencer_id, ...fields }]),
+    });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  await writeHistory(env, deal.id, 'contract_accepted_by_hand', null, null, reason, auth.userId);
+  return ok({ status: 'accepted_by_hand' });
+}
+
+export async function allowBankUpdate(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.influencer_id || !body.engagement_id) return err('influencer_id and engagement_id required', 400);
+  const er = await sb(`/rest/v1/engagements?id=eq.${encodeURIComponent(body.engagement_id)}&select=id,influencer_id&limit=1`, env);
+  if (!er.ok) return err('db_error', 500);
+  if (!er.data?.[0] || er.data[0].influencer_id !== body.influencer_id) return err('not_found', 404);
+  // The reopen names this deal's accepted link, so an old link from another deal cannot use it.
+  const lr = await sb(`/rest/v1/deal_contracts?engagement_id=eq.${encodeURIComponent(body.engagement_id)}&status=in.(accepted,accepted_by_hand)&token_hash=not.is.null&select=id&order=created_at.desc&limit=1`, env);
+  if (!lr.ok) return err('db_error', 500);
+  if (!lr.data?.[0]) return err('This deal has no accepted link to change bank details through. Send the contract first.', 409);
+  const until = new Date(Date.now() + BANK_REOPEN_MS).toISOString();
+  const r = await sb(`/rest/v1/influencer_bank_details?influencer_id=eq.${encodeURIComponent(body.influencer_id)}&select=influencer_id`, env, {
+    method: 'PATCH', body: JSON.stringify({ editable_until: until, reopen_contract_id: lr.data[0].id }),
+  });
+  if (!r.ok) return err('db_error', 500);
+  if (!r.data?.[0]) return err('No bank details have been given yet, so there is nothing to reopen.', 409);
+  await writeHistory(env, body.engagement_id, 'bank_update_allowed', null, null, 'Creator can change bank details for 7 days', auth.userId);
+  return ok({ editable_until: until });
+}
+
+/** Short-lived signed URL for reading a creator's invoice. The bucket is private. */
+async function getDealInvoiceUrl(url, auth, env) {
+  const gate = requirePerm('ignition_view', auth); if (gate) return gate;
+  const id = url.searchParams.get('id');
+  if (!id) return err('id required', 400);
+  const ir = await sb(`/rest/v1/deal_invoices?id=eq.${encodeURIComponent(id)}&select=path,file_name,mime&limit=1`, env);
+  const inv = ir.ok ? ir.data?.[0] : null;
+  if (!inv) return err('not_found', 404);
+  const seg = String(inv.path).split('/').map(encodeURIComponent).join('/');
+  const sr = await storageFetch(`/object/sign/${INVOICE_BUCKET}/${seg}`, env, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expiresIn: 120 }),
+  });
+  if (!sr.ok || !sr.data?.signedURL) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  return ok({ url: `${env.SUPABASE_URL}/storage/v1${sr.data.signedURL}`, file_name: inv.file_name, mime_type: inv.mime });
+}
+
+// ── The creator's link: no login, the token is the only credential ──────────────────────────────
+const LINK_INVALID = 'This link is no longer valid.';
+const ACCEPTED_STATUSES = ['accepted', 'accepted_by_hand'];
+
+// `sending` counts as live: the only way to hold its token is that the mail arrived, even if the
+// row could not be marked afterwards. A failed or superseded row's link is dead.
+async function contractByToken(env, t) {
+  if (!tokenShapeOk(t)) return null;
+  const hash = await hashToken(t);
+  const r = await sb(
+    `/rest/v1/deal_contracts?token_hash=eq.${hash}&status=in.(sending,sent,accepted,accepted_by_hand)`
+    + '&select=id,engagement_id,influencer_id,subject,body,status,accepted_at,'
+    + 'deal:engagement_id(engagement_no,stage,deal_type)&limit=1', env);
+  if (!r.ok) throw new Error(`token lookup failed: ${r.status}`);
+  return r.data?.[0] || null;
+}
+
+async function publicContractView(env, c) {
+  const accepted = ACCEPTED_STATUSES.includes(c.status);
+  // Accepted and live is NOT closed: an on-release creator invoices after going live.
+  // Closed means nothing else leaves the server, not just that the page hides it.
+  if (isDeadStage(c.deal?.stage) || (!accepted && isTerminalStage(c.deal?.stage))) return ok({ closed: true });
+  const [br, ir] = await Promise.all([
+    c.influencer_id
+      ? sb(`/rest/v1/influencer_bank_details?influencer_id=eq.${c.influencer_id}&select=account_number,ifsc,bank_name,submitted_at,editable_until,reopen_contract_id&limit=1`, env)
+      : Promise.resolve({ ok: true, data: [] }),
+    sb(`/rest/v1/deal_invoices?engagement_id=eq.${c.engagement_id}&select=file_name,uploaded_at&order=uploaded_at.asc&limit=${MAX_INVOICES_PER_DEAL}`, env),
+  ]);
+  if (!br.ok || !ir.ok) throw new Error('public contract read failed');
+  const bankRow = br.data?.[0] || null;
+  const reopenUntil = bankRow?.editable_until ? Date.parse(bankRow.editable_until) : NaN;
+  return ok({
+    deal_no: c.deal?.engagement_no || null,
+    subject: c.subject,
+    body: c.body,
+    status: accepted ? 'accepted' : 'waiting',
+    accepted_at: c.accepted_at,
+    needs_payment: needsPayment(c.deal),
+    bank: maskBank(bankRow),
+    bank_editable: !bankRow || (bankRow.reopen_contract_id === c.id && Number.isFinite(reopenUntil) && reopenUntil > Date.now()),
+    invoices: (ir.data || []).map(i => ({ file_name: i.file_name })),
+    closed: false,
+  });
+}
+
+async function handlePublicContract(request, url, env) {
+  const sub = url.pathname.replace(/\/+$/, '');
+  if (sub === '/public/contract') {
+    if (request.method !== 'GET') return err('method_not_allowed', 405);
+    const c = await contractByToken(env, url.searchParams.get('t'));
+    return c ? publicContractView(env, c) : err(LINK_INVALID, 404);
+  }
+  // Everything else is POST only: mail scanners follow GET links, and must not accept anything.
+  if (request.method !== 'POST') return err('method_not_allowed', 405);
+  let body;
+  try { body = await request.json(); } catch { return err('bad_json', 400); }
+  const c = await contractByToken(env, body?.t);
+  if (!c) return err(LINK_INVALID, 404);
+  const accepted = ACCEPTED_STATUSES.includes(c.status);
+
+  if (sub === '/public/contract/accept') {
+    if (accepted) return publicContractView(env, c);   // idempotent: a double-tap is not an error
+    if (isTerminalStage(c.deal?.stage)) return err('This deal is closed. Please reply to our email if you have a question.', 409);
+    const at = nowIso();
+    const r = await sb(`/rest/v1/deal_contracts?id=eq.${c.id}&status=in.(sending,sent)`, env, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status: 'accepted', accepted_at: at,
+        accepted_ip: request.headers.get('CF-Connecting-IP') || null,
+        accepted_user_agent: (request.headers.get('User-Agent') || '').slice(0, 500) || null,
+      }),
+    });
+    if (!r.ok) throw new Error(`accept failed: ${r.status}`);
+    // Zero rows: a newer send superseded this link between the read and the write.
+    if (!r.data?.[0]) return err(LINK_INVALID, 404);
+    await writeHistory(env, c.engagement_id, 'contract_accepted', null, null, 'Accepted by the creator through the link', null);
+    return publicContractView(env, { ...c, status: 'accepted', accepted_at: at });
+  }
+
+  if (!accepted) return err('Please accept the contract first.', 409);
+  if (isDeadStage(c.deal?.stage)) return err('This deal is closed. Please reply to our email if you have a question.', 409);
+  if (!needsPayment(c.deal)) return err('This deal does not need payment details.', 409);
+
+  if (sub === '/public/contract/bank') {
+    if (!c.influencer_id) return err(LINK_INVALID, 404);
+    const v = validateBank(body);
+    if (!v.ok) return json({ ok: false, error: 'Please check the highlighted fields.', errors: v.errors }, 422);
+    const fields = { ...v.clean, submitted_at: nowIso(), contract_id: c.id };
+    // A forwarded link must not be able to change where money goes, so both writes decide in the
+    // database, not after a read two tabs could both pass. First details: insert, ignore a conflict.
+    const first = await sb(`/rest/v1/influencer_bank_details?on_conflict=influencer_id`, env, {
+      method: 'POST', prefer: 'resolution=ignore-duplicates,return=representation',
+      body: JSON.stringify([{ influencer_id: c.influencer_id, ...fields }]),
+    });
+    if (!first.ok) throw new Error(`bank write failed: ${first.status}`);
+    if (!first.data?.[0]) {
+      // Already on file: only through this link, inside a reopen, and the reopen is used up by it.
+      const again = await sb(
+        `/rest/v1/influencer_bank_details?influencer_id=eq.${c.influencer_id}&reopen_contract_id=eq.${c.id}&editable_until=gt.${encodeURIComponent(nowIso())}&select=influencer_id`, env, {
+          method: 'PATCH', body: JSON.stringify({ ...fields, editable_until: null, reopen_contract_id: null }),
+        });
+      if (!again.ok) throw new Error(`bank update failed: ${again.status}`);
+      if (!again.data?.[0]) return err('Your bank details are already with us. To change them, ask the Legend of Toys team to reopen this.', 409);
+    }
+    await writeHistory(env, c.engagement_id, 'bank_details_received', null, null, null, null);   // no numbers, ever
+    return publicContractView(env, c);
+  }
+
+  if (sub === '/public/contract/invoice-url') {
+    if (!body.file_name) return err('file_name required', 400);
+    if (!INVOICE_MIMES.includes(body.mime)) return err('Please upload a PDF, JPG or PNG.', 422);
+    const names = await invoiceObjectNames(env, c.engagement_id);
+    if (!names) throw new Error('invoice list failed');
+    if (names.length >= MAX_INVOICES_PER_DEAL) return err('That is the most invoices we can take here. Please reply to our email.', 409);
+    const path = `${c.engagement_id}/${Date.now()}_${safeSeg(body.file_name)}`;
+    const sr = await storageFetch(`/object/upload/sign/${INVOICE_BUCKET}/${path}`, env, { method: 'POST' });
+    if (!sr.ok || !sr.data?.url) throw new Error(`sign failed: ${sr.status}`);
+    const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
+    return ok({ storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null, bucket: INVOICE_BUCKET });
+  }
+
+  if (sub === '/public/contract/invoice-done') {
+    if (!invoicePathOk(body.path, c.engagement_id)) return err('That upload does not belong to this deal.', 403);
+    const names = await invoiceObjectNames(env, c.engagement_id);
+    if (!names) throw new Error('invoice list failed');
+    if (!names.includes(String(body.path).slice(String(c.engagement_id).length + 1))) {
+      return err('We could not find that upload. Please try again.', 422);
+    }
+    const r = await sb(`/rest/v1/deal_invoices?on_conflict=path`, env, {
+      method: 'POST', prefer: 'resolution=ignore-duplicates,return=minimal',
+      body: JSON.stringify([{
+        engagement_id: c.engagement_id, contract_id: c.id, path: body.path,
+        file_name: String(body.file_name || 'invoice').slice(0, 200),
+        mime: INVOICE_MIMES.includes(body.mime) ? body.mime : null,
+      }]),
+    });
+    if (!r.ok) throw new Error(`invoice write failed: ${r.status}`);
+    await writeHistory(env, c.engagement_id, 'invoice_received', null, null, String(body.file_name || '').slice(0, 200) || null, null);
+    return publicContractView(env, c);
+  }
+
+  return err('not_found', 404);
+}
+
+// ── Post reminder, INERT (S313): this composes a list and sends nothing ─────────────────────────
+//
 // Who would be nudged today, and why. Merges B5 (10 days after delivery, no post) with Reann's
 // separate "(3) Delhivery status → follow-up reminder" request — they are the same nudge with
 // two triggers, and building them separately would let both fire at one creator.
@@ -5850,13 +6285,20 @@ const GET_ACTIONS = {
   getProductPrice,
   getInfluencerAttribution,
   getQualityFlags,
-  getDealBriefPreview,
+  getContractSettings,
+  getDealContractDraft,
+  getDealInvoiceUrl,
   getPostReminderDue,
   getBrokenChannelLinks,
   getTrackingLinkStatus,
 };
 
 const POST_ACTIONS = {
+  saveContractSettings,
+  publishContractSettings,
+  sendDealContract,
+  markContractAcceptedByHand,
+  allowBankUpdate,
   createInfluencer,
   updateInfluencer,
   deleteInfluencer,
@@ -6017,6 +6459,15 @@ export default {
       const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
       if (!want || bearer !== want) return err('unauthorised', 401);
       return refreshProductPrices({}, { userId: 'maint', permissions: { ignition_manage: true } }, env);
+    }
+
+    // The creator's accept link: no login, the token is the credential. Before the JWT gate.
+    if (url.pathname.startsWith('/public/contract')) {
+      try { return await handlePublicContract(request, url, env); }
+      catch (e) {
+        console.error('[public-contract]', e?.message || e);
+        return err('Something went wrong. Please try again.', 500);
+      }
     }
 
     if (request.method === 'GET')  return handleGet(url, request, env);

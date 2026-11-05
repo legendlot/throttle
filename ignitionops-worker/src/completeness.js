@@ -73,7 +73,7 @@ export function isLocked(row = {}, now = Date.now()) {
 // The fields the five locked cards save through updateEngagement (reconciled against every
 // updateEngagement caller in apps/ignition, S373):
 //   DealTermsCard  → deal_type, payment_terms, payment_amount, affiliate_pct, commission_amount,
-//                    campaign_id, ad_rights, ad_rights_amount, ad_rights_duration
+//                    campaign_id, ad_rights, ad_rights_amount, ad_rights_duration, deliverables
 //   CostsCard      → return_cost (S373: its ad_spend input was retired — ad money now lives on the
 //                    Ads card, which is NOT locked.)
 //   PostLiveCard   → post_date (also reachable through the Performance card: the deal's post_date
@@ -89,7 +89,7 @@ export function isLocked(row = {}, now = Date.now()) {
 // every Complete UGC deal.
 export const LOCKED_FIELDS = [
   'deal_type', 'payment_terms', 'payment_amount', 'affiliate_pct', 'commission_amount',
-  'campaign_id', 'ad_rights', 'ad_rights_amount', 'ad_rights_duration',
+  'campaign_id', 'ad_rights', 'ad_rights_amount', 'ad_rights_duration', 'deliverables',
   'return_cost',
   'post_date',
   'compliance_caption_link', 'compliance_coupon_verbal', 'compliance_car_motion',

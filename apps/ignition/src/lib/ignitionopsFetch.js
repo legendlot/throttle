@@ -38,3 +38,23 @@ export async function ignitionopsPost(action, body = {}, session) {
   if (!res.ok || data.ok === false) throw new Error(data.error || `ignitionopsPost ${action} failed (${res.status})`);
   return data.data;
 }
+
+// The creator's accept link (app/deal): no login, so no Authorization header. The token is the
+// credential. `sub` is '' for the read, or accept | bank | invoice-url | invoice-done (POST only).
+export async function contractPublic(sub, token, body) {
+  const res = body === undefined
+    ? await fetch(`${IGN_URL}/public/contract?t=${encodeURIComponent(token)}`)
+    : await fetch(`${IGN_URL}/public/contract/${sub}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, t: token }),
+    });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    const e = new Error(data.error || 'Something went wrong. Please try again.');
+    e.status = res.status;
+    e.fieldErrors = data.errors || null;
+    throw e;
+  }
+  return data.data;
+}

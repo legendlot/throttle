@@ -42,3 +42,9 @@ test('dealPayload: paid with the amount left blank keeps the chosen terms, omits
 test('dealPayload: no product lines → no products key', () => {
   assert.equal('products' in dealPayload(initialDealForm(), 'inf', []), false);
 });
+
+// Reann #1: printed in the contract. Blank is omitted, so the column stays NULL and the send blocker fires.
+test('deliverables: trimmed when written, omitted when blank', () => {
+  assert.equal(dealPayload(initialDealForm({ deliverables: '  1 reel ' }), 'i1').deliverables, '1 reel');
+  for (const deliverables of ['', '   ']) assert.equal('deliverables' in dealPayload(initialDealForm({ deliverables }), 'i1'), false);
+});

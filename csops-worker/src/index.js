@@ -36,6 +36,7 @@ import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket,
 import { splitMulti } from './multiselect.js';
 import { postNeedsMeta, shouldFetchPostMeta, postMetaPatch } from './social-posts.js';
 import { normalizeUpc, normalizeTicketUpcs, upcInFilter, findMissingUpc } from './upc.js';
+import { PARTNER_MAILBOX, buildPartnerMime } from './partner-email.js';
 
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
@@ -10029,7 +10030,7 @@ async function callWorker(binding, env, path, init) {
   return fetch(`${commsopsUrl(env)}${path}`, init);
 }
 
-function gmailMailbox(env) { return env.GMAIL_MAILBOX || 'carecrew@legendoftoys.com'; }
+export function gmailMailbox(env) { return env.GMAIL_MAILBOX || 'carecrew@legendoftoys.com'; }
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1';
 const MAX_NEW_EMAILS_PER_RUN = 6;             // paced per tick (Gmail API politeness); backlog drains across cron ticks
 
@@ -10055,10 +10056,13 @@ function b64urlEncodeJson(obj) { return b64urlEncodeUtf8(JSON.stringify(obj)); }
 // ── Gmail OAuth — service-account JWT (RS256), domain-wide-delegated to carecrew@.
 // Reuses the shared GOOGLE_SA_JSON secret (the full SA key JSON, same convention as
 // odoops/podiumops). That SA already has gmail.modify domain-wide-delegated.
-let _gmailTok = { token: null, exp: 0 };
+// ⚠️ The cache is per mailbox (Ignition's partners@, Reann #1): one shared slot would hand a
+// partners@ token to the next carecrew@ read. With no mailbox argument every caller gets carecrew@.
+const _gmailToks = new Map();
 function gmailConfigured(env) { return !!env.GOOGLE_SA_JSON; }
-async function gmailAccessToken(env) {
-  if (_gmailTok.token && Date.now() < _gmailTok.exp - 60_000) return _gmailTok.token;
+export async function gmailAccessToken(env, mailbox = gmailMailbox(env)) {
+  const cached = _gmailToks.get(mailbox);
+  if (cached && Date.now() < cached.exp - 60_000) return cached.token;
   if (!env.GOOGLE_SA_JSON) throw new Error('gmail_not_configured');
   const sa = JSON.parse(env.GOOGLE_SA_JSON);
   const clientEmail = sa.client_email;
@@ -10068,7 +10072,7 @@ async function gmailAccessToken(env) {
   const iat = Math.floor(Date.now() / 1000);
   const claim = {
     iss: clientEmail,
-    sub: gmailMailbox(env),                                   // impersonate the mailbox
+    sub: mailbox,                                             // impersonate the mailbox
     scope: 'https://www.googleapis.com/auth/gmail.modify',
     aud: 'https://oauth2.googleapis.com/token',
     iat, exp: iat + 3600,
@@ -10092,13 +10096,17 @@ async function gmailAccessToken(env) {
   });
   const d = await r.json().catch(() => ({}));
   if (!r.ok || !d.access_token) throw new Error(`gmail_token_failed: ${JSON.stringify(d).slice(0, 200)}`);
-  _gmailTok = { token: d.access_token, exp: Date.now() + (Number(d.expires_in || 3600) * 1000) };
-  return _gmailTok.token;
+  _gmailToks.set(mailbox, { token: d.access_token, exp: Date.now() + (Number(d.expires_in || 3600) * 1000) });
+  return d.access_token;
 }
 
-async function gmailFetch(env, path, opts = {}) {
-  const token = await gmailAccessToken(env);
-  const mb = encodeURIComponent(gmailMailbox(env));
+export async function gmailFetch(env, path, opts = {}) {
+  return gmailFetchFor(env, gmailMailbox(env), path, opts);
+}
+
+export async function gmailFetchFor(env, mailbox, path, opts = {}) {
+  const token = await gmailAccessToken(env, mailbox);
+  const mb = encodeURIComponent(mailbox);
   const r = await fetch(`${GMAIL_API}/users/${mb}${path}`, {
     ...opts,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(opts.headers || {}) },
@@ -11236,8 +11244,32 @@ async function handleIgnitionBridge(request, env) {
     case 'sendConnectReply':       return bridgeSendReply(body, env);
     case 'returnConnectToPitstop': return bridgeReturnConnect(body, env);
     case 'createTicketFromIgnition': return bridgeCreateTicket(body, env);
+    case 'partnerMailboxProbe':    return bridgePartnerMailboxProbe(env);
+    case 'sendPartnerEmail':       return bridgeSendPartnerEmail(body, env);
     default: return err(`Unknown bridge action: ${body.action}`, 404);
   }
+}
+
+// Ignition's deal contract (Reann #1). Unlike the handlers below this reaches no customer thread:
+// the sender is the PARTNER_MAILBOX constant, and the caller supplies only recipient and words.
+async function bridgePartnerMailboxProbe(env) {
+  try {
+    const r = await gmailFetchFor(env, PARTNER_MAILBOX, '/profile');
+    if (!r.ok) return err(`Gmail said ${r.status}: ${JSON.stringify(r.data)?.slice(0, 200)}`, 502);
+    return ok({ address: r.data?.emailAddress || PARTNER_MAILBOX });
+  } catch (e) { return err(String(e?.message || e), 502); }
+}
+
+async function bridgeSendPartnerEmail(body, env) {
+  const built = buildPartnerMime({ to: body.to, subject: body.subject, text: body.text, html: body.html });
+  if (built.error) return err(built.error, 400);
+  try {
+    const send = await gmailFetchFor(env, PARTNER_MAILBOX, '/messages/send', {
+      method: 'POST', body: JSON.stringify({ raw: b64urlEncodeUtf8(built.raw) }),
+    });
+    if (!send.ok) return err(`Gmail refused it (${send.status}): ${JSON.stringify(send.data)?.slice(0, 200)}`, 502);
+    return ok({ message_id: send.data?.id || null, from: PARTNER_MAILBOX });
+  } catch (e) { return err(String(e?.message || e), 502); }
 }
 
 // List every transferred thread + a batched last-message preview + awaiting-reply flag.

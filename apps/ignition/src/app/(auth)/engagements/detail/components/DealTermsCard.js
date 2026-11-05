@@ -56,6 +56,7 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
       ad_rights: e.ad_rights == null ? '' : (e.ad_rights ? 'yes' : 'no'),
       ad_rights_amount: e.ad_rights_amount ?? '',
       ad_rights_duration: e.ad_rights_duration || '',
+      deliverables: e.deliverables || '',
     });
     setEditing(true);
   }
@@ -76,6 +77,7 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
         ad_rights: f.ad_rights === '' ? null : f.ad_rights === 'yes',
         ad_rights_amount: numOrNull(f.ad_rights_amount),
         ad_rights_duration: f.ad_rights_duration || null,
+        deliverables: f.deliverables.trim() || null,
       }, session);
       toast('Deal terms updated', 'success');
       setEditing(false);
@@ -97,6 +99,11 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
 
       {editing && !locked ? (
         <>
+          <div style={{ padding: '7px 0', borderTop: '1px solid var(--row-divider)', fontSize: 14 }}>
+            <div style={{ color: 'var(--text-3)', marginBottom: 6 }}>Deliverables</div>
+            <textarea value={f.deliverables} onChange={ev => setF(x => ({ ...x, deliverables: ev.target.value }))} rows={3}
+              placeholder="e.g. 1 reel, 3 stories" style={{ width: '100%', boxSizing: 'border-box', background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', padding: '7px 10px', fontFamily: 'var(--font-ui)', fontSize: 13, resize: 'vertical' }} />
+          </div>
           <SelectEdit label="Deal type" value={f.deal_type} onChange={v => setF(x => ({ ...x, deal_type: v }))}
             options={DEAL_TYPE_VALUES.map(v => ({ value: v, label: DEAL_TYPE_LABELS[v] }))} />
           <SelectEdit label="Payment terms" value={f.payment_terms} onChange={v => setF(x => ({ ...x, payment_terms: v }))}
@@ -122,6 +129,12 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
         </>
       ) : (
         <>
+          {/* undefined = stripped for a partner; null = nobody has written them yet. */}
+          {e.deliverables !== undefined && (
+            <KV label="Deliverables" value={e.deliverables
+              ? <span style={{ whiteSpace: 'pre-wrap' }}>{e.deliverables}</span>
+              : <span style={{ color: 'var(--text-4)' }}>—</span>} />
+          )}
           <KV label="Deal type" value={DEAL_TYPE_LABELS[e.deal_type] || e.deal_type} />
           <KV label="Payment terms" value={PAYMENT_TERMS_LABELS[e.payment_terms] || e.payment_terms || '—'} />
           <KV label="Payment amount" value={<span style={mono}>₹{agreed.toLocaleString()}</span>} />
