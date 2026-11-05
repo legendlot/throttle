@@ -79,6 +79,7 @@ test('the form remounts per request, and keeps a line type on save', () => {
   const form = readFileSync(join(here, '../../apps/snorkel/src/app/(auth)/requests/new/page.js'), 'utf8');
   assert.ok(form.includes("<RequestForm key={editNo || 'new'} editNo={editNo} />"));
   assert.equal(form.match(/item_type: l\.item_type \|\| 'Part'/g).length, 2);
+  assert.ok(form.includes('itemOptions.some((o) => o.value === l.description || o.part_name === l.description)'), 'a re-picked part replaces a description that was only a part name');
 });
 
 test('postRequest and updateRequest share the helpers', () => {

@@ -122,8 +122,9 @@ function RequestForm({ editNo }) {
   // part prints part B described as part A. One the requester typed stays.
   function nextDescription(l, opt) {
     if (!opt) return l.description;
-    const prev = itemOptions.find((o) => o.value === l.part_code);
-    const typed = l.description && l.description !== prev?.part_name && l.description !== l.part_code;
+    // Against every part, not just the line's current one: the Combobox clears the part while
+    // the new code is typed, so by the time of the pick the old part is already gone.
+    const typed = l.description && !itemOptions.some((o) => o.value === l.description || o.part_name === l.description);
     return typed ? l.description : (opt.part_name || opt.value || '');
   }
   function removeLine(i) {
