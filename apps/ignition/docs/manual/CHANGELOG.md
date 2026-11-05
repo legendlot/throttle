@@ -3,6 +3,14 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.17.0] - 2026-11-05
+### Changed
+- POC is now Owner: required on new deals, picked from the influencer team, editable on the deal page (new Owner section); older deals with none can be given one.
+- Reports: Deals created by created date, spend/orders/sales/likes by deal post date, views by each video's post date; Total spend tile states what it includes and leaves out; new Sync all button (manage access) and daily 08:40 IST sync.
+- CPM: Avg CPM replaced by Blended and Median CPM (Dashboard, Engagements, Reports, Campaigns).
+- Sales per Rs 1 replaces ROAS (UGC keeps real ROAS); Conversions Rs / Conv. value now Sales (coupon, net); deal Orders fill from the code sync.
+- A video needs a post date once it has views or paid views. Targets shows paid views under each month.
+
 ## [1.16.0] - 2026-10-09
 ### Added
 - Signing In: Esc closes the search dropdown (second Esc clears), B-List included and archived excluded, phone search is a full-screen sheet; page search boxes (dropdown on Engagements / Influencers, loaded-row filter elsewhere).
