@@ -1,4 +1,5 @@
 'use client';
+import { cpmLabel } from '../../../../lib/cpm.js';
 import { useEffect, useState, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
@@ -129,6 +130,8 @@ function CampaignDetailPageBody() {
         <Tile size={22} label="Organic views" value={num(r.views).toLocaleString('en-IN')} />
         {num(r.paid_views) > 0 && <Tile size={22} label="Paid views (ads)" value={num(r.paid_views).toLocaleString('en-IN')} />}
         <Tile size={22} label="Orders" value={num(r.orders).toLocaleString('en-IN')} />
+        <Tile size={22} label="Blended CPM" value={cpmLabel(r.blended_cpm)} />
+        <Tile size={22} label="Median CPM" value={cpmLabel(r.median_cpm)} />
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'flex-start' }}>

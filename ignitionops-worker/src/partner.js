@@ -103,6 +103,7 @@ export const PARTNER_MONEY_KEYS = [
   // computed (getEngagement, campaignRollup, getReports)
   'paid_total', 'payments', 'ad_payments', 'spend', 'budget', 'budget_remaining', 'budget_pct',
   'budget_consumed', 'roas', 'avg_cpm', 'avg_roas', 'roas_distribution', 'cpm_distribution',
+  'blended_cpm', 'median_cpm', 'cpm_deals', 'sales_per_rupee', 'sales_per_rupee_distribution', 'not_posted', 'never_posted',
 ];
 
 export function partnerStripSet(perms = {}) {

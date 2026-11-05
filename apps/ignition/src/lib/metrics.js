@@ -101,11 +101,12 @@ export function deriveMetrics(e = {}, platform) {
   // Business metrics are absolute, never normalised to followers. CPM and revenue per view divide
   // by the same ORGANIC `views` — matching the worker's recomputeCpm (engagements.cpm).
   const cost = num(e.total_cost);
+  const cpmCost = cost == null ? null : Math.max(0, cost - (num(e.commission_amount) || 0));   // commission stays out (Reann #7)
   const revenue = num(e.conversions_value);
   const business = [
     { key: 'cost_per_video', label: 'Cost per video', value: cost, unit: '₹' },
     { key: 'cpm',            label: 'CPM',            unit: '₹',
-      value: (cost == null || !views) ? null : Math.round((cost / views) * 1000 * 100) / 100 },
+      value: (cpmCost == null || !views) ? null : Math.round((cpmCost / views) * 1000 * 100) / 100 },
     { key: 'revenue_per_view', label: 'Revenue per view', unit: '₹',
       value: (revenue == null || !views) ? null : Math.round((revenue / views) * 100) / 100 },
   ];

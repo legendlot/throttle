@@ -58,3 +58,13 @@ test('dealIstDate: posted deal keeps post_date; unposted deal uses the IST day o
   assert.equal(dealIstDate({ post_date: null, created_at: '2026-09-30T18:29:59+00:00' }), '2026-09-30');
   assert.equal(dealIstDate({ post_date: null, created_at: null }), '');
 });
+
+test('a take with paid views but a blank total still counts its paid views (Reann #6)', () => {
+  const { byMonth, paidByMonth, rows } = bucketVideoViewsByMonth(
+    [{ id: 'P', post_date: '2026-08-02' }],
+    [{ engagement_id: 'P', seq: 1, post_date: '2026-08-02', views: null, paid_views: 621900 }],
+  );
+  assert.equal(paidByMonth['2026-08'], 621900);
+  assert.equal(byMonth['2026-08'], 0);
+  assert.equal(rows.length, 1);
+});

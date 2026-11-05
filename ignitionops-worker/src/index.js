@@ -1075,6 +1075,29 @@ export function organicViews(views, paid) {
   return Math.max(0, v - (vnum(paid) ?? 0));
 }
 
+// ── One CPM (Reann #7) ──────────────────────────────────────────────────────────────────────
+// Blended = cost of deals with views ÷ their organic views × 1,000. Median = the middle deal's own
+// CPM, so one very costly deal cannot move it. An average of each deal's CPM (the old "Avg CPM
+// ₹160.7") is neither: a few deals with almost no views dominate it. Commission stays out of the
+// cost. Ad rights already left total_cost in S373. Dashboard, Reports and Campaigns read this; the
+// Engagements tiles compute on the rows on screen with the twin in apps/ignition/src/lib/cpm.js.
+export function cpmCostOf(e) {
+  const n = v => Number(v) || 0;
+  return e.total_cost != null ? Math.max(0, n(e.total_cost) - n(e.commission_amount)) : n(e.payment_amount);
+}
+export function cpmStats(deals) {
+  const viewed = (deals || []).filter(d => Number(d.views) > 0);
+  if (!viewed.length) return { blended: null, median: null, deals: 0 };
+  const cost = viewed.reduce((t, d) => t + Number(d.cost || 0), 0);
+  const views = viewed.reduce((t, d) => t + Number(d.views), 0);
+  const each = viewed.map(d => Number(d.cost || 0) / Number(d.views) * 1000).sort((a, b) => a - b);
+  const mid = Math.floor(each.length / 2);
+  const median = each.length % 2 ? each[mid] : (each[mid - 1] + each[mid]) / 2;
+  const r2 = v => Math.round(v * 100) / 100;
+  return { blended: r2(cost / views * 1000), median: r2(median), deals: viewed.length };
+}
+const cpmRow = e => ({ cost: cpmCostOf(e), views: organicViews(e.views, e.paid_views) ?? 0 });
+
 const VIDEO_FIELDS = ['video_link','post_date','views','organic_views','paid_views','likes','comments','shares',
   'reposts','saves','impressions','followers_gained','follower_count_at_post','metric_gaps','note'];
 const VIDEO_NUMERIC = ['views','organic_views','paid_views','likes','comments','shares','reposts','saves',
@@ -1189,6 +1212,9 @@ async function setEngagementVideo(body, auth, env) {
   if (splitChanged && effViews != null && effPaid != null && effPaid > effViews) {
     return err(`paid views (${effPaid.toLocaleString('en-IN')}) cannot exceed views (${effViews.toLocaleString('en-IN')})`, 400);
   }
+  // Reann #5: each video's views count on its own post date, so views with no date land in no month.
+  const effDate = 'post_date' in row ? row.post_date : prev.post_date;
+  if ((effViews > 0 || effPaid > 0) && !effDate) return err('Enter the video post date before saving its views', 400);
   // COMPLETE-deal lock — before any write.
   const lockRow = await loadVideoLockRow(env, eid);
   if (lockRow === undefined) return err('db_error', 500);
@@ -1339,6 +1365,7 @@ function campaignRollup(c) {
   // and a manager needs to see the commitment before the money moves. Remaining is null (not 0)
   // when no budget is set, so "no budget" never renders as "fully spent".
   const budget = c.budget_amount != null ? num(c.budget_amount) : null;
+  const cpm = cpmStats(counted.map(cpmRow));
   return {
     linked_count: engs.length,
     posted_count: engs.filter(e => POSTED.has(e.stage)).length,
@@ -1350,11 +1377,13 @@ function campaignRollup(c) {
     views: counted.reduce((s, e) => s + (organicViews(e.views, e.paid_views) ?? 0), 0),
     paid_views: counted.reduce((s, e) => s + num(e.paid_views), 0),
     orders: counted.reduce((s, e) => s + num(e.orders), 0),
+    blended_cpm: cpm.blended,
+    median_cpm: cpm.median,
   };
 }
 
 const CAMPAIGN_ENG_SELECT =
-  'engagements:engagements!campaign_id(id,engagement_no,engagement_type,stage,product_code,product_variant,payment_amount,total_cost,views,paid_views,orders,post_date,expected_post_date,video_link)';
+  'engagements:engagements!campaign_id(id,engagement_no,engagement_type,stage,product_code,product_variant,payment_amount,commission_amount,total_cost,views,paid_views,orders,post_date,expected_post_date,video_link)';
 
 // Partner scope for campaign embeds (S419 Codex review): a campaign links deals of any stage, so a
 // partner with partner_campaigns on sees only the ROSTER_STAGES ones, and the rollup is computed on those.
@@ -1609,6 +1638,11 @@ async function getKpis(url, auth, env) {
     }
     ugc_summary.budget_consumed = Math.round(ugc_summary.budget_consumed);
     ugc_summary.conversions_value = Math.round(ugc_summary.conversions_value);
+    pipeline.cpm = {
+      all: cpmStats(rows.map(cpmRow)),
+      ugc: cpmStats(rows.filter(e => e.engagement_type === 'ugc').map(cpmRow)),
+      video: cpmStats(rows.filter(e => e.engagement_type !== 'ugc').map(cpmRow)),
+    };
   }
 
   return ok({ active, live, ghosted, overdue, engagement_totals, ugc_summary, ...pipeline });
@@ -2261,72 +2295,101 @@ async function getPayments(url, auth, env) {
 // ── Reports (spend / ROAS / CPM / top performers) ───────────────────────────
 // One range-scoped query over engagements; all aggregation happens in JS to
 // stay within the 50-subrequest budget. Gated on ignition_reports_view.
+// Reports by the date each number belongs to (Reann #4, #5). Deals created go by created date;
+// spend, orders, sales and likes by the deal's post date; views by each video's own post date, from
+// the same function as Targets, so a month reads the same on both screens. Pure so that holds in a test.
+export function reportAttribution(deals, videos, from, to) {
+  const inRange = d => !!d && (!from || d >= from) && (!to || d <= to);
+  const createdDay = e => { const t = Date.parse(e.created_at || ''); return Number.isFinite(t) ? istToday(t) : ''; };
+  const views = {}, paid = {}, viewsByMonth = {}, paidByMonth = {}, allViews = {};
+  for (const t of bucketVideoViewsByMonth(deals, videos).rows) {
+    allViews[t.engagement_id] = (allViews[t.engagement_id] || 0) + t.views;
+    if (!inRange(String(t.post_date || '').slice(0, 10))) continue;
+    views[t.engagement_id] = (views[t.engagement_id] || 0) + t.views;
+    paid[t.engagement_id] = (paid[t.engagement_id] || 0) + t.paid_views;
+    viewsByMonth[t.month] = (viewsByMonth[t.month] || 0) + t.views;
+    paidByMonth[t.month] = (paidByMonth[t.month] || 0) + t.paid_views;
+  }
+  return {
+    created: deals.filter(e => inRange(createdDay(e))),
+    posted: deals.filter(e => e.post_date && inRange(String(e.post_date).slice(0, 10))),
+    views, paid, viewsByMonth, paidByMonth, allViews,
+  };
+}
+
+const NEVER_POSTS = new Set(['dropped', 'ghosted']);
+
 async function getReports(url, auth, env) {
   const gate = requirePerm('ignition_reports_view', auth); if (gate) return gate;
-  const from = url.searchParams.get('from');
-  const to = url.searchParams.get('to');
-  const range = istDayRangeFilters('created_at', from, to);
+  const range = istDayRangeFilters('created_at', url.searchParams.get('from'), url.searchParams.get('to'));
   if (range.error) return err(range.error, 400);
-  const filters = range.filters;
+  const from = (url.searchParams.get('from') || '').slice(0, 10) || null;
+  const to = (url.searchParams.get('to') || '').slice(0, 10) || null;
   // Cancelled deals are excluded from the whole report, not just its money columns — a report is
   // metrics end to end, and a deal called off before anything was spent has no numbers to add.
-  filters.push(EXCLUDE_NON_SPEND);
-
   const r = await sb(
-    `/rest/v1/engagements?${filters.join('&')}&select=id,engagement_no,created_at,post_date,product_code,engagement_type,deal_type,payment_amount,total_cost,commission_amount,views,paid_views,likes,shares,orders,conversions_value,cpm,actual_roas,roas_on_ad_spend,influencer:influencer_id(influencer_code,channel_name,person_name,influencer_type)&order=created_at.desc&limit=5000`,
+    `/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=id,engagement_no,stage,created_at,post_date,product_code,engagement_type,deal_type,payment_amount,total_cost,commission_amount,views,paid_views,likes,shares,orders,conversions_value,influencer:influencer_id(channel_name,person_name,influencer_code,influencer_type)&order=created_at.desc&limit=5000`,
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
   const rows = r.data || [];
-  // Slice 4, same rule as both monthly handlers: a month's views are its TAKES' views, not the
-  // whole deal's parked on one post_date. Only by_month moves — spend/orders/product/tier totals
-  // stay deal-level, as they are deal-level facts.
   const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views,paid_views&order=engagement_id.asc,seq.asc&limit=5000`, env);
-  const { byMonth: viewsByMonth, paidByMonth } = bucketVideoViewsByMonth(rows, vr.ok ? vr.data || [] : []);
+  if (!vr.ok) return err(`db_error: ${JSON.stringify(vr.data)}`, 500);
+  const A = reportAttribution(rows, vr.data || [], from, to);
+  const postedIds = new Set(A.posted.map(e => e.id));
+  // Dropped and ghosted deals never post, but their cost is a real loss and keeps counting in Reports
+  // (reference/decisions.md §S317b). With no post date to go by, they sit on the created date.
+  const lost = A.created.filter(e => !e.post_date && NEVER_POSTS.has(e.stage));
+  const countedIds = new Set([...postedIds, ...lost.map(e => e.id)]);
+  // A deal is in the report if it posted in range, or one of its videos did: a second video posted
+  // this month brings its views in, while the deal's money stays on the deal's own post date.
+  const scope = rows.filter(e => countedIds.has(e.id) || A.views[e.id] > 0 || A.paid[e.id] > 0);
   const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
   // S373: no ad_spend in the fallback (ad money is not influencer spend); `views` below is ORGANIC.
   const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.commission_amount));
-  const roasOf = e => (e.actual_roas != null ? num(e.actual_roas) : (e.roas_on_ad_spend != null ? num(e.roas_on_ad_spend) : null));
+  // Reann #8: sales per ₹1 spent. ROAS only read ad spend, so it was blank on every deal.
+  const perRupee = (sales, spend) => (spend > 0 ? Math.round(sales / spend * 100) / 100 : null);
 
-  // Spend / orders / views by month (post_date if posted, else created_at's IST day).
   const byMonthMap = {};
   const byProductMap = {};
   let totalSpend = 0, totalOrders = 0, totalViews = 0, totalPaid = 0, totalConv = 0;
   let totLikes = 0, totShares = 0;
-  let cpmSum = 0, cpmN = 0, roasSum = 0, roasN = 0;
   const byTierMap = {};
   const ugcAgg = { deals: 0, views: 0, paid_views: 0, likes: 0, budget_consumed: 0, orders: 0, conversions_value: 0 };
 
-  const ROAS_BUCKETS = [{ k: '<1', lo: -Infinity, hi: 1 }, { k: '1–2', lo: 1, hi: 2 }, { k: '2–3', lo: 2, hi: 3 }, { k: '3–5', lo: 3, hi: 5 }, { k: '5+', lo: 5, hi: Infinity }];
+  const SALES_BUCKETS = [{ k: '<1', lo: -Infinity, hi: 1 }, { k: '1–2', lo: 1, hi: 2 }, { k: '2–3', lo: 2, hi: 3 }, { k: '3–5', lo: 3, hi: 5 }, { k: '5+', lo: 5, hi: Infinity }];
   const CPM_BUCKETS = [{ k: '<50', lo: -Infinity, hi: 50 }, { k: '50–100', lo: 50, hi: 100 }, { k: '100–200', lo: 100, hi: 200 }, { k: '200–500', lo: 200, hi: 500 }, { k: '500+', lo: 500, hi: Infinity }];
-  const roasDist = Object.fromEntries(ROAS_BUCKETS.map(b => [b.k, 0]));
+  const salesDist = Object.fromEntries(SALES_BUCKETS.map(b => [b.k, 0]));
   const cpmDist = Object.fromEntries(CPM_BUCKETS.map(b => [b.k, 0]));
   const bucketOf = (buckets, v) => (buckets.find(b => v >= b.lo && v < b.hi) || buckets[buckets.length - 1]).k;
+  const cpmRows = [];
 
-  for (const e of rows) {
-    const spend = spendOf(e);
-    const orders = num(e.orders), views = organicViews(e.views, e.paid_views) ?? 0, conv = num(e.conversions_value);
-    const paid = num(e.paid_views);
-    const likes = num(e.likes), shares = num(e.shares);
+  for (const e of scope) {
+    const isPosted = countedIds.has(e.id);
+    const deal = isPosted ? 1 : 0;
+    const spend = isPosted ? spendOf(e) : 0;
+    const orders = isPosted ? num(e.orders) : 0, conv = isPosted ? num(e.conversions_value) : 0;
+    const likes = isPosted ? num(e.likes) : 0, shares = isPosted ? num(e.shares) : 0;
+    const views = A.views[e.id] || 0, paid = A.paid[e.id] || 0;
     totalSpend += spend; totalOrders += orders; totalViews += views; totalPaid += paid; totalConv += conv;
     totLikes += likes; totShares += shares;
 
     // By influencer tier (Reann analytics): delivered views/likes/shares + distinct active influencers.
     const tier = (e.influencer && e.influencer.influencer_type) || 'untyped';
     const t = byTierMap[tier] || (byTierMap[tier] = { tier, deals: 0, views: 0, paid_views: 0, likes: 0, shares: 0, spend: 0, orders: 0, conversions_value: 0, influencer_ids: new Set() });
-    t.deals += 1; t.views += views; t.paid_views += paid; t.likes += likes; t.shares += shares; t.spend += spend; t.orders += orders; t.conversions_value += conv;
+    t.deals += deal; t.views += views; t.paid_views += paid; t.likes += likes; t.shares += shares; t.spend += spend; t.orders += orders; t.conversions_value += conv;
     if (e.influencer && e.influencer.influencer_code) t.influencer_ids.add(e.influencer.influencer_code);
 
     // UGC rollup
     if (e.engagement_type === 'ugc') {
-      ugcAgg.deals += 1; ugcAgg.views += views; ugcAgg.paid_views += paid; ugcAgg.likes += likes;
+      ugcAgg.deals += deal; ugcAgg.views += views; ugcAgg.paid_views += paid; ugcAgg.likes += likes;
       ugcAgg.budget_consumed += spend; ugcAgg.orders += orders; ugcAgg.conversions_value += conv;
     }
 
-    const month = dealIstDate(e).slice(0, 7);
-    if (month) {
+    if (isPosted) {
+      const month = dealIstDate(e).slice(0, 7);
       const m = byMonthMap[month] || (byMonthMap[month] = { month, spend: 0, orders: 0, views: 0, paid_views: 0, deals: 0 });
-      m.spend += spend; m.orders += orders; m.deals += 1;   // views: per take, filled in below
+      m.spend += spend; m.orders += orders; m.deals += 1;   // views: per video, filled in below
     }
     // ⚠️ Keyed CASE-INSENSITIVELY (2026-08-27). `product_code` holds free text — 44 distinct
     // spellings for 22 products, measured the same day — and this map keyed on the raw string,
@@ -2338,19 +2401,23 @@ async function getReports(url, auth, env) {
     const prodKey = prodRaw.toLowerCase();
     const p = byProductMap[prodKey]
       || (byProductMap[prodKey] = { name: productDisplay(prodRaw), deals: 0, spend: 0, orders: 0, views: 0, paid_views: 0 });
-    p.deals += 1; p.spend += spend; p.orders += orders; p.views += views; p.paid_views += paid;
+    p.deals += deal; p.spend += spend; p.orders += orders; p.views += views; p.paid_views += paid;
 
-    if (e.cpm != null) { const c = num(e.cpm); cpmSum += c; cpmN++; cpmDist[bucketOf(CPM_BUCKETS, c)]++; }
-    const roas = roasOf(e);
-    if (roas != null) { roasSum += roas; roasN++; roasDist[bucketOf(ROAS_BUCKETS, roas)]++; }
+    if (views > 0) {
+      // A deal whose videos fall either side of the range is charged only for the share in range,
+      // or its whole cost would sit against part of its views, in both months.
+      const row = { cost: cpmCostOf(e) * (A.allViews[e.id] > 0 ? views / A.allViews[e.id] : 1), views };
+      cpmRows.push(row);
+      cpmDist[bucketOf(CPM_BUCKETS, row.cost / views * 1000)]++;
+    }
+    if (conv > 0 && spend > 0) salesDist[bucketOf(SALES_BUCKETS, conv / spend)]++;
   }
 
-  // Views per month come from the takes, keyed on each take's own post_date. A month that only
-  // exists because of created_at (nothing posted yet) therefore reads 0 views — which is the truth.
-  for (const month of new Set([...Object.keys(viewsByMonth), ...Object.keys(paidByMonth)])) {
+  // Views per month come from the videos, keyed on each video's own post date.
+  for (const month of new Set([...Object.keys(A.viewsByMonth), ...Object.keys(A.paidByMonth)])) {
     const m = byMonthMap[month] || (byMonthMap[month] = { month, spend: 0, orders: 0, views: 0, paid_views: 0, deals: 0 });
-    m.views = viewsByMonth[month] || 0;
-    m.paid_views = paidByMonth[month] || 0;
+    m.views = A.viewsByMonth[month] || 0;
+    m.paid_views = A.paidByMonth[month] || 0;
   }
   const byMonth = Object.values(byMonthMap).sort((a, b) => a.month.localeCompare(b.month))
     .map(m => ({ ...m, spend: Math.round(m.spend) }));
@@ -2368,7 +2435,7 @@ async function getReports(url, auth, env) {
   const engagement_totals = { views: totalViews, paid_views: totalPaid, likes: totLikes, shares: totShares };
   const ugc = { ...ugcAgg, budget_consumed: Math.round(ugcAgg.budget_consumed), conversions_value: Math.round(ugcAgg.conversions_value) };
 
-  const topPerformers = rows
+  const topPerformers = A.posted
     .map(e => ({
       engagement_no: e.engagement_no,
       influencer: e.influencer?.channel_name || e.influencer?.person_name || e.influencer?.influencer_code || '—',
@@ -2376,27 +2443,35 @@ async function getReports(url, auth, env) {
       orders: num(e.orders),
       conversions_value: Math.round(num(e.conversions_value)),
       spend: Math.round(spendOf(e)),
-      roas: roasOf(e),
+      sales_per_rupee: perRupee(num(e.conversions_value), spendOf(e)),
     }))
-    .filter(e => e.orders > 0 || e.conversions_value > 0 || e.roas != null)
+    .filter(e => e.orders > 0 || e.conversions_value > 0)
     .sort((a, b) => (b.conversions_value - a.conversions_value) || (b.orders - a.orders))
     .slice(0, 15);
 
+  // Spend the post-date totals cannot place yet. Said on the page, so the total never quietly omits it.
+  const unposted = A.created.filter(e => !e.post_date && !NEVER_POSTS.has(e.stage));
+  const cpm = cpmStats(cpmRows);
   return ok({
-    range: { from: from || null, to: to || null, total_deals: rows.length },
+    range: { from, to, total_deals: A.created.length },
     totals: {
-      deals: rows.length,
+      deals: A.created.length,
+      posted_deals: A.posted.length,
       spend: Math.round(totalSpend),
       orders: totalOrders,
       views: totalViews,            // organic (S373)
       paid_views: totalPaid,
       conversions_value: Math.round(totalConv),
-      avg_cpm: cpmN ? Math.round((cpmSum / cpmN) * 100) / 100 : null,
-      avg_roas: roasN ? Math.round((roasSum / roasN) * 100) / 100 : null,
+      blended_cpm: cpm.blended,
+      median_cpm: cpm.median,
+      cpm_deals: cpm.deals,
+      sales_per_rupee: perRupee(totalConv, totalSpend),
     },
+    not_posted: { deals: unposted.length, spend: Math.round(unposted.reduce((t, e) => t + spendOf(e), 0)) },
+    never_posted: { deals: lost.length, spend: Math.round(lost.reduce((t, e) => t + spendOf(e), 0)) },
     by_month: byMonth,
     by_product: byProduct,
-    roas_distribution: ROAS_BUCKETS.map(b => ({ bucket: b.k, count: roasDist[b.k] })),
+    sales_per_rupee_distribution: SALES_BUCKETS.map(b => ({ bucket: b.k, count: salesDist[b.k] })),
     cpm_distribution: CPM_BUCKETS.map(b => ({ bucket: b.k, count: cpmDist[b.k] })),
     top_performers: topPerformers,
     by_tier,
@@ -2757,14 +2832,14 @@ async function createEngagement(body, auth, env) {
 }
 
 // Replace the full product-line set for a deal, then roll up (#4).
-// CPM auto-calc (theme ④ B13): cost-per-1000-views off the GENERATED total_cost
-// (payment+commission+goodies+shipping+return — S373: ad_spend and ad_rights left it). Worker-owned, not manual.
+// CPM auto-calc (theme ④ B13): cost-per-1000-views off the GENERATED total_cost, less commission
+// (payment+goodies+shipping+return — S373: ad_spend and ad_rights left it; Reann #7: commission). Worker-owned, not manual.
 // S373: per 1000 ORGANIC views (views − paid) — views an ad bought are not the collab's reach.
 async function recomputeCpm(env, engagementId) {
-  const r = await sb(`/rest/v1/engagements?id=eq.${engagementId}&select=views,paid_views,total_cost&limit=1`, env);
+  const r = await sb(`/rest/v1/engagements?id=eq.${engagementId}&select=views,paid_views,total_cost,payment_amount,commission_amount&limit=1`, env);
   const e = r.data?.[0]; if (!e) return;
   const views = organicViews(e.views, e.paid_views) || 0;
-  const cpm = views > 0 ? Math.round((Number(e.total_cost || 0) / views) * 1000 * 100) / 100 : null;
+  const cpm = views > 0 ? Math.round((cpmCostOf(e) / views) * 1000 * 100) / 100 : null;
   await sb(`/rest/v1/engagements?id=eq.${engagementId}`, env, {
     method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ cpm }),
   });
@@ -2828,6 +2903,16 @@ async function deleteEngagement(body, auth, env) {
   return ok({ deleted: true, engagement_no: er.data[0].engagement_no });
 }
 
+// null = fine; otherwise the refusal. post_date mirrors onto video 1, so both deal-level writers must
+// meet the video form's rule (Reann #5).
+async function clearedPostDateRefusal(env, engagementId, patch) {
+  if (!('post_date' in patch) || patch.post_date) return null;
+  const v1 = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${encodeURIComponent(engagementId)}&seq=eq.1&select=views,paid_views&limit=1`, env);
+  if (!v1.ok) return err('could not read the video', 502);
+  if (vnum(v1.data?.[0]?.views) > 0 || vnum(v1.data?.[0]?.paid_views) > 0) return err('This video has views, so it needs a post date', 400);
+  return null;
+}
+
 async function updateEngagement(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
@@ -2837,6 +2922,8 @@ async function updateEngagement(body, auth, env) {
   // Reann #11: an owner can be changed, never removed. Old deals with none stay as they are until
   // someone picks one, because this only refuses a patch that clears the field.
   if ('poc_user_id' in patch && !patch.poc_user_id) return err('A deal must have an owner', 400);
+  // Reann #5: post_date mirrors onto video 1, so clearing it here must meet the same rule as the video form.
+  const dateRefusal = await clearedPostDateRefusal(env, body.engagement_id, patch); if (dateRefusal) return dateRefusal;
   // Refuse, never strip: a patch that names a locked field is rejected WHOLE and the error names
   // the fields. Silently dropping them would read as "saved" while nothing changed. A patch with
   // no locked field (Performance totals, logistics, POC…) skips the read entirely.
@@ -3111,6 +3198,7 @@ async function advanceStage(body, auth, env) {
   // Allow incidental field updates in the same call (e.g. video_link on go-live).
   const extra = pickPatch(body, ENGAGEMENT_FIELDS);
   Object.assign(patch, extra);
+  const dateRefusal = await clearedPostDateRefusal(env, body.engagement_id, patch); if (dateRefusal) return dateRefusal;
 
   const r = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}`, env, {
     method: 'PATCH',
@@ -3476,17 +3564,25 @@ async function syncOneCoupon(env, coupon, maxPages) {
   return { ok: ord.ok, count: rows.length, error: ord.error };
 }
 
-// Roll an engagement's AFFILIATE coupons up onto conversions_value + commission_earned.
-// Gift codes are excluded (never count as affiliate revenue).
+// Roll an engagement's AFFILIATE coupons up onto conversions_value + commission_earned + orders.
+// Gift codes are excluded (never count as affiliate revenue). Orders = the code's orders with money
+// left after refunds, the same orders the sales figure sums (Reann #8: 58 on the code, 0 on the deal).
+// A deal with no affiliate code keeps any orders typed on it by hand, because nothing here knows better.
 async function recomputeEngagementAttribution(env, engagementId) {
   if (!engagementId) return;
-  const cs = await sb(`/rest/v1/coupon_codes?engagement_id=eq.${engagementId}&kind=eq.affiliate&select=attributed_revenue_net,commission_accrued`, env);
+  const cs = await sb(`/rest/v1/coupon_codes?engagement_id=eq.${engagementId}&kind=eq.affiliate&select=id,attributed_revenue_net,commission_accrued`, env);
   const rows = cs.data || [];
+  let orders = null;
+  if (rows.length) {
+    const rr = await sb(`/rest/v1/coupon_redemptions?coupon_code_id=in.(${rows.map(c => c.id).join(',')})&net_value=gt.0&select=shopify_order_id&limit=5000`, env);
+    if (rr.ok) orders = new Set((rr.data || []).map(x => x.shopify_order_id)).size;   // two codes on one order is one order
+  }
   await sb(`/rest/v1/engagements?id=eq.${engagementId}`, env, {
     method: 'PATCH', prefer: 'return=minimal',
     body: JSON.stringify({
       conversions_value: rows.reduce((s, r) => s + Number(r.attributed_revenue_net || 0), 0),
       commission_earned: rows.reduce((s, r) => s + Number(r.commission_accrued || 0), 0),
+      ...(orders != null ? { orders } : {}),
       updated_at: nowIso(),
     }),
   });
@@ -4600,8 +4696,9 @@ async function assignEngagementToCampaign(body, auth, env) {
 // for views so the drill-down sums to the tile by construction (their own comments demand it).
 // Spend and conversions are deal-level and keep the deal post_date rule — only views move.
 // S373: `views` here is ORGANIC (views − paid) and `paid_views` rides alongside, so a month's
-// views target is met by the collab's own reach, not by what an ad bought. A take is still keyed
-// on its TOTAL views (> 0) so an entirely-paid take shows up as a row with 0 organic, not vanish.
+// views target is met by the collab's own reach, not by what an ad bought. A take counts if it has
+// views OR paid views: Meta's paid figure can arrive before anyone types a total, and skipping those
+// takes is why Targets read 0 paid against 7,72,900 logged (Reann #6, 3 takes held all of it).
 export function bucketVideoViewsByMonth(engagements, videos) {
   const n = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
   const byDeal = new Map();
@@ -4612,7 +4709,7 @@ export function bucketVideoViewsByMonth(engagements, videos) {
   const rows = [], byMonth = {}, paidByMonth = {};
   const push = (engagement_id, seq, post_date, views, paid) => {
     const month = String(post_date || '').slice(0, 7);
-    if (!/^\d{4}-\d{2}$/.test(month) || n(views) <= 0) return;
+    if (!/^\d{4}-\d{2}$/.test(month) || (n(views) <= 0 && n(paid) <= 0)) return;
     const organic = organicViews(views, paid) ?? 0;
     rows.push({ engagement_id, seq, post_date, month, views: organic, paid_views: n(paid) });
     byMonth[month] = (byMonth[month] || 0) + organic;

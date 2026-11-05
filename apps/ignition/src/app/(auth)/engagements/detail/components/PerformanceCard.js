@@ -26,7 +26,7 @@ const VIDEO_METRIC_FIELDS = [
   ['follower_count_at_post', 'Followers at post date'], ['impressions', 'Impressions'],
 ];
 // …and the deal-level ones that are NOT per-video (still written with updateEngagement).
-const DEAL_METRIC_FIELDS = [['sessions', 'Sessions'], ['orders', 'Orders'], ['conversions_value', 'Conversions ₹']];
+const DEAL_METRIC_FIELDS = [['sessions', 'Sessions'], ['orders', 'Orders'], ['conversions_value', 'Sales (coupon, net) ₹']];
 // Per-take-only fields (no deal-level column). Empty since S373: `engagements.paid_views` is now
 // a worker rollup like views. Kept so a future per-take-only field has somewhere to go.
 const VIDEO_ONLY_FIELDS = new Set([]);
@@ -38,10 +38,10 @@ const organicLabel = (row) => {
   const o = organicViews(row.views, row.paid_views);
   return o == null ? <span style={{ color: 'var(--text-4)', fontStyle: 'italic' }}>—</span> : <span style={{ fontFamily: 'var(--font-mono)' }}>{o.toLocaleString()}</span>;
 };
-// Headline tiles (prototype: Views · Likes · Comments · Shares · Orders · Conv. value), off the
+// Headline tiles (prototype: Views · Likes · Comments · Shares · Orders · Sales), off the
 // deal-level rollup / deal columns already on `e`. [key, label, isMoney]
 const TILE_FIELDS = [['views', 'Views'], ['likes', 'Likes'], ['comments', 'Comments'], ['shares', 'Shares'],
-  ['orders', 'Orders'], ['conversions_value', 'Conv. value', true]];
+  ['orders', 'Orders'], ['conversions_value', 'Sales (coupon, net)', true]];
 const MAX_VIDEOS = 6;   // engagement_videos.seq CHECK (1..6) — the 7th insert 23514s; refuse here first
 
 export function PerformanceCard({ e, videos, ads, canEdit, session, onSaved, platform, gapReasons }) {
@@ -81,6 +81,9 @@ export function PerformanceCard({ e, videos, ads, canEdit, session, onSaved, pla
     && Number(form.paid_views) > Number(form.views);
   const requiredLabels = missingRequired
     .map(k => (VIDEO_METRIC_FIELDS.find(([mk]) => mk === k) || [k, k])[1]);
+  // Reann #5: views count on the video's own post date, so views with no date land in no month.
+  // Same rule as the worker.
+  const missingPostDate = editing && !!current && (Number(form.views) > 0 || Number(form.paid_views) > 0) && !form.post_date;
 
   function startEdit() {
     if (!current) return;
@@ -96,6 +99,7 @@ export function PerformanceCard({ e, videos, ads, canEdit, session, onSaved, pla
       return;
     }
     if (paidOverViews) { toast('Paid views cannot be more than views', 'error'); return; }
+    if (missingPostDate) { toast('Enter the video post date before saving its views', 'error'); return; }
     setBusy(true);
     try {
       const patch = {
@@ -263,15 +267,20 @@ export function PerformanceCard({ e, videos, ads, canEdit, session, onSaved, pla
               recovered later, and every ratio on the deal depends on it. Enter it above.
             </div>
           )}
+          {missingPostDate && (
+            <div style={{ marginTop: 8, fontSize: 13, color: 'var(--state-error-fg)' }}>
+              Enter the video post date. Views count in the month the video went live.
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12, flexWrap: 'wrap' }}>
             {Number(current.seq) !== 1 && (
               <button onClick={removeTake} disabled={busy}
                 style={{ ...ghostBtn, marginRight: 'auto', color: 'var(--state-error-fg)', border: '1px solid rgba(255,123,123,.3)' }}>Remove video #{current.seq}</button>
             )}
             <button onClick={() => setEditing(false)} className="ig-ghost-btn" style={ghostBtn}>Cancel</button>
-            <button onClick={saveTake} disabled={busy || missingRequired.length > 0 || paidOverViews}
-              title={missingRequired.length > 0 ? `${requiredLabels.join(', ')} is required` : paidOverViews ? 'Paid views cannot be more than views' : undefined}
-              style={{ ...primaryBtn, cursor: (busy || missingRequired.length > 0 || paidOverViews) ? 'not-allowed' : 'pointer', opacity: (busy || missingRequired.length > 0 || paidOverViews) ? 0.5 : 1 }}>{busy ? 'Saving…' : `Save video #${current.seq}`}</button>
+            <button onClick={saveTake} disabled={busy || missingRequired.length > 0 || paidOverViews || missingPostDate}
+              title={missingRequired.length > 0 ? `${requiredLabels.join(', ')} is required` : paidOverViews ? 'Paid views cannot be more than views' : missingPostDate ? 'Enter the video post date' : undefined}
+              style={{ ...primaryBtn, cursor: (busy || missingRequired.length > 0 || paidOverViews || missingPostDate) ? 'not-allowed' : 'pointer', opacity: (busy || missingPostDate || missingRequired.length > 0 || paidOverViews) ? 0.5 : 1 }}>{busy ? 'Saving…' : `Save video #${current.seq}`}</button>
           </div>
         </div>
       )}
@@ -353,7 +362,9 @@ function DealTotals({ e, derived, unexplained, takes, canEdit, session, onSaved,
           {shownDeal.map(([k, label]) => (
             <KV key={k} label={label} value={value(e[k], (e.metric_gaps || {})[k], k === 'conversions_value')} />
           ))}
-          {e.actual_roas != null && <KV label="Actual ROAS" value={<span style={mono}>{Number(e.actual_roas).toFixed(2)}</span>} />}
+          {Number(e.total_cost) > 0 && e.conversions_value != null && (
+            <KV label="Sales per ₹1" value={<span style={mono}>₹{(Number(e.conversions_value) / Number(e.total_cost)).toFixed(2)}</span>} />
+          )}
         </>
       )}
 

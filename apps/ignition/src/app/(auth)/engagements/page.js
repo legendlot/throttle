@@ -11,6 +11,7 @@ import { STAGE_VALUES, STAGE_LABELS, STAGE_PALETTE } from '../../../lib/stages.j
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS } from '../../../lib/dealTypes.js';
 import { productLabel, titleish, productKey } from '../../../lib/productLabel.js';
 import { metricsCompleteness, organicViews } from '../../../lib/metrics.js';
+import { cpmCost, cpmStats, cpmLabel } from '../../../lib/cpm.js';
 import { useListScroll } from '../../../lib/useListScroll.js';
 
 // S369 — a deal can be Complete because a metric was EXPLAINED (a recorded metric_gaps reason)
@@ -293,7 +294,8 @@ export default function EngagementsPage() {
   // on the main dashboard, to view the total number of videos displayed and the total cost
   // when the filters are selected").
   const summary = useMemo(() => {
-    let cost = 0, views = 0, paid = 0, costOfViewed = 0, viewedDeals = 0, cancelled = 0;
+    let cost = 0, views = 0, paid = 0, viewedDeals = 0, cancelled = 0;
+    const cpmRows = [];
     for (const r of visible) {
       // Reann, 2026-08-27: a CANCELLED deal was called off before anything was spent, so its
       // money never happened and must not reach any total. DROPPED still counts — goods went
@@ -306,10 +308,12 @@ export default function EngagementsPage() {
       const v = organicViews(r.views, r.paid_views) ?? 0;
       views += v;
       paid += Number(r.paid_views || 0);
-      // Blended CPM counts only deals that actually have views. Folding in the cost of deals
-      // that have not posted yet would inflate the cost-per-thousand of the ones that have.
-      if (v > 0) { costOfViewed += Number(r.total_cost || 0); viewedDeals += 1; }
+      // CPM counts only deals that actually have views. Folding in the cost of deals that have
+      // not posted yet would inflate the cost-per-thousand of the ones that have.
+      // A partner without money access has no cost on the row, so no CPM to show.
+      if (v > 0 && r.total_cost !== undefined) { cpmRows.push({ cost: cpmCost(r), views: v }); viewedDeals += 1; }
     }
+    const stats = cpmStats(cpmRows);
     return {
       // The deal COUNT stays honest to the rows on screen — a cancelled deal is still a row you
       // are looking at. Only the money and metrics leave it out, and the tile says so.
@@ -317,7 +321,8 @@ export default function EngagementsPage() {
       cost,
       views,
       paid,
-      cpm: views > 0 ? (costOfViewed / views) * 1000 : null,
+      cpm: stats.blended,
+      medianCpm: stats.median,
       viewedDeals,
       cancelled,
     };
@@ -510,9 +515,10 @@ export default function EngagementsPage() {
             hint={summary.paid ? `+ ${summary.paid.toLocaleString('en-IN')} paid (ads)` : undefined} />
           <Tile
             label="Blended CPM"
-            value={summary.cpm == null ? '—' : `₹${summary.cpm.toFixed(0)}`}
+            value={cpmLabel(summary.cpm)}
             hint={summary.cpm == null ? 'no views yet' : `over ${summary.viewedDeals} deal${summary.viewedDeals === 1 ? '' : 's'} with views`}
           />
+          <Tile label="Median CPM" value={cpmLabel(summary.medianCpm)} hint={summary.medianCpm == null ? 'no views yet' : 'the middle deal'} />
         </div>
       )}
 

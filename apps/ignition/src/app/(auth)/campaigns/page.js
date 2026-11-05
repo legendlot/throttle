@@ -1,4 +1,5 @@
 'use client';
+import { cpmLabel } from '../../../lib/cpm.js';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
@@ -139,10 +140,12 @@ export default function CampaignsPage() {
                   {/* No budget set → no bar and no remaining (null must never read as ₹0 / fully spent). */}
                   {pct != null && <ProgressBar pct={pct} color={tone} delay={300 + Math.min(i, 12) * 50} />}
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, paddingTop: 12, borderTop: '1px solid var(--row-divider)' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, paddingTop: 12, borderTop: '1px solid var(--row-divider)' }}>
                   <CardStat label="Posted" value={c.rollup?.posted_count ?? 0} sub={`/${c.rollup?.linked_count ?? 0}`} />
                   <CardStat label="Organic views" value={Number(c.rollup?.views || 0).toLocaleString('en-IN')} />
                   <CardStat label="Orders" value={Number(c.rollup?.orders || 0).toLocaleString('en-IN')} />
+                  <CardStat label="Blended CPM" value={cpmLabel(c.rollup?.blended_cpm)} />
+                  <CardStat label="Median CPM" value={cpmLabel(c.rollup?.median_cpm)} />
                 </div>
               </Card>
             );
@@ -205,6 +208,7 @@ function SpendVsBudget({ rows }) {
             <th style={th}>Campaign</th><th style={thR}>Budget</th><th style={thR}>Spend</th>
             <th style={thR}>Δ</th><th style={thR}>Videos</th><th style={thR}>Posted</th>
             <th style={thR}>Organic views</th><th style={thR}>Orders</th>
+            <th style={thR}>Blended CPM</th><th style={thR}>Median CPM</th>
           </tr></thead>
           <tbody>
             {rows.map(c => {
@@ -227,6 +231,8 @@ function SpendVsBudget({ rows }) {
                     {Number(c.rollup?.paid_views) > 0 && <div style={{ fontSize: 10, color: 'var(--text-3)', fontWeight: 400 }}>+ {Number(c.rollup.paid_views).toLocaleString('en-IN')} paid</div>}
                   </td>
                   <td style={tdR}>{Number(c.rollup?.orders || 0).toLocaleString('en-IN')}</td>
+                  <td style={tdR}>{cpmLabel(c.rollup?.blended_cpm)}</td>
+                  <td style={tdR}>{cpmLabel(c.rollup?.median_cpm)}</td>
                 </tr>
               );
             })}
@@ -244,6 +250,8 @@ function SpendVsBudget({ rows }) {
                 {totals.paid > 0 && <div style={{ fontSize: 10, color: 'var(--text-3)', fontWeight: 400 }}>+ {totals.paid.toLocaleString('en-IN')} paid</div>}
               </td>
               <td style={tdR}>{totals.orders.toLocaleString('en-IN')}</td>
+              <td style={tdR}>—</td>
+              <td style={tdR}>—</td>
             </tr>
           </tbody>
         </table>

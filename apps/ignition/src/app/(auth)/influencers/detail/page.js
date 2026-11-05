@@ -1,4 +1,5 @@
 'use client';
+import { cpmCost } from '../../../../lib/cpm.js';
 import { useEffect, useMemo, useState, Fragment } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { ArrowLeft, ExternalLink, Trash2, Plus, ChevronDown } from 'lucide-react';
@@ -173,7 +174,7 @@ function InfluencerDetailPageBody() {
       cost += Number(e.total_cost || 0);
       const v = organicViews(e.views, e.paid_views) ?? 0;
       views += v;
-      if (v > 0) costOfViewed += Number(e.total_cost || 0);
+      if (v > 0) costOfViewed += cpmCost(e);
     }
     const breakdown = Object.entries(byStage)
       .sort((a, b) => b[1] - a[1])

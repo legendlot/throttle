@@ -1,4 +1,5 @@
 'use client';
+import { cpmLabel } from '../../../lib/cpm.js';
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
@@ -192,6 +193,12 @@ export default function DashboardPage() {
         {/* Organic = views − paid (S373) — getKpis returns it that way; paid (ads) rides as the hint. */}
         <Tile label="Organic views" value={views.toLocaleString('en-IN')} size={28} hover
           hint={paid > 0 ? `+ ${paid.toLocaleString('en-IN')} paid (ads)` : undefined} style={{ borderRadius: 'var(--r-card)', padding: 18 }} />
+        {kpis.cpm && (
+          <>
+            <Tile label="Blended CPM" value={cpmLabel(kpis.cpm[m]?.blended)} size={28} hint="all time, deals with views" style={{ borderRadius: 'var(--r-card)', padding: 18 }} />
+            <Tile label="Median CPM" value={cpmLabel(kpis.cpm[m]?.median)} size={28} hint="the middle deal" style={{ borderRadius: 'var(--r-card)', padding: 18 }} />
+          </>
+        )}
         <Tile label="Live (done)" value={live.toLocaleString('en-IN')} color="var(--state-success-fg)" size={28} hover
           style={{ borderRadius: 'var(--r-card)', padding: 18 }} />
         {monthRow !== undefined && (hasTarget ? (
@@ -213,7 +220,7 @@ export default function DashboardPage() {
           <Tile label="Budget consumed" value={inr(ugc.budget_consumed)} color="var(--accent)" />
           <Tile label="UGC likes" value={n0(ugc.likes).toLocaleString('en-IN')} />
           <Tile label="Orders" value={n0(ugc.orders).toLocaleString('en-IN')} />
-          <Tile label="Conv. value" value={inr(ugc.conversions_value)} />
+          <Tile label="Sales (coupon, net)" value={inr(ugc.conversions_value)} />
         </div>
       )}
       {m === 'all' && (

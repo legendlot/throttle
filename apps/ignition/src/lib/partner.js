@@ -38,7 +38,7 @@ export function watermarkDataUrl(text) {
 
 // Admin → Users: the per-role switches setIgnitionRolePermission accepts (worker PARTNER_TOGGLES).
 export const PARTNER_TOGGLE_LABELS = [
-  { key: 'partner_money',           label: 'Money',            hint: 'Fees, costs, CPM, ROAS, spend' },
+  { key: 'partner_money',           label: 'Money',            hint: 'Fees, costs, CPM, sales per ₹1, spend' },
   { key: 'partner_contacts',        label: 'Contacts',         hint: 'Phone, email, address, AWB / tracking' },
   { key: 'partner_campaigns',       label: 'Campaigns',        hint: 'Campaign list + detail' },
   { key: 'partner_all_influencers', label: 'All influencers',  hint: 'Beyond the Roster — every influencer AND every deal at any stage (incl. proposed/planning)' },
