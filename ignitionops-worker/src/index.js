@@ -1497,7 +1497,27 @@ async function getIgnitionUsers(_url, auth, env) {
   if (!userIds.length) return ok({ users: [] });
   const ur = await sbStore(
     `/rest/v1/users_profile?active=eq.true&id=in.(${userIds.join(',')})&select=id,full_name&order=full_name.asc`, env);
-  return ok({ users: (ur.ok ? ur.data || [] : []).filter(u => u.full_name) });
+  const users = (ur.ok ? ur.data || [] : []).filter(u => u.full_name);
+  // Owner picker = the influencer team, not everyone with an Ignition login (Reann #11: 27 names,
+  // the Jarvis bot included). "The team" = in the Podium department AND holding an Ignition role, so
+  // a joiner needs a role before they can own a deal; nothing here changes for them.
+  const headers = { 'Accept-Profile': 'podium' };
+  const dr = await sb(`/rest/v1/departments?name=eq.${encodeURIComponent(OWNER_DEPARTMENT)}&active=is.true&select=id`, env, { headers });
+  const deptIds = (dr.ok ? dr.data || [] : []).map(d => d.id);
+  const er = deptIds.length
+    ? await sb(`/rest/v1/employees?department_id=in.(${deptIds.join(',')})&status=eq.active&select=auth_user_id`, env, { headers })
+    : { ok: false };
+  return ok({ users: ownerOptions(users, er.ok ? (er.data || []).map(e => e.auth_user_id) : null) });
+}
+
+// Fails OPEN to everyone with Ignition access: the owner is now required, so an empty picker (a
+// Podium read that failed, or a renamed department) would stop anyone creating a deal.
+const OWNER_DEPARTMENT = 'Influencer';
+export function ownerOptions(users, teamUserIds) {
+  if (!teamUserIds) return users;
+  const team = new Set(teamUserIds.filter(Boolean));
+  const picked = users.filter(u => team.has(u.id));
+  return picked.length ? picked : users;
 }
 
 // Dashboard Pipeline card (Pit Control redesign W1). Pure, so the bucket split is testable.
@@ -2702,6 +2722,7 @@ async function createEngagement(body, auth, env) {
   if (!body.influencer_id) return err('influencer_id required', 400);
   if (!body.engagement_type) return err('engagement_type required', 400);
   if (!body.deal_type) return err('deal_type required', 400);
+  if (!body.poc_user_id) return err('Pick an owner for this deal', 400);   // Reann #11
 
   const eno = await mintEngagementNo(env);
   if (!eno) return err('failed_to_mint_engagement_no', 500);
@@ -2813,6 +2834,9 @@ async function updateEngagement(body, auth, env) {
   const patch = pickPatch(body, ENGAGEMENT_FIELDS);
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
+  // Reann #11: an owner can be changed, never removed. Old deals with none stay as they are until
+  // someone picks one, because this only refuses a patch that clears the field.
+  if ('poc_user_id' in patch && !patch.poc_user_id) return err('A deal must have an owner', 400);
   // Refuse, never strip: a patch that names a locked field is rejected WHOLE and the error names
   // the fields. Silently dropping them would read as "saved" while nothing changed. A patch with
   // no locked field (Performance totals, logistics, POC…) skips the read entirely.
@@ -2828,6 +2852,7 @@ async function updateEngagement(body, auth, env) {
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   await mirrorDealVideoFields(env, body.engagement_id, patch);
   await recomputeCpm(env, body.engagement_id);   // views/costs may have changed (B13)
+  if (patch.poc_user_id) await writeHistory(env, body.engagement_id, 'owner_change', null, null, patch.poc_name || null, auth.userId);
   return ok(r.data?.[0]);
 }
 

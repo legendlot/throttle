@@ -165,7 +165,7 @@ export default function NewEngagementPage() {
               </button>
             </div>
           </DealField>
-          <DealField label="POC">
+          <DealField label="Owner *">
             <PocSelect
               value={form.poc_user_id}
               onChange={({ poc_user_id, poc_name }) => setForm(f => ({ ...f, poc_user_id, poc_name }))}

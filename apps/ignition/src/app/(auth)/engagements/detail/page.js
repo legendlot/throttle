@@ -13,6 +13,7 @@ import { PipelineCard } from './components/PipelineCard.js';
 import { ProductsCard } from './components/ProductsCard.js';
 import { DealTermsCard } from './components/DealTermsCard.js';
 import { CostsCard } from './components/CostsCard.js';
+import { OwnerCard } from './components/OwnerCard.js';
 import { PostLiveCard } from './components/PostLiveCard.js';
 import { PerformanceCard } from './components/PerformanceCard.js';
 import { CodesCard } from './components/CodesCard.js';
@@ -22,7 +23,6 @@ import { InfluencerCard } from './components/InfluencerCard.js';
 import { LogisticsCard } from './components/LogisticsCard.js';
 import { NotesCard } from './components/NotesCard.js';
 import { HistoryCard } from './components/HistoryCard.js';
-import { Card, KV } from './components/shared.js';
 
 // Keyed by the record id: global search (⌘K) can move from one record to another on this same route,
 // and Next keeps the page mounted across a ?id= change — without the key, open edit forms, typed
@@ -203,9 +203,7 @@ function EngagementDetailPageBody() {
           onSaved={reload}
         />}
 
-        {!partner && <Card title="POC">
-          <KV label="Assigned to" value={e.poc_name || '—'} />
-        </Card>}
+        {!partner && <OwnerCard e={e} canEdit={canManage} session={session} onSaved={reload} />}
 
         {seeMoney && <CostsCard e={e} canEdit={canManage} locked={locked} session={session} onSaved={reload} />}
 

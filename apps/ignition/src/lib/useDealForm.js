@@ -37,6 +37,7 @@ export function useDealForm({ session, active = true, presetInfluencer = null, i
   /** Returns a user-facing reason the deal can't be created yet, or null. */
   function problem() {
     if (!selected) return 'Pick an influencer first';
+    if (!form.poc_user_id) return 'Pick an owner for this deal';
     // Every product line must resolve to a real catalogue product (2026-09-04). The button is
     // disabled too — this is the guard that holds if a blur lands in the same tick as the click.
     if (!productsValid || !linesAreValid(lines)) return 'Pick a product from the list for every line';

@@ -87,7 +87,7 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
             <input type="number" min="0" max="100" step="0.1" value={form.affiliate_pct}
               onChange={e => setField('affiliate_pct', e.target.value)} placeholder="e.g. 10" style={ctlMono} />
           </DealField>
-          <DealField label="POC">
+          <DealField label="Owner *">
             <PocSelect
               value={form.poc_user_id}
               onChange={({ poc_user_id, poc_name }) => setForm(f => ({ ...f, poc_user_id, poc_name }))}
