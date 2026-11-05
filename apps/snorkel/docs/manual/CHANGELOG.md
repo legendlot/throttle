@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.24.0] - 2026-11-05
+### Added
+- PO Requests: **Edit request** for the requester (pending, no PO started); **Download PO** in the Linked Purchase Order panel (requester and PO-access users, not for a cancelled PO); procurement note that saving a PO after the request was edited asks for a reload.
+
 ## [1.23.0] - 2026-10-06
 ### Added
 - Sales Orders: order-date filter (presets + custom range, applies to table and all exports); Total PO value and Total fulfilled value tiles (confirmed orders only); Export + lines gains Order Fulfilment and Line Status columns.

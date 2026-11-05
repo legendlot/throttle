@@ -25,8 +25,13 @@
 <ul>
   <li><strong>Make PO from request</strong> <span class="role proc">Procurement</span> &mdash; starts a new purchase order with the request shown alongside. If the request has item lines, they prefill the PO&rsquo;s lines automatically (see New Purchase Order); otherwise copy the details across by hand.</li>
   <li><strong>Reject</strong> <span class="role proc">Procurement</span> &mdash; declines the request; a reason is required and is shown back to the requester.</li>
+  <li><strong>Edit request</strong> <span class="role req">Requester</span> &mdash; shown to the person who filed it while the request is pending and procurement has not started a PO from it. It opens the same form; saving updates the request. If procurement has already started a PO, the screen says so and you must ask procurement to change it.</li>
   <li><strong>Cancel request</strong> &mdash; only the person who filed it can withdraw their own pending request.</li>
 </ul>
+
+<h2 class="sec">The linked purchase order</h2>
+<p>Once a PO has been raised, the detail screen shows a Linked Purchase Order panel. <strong>Download PO</strong> is offered there to the person who filed the request and to anyone with PO access. It opens the PO&rsquo;s print view; choose <strong>Save as PDF</strong> there. It is not offered for a cancelled PO.</p>
+<p><span class="role proc">Procurement</span> If the request is edited while the PO form is open, saving the PO says the request changed and asks you to reload the page.</p>
 
 <h2 class="sec">Reading a request&rsquo;s items</h2>
 <p>Any request filed with item lines shows an <strong>Items</strong> table on its detail screen: part code (or &ldquo;new item&rdquo; if none was picked), description, quantity, unit, estimated price, HSN, GST and a line total, with a subtotal, estimated tax and estimated total beneath it. A warning banner names how many lines have no tax rate resolved, so procurement knows which to confirm before turning the request into a PO. These prices are the requester&rsquo;s estimate, not a quote.</p>
