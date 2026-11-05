@@ -91,7 +91,7 @@ export function ContractCard({ e, contract, canManage, canAdmin, session, onSave
           {c.needs_payment && c.bank?.received && <button type="button" onClick={allowBank} disabled={busy} className="ig-ghost-btn" style={miniBtn}>Allow bank details update</button>}
         </div>
       )}
-      {sendOpen && <SendModal e={e} accepted={c.accepted} session={session} onClose={() => setSendOpen(false)} onSent={() => { setSendOpen(false); onSaved?.(); }} />}
+      {sendOpen && <SendModal e={e} accepted={c.resend_clears_acceptance} session={session} onClose={() => setSendOpen(false)} onSent={() => { setSendOpen(false); onSaved?.(); }} />}
       {handOpen && <HandModal e={e} session={session} onClose={() => setHandOpen(false)} onDone={() => { setHandOpen(false); onSaved?.(); }} />}
     </Card>
   );

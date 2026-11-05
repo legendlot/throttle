@@ -169,10 +169,52 @@ test('the first publish exempts deals already past Planning, a re-publish does n
   assert.equal(writes(calls, /engagements/).length, 0);
 });
 
-test('nothing is published if the exemption fails', async () => {
-  const calls = db([['GET', /contract_settings/, 200, [{ dos_and_donts: 'd', terms: 't', published_at: null }]], ['PATCH', /engagements/, 500, {}]]);
+test('if the exemption fails the publish is undone', async () => {
+  const words = { dos_and_donts: 'd', terms: 't', published_at: null };
+  const calls = db([['GET', /contract_settings/, 200, [words]], ['PATCH', /engagements/, 500, {}], ['PATCH', /contract_settings/, 200, [words]]]);
   assert.equal((await publishContractSettings({}, auth, env())).status, 500);
-  assert.equal(writes(calls, /contract_settings/).length, 0);
+  const w = writes(calls, /contract_settings/);
+  assert.equal(w.at(-1).body.published_at, null);
+});
+
+test('two publishers: only the one who wins the guarded write exempts deals', async () => {
+  const words = { dos_and_donts: 'd', terms: 't', published_at: null };
+  const calls = db([['GET', /contract_settings/, 200, [words]], ['PATCH', /published_at=is\.null/, 200, []], ['PATCH', /contract_settings/, 200, [words]]]);
+  assert.equal((await publishContractSettings({}, auth, env())).status, 200);
+  assert.equal(writes(calls, /engagements/).length, 0);
+});
+
+test('a failed mail cannot overwrite an acceptance made during the send', async () => {
+  const calls = db(sendRoutes([]));
+  assert.equal((await sendDealContract(SEND, auth, env({ ok: false, error: 'no' }, 502))).status, 502);
+  // The stuck-send cleanup also writes `failed`, on other rows. This is the write to this send's row.
+  const failed = writes(calls, /deal_contracts\?id=eq/).filter(c => c.body?.status === 'failed');
+  assert.equal(failed.length, 1);
+  assert.match(failed[0].at, /status=eq\.sending/);
+});
+
+test('a send only supersedes older rows, so a newer send keeps its link', async () => {
+  const routes = sendRoutes([]);
+  routes[3] = ['POST', /deal_contracts/, 201, [{ id: CID, created_at: '2026-11-05T10:00:00Z' }]];
+  const calls = db(routes);
+  await sendDealContract(SEND, auth, env());
+  const [sup] = writes(calls, /deal_contracts/).filter(c => c.body?.status === 'superseded');
+  assert.match(sup.at, /created_at=lt\.2026-11-05T10:00:00Z/);
+});
+
+test('a by-hand record with no link is not treated as an acceptance to clear', async () => {
+  const calls = db(sendRoutes([]));
+  await sendDealContract(SEND, auth, env());
+  const read = calls.find(c => c.method === 'GET' && /status=in\.\(accepted,accepted_by_hand\)/.test(c.at));
+  assert.match(read.at, /token_hash=not\.is\.null/);
+});
+
+test('invoice-done looks for the one file and caps on what is recorded', async () => {
+  const many = Array.from({ length: 20 }, (_, i) => ({ path: `${EID}/${i}.pdf` }));
+  const calls = db([tokenRoute(row()), ['POST', /object\/list/, 200, [{ name: 'new.pdf' }]], ['GET', /deal_invoices\?engagement_id=[^&]+&select=path/, 200, many]]);
+  const res = await post('/public/contract/invoice-done', { path: `${EID}/new.pdf`, file_name: 'new.pdf', mime: 'application/pdf' });
+  assert.equal(res.status, 409);
+  assert.equal(calls.find(c => /object\/list/.test(c.at)).body.search, 'new.pdf');
 });
 
 test('a deal type cannot be changed after creation', async () => {

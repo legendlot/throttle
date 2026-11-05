@@ -3686,6 +3686,7 @@ async function syncCouponRedemptions(body, auth, env) {
 async function syncAllActiveCoupons(env) {
   if (!shopifyConfigured(env)) return { synced: 0, failed: 0 };
   const r = await sb(`/rest/v1/coupon_codes?status=eq.active&select=*&order=kind.asc,last_synced_at.asc.nullsfirst&limit=5000`, env);
+  if (!r.ok) throw new Error(`could not read active codes: ${r.status}`);
   const all = r.data || [];
   let synced = 0;
   for (let i = 0; i < all.length; i += COUPON_SYNC_BATCH) {
@@ -4182,10 +4183,10 @@ const STUCK_SENDING_MS = 5 * 60 * 1000;
 const BANK_REOPEN_MS = 7 * 24 * 3600 * 1000;
 const MAX_INVOICES_PER_DEAL = 20;
 // File names under this deal's folder in the invoice bucket. undefined = the read failed.
-async function invoiceObjectNames(env, engagementId) {
+async function invoiceObjectNames(env, engagementId, search) {
   const r = await storageFetch(`/object/list/${INVOICE_BUCKET}`, env, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prefix: `${engagementId}/`, limit: MAX_INVOICES_PER_DEAL + 1, offset: 0 }),
+    body: JSON.stringify({ prefix: `${engagementId}/`, limit: MAX_INVOICES_PER_DEAL + 1, offset: 0, ...(search ? { search } : {}) }),
   });
   return r.ok && Array.isArray(r.data) ? r.data.map(o => o.name) : undefined;
 }
@@ -4212,25 +4213,34 @@ async function contractLockRefusal(env, engagementId, deal, toStage) {
 // What the deal page's card shows. Never token_hash, never full bank details. A failed send does
 // not hide an older live or accepted row, it rides along as `last_failed`.
 async function loadContractSummary(env, eng) {
-  const COLS = 'id,status,to_email,subject,body,gmail_message_id,error,sent_by,sent_at,accepted_at,by_hand_reason,by_hand_by,created_at';
+  const COLS = 'id,status,to_email,subject,body,gmail_message_id,error,sent_by,sent_at,accepted_at,by_hand_reason,by_hand_by,created_at,token_hash';
   const [cr, br, ir, settings] = await Promise.all([
     sb(`/rest/v1/deal_contracts?engagement_id=eq.${eng.id}&select=${COLS}&order=created_at.desc&limit=20`, env),
     eng.influencer_id
-      ? sb(`/rest/v1/influencer_bank_details?influencer_id=eq.${eng.influencer_id}&select=account_number,ifsc,bank_name,submitted_at,editable_until&limit=1`, env)
+      ? sb(`/rest/v1/influencer_bank_details?influencer_id=eq.${eng.influencer_id}&select=account_number,ifsc,bank_name,submitted_at,editable_until,reopen_contract_id&limit=1`, env)
       : Promise.resolve({ ok: true, data: [] }),
     sb(`/rest/v1/deal_invoices?engagement_id=eq.${eng.id}&select=id,file_name,mime,uploaded_at&order=uploaded_at.desc&limit=${MAX_INVOICES_PER_DEAL}`, env),
     readContractSettings(env),
   ]);
   if (!cr.ok || !br.ok || !ir.ok || settings === undefined) return null;
-  const rows = cr.data || [];
-  const current = rows.find(c => !['failed', 'superseded'].includes(c.status)) || null;
+  // token_hash stops here: only whether a row has a link leaves the worker.
+  const rows = (cr.data || []).map(({ token_hash, ...c }) => ({ ...c, has_link: !!token_hash }));
+  const isAccepted = c => ['accepted', 'accepted_by_hand'].includes(c.status);
+  // Any accepted row opens the lock, so an accepted row is what the card shows, even with a newer
+  // send waiting (an old link accepted mid-resend, or a link sent after a by-hand record).
+  const current = rows.find(isAccepted) || rows.find(c => !['failed', 'superseded'].includes(c.status)) || null;
   const bankRow = br.data?.[0] || null;
+  // A reopen only counts if the link it names can still use it.
+  const reopenLive = !!bankRow?.reopen_contract_id && rows.some(c => c.id === bankRow.reopen_contract_id && isAccepted(c) && c.has_link);
   return {
     ...(current || { status: null }),
-    accepted: !!current && ['accepted', 'accepted_by_hand'].includes(current.status),
+    accepted: !!current && isAccepted(current),
+    // A by-hand record with no link stands when a link goes out: it is how a paid deal recorded by
+    // hand still collects bank details. Only an acceptance through a link is cleared by a resend.
+    resend_clears_acceptance: rows.some(c => isAccepted(c) && c.has_link),
     last_failed: rows[0]?.status === 'failed' ? { error: rows[0].error, created_at: rows[0].created_at } : null,
     bank: maskBank(bankRow),
-    bank_editable_until: bankRow?.editable_until || null,
+    bank_editable_until: reopenLive ? bankRow.editable_until : null,
     invoices: ir.data || [],
     settings_published: wordingPublished(settings),
     required: eng.contract_required !== false,
@@ -4278,19 +4288,29 @@ export async function publishContractSettings(body, auth, env) {
   if (!textOrNull(cur?.dos_and_donts) || !textOrNull(cur?.terms)) {
     return err("Add dos and don'ts and terms, and save them, before publishing.", 422);
   }
+  const at = nowIso();
+  const stamp = JSON.stringify({ published_at: at, published_by: auth.userId, updated_at: at, updated_by: auth.userId });
   // First publish only: a deal that moved past Planning while the lock was off has already moved on,
   // and must not be stuck at its next stage. Same rule as the migration's backfill. Not on a
-  // re-publish, or moving a deal to On hold first would become a way round the lock.
+  // re-publish, or moving a deal to On hold first would become a way round the lock. The guarded
+  // write means only one publisher can win this, even if two press Publish together.
   if (!cur?.published_at) {
-    const ex = await sb(`/rest/v1/engagements?contract_required=eq.true&stage=not.in.(proposed,planning)`, env, {
-      method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ contract_required: false }),
-    });
-    if (!ex.ok) return err('Could not prepare existing deals, so nothing was published. Please try again.', 500);
+    const claim = await sb(`/rest/v1/contract_settings?id=eq.1&published_at=is.null`, env, { method: 'PATCH', body: stamp });
+    if (!claim.ok) return err('db_error', 500);
+    if (claim.data?.[0]) {
+      const ex = await sb(`/rest/v1/engagements?contract_required=eq.true&stage=not.in.(proposed,planning)`, env, {
+        method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ contract_required: false }),
+      });
+      if (!ex.ok) {
+        await sb(`/rest/v1/contract_settings?id=eq.1`, env, {
+          method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ published_at: null, published_by: null }),
+        });
+        return err('Could not prepare existing deals, so nothing was published. Please try again.', 500);
+      }
+      return ok({ settings: claim.data[0], published: true });
+    }
   }
-  const at = nowIso();
-  const r = await sb(`/rest/v1/contract_settings?id=eq.1`, env, {
-    method: 'PATCH', body: JSON.stringify({ published_at: at, published_by: auth.userId, updated_at: at, updated_by: auth.userId }),
-  });
+  const r = await sb(`/rest/v1/contract_settings?id=eq.1`, env, { method: 'PATCH', body: stamp });
   if (!r.ok || !r.data?.[0]) return err('db_error', 500);
   return ok({ settings: r.data[0], published: true });
 }
@@ -4340,7 +4360,7 @@ export async function sendDealContract(body, auth, env) {
   if (blockers.length) return err(blockers.join(' '), 422);
 
   // Accepted already: a resend clears that, so it is a stated decision with a reason on the record.
-  const ar = await sb(`/rest/v1/deal_contracts?engagement_id=eq.${eid}&status=in.(accepted,accepted_by_hand)&select=id&limit=1`, env);
+  const ar = await sb(`/rest/v1/deal_contracts?engagement_id=eq.${eid}&status=in.(accepted,accepted_by_hand)&token_hash=not.is.null&select=id&limit=1`, env);
   if (!ar.ok) return err('db_error', 500);
   const wasAccepted = (ar.data || []).length > 0;
   const forceNote = String(body.note ?? '').trim();
@@ -4380,7 +4400,7 @@ export async function sendDealContract(body, auth, env) {
   // A stated resend clears the earlier acceptance BEFORE the mail, and a failure stops the send: the
   // other order could mail a new contract while the old acceptance still opened Shipping.
   if (wasAccepted) {
-    const cleared = await sb(`/rest/v1/deal_contracts?engagement_id=eq.${eid}&id=neq.${row.id}&status=in.(accepted,accepted_by_hand)`, env, {
+    const cleared = await sb(`/rest/v1/deal_contracts?engagement_id=eq.${eid}&id=neq.${row.id}&status=in.(accepted,accepted_by_hand)&token_hash=not.is.null`, env, {
       method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'superseded' }),
     });
     if (!cleared.ok) {
@@ -4396,7 +4416,8 @@ export async function sendDealContract(body, auth, env) {
   const br = await csopsBridge(env, 'sendPartnerEmail', { to, subject, text: mail.text, html: mail.html });
   if (!br.ok) {
     const why = String(br.raw?.error || `The mail service returned ${br.status}`).slice(0, 500);
-    await sb(`/rest/v1/deal_contracts?id=eq.${row.id}`, env, {
+    // Guarded like the success path: a by-hand record made during the send must survive a failed mail.
+    await sb(`/rest/v1/deal_contracts?id=eq.${row.id}&status=eq.sending`, env, {
       method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'failed', error: why }),
     });
     return err(`The contract did not go out: ${why}${wasAccepted ? ' The earlier acceptance has been cleared, so please send it again.' : ''}`, 502);
@@ -4414,7 +4435,8 @@ export async function sendDealContract(body, auth, env) {
   if (!stamp.ok || !sentPatch.ok) console.error('[sendDealContract] mail sent but row not marked', row.id);
   // Older links die now, on a send that really happened. Waiting ones only: an acceptance that
   // landed after the check above is a real acceptance, and only a stated resend clears those.
-  const older = await sb(`/rest/v1/deal_contracts?engagement_id=eq.${eid}&id=neq.${row.id}&status=in.(sending,sent)`, env, {
+  // Older only: a send that started after this one must keep its link.
+  const older = await sb(`/rest/v1/deal_contracts?engagement_id=eq.${eid}&id=neq.${row.id}&status=in.(sending,sent)&created_at=lt.${encodeURIComponent(row.created_at)}`, env, {
     method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'superseded' }),
   });
   await writeHistory(env, deal.id, wasAccepted ? 'contract_resent' : 'contract_sent', null, null,
@@ -4617,10 +4639,14 @@ async function handlePublicContract(request, url, env) {
 
   if (sub === '/public/contract/invoice-done') {
     if (!invoicePathOk(body.path, c.engagement_id)) return err('That upload does not belong to this deal.', 403);
-    const names = await invoiceObjectNames(env, c.engagement_id);
+    const objectName = String(body.path).slice(String(c.engagement_id).length + 1);
+    const names = await invoiceObjectNames(env, c.engagement_id, objectName);
     if (!names) throw new Error('invoice list failed');
-    if (!names.includes(String(body.path).slice(String(c.engagement_id).length + 1))) {
-      return err('We could not find that upload. Please try again.', 422);
+    if (!names.includes(objectName)) return err('We could not find that upload. Please try again.', 422);
+    const recorded = await sb(`/rest/v1/deal_invoices?engagement_id=eq.${c.engagement_id}&select=path&limit=${MAX_INVOICES_PER_DEAL}`, env);
+    if (!recorded.ok) throw new Error('invoice read failed');
+    if ((recorded.data || []).length >= MAX_INVOICES_PER_DEAL && !recorded.data.some(i => i.path === body.path)) {
+      return err('That is the most invoices we can take here. Please reply to our email.', 409);
     }
     const r = await sb(`/rest/v1/deal_invoices?on_conflict=path`, env, {
       method: 'POST', prefer: 'resolution=ignore-duplicates,return=minimal',
