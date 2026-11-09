@@ -3,6 +3,11 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.20.0] - 2026-11-09
+### Changed
+- Contract: no longer needs an expected post date and no longer prints it; when to post is covered by the published terms. A deal marked Fixed date (launch; video deals only) prints "Post date (fixed)" and Send is blocked until the date is set.
+- Deal Terms: post date and the Fixed date (launch) tick are editable after creation; the read view says fixed or expected; a change adds a Post date change line to History. New deal page and window have the tick.
+
 ## [1.19.0] - 2026-11-09
 ### Added
 - Paying the Creator chapter: the Payments card (Agreed, Raised, Paid), raising an advance, balance (at Live only) or full payment, adding the creator's invoice, every request state, Cancel and Retry, Paid details (date, gross amount, UTR, TDS), the Slack message on held or rejected, the fee cap, and the hand-log "+ Add" hiding once bank details are on file.
