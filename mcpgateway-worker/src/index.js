@@ -17,7 +17,7 @@ import {
   parseCidrs, ipAllowed, parseList, redirectAllowed, registrationAllowed,
   decodeJwtPayload, checkGoogleClaims, gateDecision, originAllowed, hmacHex, timingSafeEqualHex, esc, refusalText, refusalResponse, RPC_REFUSED, sha256Hex, ttlFor,
 } from './checks.js';
-import { parseRange, odoSalesSummary } from './odo.js';
+import { toolsFor, findTool } from './tools/index.js';
 
 const SCOPES = ['mcp:read'];
 const SERVER_INFO = { name: 'lot-data', version: '0.2.0' };
@@ -337,31 +337,6 @@ async function revoke(request, env, ctx) {
 }
 
 // ---------------------------------------------------------------- /mcp (JSON-RPC over Streamable HTTP, stateless)
-// `system` = the mcp_access grant a tool needs (null = everyone signed in). tools/list shows a person
-// only the tools their grants cover; tools/call re-checks.
-const TOOLS = [{
-  system: null,
-  name: 'whoami',
-  title: 'Who am I connected as',
-  description: 'Shows which LOT account this Claude is connected as and which LOT systems that account has been granted. Returns no business data.',
-  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-  annotations: { readOnlyHint: true, openWorldHint: false },
-}, {
-  system: 'odo',
-  name: 'odo_sales_summary',
-  title: 'Odo sales summary',
-  description: 'LOT sales from Odo for a date range (IST calendar days, inclusive; default today; at most 92 days): net revenue ex-GST (THE figure to quote), gross sales incl. GST, units, and net/gross per sales channel. Same calculation as the Odo dashboard. No costs, margins or P&L.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      from: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'First day, YYYY-MM-DD (IST). Default: today.' },
-      to: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Last day, YYYY-MM-DD (IST), inclusive. Default: same as from.' },
-    },
-    additionalProperties: false,
-  },
-  annotations: { readOnlyHint: true, openWorldHint: false },
-}];
-const toolsFor = systems => TOOLS.filter(t => t.system === null || (systems || []).includes(t.system)).map(({ system, ...t }) => t);
 
 const rpcResult = (id, result, status = 200) => Response.json({ jsonrpc: '2.0', id, result }, { status });
 const rpcError = (id, code, message, status = 200) => Response.json({ jsonrpc: '2.0', id: id ?? null, error: { code, message } }, { status });
@@ -417,29 +392,22 @@ const mcpHandler = {
         });
       }
       case 'ping': return rpcResult(id, {});
-      case 'tools/list': return rpcResult(id, { tools: toolsFor(gate.systems) });
+      case 'tools/list': return rpcResult(id, { tools: toolsFor(gate) });
       case 'tools/call': {
         const name = msg.params && msg.params.name;
-        const tool = TOOLS.find(t => t.name === name);
+        const tool = findTool(name);
         if (!tool) return rpcError(id, -32602, 'Unknown tool');
-        if (tool.system && !gate.systems.includes(tool.system)) {
-          ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate.email, tool: name, ip, status: 403, detail: `no ${tool.system} grant` }));
-          return refuse(msg, refusalText(`no ${tool.system} grant`));
-        }
+        const denied = (reason, status, detail) => {
+          ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate.email, tool: name, ip, status, detail: detail || reason }));
+          return refuse(msg, refusalText(reason));
+        };
+        if (tool.system && !gate.systems.includes(tool.system)) return denied(`no ${tool.system} grant`, 403);
+        const roleReason = tool.deny ? tool.deny(gate) : null;
+        if (roleReason) return denied(roleReason, 403, `${roleReason} (role pre-check)`);
         const args = (msg.params && msg.params.arguments) || {};
-        let range = null;
-        if (name === 'odo_sales_summary') {
-          range = parseRange(args);
-          if (!range.ok) return rpcResult(id, { isError: true, content: [{ type: 'text', text: range.error }] });
-          if (gate.odo_sales_view !== true) {
-            ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate.email, tool: name, ip, status: 403, detail: 'no Odo sales_view role' }));
-            return refuse(msg, refusalText('odo denied'));
-          }
-          if (!ctx.props.sbAccess) {
-            ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate.email, tool: name, ip, status: 401, detail: 'no LOT session in token' }));
-            return refuse(msg, refusalText('session expired'));
-          }
-        }
+        const parsed = tool.parse(args);
+        if (!parsed.ok) return rpcResult(id, { isError: true, content: [{ type: 'text', text: parsed.error }] });
+        if (tool.needsSession && !ctx.props.sbAccess) return denied('session expired', 401, 'no LOT session in token');
         if (d.overLimit) {
           ctx.waitUntil(audit(env, { event: 'rate_limited', user_id: userId, email: gate.email, tool: name, ip, status: 429 }));
           ctx.waitUntil(alertOnce(env, `rate:${userId}`, `⚠️ LOT MCP: ${gate.email} hit the ${gate.calls_per_hour}/hour call limit.`));
@@ -450,18 +418,15 @@ const mcpHandler = {
           ctx.waitUntil(alertOnce(env, 'audit-down', '🚨 LOT MCP: audit writes are failing; every tool call is being refused (fail closed).'));
           return refuse(msg, refusalText('unreachable'));
         }
-        let out;
-        if (name === 'odo_sales_summary') {
-          const r = await odoSalesSummary(env, ctx.props.sbAccess, range);
-          if (!r.ok) {
-            ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate.email, tool: name, ip, status: r.reason === 'unreachable' ? 503 : 403, detail: `odoops: ${r.reason}` }));
-            return refuse(msg, refusalText(r.reason));
-          }
-          out = r.data;
-        } else {
-          out = { connected_as: gate.email, name: gate.full_name, systems_granted: gate.systems };
+        let r;
+        try { r = await tool.run({ env, sbAccess: ctx.props.sbAccess, gate, input: parsed.value }); }
+        catch (e) { console.error('[tool]', name, e && e.message); r = { ok: false, reason: 'unreachable' }; }
+        if (!r.ok && r.userError) return rpcResult(id, { isError: true, content: [{ type: 'text', text: `The LOT app rejected that request: ${r.userError}` }] });
+        if (!r.ok) {
+          ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate.email, tool: name, ip, status: r.reason === 'unreachable' ? 503 : 403, detail: `worker: ${r.reason}` }));
+          return refuse(msg, refusalText(r.reason));
         }
-        return rpcResult(id, { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }], structuredContent: out });
+        return rpcResult(id, { content: [{ type: 'text', text: JSON.stringify(r.data, null, 2) }], structuredContent: r.data });
       }
       default: return rpcError(id, -32601, 'Method not found');
     }

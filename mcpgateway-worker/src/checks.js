@@ -116,6 +116,8 @@ const REFUSALS = {
   'unknown user': 'This connection is not linked to a LOT account. Disconnect the LOT connector and connect again with your @legendoftoys.com Google account.',
   'no odo grant': 'Your LOT access in Claude does not include Odo. Ask Afshaan if you need it.',
   'odo denied': 'Odo says your account does not have sales access (no Odo role, or it was removed). Ask Afshaan if you need it.',
+  'odo pnl denied': 'Odo P&L and product costs are only for Odo super admins.',
+  'worker denied': 'That LOT app says your account does not have permission for this. Ask Afshaan if you need it.',
   'session expired': 'Odo could not confirm your LOT login just now. Try once more in a minute; if it says this again, refresh the connection: in Claude, open Settings, then Connectors, then LOT, press Disconnect, then Connect again.',
 };
 const UNREACHABLE = 'LOT systems could not be reached just now. Try again in a few minutes; if it keeps happening, tell Afshaan.';

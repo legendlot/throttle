@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRange, todayIST, shapeSalesSummary, MAX_RANGE_DAYS } from '../src/odo.js';
+import { parseRange, todayIST, shapeSalesSummary, MAX_RANGE_DAYS } from '../src/tools/odo.js';
 import { hybridHeadline } from '../../apps/odo/src/lib/segregation.js';
 
 const NOW = Date.parse('2026-11-09T20:00:00Z'); // 01:30 IST on 10 Nov
@@ -51,7 +51,7 @@ test('summary: empty day is zeros, not an error', () => {
   assert.deepEqual(r.by_channel, []);
 });
 
-import { odoSalesSummary } from '../src/odo.js';
+import { odoSalesSummary } from '../src/tools/odo.js';
 import { ttlFor } from '../src/checks.js';
 const fakeEnv = (handler) => { const seen = []; return { seen, ODOOPS: { fetch: async (url, init) => { seen.push({ url, auth: init.headers.Authorization }); return handler(new URL(url)); } } }; };
 const json = (status, body) => new Response(JSON.stringify(body), { status });
@@ -70,12 +70,13 @@ test('odoops call: only the two read actions, as the person, dates only', async 
 test('odoops call: status mapping fails closed', async () => {
   const cases = [
     [() => json(401, { ok: false }), 'session expired'],
-    [() => json(403, { ok: false }), 'odo denied'],
+    [() => json(403, { ok: false }), 'worker denied'],
     [() => json(502, { ok: false }), 'unreachable'],
     [() => new Response('not json', { status: 200 }), 'unreachable'],
     [() => json(200, { ok: true }), 'unreachable'],
     [() => json(200, { ok: true, data: null }), 'unreachable'],
     [() => json(200, { ok: true, data: { rows: 'x' } }), 'unreachable'],
+    [() => json(500, { ok: false, error: 'boom' }), 'unreachable'],
     [() => { throw new Error('down'); }, 'unreachable'],
   ];
   for (const [h, reason] of cases) {
