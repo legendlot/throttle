@@ -8,7 +8,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { Lock, ListChecks } from 'lucide-react';
+import { Lock, ListChecks, Sparkles } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { TaskView } from '../../../components/task/TaskView.js';
 import { domTaskOrder } from '../../../components/task/taskViewMode.js';
@@ -25,6 +25,7 @@ import { TaskListView } from '../../../components/tasks/TaskListView.js';
 import { NewTaskCapture } from '../../../components/tasks/GroupHeader.js';
 import { CaptureProvider } from '../../../components/tasks/QuickCapture.js';
 import { GridTriage } from '../../../components/tasks/GridTriage.js';
+import { StaleSweep } from '../../../components/tasks/StaleSweep.js';
 import { BulkBar } from '../../../components/tasks/BulkBar.js';
 import { ROW_SELECTOR } from '../../../components/tasks/TaskRow.js';
 import { useTaskViewState, visibleColumns, COLUMNS } from '../../../components/tasks/useTaskViewState.js';
@@ -41,8 +42,16 @@ const GROUP_FIELD = { person: 'owner_employee_id', department: 'department_id', 
 // IST calendar date 'YYYY-MM-DD' (My tasks "Today & overdue" boundary).
 const istDateStr = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 
+// `?lens=stale` (F4 "Clean up") is its own screen — a separate component so the board's
+// hooks and loads don't run under it.
 export default function TasksPage() {
-  const { session } = useAuth();
+  const search = useSearchParams();
+  if (search.get('lens') === 'stale' && !search.get('space') && !search.get('program')) return <StaleSweep />;
+  return <TasksBoard />;
+}
+
+function TasksBoard() {
+  const { session, perms } = useAuth();
   const { showToast } = useToast();
   // shellModalOpen: a layout-owned modal (sidebar ⋯ SpaceSettings, shortcuts sheet,
   // New program) is up — page hotkeys must not fire behind it.
@@ -173,6 +182,18 @@ export default function TasksPage() {
     finally { setLoading(false); }
   }, [session, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, mine, showToast]);
   useEffect(() => { load(); }, [load]);
+
+  // F4: My tasks' "Clean up N" — my stale count (count_only: no hydration). Re-read after
+  // each load so it follows the list. view_all keeps the button at 0: Everyone lives there.
+  const canViewAll = !!(perms?.docket_view_all || perms?.docket_admin);
+  const [staleCount, setStaleCount] = useState(0);
+  useEffect(() => {
+    if (!session || !mineMode) return undefined;
+    let live = true;
+    docketopsGet('getStaleTasks', { count_only: '1' }, session)
+      .then(r => { if (live) setStaleCount(r?.total || 0); }).catch(() => {});
+    return () => { live = false; };
+  }, [session, mineMode, tasks]);
 
   // fetchSpaces only re-reads; refreshSpaces also tells the shell (sidebar) to re-read.
   // The listener below calls fetchSpaces, never refreshSpaces, so a page-side change
@@ -645,7 +666,13 @@ export default function TasksPage() {
       {/* Views bar + toolbar (P2/P3). The location (Space / Program) is the top-bar breadcrumb. */}
       <ViewsBar viewMode={viewMode} onView={chooseView} allowBoard={!mineMode} onCopyLink={copyLink}
         space={currentSpace} onSpaceDashboard={() => currentSpace && router.push('/dashboard?space=' + currentSpace.id)}
-        onSpaceSettings={() => setSpaceSettingsOpen(true)} />
+        onSpaceSettings={() => setSpaceSettingsOpen(true)}>
+        {mineMode && (staleCount > 0 || canViewAll) && (
+          <Button variant="neutral" size="sm" icon={Sparkles} onClick={() => router.push('/tasks?lens=stale')}>
+            Clean up{staleCount > 0 ? ` ${staleCount}` : ''}
+          </Button>
+        )}
+      </ViewsBar>
       <TasksToolbar
         showGroup={!mineMode} groupBy={groupBy} setGroupBy={setGroupBy} groupOpts={GROUP_OPTS} groupMenu={groupMenu} setGroupMenu={setGroupMenu}
         showSubtasks={!mineMode && !boardMode && parentIds.length > 0} subMenu={subMenu} setSubMenu={setSubMenu}

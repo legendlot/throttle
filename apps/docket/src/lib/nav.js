@@ -49,6 +49,10 @@ export function routeModel(pathname, search, { spaces = [], programs = [] } = {}
       return { path, spaceId, activeKey: `/tasks?space=${spaceId}`, railKey: 'tasks', showCount: true,
         crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: space?.name || 'Space', lock: space ? !!space.is_private : true }] };
     }
+    if (lens === 'stale') {
+      return { path, spaceId, activeKey: '/tasks?lens=mine', railKey: 'mine', showCount: true,
+        crumbs: [{ label: 'My tasks', href: '/tasks?lens=mine' }, { label: 'Clean up' }] };
+    }
     if (lens === 'mine') {
       return { path, spaceId, activeKey: '/tasks?lens=mine', railKey: 'mine', showCount: true, crumbs: [{ label: 'My tasks' }] };
     }

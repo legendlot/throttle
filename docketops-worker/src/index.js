@@ -56,7 +56,8 @@ function sbProfile(profile) {
     });
     const text = await res.text();
     let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-    return { ok: res.ok, status: res.status, data };
+    // contentRange: "0-0/280" when the caller asked for Prefer: count=exact.
+    return { ok: res.ok, status: res.status, data, contentRange: res.headers.get('content-range') };
   };
 }
 const sbDocket = sbProfile('docket');
@@ -66,6 +67,19 @@ const sbPodium = sbProfile('podium');
 const enc = encodeURIComponent;
 function inList(arr) { return `(${arr.map(enc).join(',')})`; }
 function uniq(arr) { return [...new Set(arr.filter(Boolean))]; }
+// An `in.(…)` read over many ids, chunked: a few hundred inline UUIDs overflow the URL
+// (a 414 whose text body then breaks a caller's .forEach). `build(list)` → the path for one
+// chunk; same { ok, status, data } back, data merged. A failing chunk is returned as is.
+async function sbIn(sb, ids, build, env, size = 150) {
+  if (!ids.length) return { ok: true, status: 200, data: [] };
+  const parts = [];
+  for (let i = 0; i < ids.length; i += size) parts.push(ids.slice(i, i + size));
+  if (parts.length === 1) return sb(build(inList(parts[0])), env);
+  const res = await Promise.all(parts.map(p => sb(build(inList(p)), env)));
+  const bad = res.find(r => !r.ok);
+  if (bad) return bad;
+  return { ok: true, status: 200, data: res.flatMap(r => (Array.isArray(r.data) ? r.data : [])) };
+}
 
 // ── Auth ────────────────────────────────────────────────────────────────────
 async function verifyJWT(authHeader, env) {
@@ -505,19 +519,20 @@ async function hydrateTasks(rows, auth, env) {
   const deptIds = uniq(rows.map(t => t.department_id));
   const taskIds = uniq(rows.map(t => t.id));
   const userIds = uniq(rows.map(t => t.created_by_user_id));
+  // Every id list goes through sbIn (≤150 per request) — a big list would overflow the URL.
   const [deptRes, childRes, collabRes, docRes, commRes, creatorRes] = await Promise.all([
-    deptIds.length ? sbPodium(`/rest/v1/departments?id=in.${inList(deptIds)}&select=id,name`, env) : { data: [] },
-    sbDocket(`/rest/v1/tasks?parent_task_id=in.${inList(taskIds)}&select=parent_task_id,status`, env),
-    sbDocket(`/rest/v1/task_collaborators?task_id=in.${inList(taskIds)}&select=task_id,employee_id`, env),
-    sbDocket(`/rest/v1/task_documents?task_id=in.${inList(taskIds)}&select=task_id`, env),
-    sbDocket(`/rest/v1/task_comments?task_id=in.${inList(taskIds)}&deleted_at=is.null&select=task_id`, env),
-    userIds.length ? sbStore(`/rest/v1/users_profile?id=in.${inList(userIds)}&select=id,full_name`, env) : { data: [] },
+    sbIn(sbPodium, deptIds, l => `/rest/v1/departments?id=in.${l}&select=id,name`, env),
+    sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?parent_task_id=in.${l}&select=parent_task_id,status`, env),
+    sbIn(sbDocket, taskIds, l => `/rest/v1/task_collaborators?task_id=in.${l}&select=task_id,employee_id`, env),
+    sbIn(sbDocket, taskIds, l => `/rest/v1/task_documents?task_id=in.${l}&select=task_id`, env),
+    sbIn(sbDocket, taskIds, l => `/rest/v1/task_comments?task_id=in.${l}&deleted_at=is.null&select=task_id`, env),
+    sbIn(sbStore, userIds, l => `/rest/v1/users_profile?id=in.${l}&select=id,full_name`, env),
   ]);
   // Employee names: owners + every collaborator (collaborator ids are only known after collabRes).
   const empIds = uniq([...rows.map(t => t.owner_employee_id), ...(collabRes.data || []).map(c => c.employee_id)]);
-  const empRes = empIds.length ? await sbPodium(`/rest/v1/employees?id=in.${inList(empIds)}&select=id,full_name`, env) : { data: [] };
+  const empRes = await sbIn(sbPodium, empIds, l => `/rest/v1/employees?id=in.${l}&select=id,full_name`, env);
   const progIds = uniq(rows.map(t => t.program_id));
-  const progRes = progIds.length ? await sbDocket(`/rest/v1/programs?id=in.${inList(progIds)}&select=id,name,color`, env) : { data: [] };
+  const progRes = await sbIn(sbDocket, progIds, l => `/rest/v1/programs?id=in.${l}&select=id,name,color`, env);
   const progMap = {}; (progRes.data || []).forEach(p => { progMap[p.id] = p; });
   const deptName = {}; (deptRes.data || []).forEach(d => { deptName[d.id] = d.name; });
   const empName  = {}; (empRes.data  || []).forEach(e => { empName[e.id] = e.full_name; });
@@ -641,6 +656,108 @@ async function getMyTasks(url, auth, env) {
     return { ...t, _relation };
   });
   return ok(rows);
+}
+
+// F4 "Clean up" — the stale-work sweep. Pull-only (decisions §S309: nothing is sent).
+// Stale = open (not done/abandoned), non-recurring, unarchived, top-level OR sub-task, and
+// (a) effective deadline coalesce(revised_deadline, deadline) older than now − 30d, or
+// (b) updated_at older than now − 60d. Each row carries stale_reasons ⊆ ['overdue30','untouched60'].
+//
+// Visibility — every row returned passes getTask's own gate, so this can't show anything
+// the task itself wouldn't open for:
+//   · space: ALWAYS the caller's accessible spaces (General + owned/member private, non-
+//     archived) — view_all included, exactly RULE-DOCKET-003 (a private space needs
+//     membership, admins too). Narrower than list_my_tasks, whose p_view_all skips it.
+//   · default scope: owner_employee_id = the caller (own tasks → canSeeTask in General).
+//   · scope=all: docket_view_all / admin only (else 403) — every owner, optional owner=<id>.
+// ?count_only=1 → { total } (select=id + count=exact, no hydration) for My tasks' "Clean up N".
+// "Last touched" = updated_at, or created_at for a task never edited since creation
+// (updated_at is NULL there — those are the longest-sitting ones, so they must count).
+const STALE_OVERDUE_DAYS = 30, STALE_UNTOUCHED_DAYS = 60, STALE_CAP = 300, STALE_PAGE = 1000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+async function getStaleTasks(url, auth, env) {
+  const q = url.searchParams;
+  const scopeAll = q.get('scope') === 'all';
+  if (scopeAll && !canViewAll(auth)) return err('forbidden', 403);
+  const owner = scopeAll ? (q.get('owner') || null) : auth.employeeId;
+  if (owner && !UUID_RE.test(owner)) return err('invalid owner', 400);
+  const countOnly = q.get('count_only') === '1';
+  const empty = countOnly ? { total: 0 } : { tasks: [], total: 0, truncated: false };
+  if (!scopeAll && !auth.employeeId) return ok(empty);     // no employee row → owns nothing
+  const spaces = await accessibleSpaces(auth, env);
+  if (!spaces.length) return ok(empty);
+
+  const now = Date.now();
+  const cutOverdue = new Date(now - STALE_OVERDUE_DAYS * 864e5).toISOString();
+  const cutUntouched = new Date(now - STALE_UNTOUCHED_DAYS * 864e5).toISOString();
+  const filters = [
+    'status=not.in.(done,abandoned)', 'is_recurring=eq.false', 'archived_at=is.null',
+    `space_id=in.${inList(spaces.map(s => s.id))}`,
+    `or=(revised_deadline.lt.${cutOverdue},and(revised_deadline.is.null,deadline.lt.${cutOverdue}),` +
+      `updated_at.lt.${cutUntouched},and(updated_at.is.null,created_at.lt.${cutUntouched}))`,
+  ];
+  if (owner) filters.push(`owner_employee_id=eq.${enc(owner)}`);
+  const base = `/rest/v1/tasks?${filters.join('&')}`;
+
+  if (countOnly) {
+    const c = await sbDocket(`${base}&select=id&limit=1`, env, { prefer: 'count=exact' });
+    if (!c.ok) return err('db_error: ' + JSON.stringify(c.data), 500);
+    const total = Number(String(c.contentRange || '').split('/')[1]);
+    return ok({ total: Number.isFinite(total) ? total : (c.data || []).length });
+  }
+  // Read every match, a page at a time (PostgREST's max-rows would silently clip one big
+  // read), then sort here — PostgREST can't order by coalesce(revised_deadline, deadline).
+  const all = [];
+  // Advance by what actually came back (PostgREST's max-rows may be below STALE_PAGE) and
+  // stop only on an empty page; order=id keeps offset paging stable. 50 pages = runaway guard.
+  let exactTotal = null;
+  for (let off = 0, n = 0; n < 50; n++) {
+    const r = await sbDocket(`${base}&select=*&order=id.asc&limit=${STALE_PAGE}&offset=${off}`, env,
+      off === 0 ? { prefer: 'count=exact' } : undefined);
+    if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
+    if (off === 0) { const t = Number(String(r.contentRange || '').split('/')[1]); if (Number.isFinite(t)) exactTotal = t; }
+    const page = Array.isArray(r.data) ? r.data : [];
+    if (!page.length) break;
+    all.push(...page);
+    off += page.length;
+    if (exactTotal != null && all.length >= exactTotal) break;
+  }
+
+  // Times as numbers: PostgREST's '+00:00' / microsecond strings don't string-compare with toISOString's 'Z'.
+  const ms = (v) => (v ? Date.parse(v) : NaN);
+  const eff = (t) => ms(t.revised_deadline || t.deadline);
+  const touched = (t) => ms(t.updated_at || t.created_at);
+  all.sort((a, b) => {
+    const ea = eff(a), eb = eff(b);
+    if (!isNaN(ea) && !isNaN(eb) && ea !== eb) return ea - eb;
+    if (isNaN(ea) !== isNaN(eb)) return isNaN(ea) ? 1 : -1;   // no deadline last
+    return (touched(a) || 0) - (touched(b) || 0);              // then longest untouched first
+  });
+  const truncated = all.length > STALE_CAP;
+  let rows = await hydrateTasks(all.slice(0, STALE_CAP), auth, env);
+  const sName = {}; spaces.forEach(s => { sName[s.id] = s.name; });
+  const parentIds = uniq(rows.map(t => t.parent_task_id));
+  // Parent crumb only where the caller could open the parent itself (canSeeTask's gate,
+  // batched: the collaborator check is one in.() read, not one per parent). Otherwise null.
+  const pr = await sbIn(sbDocket, parentIds, l => `/rest/v1/tasks?id=in.${l}&select=*`, env);
+  const parents = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
+  const quick = (p) => canViewAll(auth) || canEditTask(auth, p) || (auth.departmentId && p.department_id === auth.departmentId);
+  const needCollab = parents.filter(p => !quick(p)).map(p => p.id);
+  const collabOk = new Set();
+  if (needCollab.length && auth.employeeId) {
+    const c = await sbIn(sbDocket, needCollab, l => `/rest/v1/task_collaborators?task_id=in.${l}&employee_id=eq.${enc(auth.employeeId)}&select=task_id`, env);
+    ((c.ok && c.data) || []).forEach(x => collabOk.add(x.task_id));
+  }
+  const parent = {};
+  parents.forEach(p => { if (quick(p) || collabOk.has(p.id)) parent[p.id] = { id: p.id, task_no: p.task_no, title: p.title }; });
+  const odCut = Date.parse(cutOverdue), unCut = Date.parse(cutUntouched);
+  rows = rows.map(t => {
+    const stale_reasons = [];
+    if (eff(t) < odCut) stale_reasons.push('overdue30');        // NaN (no deadline) → false
+    if (touched(t) < unCut) stale_reasons.push('untouched60');
+    return { ...t, space_name: sName[t.space_id] || null, parent: parent[t.parent_task_id] || null, stale_reasons };
+  });
+  return ok({ tasks: rows, total: exactTotal ?? all.length, truncated: truncated || (exactTotal != null && exactTotal > all.length) });
 }
 
 async function getTask(url, auth, env) {
@@ -2028,7 +2145,7 @@ async function deleteScratchNote(body, auth, env) {
 // ════════════════════════════════════════════════════════════════════════════
 const GET_ACTIONS = {
   getMe, getDepartments, getEmployees,
-  getTasks, getProgramTasks, getMyTasks, getTask, getDashboard,
+  getTasks, getProgramTasks, getMyTasks, getStaleTasks, getTask, getDashboard,
   getChecklist, getChecklistTemplates, getChecklistTemplate, getChecklistOversight,
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,

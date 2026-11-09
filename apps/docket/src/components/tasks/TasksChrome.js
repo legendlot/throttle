@@ -15,7 +15,7 @@ import { STATUSES, PRIORITIES } from '../../lib/tasks.js';
 import { Button, IconButton, SplitButton, SegmentedTabs, Tooltip, Popover, Menu, MenuItem, MenuLabel, MenuSeparator, Kbd } from '../ui/index.js';
 
 /* ---------------- Views bar ---------------- */
-export function ViewsBar({ viewMode, onView, allowBoard, onCopyLink, space, onSpaceDashboard, onSpaceSettings }) {
+export function ViewsBar({ viewMode, onView, allowBoard, onCopyLink, space, onSpaceDashboard, onSpaceSettings, children }) {
   const tabs = [{ value: 'list', label: 'List', icon: List }];
   if (allowBoard) tabs.push({ value: 'board', label: 'Board', icon: Columns3 });
   return (
@@ -25,6 +25,7 @@ export function ViewsBar({ viewMode, onView, allowBoard, onCopyLink, space, onSp
         <Button variant="ghost" size="sm" icon={Plus} aria-disabled="true" className="tk-views-add" onClick={(e) => e.preventDefault()}>View</Button>
       </Tooltip>
       <span className="tk-spacer" />
+      {children /* page-specific actions (My tasks: "Clean up N") */}
       <IconButton icon={Link2} size="sm" label="Copy link" onClick={onCopyLink} />
       {space?.is_private && <IconButton icon={LayoutDashboard} size="sm" label="Space dashboard" onClick={onSpaceDashboard} />}
       {space?.is_private && space.is_owner && <IconButton icon={Settings2} size="sm" label="Space settings" onClick={onSpaceSettings} />}

@@ -1566,3 +1566,59 @@ textarea.tk-input { resize: vertical; line-height: 1.55; }
   .gt-quick, .gt-abandon textarea { font-size: 16px; }
   .gt-main-actions .ui-kbd { display: none; }
 }
+
+/* ---------------- Clean up (F4) — components/tasks/StaleSweep.js ----------------
+   /tasks?lens=stale. Rows are a flex line: checkbox · title+meta · age · actions.
+   ≤767px: rows stack (age under the title), the actions fold into a ⋯ menu; nothing
+   is wider than the viewport at 375. */
+.ss { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px 96px; font-family: var(--f-ui); min-width: 0; }
+.ss-head { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px 14px; }
+.ss-titles { flex: 1 1 260px; min-width: 0; }
+.ss-title-h { margin: 0; font-size: 16px; font-weight: 600; color: var(--text-1); }
+.ss-sub { margin: 2px 0 0; font-size: 12.5px; color: var(--text-3); }
+.ss-scope { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.ss-note { margin: 0; font-size: 12px; color: var(--text-4); }
+.ss-groups { display: flex; flex-direction: column; gap: 18px; transition: opacity var(--base) var(--ease); }
+.ss-group { display: flex; flex-direction: column; min-width: 0; }
+.ss-ghead { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; padding: 4px 8px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+.ss-count { font-family: var(--f-mono); font-weight: 500; color: var(--text-4); }
+.ss-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px; border-top: 1px solid var(--border); min-width: 0; }
+.ss-row.is-selected { background: var(--surface-2); }
+.ss-cb { flex-shrink: 0; width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+.ss-cb-pad { flex-shrink: 0; width: 15px; }
+.ss-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ss-title { align-self: flex-start; max-width: 100%; padding: 0; text-align: left; font-size: 13.5px; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-title:hover { color: var(--accent); }
+.ss-title:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--r-sm); }
+.ss-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; font-size: 11.5px; color: var(--text-4); min-width: 0; }
+.ss-id { font-family: var(--f-mono); }
+.ss-crumb { display: inline-flex; align-items: center; gap: 3px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); }
+.ss-age { flex-shrink: 0; display: inline-flex; flex-direction: column; align-items: flex-end; min-width: 84px; font-size: 12.5px; font-weight: 500; }
+.ss-age.over { color: var(--overdue); }
+.ss-age.untouched { color: var(--text-3); }
+.ss-age small { font-size: 11px; font-weight: 400; color: var(--text-4); }
+.ss-acts { flex-shrink: 0; display: flex; align-items: center; }
+.ss-acts-desk { display: flex; gap: 2px; }
+.ss-acts-more { display: none; }
+.ss-ro { flex-shrink: 0; min-width: 120px; text-align: right; font-size: 12px; font-style: italic; color: var(--text-4); }
+.ui-pop.ss-pop { padding: 10px; }
+.ss-form { display: flex; flex-direction: column; gap: 8px; }
+.ss-form-h { font-size: 13px; font-weight: 600; color: var(--text-1); }
+.ss-form-note { margin: 0; font-size: 12px; line-height: 1.45; color: var(--text-3); }
+.ss-input { width: 100%; min-height: 30px; padding: 6px 10px; border: none; border-radius: var(--r-ctl); background: var(--surface-2); box-shadow: var(--ring); font: inherit; font-size: 13px; color: var(--text-1); outline: none; resize: vertical; }
+.ss-input:focus { box-shadow: var(--focus-ring); }
+.ss-bulk { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px; border-radius: var(--r-card); background: var(--surface-3); box-shadow: var(--elev-2); }
+.ss-bulk-n { font-size: 12.5px; font-weight: 600; color: var(--text-1); margin-right: 4px; }
+.ss-bulk-reason { flex: 1 1 200px; min-width: 0; width: auto; }
+@media (max-width: 767px) {
+  .ss { padding: 10px 12px 96px; }
+  .ss-row { flex-wrap: wrap; align-items: flex-start; gap: 4px 10px; }
+  .ss-main { flex: 1 1 calc(100% - 70px); }
+  .ss-age { order: 3; flex-direction: row; align-items: baseline; gap: 6px; min-width: 0; margin-left: 25px; }
+  .ss-acts { order: 2; }
+  .ss-acts-desk { display: none; }
+  .ss-acts-more { display: inline-flex; }
+  .ss-ro { order: 4; min-width: 0; margin-left: 25px; text-align: left; }
+  .ss-crumb { max-width: 100%; }
+  .ss-input { font-size: 16px; }
+}
