@@ -38,6 +38,7 @@ function AuthLayoutInner({ children }) {
   const [spaces, setSpaces] = useState([]);
   const [programs, setPrograms] = useState([]);
   const [canViewDashboard, setCanViewDashboard] = useState(false);
+  const [myEmployeeId, setMyEmployeeId] = useState(null);   // getMe.employee_id (F2 capture toast)
   const [helpOpen, setHelpOpen] = useState(false);
   const [count, setCount] = useState(null);   // board task count, published by the tasks page
   const [settingsSpace, setSettingsSpace] = useState(null);   // sidebar ⋯ → SpaceSettings
@@ -70,6 +71,7 @@ function AuthLayoutInner({ children }) {
     docketopsGet('getMe', {}, session).then(me => {
       setSpaces(me?.spaces || []);
       setPrograms(me?.programs || []);
+      setMyEmployeeId(me?.employee_id || null);
       const can = !!me?.can_view_dashboard;
       setCanViewDashboard(can);
       // Remembered so the next load's mobile tab bar / rail don't flip Scratchpad → Dashboard.
@@ -177,7 +179,7 @@ function AuthLayoutInner({ children }) {
   const displayName = user?.full_name || user?.email || '';
   const isAdmin = !!perms?.docket_admin;
   // shellModalOpen: a layout-owned modal is up; pages fold it into their hotkey guards.
-  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
+  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
 
   return (
     <ChromeContext.Provider value={ctxValue}>

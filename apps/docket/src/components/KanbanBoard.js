@@ -17,6 +17,7 @@ import { Avatar, personColor } from './primitives.js';
 import { SETTABLE_STATUSES, STATUS_MAP } from '../lib/tasks.js';
 import { Pill, Menu, MenuItem, AvatarStack, Button } from './ui/index.js';
 import { PriorityFlag, DeadlineCell } from './tasks/TaskCells.js';
+import { useQuickCapture, CaptureChips, withHint, keepFocus, isSubmitKey } from './tasks/QuickCapture.js';
 
 const NONE = '__none__';
 const COLLAPSED_KEY = 'docket.board.collapsed';
@@ -218,7 +219,7 @@ export function KanbanBoard({ rows, axis, ctx }) {
                 ))}
                 {landAt === cards.length && <div className="kb-insert" aria-hidden />}
                 {cards.length === 0 && !isOver && <div className="kb-empty">No tasks</div>}
-                {ctx.createIn && <ColumnAdd col={col} create={(title) => ctx.createIn(title, col.value)} />}
+                {ctx.createIn && <ColumnAdd col={col} create={(title, extras) => ctx.createIn(title, col.value, extras)} />}
               </div>
             </section>
           );
@@ -252,15 +253,16 @@ function ColumnHead({ col, count, statusAxis, onCollapse, onAdd }) {
 // column's value (status included in the create since F1 — same path as the list's group foot).
 function ColumnAdd({ col, create }) {
   const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState('');
+  const qc = useQuickCapture();      // F2: same quick-add tokens + Owner/Deadline/Priority chips as the list
   const [saving, setSaving] = useState(false);
   const ref = useRef(null);
   useEffect(() => { if (open) ref.current?.focus(); }, [open]);
+  const has = !!qc.title.trim();
   async function add() {
-    const t = title.trim();
-    if (!t || saving) return;
+    if (!has || saving) return;
+    const { title, extras } = qc.result();
     setSaving(true);
-    try { const ok = await create(t); if (ok !== false) setTitle(''); }
+    try { const ok = await create(title, extras); if (ok !== false) qc.reset(); }
     finally { setSaving(false); setTimeout(() => ref.current?.focus(), 0); }
   }
   if (!open) {
@@ -271,17 +273,18 @@ function ColumnAdd({ col, create }) {
     );
   }
   return (
-    <div className="kb-capture">
-      <textarea ref={ref} rows={2} value={title} disabled={saving} placeholder="Task name" aria-label={`New task in ${col.label}`}
-        onChange={e => setTitle(e.target.value)}
+    <div className="kb-capture qc-host qc-on">
+      <textarea ref={ref} rows={2} value={qc.title} disabled={saving} placeholder={withHint('Task name')} aria-label={`New task in ${col.label}`}
+        onChange={e => qc.setTitle(e.target.value)}
         onKeyDown={e => {
-          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); add(); }
-          if (e.key === 'Escape') { e.preventDefault(); setTitle(''); setOpen(false); }
+          if (isSubmitKey(e) && !e.shiftKey) { e.preventDefault(); add(); }
+          if (e.key === 'Escape') { e.preventDefault(); qc.reset(); setOpen(false); }
         }}
-        onBlur={(e) => { if (!title.trim() && !e.currentTarget.parentElement.contains(e.relatedTarget)) setOpen(false); }} />
+        onBlur={(e) => { if (!qc.active && !e.currentTarget.parentElement.contains(e.relatedTarget)) setOpen(false); }} />
+      <CaptureChips qc={qc} disabled={saving} />
       <div className="kb-capture-acts">
-        <Button variant="ghost" size="sm" onClick={() => { setTitle(''); setOpen(false); }}>Cancel</Button>
-        <Button variant={title.trim() ? 'primary' : 'neutral'} size="sm" onClick={add} disabled={!title.trim()} loading={saving}>Add</Button>
+        <Button variant="ghost" size="sm" onMouseDown={keepFocus} onClick={() => { qc.reset(); setOpen(false); }}>Cancel</Button>
+        <Button variant={has ? 'primary' : 'neutral'} size="sm" onMouseDown={keepFocus} onClick={add} disabled={!has} loading={saving}>Add</Button>
       </div>
     </div>
   );

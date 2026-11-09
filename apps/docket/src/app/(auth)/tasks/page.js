@@ -23,6 +23,7 @@ import { useChrome } from '../../../lib/chrome.js';
 import { ViewsBar, TasksToolbar } from '../../../components/tasks/TasksChrome.js';
 import { TaskListView } from '../../../components/tasks/TaskListView.js';
 import { NewTaskCapture } from '../../../components/tasks/GroupHeader.js';
+import { CaptureProvider } from '../../../components/tasks/QuickCapture.js';
 import { BulkBar } from '../../../components/tasks/BulkBar.js';
 import { ROW_SELECTOR } from '../../../components/tasks/TaskRow.js';
 import { useTaskViewState, visibleColumns, COLUMNS } from '../../../components/tasks/useTaskViewState.js';
@@ -44,7 +45,7 @@ export default function TasksPage() {
   const { showToast } = useToast();
   // shellModalOpen: a layout-owned modal (sidebar ⋯ SpaceSettings, shortcuts sheet,
   // New program) is up — page hotkeys must not fire behind it.
-  const { setCount, shellModalOpen } = useChrome();
+  const { setCount, shellModalOpen, myEmployeeId } = useChrome();
   const router = useRouter();
   const search = useSearchParams();
 
@@ -111,6 +112,8 @@ export default function TasksPage() {
   const programOpts = useMemo(() => programs.map(p => ({ value: p.id, label: p.name })), [programs]);
   const programCellOpts = useMemo(() => [{ value: '', label: '— No program —' }, ...programOpts], [programOpts]);
   const opts = useMemo(() => ({ teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts }), [teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts]);
+  // F2 capture chips + @name tokens: the same people / options as the owner and priority cells.
+  const captureCtx = useMemo(() => ({ people: employees, ownerOpts: ownerCellOpts, prioOpts }), [employees, ownerCellOpts, prioOpts]);
 
   const currentSpace = useMemo(() => spaces.find(s => s.id === spaceId) || null, [spaces, spaceId]);
 
@@ -273,18 +276,35 @@ export default function TasksPage() {
   // Create a task from a group foot (replaces the P2 top capture bar; same create
   // bodies: space board → space_id, My tasks → assign_self, program → program_id +
   // the chosen space), with the group's value prefilled where the field maps.
-  async function createInGroup(title, field, value) {
+  // F2: `extras` {owner_employee_id, deadline, priority} come from the capture's quick-add
+  // tokens / chips and are merged OVER the group prefill — an explicit choice wins. On My
+  // tasks a chosen owner replaces assign_self.
+  async function createInGroup(title, field, value, extras) {
     const body = mineMode ? { title, assign_self: true }
       : inProgramMode ? { title, space_id: (programSpace || programDefaultSpace) || undefined, program_id: viewProgramId }
       : { title, space_id: spaceId || undefined };
     // A status group's value goes in the create itself (worker F1): one write, one history row.
     if (field && value && !(field === 'status' && value === 'abandoned')) body[field] = value;
+    const x = extras || {};
+    if (x.owner_employee_id) { body.owner_employee_id = x.owner_employee_id; delete body.assign_self; }
+    if (x.deadline) body.deadline = x.deadline;
+    if (x.priority) body.priority = x.priority;
     try {
       await docketopsPost('createTask', body, session);
       await load();
       if (inProgramMode && typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed')); // sidebar count
-      // Without an owner AND a deadline a new task lands in The Grid (RULE-DOCKET-001).
-      showToast(mineMode ? 'Added to your list' : inProgramMode ? 'Added to program — in The Grid until it has an owner and a deadline' : 'Captured to The Grid', 'success');
+      // The toast reads the FINAL owner. Without an owner AND a deadline a new task lands in The
+      // Grid (RULE-DOCKET-001) — say so only when one is still missing. assign_self with no
+      // employee record (getMe.employee_id null) means no owner.
+      const owner = body.owner_employee_id || (body.assign_self ? myEmployeeId : null) || null;
+      const mine = !!owner && owner === myEmployeeId;
+      const ownerName = owner && !mine ? (employees.find(e => e.id === owner)?.full_name || '').split(/\s+/)[0] : '';
+      const where = mineMode ? (mine ? 'Added to your list' : ownerName ? `Added — owned by ${ownerName}` : 'Added')
+        : inProgramMode ? 'Added to program' : 'Added';
+      const missing = !owner && !body.deadline ? 'an owner and a deadline' : !owner ? 'an owner' : !body.deadline ? 'a deadline' : '';
+      showToast(!missing ? where
+        : (!mineMode && !inProgramMode) ? 'Captured to The Grid'
+        : `${where} — in The Grid until it has ${missing}`, 'success');
       return true;
     } catch (e) { showToast(e.message || 'Create failed', 'error'); return false; }
   }
@@ -410,7 +430,7 @@ export default function TasksPage() {
   const listRows = useMemo(() => (separate ? [...boardRows, ...childRows].sort(sortFn) : boardRows), [separate, boardRows, childRows, sortFn]);
   const groups = useMemo(() => {
     // Through `live` so a memoised group never holds a stale create (program space picker).
-    const cap = (field, value) => (title) => live.current.createInGroup(title, field, value);
+    const cap = (field, value) => (title, extras) => live.current.createInGroup(title, field, value, extras);
     const knownPrograms = new Set(programs.map(p => p.id));
     if (mineMode) {
       return [
@@ -546,9 +566,9 @@ export default function TasksPage() {
   // never a program id that no longer resolves.
   const boardCtx = {
     ...gridCtx, showIds, cardSize, activeId: drawerId, drawerOpen: drawerId != null, shellModalOpen, sortKey,
-    createIn: (title, value) => {
+    createIn: (title, value, extras) => {
       const dead = kanbanAxis === 'program' && value && !programs.some(p => p.id === value);
-      return live.current.createInGroup(title, GROUP_FIELD[kanbanAxis], dead ? undefined : value);
+      return live.current.createInGroup(title, GROUP_FIELD[kanbanAxis], dead ? undefined : value, extras);
     },
   };
 
@@ -608,6 +628,7 @@ export default function TasksPage() {
   const anyQuery = !!(q || f.activeFilterCount);
 
   return (
+    <CaptureProvider value={captureCtx}>
     <div data-density={density}>
       {/* Views bar + toolbar (P2/P3). The location (Space / Program) is the top-bar breadcrumb. */}
       <ViewsBar viewMode={viewMode} onView={chooseView} allowBoard={!mineMode} onCopyLink={copyLink}
@@ -636,7 +657,7 @@ export default function TasksPage() {
 
       {/* The one un-prefilled capture ([data-create-primary]): hidden until + Task / + New / `c`
           reveal it, always open on an empty page. Same create body as the P2 quick capture. */}
-      <NewTaskCapture create={(t) => live.current.createInGroup(t)} alwaysOpen={isEmpty && !boardMode && !(loading && tasks.length === 0)}
+      <NewTaskCapture create={(t, x) => live.current.createInGroup(t, undefined, undefined, x)} alwaysOpen={isEmpty && !boardMode && !(loading && tasks.length === 0)}
         placeholder={inProgramMode ? "New task — it's tagged to this program" : 'New task'}>{programSpacePicker}</NewTaskCapture>
 
       {loading && tasks.length === 0 ? <Spinner /> : boardMode ? (
@@ -686,6 +707,7 @@ export default function TasksPage() {
           onArchived={() => { setSpaceSettingsOpen(false); refreshSpaces(); router.push('/tasks'); }} />
       )}
     </div>
+    </CaptureProvider>
   );
 }
 

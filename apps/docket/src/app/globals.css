@@ -506,9 +506,9 @@ body.tl-resizing { cursor: col-resize; user-select: none; }
 .tl-pop-form .tl-pop-actions { margin-top: 2px; }
 
 /* Group-foot capture (replaces the top capture bar) */
-.tl-foot { display: flex; align-items: center; gap: 8px; height: 32px; padding-left: 26px; border-bottom: 1px solid var(--border); }
+.tl-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-height: 32px; padding-left: 26px; border-bottom: 1px solid var(--border); }
 .tl-foot-plus { flex-shrink: 0; color: var(--text-4); }
-.tl-foot input { flex: 1; min-width: 0; height: 100%; background: none; border: none; outline: none; font-size: 13px; color: var(--text-1); }
+.tl-foot input { flex: 1; min-width: 0; height: 32px; background: none; border: none; outline: none; font-size: 13px; color: var(--text-1); }
 .tl-foot input::placeholder { color: var(--text-3); }
 .tl-foot:focus-within { background: var(--surface); }
 .tl-foot:focus-within .tl-foot-plus { color: var(--text-2); }
@@ -519,10 +519,27 @@ body.tl-resizing { cursor: col-resize; user-select: none; }
    (input still focusable, so + Task / c can reveal it) until focused or holding text. */
 .tl-new { display: flex; align-items: center; gap: 8px; height: 0; overflow: hidden; padding: 0 6px 0 10px; border: 1px solid transparent; border-radius: var(--r-md); }
 .tl-new:not(.open):not(:focus-within) > :not(input) { display: none; }
-.tl-new.open, .tl-new:focus-within { height: 36px; margin: 4px 0 6px; border-color: var(--border); background: var(--surface); }
+.tl-new.open, .tl-new:focus-within { height: auto; min-height: 36px; flex-wrap: wrap; row-gap: 4px; margin: 4px 0 6px; border-color: var(--border); background: var(--surface); }
 .tl-new:focus-within .tl-foot-plus { color: var(--text-2); }
-.tl-new input { flex: 1; min-width: 0; height: 100%; background: none; border: none; outline: none; font-size: 13px; color: var(--text-1); }
+.tl-new input { flex: 1; min-width: 0; height: 34px; background: none; border: none; outline: none; font-size: 13px; color: var(--text-1); }
 .tl-new input::placeholder { color: var(--text-3); }
+/* F2 capture chips (QuickCapture.js): Owner · Deadline · Priority. Shown while the capture is
+   focused or holds something (.qc-on); a token parsed from the title is tinted yellow. */
+.qc-chips { display: none; align-items: center; flex-wrap: wrap; gap: 4px; flex-shrink: 0; }
+.qc-host:focus-within .qc-chips, .qc-host.qc-on .qc-chips { display: inline-flex; }
+.qc-chip { display: inline-flex; align-items: center; height: 22px; border-radius: var(--r-full); box-shadow: var(--ring); color: var(--text-3); font-size: 12px; white-space: nowrap; }
+.qc-chip.set { background: var(--surface-2); color: var(--text-1); }
+.qc-chip.parsed { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
+.qc-chip-btn { display: inline-flex; align-items: center; gap: 4px; height: 100%; padding: 0 8px; border-radius: var(--r-full); color: inherit; }
+.qc-chip.set .qc-chip-btn { padding-right: 2px; }
+.qc-chip-btn:hover { color: var(--text-1); }
+.qc-chip-btn:focus-visible, .qc-chip-x:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.qc-chip-l { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.qc-chip-x { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 2px; border-radius: 50%; color: inherit; opacity: .7; }
+.qc-chip-x:hover { opacity: 1; background: var(--hover); }
+.ui-pop.qc-pop { z-index: 175; }
+.ui-pop.qc-pop-date { padding: 8px; }
+.kb-capture .qc-chips { display: flex; }
 /* Touch has no hover: the group header's ⋯ and + Add task are always shown. */
 @media (hover: none) { .tl-ghead-more, .tl-ghead-add { opacity: 1; } }
 
@@ -597,6 +614,10 @@ body.tl-resizing { cursor: col-resize; user-select: none; }
   .tl-row-acts { opacity: 1; }
   .tl-foot { padding-left: 4px; }
   .tl-new input { font-size: 16px; } /* iOS: no zoom on focus */
+  .tl-foot .qc-chips, .tl-new .qc-chips { order: 10; flex-basis: 100%; padding: 0 0 6px 22px; } /* chips wrap under the input */
+  .tl-foot input { font-size: 16px; }
+  .qc-chip-btn { padding: 0 10px; }
+  .qc-chip { height: 28px; }
   .tl-grid-body { padding-left: 0; }
   .gcard { flex-wrap: wrap; row-gap: 6px; padding-left: 8px; }
   .gcard .tl-sel { position: static; transform: none; display: none; }

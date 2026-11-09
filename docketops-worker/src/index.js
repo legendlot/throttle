@@ -1112,6 +1112,9 @@ async function createTaskCore(d, auth, env) {
   }
   await logHistory(env, task.id, auth.userId, 'created',
     { note: parentId ? 'sub-task' : null, ...(initStatus !== 'not_started' && !isRecurring ? { field: 'status', new: initStatus } : {}) });
+  // A deadline given at create is the immutable original (RULE-DOCKET-001) — log it like
+  // updateTask's first set, so the activity feed and "deadline_set" counts see it (F2 quick-add).
+  if (d.deadline && !isRecurring) await logHistory(env, task.id, auth.userId, 'deadline_set', { field: 'deadline', new: d.deadline });
   return ok({ id: task.id, task_no: task.task_no });
 }
 async function createTask(body, auth, env)    { return createTaskCore(body.data || body, auth, env); }
