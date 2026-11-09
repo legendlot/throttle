@@ -112,7 +112,7 @@ export function TaskProps({ task, canEdit, busy, edit, setEdit, refs, abandonMod
           <Trigger field="deadline" label="Deadline" {...{ refs, edit, setEdit, canEdit }}>
             {dl ? (
               <span className={'tv-dl ' + (dstate || '')}>
-                {fmtDateTime(dl)} · {relDeadline(dl)}
+                {fmtDateTime(dl)}{task.status === 'done' || task.status === 'abandoned' ? '' : ` · ${relDeadline(dl)}`}
                 {task.revised_deadline && <span className="tl-rev" title="Deadline revised">REV{revisions > 1 ? ` ×${revisions}` : ''}</span>}
               </span>
             ) : <Empty />}
