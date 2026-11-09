@@ -117,8 +117,10 @@ const REFUSALS = {
   'no odo grant': 'Your LOT access in Claude does not include Odo. Ask Afshaan if you need it.',
   'odo denied': 'Odo says your account does not have sales access (no Odo role, or it was removed). Ask Afshaan if you need it.',
   'odo pnl denied': 'Odo P&L and product costs are only for Odo super admins.',
+  'no docket grant': 'Your LOT access in Claude does not include Docket. Ask Afshaan if you need it.',
+  'docket denied': 'Docket does not let your account change this task: only its owner, creator, collaborators or their department can (Docket admins can change any). This is a rule on that one task, not your LOT access.',
   'worker denied': 'That LOT app says your account does not have permission for this. Ask Afshaan if you need it.',
-  'session expired': 'Odo could not confirm your LOT login just now. Try once more in a minute; if it says this again, refresh the connection: in Claude, open Settings, then Connectors, then LOT, press Disconnect, then Connect again.',
+  'session expired': 'LOT could not confirm your LOT login just now. Try once more in a minute; if it says this again, refresh the connection: in Claude, open Settings, then Connectors, then LOT, press Disconnect, then Connect again.',
 };
 const UNREACHABLE = 'LOT systems could not be reached just now. Try again in a few minutes; if it keeps happening, tell Afshaan.';
 const FOOT_REFUSED = '(For Claude: this is a deliberate refusal, not a server fault. Tell the user this message as it is and do not retry.)';
@@ -129,6 +131,8 @@ export function refusalText(reason, { callsPerHour } = {}) {
     const n = Number(callsPerHour);
     return { fault: false, text: `You have used all ${n > 0 ? n : 'your'} LOT data calls for this hour. Calls free up as the hour rolls on; try again a little later. Nothing is broken.\n\n${FOOT_REFUSED}` };
   }
+  // A write whose outcome is unknown: never "try again" (createTask is not idempotent; hostile review 2026-11-09).
+  if (reason === 'write unconfirmed') return { fault: true, text: `LOT could not confirm whether that Docket change was saved. Check the task with docket_tasks before trying again, so nothing is done twice. If this keeps happening, tell Afshaan.\n\n${FOOT_FAULT}` };
   if (REFUSALS[reason]) return { fault: false, text: `${REFUSALS[reason]}\n\n${FOOT_REFUSED}` };
   return { fault: true, text: `${UNREACHABLE}\n\n${FOOT_FAULT}` }; // unreachable, gate unreadable, anything unmapped
 }

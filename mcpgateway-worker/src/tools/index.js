@@ -5,8 +5,9 @@
 //   { ok, data } | { ok:false, reason } | { ok:false, userError } }.
 import core from './core.js';
 import odo from './odo.js';
+import docket from './docket.js';
 
-export const TOOLS = [...core, ...odo];
+export const TOOLS = [...core, ...odo, ...docket];
 
 const names = new Set();
 for (const t of TOOLS) {

@@ -4,21 +4,41 @@
 // worker rejected the request itself, e.g. a bad parameter: shown to Claude, not a refusal).
 
 const MAX_ERR = 300;
+const SERVER_FAIL = /^(db_error|server_error|update_failed|create_failed|comment_failed|insert_failed|delete_failed)\b/i;
 
 export async function getAs(binding, sbAccess, action, params = {}) {
-  if (!binding || typeof binding.fetch !== 'function') return { ok: false, reason: 'unreachable' };
   const u = new URL('https://worker/');
   const q = new URLSearchParams({ action });
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
   u.search = q.toString();
+  return callAs(binding, u.toString(), { headers: { Authorization: `Bearer ${sbAccess}` } });
+}
+
+// A write, as the person: POST { action, data } (LOT workers route POSTs by body.action and read
+// body.data || body). Only Docket write tools call this, each with one fixed action.
+export async function postAs(binding, sbAccess, action, data = {}) {
+  return callAs(binding, 'https://worker/', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${sbAccess}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, data }),
+  });
+}
+
+async function callAs(binding, url, init) {
+  if (!binding || typeof binding.fetch !== 'function') return { ok: false, reason: 'unreachable' };
   let res;
-  try { res = await binding.fetch(u.toString(), { headers: { Authorization: `Bearer ${sbAccess}` } }); }
+  try { res = await binding.fetch(url, init); }
   catch { return { ok: false, reason: 'unreachable' }; }
   // 401: dead session OR a transient identity lookup in the worker; 403: the worker's own permission check.
   if (res.status === 401) return { ok: false, reason: 'session expired' };
   if (res.status === 403) return { ok: false, reason: 'worker denied' };
   const j = await res.json().catch(() => null);
-  if (res.status >= 400 && res.status < 500 && j && typeof j.error === 'string') return { ok: false, userError: j.error.slice(0, MAX_ERR) };
+  if (res.status >= 400 && res.status < 500 && j && typeof j.error === 'string') {
+    // Worker-side failures that come back as 4xx (docketops: `update_failed: {db json}`) are faults, and their
+    // DB diagnostics never reach Claude (Codex 2026-11-09). Only plain request errors are shown.
+    if (SERVER_FAIL.test(j.error) || /[{}]/.test(j.error)) return { ok: false, reason: 'unreachable', serverFail: true };
+    return { ok: false, userError: j.error.slice(0, MAX_ERR) };
+  }
   if (!res.ok || !j || j.ok !== true || j.data === undefined || j.data === null) return { ok: false, reason: 'unreachable' };
   return { ok: true, data: j.data };
 }

@@ -18,6 +18,10 @@ id = "e9006480ed5c46f6b605a803bd311fcd"
 binding = "ODOOPS"
 service = "odoops"
 
+[[services]]
+binding = "DOCKETOPS"
+service = "docketops"
+
 [triggers]
 crons = ["30 21 * * *"]   # 03:00 IST daily: purge expired grants/tokens from KV
 
