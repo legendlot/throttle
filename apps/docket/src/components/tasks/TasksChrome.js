@@ -1,13 +1,16 @@
 'use client';
 // /tasks page chrome (ClickUp redesign P2): the views bar (List · Board · + View,
 // Copy link, space actions) and the 40px toolbar (Group pill · Subtasks | Filter ·
-// Me · Archive done · Select · search · Customize · + Task). State lives in
-// tasks/page.js; these only render it. Rows / groups / cards are P3–P4.
+// Me · Archive done · Select · search · Columns · Customize · + Task). State lives in
+// tasks/page.js (+ useTaskViewState); these only render it.
+// ≤767px every labelled toolbar button collapses to its icon (label kept for screen
+// readers via .tk-toolbar CSS), so the toolbar fits in two rows.
 import { useRef } from 'react';
 import {
   Layers, X, ChevronDown, ListFilter, UserCheck, Archive, CheckSquare, Check, Search, Settings2, Plus,
-  List, Columns3, Link2, LayoutDashboard, ListTree, ChevronsDownUp, ChevronsUpDown, FolderPlus, CornerDownRight, SquarePen,
+  List, Columns3, Link2, LayoutDashboard, ListTree, ChevronsDownUp, ChevronsUpDown, FolderPlus, CornerDownRight, SquarePen, RotateCcw,
 } from 'lucide-react';
+import { COLUMNS } from './useTaskViewState.js';
 import { STATUSES, PRIORITIES } from '../../lib/tasks.js';
 import { Button, IconButton, SplitButton, SegmentedTabs, Tooltip, Popover, Menu, MenuItem, MenuLabel, MenuSeparator, Kbd } from '../ui/index.js';
 
@@ -32,9 +35,9 @@ export function ViewsBar({ viewMode, onView, allowBoard, onCopyLink, space, onSp
 /* ---------------- Toolbar ---------------- */
 const GROUP_LABEL = { none: 'None', person: 'Owner', department: 'Team', status: 'Status', program: 'Program' };
 
-function ToggleBtn({ on, icon, children, tip, onClick }) {
+function ToggleBtn({ on, icon, children, tip, label, onClick }) {
   const b = (
-    <Button variant="ghost" size="md" icon={icon} className={on ? 'is-active' : undefined} aria-pressed={on} onClick={onClick}>{children}</Button>
+    <Button variant="ghost" size="md" icon={icon} className={on ? 'is-active' : undefined} aria-pressed={on} aria-label={label} onClick={onClick}>{children}</Button>
   );
   return tip ? <Tooltip content={tip}>{b}</Tooltip> : b;
 }
@@ -44,6 +47,7 @@ export function TasksToolbar(p) {
   const subRef = useRef(null);
   const filterRef = useRef(null);
   const custRef = useRef(null);
+  const colsRef = useRef(null);
   const newRef = useRef(null);
   const subTarget = p.newTaskMenuOpen ? p.getSubtaskTarget?.() : null;
   return (
@@ -70,36 +74,42 @@ export function TasksToolbar(p) {
         </Menu>
 
         {p.showSubtasks && <>
-          <Button ref={subRef} variant="ghost" size="md" icon={ListTree} iconRight={ChevronDown} aria-haspopup="menu"
-            onClick={() => p.setSubMenu(o => !o)}>Subtasks</Button>
-          <Menu anchorRef={subRef} open={p.subMenu} onClose={() => p.setSubMenu(false)} width={180} label="Subtasks">
-            <MenuItem icon={ChevronsUpDown} onClick={p.onExpandAll}>Expand all</MenuItem>
-            <MenuItem icon={ChevronsDownUp} onClick={p.onCollapseAll}>Collapse all</MenuItem>
+          <Button ref={subRef} variant="ghost" size="md" icon={ListTree} iconRight={ChevronDown} aria-haspopup="menu" aria-label="Subtasks"
+            className={p.subtaskMode === 'separate' ? 'is-active' : undefined} onClick={() => p.setSubMenu(o => !o)}>Subtasks</Button>
+          <Menu anchorRef={subRef} open={p.subMenu} onClose={() => p.setSubMenu(false)} width={200} label="Subtasks">
+            <MenuItem icon={ChevronsUpDown} disabled={p.subtaskMode === 'separate'} onClick={p.onExpandAll}>Expand all</MenuItem>
+            <MenuItem icon={ChevronsDownUp} disabled={p.subtaskMode === 'separate'} onClick={p.onCollapseAll}>Collapse all</MenuItem>
+            <MenuSeparator />
+            {[['nested', 'Nested under parent'], ['separate', 'As separate tasks']].map(([v, l]) => (
+              <MenuItem key={v} selected={p.subtaskMode === v} icon={<Check size={14} style={{ opacity: p.subtaskMode === v ? 1 : 0 }} aria-hidden />}
+                onClick={() => p.chooseSubtaskMode(v)}>{l}</MenuItem>
+            ))}
           </Menu>
         </>}
       </div>
 
       <div className="tk-tb-right">
-        <Button ref={filterRef} variant="ghost" size="md" icon={ListFilter} className={p.filterCount > 0 ? 'is-active' : undefined}
-          aria-haspopup="dialog" aria-expanded={p.filterOpen} onClick={() => p.setFilterOpen(o => !o)}>
-          Filter{p.filterCount > 0 && <span className="tk-badge">{p.filterCount}</span>}
+        <Button ref={filterRef} variant="ghost" size="md" icon={ListFilter} className={p.filterCount > 0 ? 'is-active' : undefined} aria-label="Filter"
+          aria-haspopup="dialog" aria-expanded={p.filterOpen} onClick={() => p.setFilterOpen(o => !o)}
+          iconRight={p.filterCount > 0 ? <span className="tk-badge">{p.filterCount}</span> : null}>
+          Filter
         </Button>
         <Popover anchorRef={filterRef} open={p.filterOpen} onClose={() => p.setFilterOpen(false)} align="right" width={280} className="tk-fp" role="dialog" aria-label="Filters">
           <FilterPanel {...p.filter} />
         </Popover>
 
-        {p.showMe && <ToggleBtn on={p.mine} icon={UserCheck} tip="Tasks I own, am assigned, collaborate on, or raised" onClick={() => p.setMine(m => !m)}>Me</ToggleBtn>}
+        {p.showMe && <ToggleBtn on={p.mine} icon={UserCheck} tip="Tasks I own, am assigned, collaborate on, or raised" label="Me mode" onClick={() => p.setMine(m => !m)}>Me</ToggleBtn>}
         {p.showArchive && (
-          <ToggleBtn on={p.archiveDone} icon={Archive} onClick={p.toggleArchiveDone}
+          <ToggleBtn on={p.archiveDone} icon={Archive} label="Archive done" onClick={p.toggleArchiveDone}
             tip={p.archiveDone ? 'Done tasks are archived — click to show them on the board' : 'Archive done tasks into a collapsed section'}>
             {p.archiveDone ? 'Done archived' : 'Archive done'}
           </ToggleBtn>
         )}
         {p.showSelect && (
-          <ToggleBtn on={p.selectMode} icon={CheckSquare} tip="Select multiple tasks to update them in bulk" onClick={p.toggleSelectMode}>Select</ToggleBtn>
+          <ToggleBtn on={p.selectMode} icon={CheckSquare} label="Select" tip="Select multiple tasks to update them in bulk" onClick={p.toggleSelectMode}>Select</ToggleBtn>
         )}
         {p.showSelect && p.selectMode && p.selectableCount > 0 && (
-          <Button variant="ghost" size="md" onClick={p.toggleSelectAll}>
+          <Button variant="ghost" size="md" className="tk-keep-label" onClick={p.toggleSelectAll}>
             {p.allSelected ? 'Clear all' : 'Select all'}{p.selectedCount > 0 && <span className="tk-badge">{p.selectedCount}</span>}
           </Button>
         )}
@@ -113,15 +123,36 @@ export function TasksToolbar(p) {
             : <Kbd>/</Kbd>}
         </label>
 
+        {p.showColumns && <>
+          <IconButton ref={colsRef} icon={Columns3} label="Columns" aria-haspopup="menu" onClick={() => p.setColsOpen(o => !o)} />
+          <Menu anchorRef={colsRef} open={p.colsOpen} onClose={() => p.setColsOpen(false)} align="right" width={210} label="Columns">
+            <MenuLabel>Show columns</MenuLabel>
+            {p.columnKeys.map(k => {
+              const on = COLUMNS[k].fixed || !p.cols.hidden[k];
+              return (
+                <MenuItem key={k} keepOpen disabled={COLUMNS[k].fixed}
+                  icon={<Check size={14} style={{ opacity: on ? 1 : 0 }} aria-hidden />}
+                  onClick={() => p.toggleColumn(k)}>{COLUMNS[k].label}{COLUMNS[k].fixed ? ' (always)' : ''}</MenuItem>
+              );
+            })}
+            <MenuSeparator />
+            <MenuItem icon={RotateCcw} onClick={p.resetColumns}>Reset columns</MenuItem>
+          </Menu>
+        </>}
+
         {p.showCustomize && <>
           <IconButton ref={custRef} icon={Settings2} label="Customize" aria-haspopup="menu" onClick={() => p.setCustOpen(o => !o)} />
-          <Menu anchorRef={custRef} open={p.custOpen} onClose={() => p.setCustOpen(false)} align="right" width={180} label="Customize">
+          <Menu anchorRef={custRef} open={p.custOpen} onClose={() => p.setCustOpen(false)} align="right" width={200} label="Customize">
             <MenuLabel>Density</MenuLabel>
             {[['compact', 'Compact'], ['default', 'Default'], ['roomy', 'Roomy']].map(([v, l]) => (
               <MenuItem key={v} keepOpen selected={p.density === v}
                 icon={<Check size={14} style={{ opacity: p.density === v ? 1 : 0 }} aria-hidden />}
                 onClick={() => p.chooseDensity(v)}>{l}</MenuItem>
             ))}
+            <MenuSeparator />
+            <MenuLabel>Show</MenuLabel>
+            <MenuItem keepOpen icon={<Check size={14} style={{ opacity: p.showIds ? 1 : 0 }} aria-hidden />} onClick={p.toggleShowIds}>DKT ids</MenuItem>
+            <MenuItem keepOpen icon={<Check size={14} style={{ opacity: p.cols.hidden.team ? 0 : 1 }} aria-hidden />} onClick={() => p.toggleColumn('team')}>Team</MenuItem>
           </Menu>
         </>}
 

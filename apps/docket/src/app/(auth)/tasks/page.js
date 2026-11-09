@@ -1,38 +1,44 @@
 'use client';
+// /tasks — the orchestrator (ClickUp redesign P3 split). Owns data (load + writes),
+// derived rows/groups, selection, hotkeys and the page modals. Rendering lives in
+// components/tasks/: TasksChrome (views bar + toolbar), TaskListView (Grid · column
+// header · groups · Archived), TaskRow, GroupHeader (+ foot capture), BulkBar;
+// view state + its localStorage in useTaskViewState. Board view = KanbanBoard.
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import {
-  Search, X, Plus, Check, Ban, Inbox,
-  ChevronRight, ChevronDown, Calendar, AlertTriangle, Link2, MessageSquare,
-  Lock, ListChecks, Archive, CheckSquare, Users, Flag, Tag,
-  UserPlus, FolderInput,
-} from 'lucide-react';
+import { Lock, ListChecks } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
-import { StatusBadge } from '../../../components/StatusBadge.js';
-import { PriorityBadge } from '../../../components/PriorityBadge.js';
-import { DatePicker } from '../../../components/DatePicker.js';
 import { TaskDrawer } from '../../../components/TaskDrawer.js';
 import { SpaceSettings } from '../../../components/SpaceSettings.js';
-import { Avatar, AvatarRow, Popover, AnchoredPopover, OptionList, firstName, personColor, deadlineState, relDeadline, fmtShortDate } from '../../../components/primitives.js';
+import { personColor } from '../../../components/primitives.js';
 import { KanbanBoard } from '../../../components/KanbanBoard.js';
-import { STATUSES, STATUS_MAP, SETTABLE_STATUSES, PRIORITIES, effectiveDeadline } from '../../../lib/tasks.js';
+import { STATUSES, STATUS_MAP, PRIORITIES, effectiveDeadline } from '../../../lib/tasks.js';
 import { useHotkey } from '../../../lib/hotkeys.js';
+import { focusWhenReady } from '../../../lib/nav.js';
 import { useChrome } from '../../../lib/chrome.js';
 import { ViewsBar, TasksToolbar } from '../../../components/tasks/TasksChrome.js';
-import { Button, Kbd } from '../../../components/ui/index.js';
+import { TaskListView } from '../../../components/tasks/TaskListView.js';
+import { NewTaskCapture } from '../../../components/tasks/GroupHeader.js';
+import { BulkBar } from '../../../components/tasks/BulkBar.js';
+import { ROW_SELECTOR } from '../../../components/tasks/TaskRow.js';
+import { useTaskViewState, visibleColumns, COLUMNS } from '../../../components/tasks/useTaskViewState.js';
+import { Button } from '../../../components/ui/index.js';
 
-// Task(flex) · Owner(150) · Status(132) · Pri(76) · Deadline(140) · meta(46)
-const GRID_COLS = 'minmax(230px,1fr) 150px 132px 76px 140px 46px';
-// Program mode adds a Space column (rows span spaces): Task · Space(130) · Owner · Status · Pri · Deadline · meta
-const PROGRAM_GRID_COLS = 'minmax(230px,1fr) 130px 150px 132px 76px 140px 46px';
+const GROUP_OPTS = [
+  { value: 'none', label: 'No grouping' }, { value: 'person', label: 'Owner' },
+  { value: 'department', label: 'Team' }, { value: 'status', label: 'Status' }, { value: 'program', label: 'Program' },
+];
+// Group axis → the createTask field a group-foot capture prefills (status is set
+// with a follow-up changeStatus: createTask always starts a task as not_started).
+const GROUP_FIELD = { person: 'owner_employee_id', department: 'department_id', program: 'program_id', status: 'status' };
 
 export default function TasksPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
-  // shellModalOpen: a layout-owned modal (sidebar ⋯ SpaceSettings, shortcuts sheet) is
-  // up — page hotkeys must not fire behind it.
+  // shellModalOpen: a layout-owned modal (sidebar ⋯ SpaceSettings, shortcuts sheet,
+  // New program) is up — page hotkeys must not fire behind it.
   const { setCount, shellModalOpen } = useChrome();
   const router = useRouter();
   const search = useSearchParams();
@@ -42,10 +48,15 @@ export default function TasksPage() {
   const lensParam = search.get('lens');
   const viewProgramId = search.get('program') || '';
   const inProgramMode = !!viewProgramId;
-  // My-tasks mode: cross-space list of tasks I own/collaborate on, split into two sections.
+  // My-tasks mode: cross-space list of tasks I own / collaborate on / raised, in sections.
   const mineMode = lensParam === 'mine' && !spaceId && !inProgramMode;
   const crossSpace = inProgramMode || mineMode;
-  const gridCols = crossSpace ? PROGRAM_GRID_COLS : GRID_COLS;
+
+  const view = useTaskViewState({ lensParam });
+  const { filters: f, groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView,
+    showIds, toggleShowIds, subtaskMode, chooseSubtaskMode, cols, toggleColumn, moveColumn, resizeColumn, resetColumns,
+    collapsed, toggleGroupCollapsed, setGroupsCollapsed } = view;
+  const { status, departmentId, employeeId, priority, programId, overdue, revised, mine, q } = f;
 
   const [tasks, setTasks] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -53,30 +64,15 @@ export default function TasksPage() {
   const [programs, setPrograms] = useState([]);
   const [spaces, setSpaces] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [collapsedGroups, setCollapsedGroups] = useState({});
   const [expanded, setExpanded] = useState({});
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
 
-  // Structured filters (server-side).
-  const [status, setStatus] = useState('');
-  const [departmentId, setDepartmentId] = useState('');
-  const [employeeId, setEmployeeId] = useState('');
-  const [priority, setPriority] = useState('');
-  const [programId, setProgramId] = useState('');
-  const [overdue, setOverdue] = useState(false);
-  const [revised, setRevised] = useState(false);
-  const [mine, setMine] = useState(lensParam === 'mine');
-  const [groupBy, setGroupBy] = useState('none');
-  const [density, setDensity] = useState('roomy');
-  const [archiveDone, setArchiveDone] = useState(false); // per-person view pref (sticky)
-  const [viewMode, setViewMode] = useState('list'); // 'list' | 'board' (Kanban) — sticky per-person
-
-  const [q, setQ] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
   const [groupMenu, setGroupMenu] = useState(false);
   const [subMenu, setSubMenu] = useState(false);          // toolbar Subtasks menu
   const [custOpen, setCustOpen] = useState(false);        // toolbar Customize menu
+  const [colsOpen, setColsOpen] = useState(false);        // toolbar Columns menu
   const [newTaskMenuOpen, setNewTaskMenuOpen] = useState(false); // + Task split menu
   // New sub-task from the + Task menu: the last focused top-level row (a ref — j/k moves
   // focus constantly and must not re-render the page), and a one-shot request the
@@ -94,30 +90,16 @@ export default function TasksPage() {
   // so a bulk action can never land on tasks from a different context.
   useEffect(() => { setSelected(new Set()); setSelectMode(false); }, [spaceId, viewProgramId, mineMode]);
 
-  // `lens=mine` (sidebar "My tasks") drives the mine filter; absent → off.
-  useEffect(() => { setMine(lensParam === 'mine'); }, [lensParam]);
-
-  // Sticky view preferences (per person, per device — same model as sidebar collapse).
-  useEffect(() => {
-    try {
-      const d = localStorage.getItem('docket.density'); if (d) setDensity(d);
-      const a = localStorage.getItem('docket.archiveDone'); if (a != null) setArchiveDone(a === '1');
-      const v = localStorage.getItem('docket.viewMode'); if (v === 'list' || v === 'board') setViewMode(v);
-    } catch { /* ignore */ }
-  }, []);
-  function chooseDensity(d) { setDensity(d); try { localStorage.setItem('docket.density', d); } catch { /* ignore */ } }
-  function toggleArchiveDone() { setArchiveDone(v => { const n = !v; try { localStorage.setItem('docket.archiveDone', n ? '1' : '0'); } catch { /* ignore */ } return n; }); }
-  function chooseView(v) { setViewMode(v); try { localStorage.setItem('docket.viewMode', v); } catch { /* ignore */ } }
-
   const empMap = useMemo(() => Object.fromEntries(employees.map(e => [e.id, e.full_name])), [employees]);
   const deptMap = useMemo(() => Object.fromEntries(departments.map(d => [d.id, d.name])), [departments]);
   const teamCellOpts = useMemo(() => [{ value: '', label: '— No team —' }, ...departments.map(d => ({ value: d.id, label: d.name, dot: personColor(d.id) }))], [departments]);
   const ownerCellOpts = useMemo(() => [{ value: '', label: '— Unassigned —' }, ...employees.map(e => ({ value: e.id, label: e.full_name }))], [employees]);
-  const prioOpts = PRIORITIES.map(p => ({ value: p.key, label: p.label }));
+  const prioOpts = useMemo(() => PRIORITIES.map(p => ({ value: p.key, label: p.label })), []);
   const teamOpts = useMemo(() => departments.map(d => ({ value: d.id, label: d.name })), [departments]);
   const empOpts = useMemo(() => employees.map(e => ({ value: e.id, label: e.full_name })), [employees]);
   const programOpts = useMemo(() => programs.map(p => ({ value: p.id, label: p.name })), [programs]);
   const programCellOpts = useMemo(() => [{ value: '', label: '— No program —' }, ...programOpts], [programOpts]);
+  const opts = useMemo(() => ({ teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts }), [teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts]);
 
   const currentSpace = useMemo(() => spaces.find(s => s.id === spaceId) || null, [spaces, spaceId]);
 
@@ -133,7 +115,18 @@ export default function TasksPage() {
 
   useEffect(() => { setNewSpaceOpen(spaceParam === 'new'); }, [spaceParam]);
 
+  // `c` → with a row focused, that row's group-foot capture (prefilled with the group's
+  // value; the group is expanded first if collapsed); otherwise the un-prefilled top
+  // "New task" capture.
   useHotkey('c', (e) => {
+    const key = document.activeElement?.closest?.('.tl-group[data-group]')?.getAttribute('data-group');
+    // Groups without a foot capture (Abandoned, My tasks' collab/raised) fall through to the top one.
+    if (key && groups.find(g => g.key === key)?.capture) {
+      e.preventDefault();
+      toggleGroupCollapsed(key, false);
+      focusWhenReady(`.tl-group[data-group="${CSS.escape(key)}"] [data-group-capture]`, { select: true, tries: 10 });
+      return;
+    }
     const el = document.querySelector('[data-create-primary]');
     if (!el) return;
     e.preventDefault();
@@ -175,11 +168,9 @@ export default function TasksPage() {
     fetchSpaces();
     if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:spaces-changed'));
   }
-  // The shell's sidebar ⋯ (SpaceSettings in the layout) renames / archives / transfers
-  // spaces too — keep this page's own `spaces` (bulk Move list, ProgramCapture, is_owner) in step.
   // Programs created elsewhere (top-bar / sidebar New program, drawer inline create)
   // feed the Program filter + cell options. Re-read only — this page never re-dispatches
-  // from here, so ProgramCapture's own dispatch can't loop.
+  // from here, so the group-foot capture's own dispatch can't loop.
   const fetchPrograms = useCallback(() => {
     if (!session) return;
     docketopsGet('getPrograms', {}, session).then(p => setPrograms(p || [])).catch(() => {});
@@ -188,6 +179,8 @@ export default function TasksPage() {
     window.addEventListener('docket:programs-changed', fetchPrograms);
     return () => window.removeEventListener('docket:programs-changed', fetchPrograms);
   }, [fetchPrograms]);
+  // The shell's sidebar ⋯ (SpaceSettings in the layout) renames / archives / transfers
+  // spaces too — keep this page's own `spaces` (bulk Move list, program capture, is_owner) in step.
   useEffect(() => {
     window.addEventListener('docket:spaces-changed', fetchSpaces);
     return () => window.removeEventListener('docket:spaces-changed', fetchSpaces);
@@ -201,20 +194,7 @@ export default function TasksPage() {
     return tokens.every(tok => hay.includes(tok));
   }, [tokens]);
 
-  const activeFilterCount = [status, departmentId, employeeId, priority, programId].filter(Boolean).length
-    + [overdue, revised, mine].filter(Boolean).length;
-  function clearFilters() {
-    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId('');
-    setOverdue(false); setRevised(false); setMine(false);
-  }
-  // The Filter popover's own count + clear. Me mode is its own toolbar toggle now (P2),
-  // so it's neither counted on the Filter badge nor cleared from inside the popover.
-  const panelFilterCount = activeFilterCount - (mine ? 1 : 0);
-  function clearPanelFilters() {
-    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId('');
-    setOverdue(false); setRevised(false);
-  }
-
+  /* ---------------- writes ---------------- */
   function patchRow(id, patch) { setTasks(ts => ts.map(t => (t.id === id ? { ...t, ...patch } : t))); }
   async function saveField(task, field, value) {
     try {
@@ -257,7 +237,74 @@ export default function TasksPage() {
     try { await docketopsPost('addCollaborator', { id: task.id, employee_id: employeeIdToAdd }, session); await load(); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
+  function copyTaskLink(task) {
+    const url = `${window.location.origin}/tasks/detail/?id=${task.id}`;
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(() => showToast(`Link to ${task.task_no} copied`, 'success')).catch(() => showToast('Could not copy the link', 'error'));
+    else showToast('Could not copy the link', 'error');
+  }
 
+  // Program mode: smart default space for new tasks = the space this program already lives
+  // in most (programs live in private spaces; General is rarely used). Falls back to General.
+  const programDefaultSpace = useMemo(() => {
+    if (!inProgramMode) return '';
+    const counts = {};
+    for (const t of tasks) { if (t.space_id) counts[t.space_id] = (counts[t.space_id] || 0) + 1; }
+    let best = '', n = -1;
+    for (const [sid, c] of Object.entries(counts)) { if (c > n) { n = c; best = sid; } }
+    if (best) return best;
+    const general = spaces.find(s => !s.is_private);
+    return general ? general.id : (spaces[0]?.id || '');
+  }, [inProgramMode, tasks, spaces]);
+  const [programSpace, setProgramSpace] = useState('');
+  useEffect(() => { setProgramSpace(prev => prev || programDefaultSpace || ''); }, [programDefaultSpace]);
+  useEffect(() => { setProgramSpace(''); }, [viewProgramId]);
+
+  // Create a task from a group foot (replaces the P2 top capture bar; same create
+  // bodies: space board → space_id, My tasks → assign_self, program → program_id +
+  // the chosen space), with the group's value prefilled where the field maps.
+  async function createInGroup(title, field, value) {
+    const body = mineMode ? { title, assign_self: true }
+      : inProgramMode ? { title, space_id: (programSpace || programDefaultSpace) || undefined, program_id: viewProgramId }
+      : { title, space_id: spaceId || undefined };
+    if (field && field !== 'status' && value) body[field] = value;
+    let statusErr = null;
+    try {
+      const r = await docketopsPost('createTask', body, session);
+      if (field === 'status' && value && value !== 'not_started' && r?.id) {
+        try { await docketopsPost('changeStatus', { id: r.id, status: value }, session); }
+        catch (se) { statusErr = se.message || 'unknown error'; }
+      }
+      await load();
+      if (inProgramMode && typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed')); // sidebar count
+      // One message: a half-done create (task made, status not set) is not a success.
+      if (statusErr) { showToast(`Task created, but its status was not set (${statusErr}) — it is Not started`, 'error'); return true; }
+      // Without an owner AND a deadline a new task lands in The Grid (RULE-DOCKET-001).
+      showToast(mineMode ? 'Added to your list' : inProgramMode ? 'Added to program — in The Grid until it has an owner and a deadline' : 'Captured to The Grid', 'success');
+      return true;
+    } catch (e) { showToast(e.message || 'Create failed', 'error'); return false; }
+  }
+
+  /* ---------------- stable actions for memoised rows ---------------- */
+  const live = useRef({});
+  live.current = { saveField, abandonInline, reviseInline, addSubtask, addCollab, copyTaskLink, createInGroup };
+  const toggleSelect = useCallback((id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }), []);
+  const actions = useMemo(() => ({
+    saveField: (...a) => live.current.saveField(...a),
+    abandonInline: (...a) => live.current.abandonInline(...a),
+    reviseInline: (...a) => live.current.reviseInline(...a),
+    addSubtask: (...a) => live.current.addSubtask(...a),
+    addCollab: (...a) => live.current.addCollab(...a),
+    copyTaskLink: (...a) => live.current.copyTaskLink(...a),
+    openDrawer: (id) => setDrawerId(id),
+    toggleExpand: (id) => setExpanded(s => ({ ...s, [id]: !s[id] })),
+    setExpandedOn: (id) => setExpanded(s => (s[id] ? s : { ...s, [id]: true })),
+    toggleSelect,
+    enterSelect: () => setSelectMode(true),
+    clearSubRequest: () => setSubRequest(null),
+    focusedRowRef,
+  }), [toggleSelect]);
+
+  /* ---------------- derived rows ---------------- */
   // Children grouped by parent (off the full set), so a parent can expand inline.
   // When "Archive done tasks" is on, done children are hidden from the active expand too.
   const childrenByParent = useMemo(() => {
@@ -265,6 +312,7 @@ export default function TasksPage() {
     for (const t of tasks) { if (t.parent_task_id && !(archiveDone && t.status === 'done')) (m[t.parent_task_id] = m[t.parent_task_id] || []).push(t); }
     return m;
   }, [tasks, archiveDone]);
+  const parentById = useMemo(() => Object.fromEntries(tasks.filter(t => !t.parent_task_id).map(t => [t.id, t])), [tasks]);
 
   const statusRank = useMemo(() => Object.fromEntries(STATUSES.map((s, i) => [s.key, i])), []);
   const sortFn = useCallback((a, b) => {
@@ -285,10 +333,10 @@ export default function TasksPage() {
     if (av > bv) return 1 * dir;
     return 0;
   }, [sortKey, sortDir, statusRank]);
-  function onSort(key) {
+  const onSort = useCallback((key) => {
     if (sortKey === key) { if (sortDir === 'asc') setSortDir('desc'); else { setSortKey(null); setSortDir('asc'); } }
     else { setSortKey(key); setSortDir('asc'); }
-  }
+  }, [sortKey, sortDir]);
 
   const topLevel = useMemo(() => tasks.filter(t => !t.parent_task_id && matchesQuery(t)), [tasks, matchesQuery]);
   // "Archive done tasks" (per-person toggle): when ON, done top-level tasks leave the
@@ -298,31 +346,82 @@ export default function TasksPage() {
   const needsSetup = (t) => t.status !== 'abandoned' && (!t.deadline || !t.owner_employee_id);
   const gridRows = useMemo(() => activeTop.filter(needsSetup).sort(sortFn), [activeTop, sortFn]);
   const boardRows = useMemo(() => activeTop.filter(t => !needsSetup(t)).sort(sortFn), [activeTop, sortFn]);
+  // Subtasks "As separate tasks": sub-tasks become rows of their own (with a parent chip).
+  const separate = subtaskMode === 'separate' && !mineMode;
+  const childRows = useMemo(() => (separate
+    ? tasks.filter(t => t.parent_task_id && matchesQuery(t) && !(archiveDone && t.status === 'done')).sort(sortFn) : []),
+  [separate, tasks, matchesQuery, archiveDone, sortFn]);
 
   // My-tasks mode: flat list (incl. sub-tasks) split by relation. "Assigned to me" = owner;
-  // "Collaborating" = everything else (collaborator-only). Search applies; no Grid/nesting.
+  // "Collaborating" = collaborator; "Raised by me" = creator (owned by someone else).
   const mineMatched = useMemo(() => (mineMode ? tasks.filter(matchesQuery) : []), [mineMode, tasks, matchesQuery]);
   const mineOwner = useMemo(() => mineMatched.filter(t => t._relation === 'owner').sort(sortFn), [mineMatched, sortFn]);
-  // Match 'collaborator' EXACTLY, not !== 'owner'. The worker gained a third relation
-  // ('creator' — raised by me, owned by someone else), and the old catch-all would have
-  // filed those under "Collaborating", which is a different and misleading claim.
+  // Match 'collaborator' EXACTLY, not !== 'owner' — the worker also returns 'creator'.
   const mineCollab = useMemo(() => mineMatched.filter(t => t._relation === 'collaborator').sort(sortFn), [mineMatched, sortFn]);
   const mineCreated = useMemo(() => mineMatched.filter(t => t._relation === 'creator').sort(sortFn), [mineMatched, sortFn]);
 
-  // Board (Kanban) view: top-level, non-abandoned tasks (incl. ones still "needs setup" —
-  // there is no separate Grid tray on the board). Columns follow the group-by axis,
-  // defaulting to Status. Independent of the list-only "Archive done" toggle.
+  // Board (Kanban) view: top-level, non-abandoned tasks (incl. ones still "needs setup").
+  // Columns follow the group-by axis, defaulting to Status. Independent of Archive done.
   const boardMode = viewMode === 'board' && !mineMode;
   const kanbanAxis = groupBy === 'none' ? 'status' : groupBy;
   const kanbanRows = useMemo(() => topLevel.filter(t => t.status !== 'abandoned').sort(sortFn), [topLevel, sortFn]);
 
-  // ---- bulk selection (works in Grid + board + my-tasks; only editable tasks are selectable) ----
+  /* ---------------- groups ---------------- */
+  const listRows = useMemo(() => (separate ? [...boardRows, ...childRows].sort(sortFn) : boardRows), [separate, boardRows, childRows, sortFn]);
+  const groups = useMemo(() => {
+    // Through `live` so a memoised group never holds a stale create (program space picker).
+    const cap = (field, value) => (title) => live.current.createInGroup(title, field, value);
+    const knownPrograms = new Set(programs.map(p => p.id));
+    if (mineMode) {
+      return [
+        { key: 'mine:owner', label: 'Assigned to me', rows: mineOwner, capture: cap(), capturePlaceholder: "Add task — it's assigned to you", empty: 'Nothing here yet.' },
+        { key: 'mine:collab', label: 'Collaborating', rows: mineCollab },
+        // Raised by me, owned by someone else. Only OPEN ones (the RPC excludes done/abandoned).
+        { key: 'mine:creator', label: 'Raised by me', rows: mineCreated },
+      ].filter(g => g.capture || g.rows.length);
+    }
+    const capPlaceholder = inProgramMode ? "Add task — it's tagged to this program" : 'Add task';
+    if (groupBy === 'none') return [{ key: 'none', label: null, rows: listRows, capture: cap(), capturePlaceholder: capPlaceholder }];
+    const field = GROUP_FIELD[groupBy];
+    const m = new Map();
+    for (const t of listRows) {
+      let value, label, color;
+      if (groupBy === 'status') { value = t.status; label = STATUS_MAP[t.status]?.label || t.status; color = STATUS_MAP[t.status]?.color; }
+      else if (groupBy === 'person') { value = t.owner_employee_id || ''; label = t.owner_name || 'Unassigned'; color = value ? personColor(label) : null; }
+      else if (groupBy === 'department') { value = t.department_id || ''; label = t.department_name || 'No team'; color = value ? personColor(label) : null; }
+      else {
+        value = t.program?.id || t.program_id || '';
+        label = value ? (t.program?.name || (knownPrograms.has(value) ? programs.find(p => p.id === value)?.name : null) || 'Unknown program') : 'No program';
+        color = value ? (t.program?.color || personColor(value)) : null;
+      }
+      if (!m.has(value)) m.set(value, { key: `${groupBy}:${value || '∅'}`, value, label, color, rows: [], tone: groupBy === 'status' ? 'status' : null });
+      m.get(value).rows.push(t);
+    }
+    const out = [...m.values()];
+    if (groupBy === 'status') out.sort((a, b) => (statusRank[a.value] ?? 99) - (statusRank[b.value] ?? 99));
+    else out.sort((a, b) => (a.value ? 0 : 1) - (b.value ? 0 : 1) || a.label.localeCompare(b.label));
+    for (const g of out) {
+      // Abandoning needs a reason — no one-line capture into the Abandoned group.
+      // A program that no longer resolves (deleted / not visible) is never prefilled.
+      const dead = groupBy === 'program' && g.value && !knownPrograms.has(g.value);
+      if (!(groupBy === 'status' && g.value === 'abandoned')) { g.capture = dead ? cap() : cap(field, g.value); g.capturePlaceholder = capPlaceholder; }
+    }
+    // Grouped but nothing on the board yet: still offer one capture.
+    if (!out.length) out.push({ key: 'none', label: null, rows: [], capture: cap(), capturePlaceholder: capPlaceholder });
+    return out;
+  }, [mineMode, mineOwner, mineCollab, mineCreated, groupBy, listRows, statusRank, inProgramMode, programs]);
+
+  const visibleCols = useMemo(() => visibleColumns(cols, { crossSpace }), [cols, crossSpace]);
+  const columnKeys = useMemo(() => Object.keys(COLUMNS).filter(k => !COLUMNS[k].crossSpaceOnly || crossSpace)
+    .sort((a, b) => cols.order.indexOf(a) - cols.order.indexOf(b)), [cols.order, crossSpace]);
+
+  /* ---------------- selection + bulk ---------------- */
+  // Works in Grid + list + my-tasks; only editable, non-abandoned tasks are selectable.
   const selectableIds = useMemo(() => {
-    const pool = mineMode ? [...mineOwner, ...mineCollab, ...mineCreated] : [...gridRows, ...boardRows];
+    const pool = mineMode ? [...mineOwner, ...mineCollab, ...mineCreated] : [...gridRows, ...listRows];
     return pool.filter(t => t._can_edit && t.status !== 'abandoned').map(t => t.id);
-  }, [mineMode, mineOwner, mineCollab, mineCreated, gridRows, boardRows]);
+  }, [mineMode, mineOwner, mineCollab, mineCreated, gridRows, listRows]);
   const allSelected = selectableIds.length > 0 && selectableIds.every(id => selected.has(id));
-  const toggleSelect = useCallback((id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }), []);
   function clearSelection() { setSelected(new Set()); }
   function toggleSelectAll() {
     setSelected(s => {
@@ -371,39 +470,10 @@ export default function TasksPage() {
   const headerCount = mineMode ? (mineOwner.length + mineCollab.length + mineCreated.length) : activeTop.length;
   useEffect(() => { setCount?.(headerCount); return () => setCount?.(null); }, [headerCount, setCount]);
 
-  // Program mode: smart default space for new tasks = the space this program already lives
-  // in most (programs live in private spaces; General is rarely used). Falls back to General.
-  const programDefaultSpace = useMemo(() => {
-    if (!inProgramMode) return '';
-    const counts = {};
-    for (const t of tasks) { if (t.space_id) counts[t.space_id] = (counts[t.space_id] || 0) + 1; }
-    let best = '', n = -1;
-    for (const [sid, c] of Object.entries(counts)) { if (c > n) { n = c; best = sid; } }
-    if (best) return best;
-    const general = spaces.find(s => !s.is_private);
-    return general ? general.id : (spaces[0]?.id || '');
-  }, [inProgramMode, tasks, spaces]);
-
-  const groups = useMemo(() => {
-    if (groupBy === 'none') return [{ key: 'all', label: null, rows: boardRows }];
-    const keyOf = (t) => groupBy === 'person' ? (t.owner_name || 'Unassigned')
-      : groupBy === 'program' ? (t.program?.name || 'No program')
-      : groupBy === 'status' ? (STATUS_MAP[t.status]?.label || t.status)
-      : (t.department_name || 'No team');
-    const m = new Map();
-    for (const t of boardRows) { const k = keyOf(t); if (!m.has(k)) m.set(k, []); m.get(k).push(t); }
-    const colorOf = (label) => groupBy === 'status' ? (STATUSES.find(s => s.label === label)?.color || 'var(--text-4)')
-      : groupBy === 'person' ? personColor(label)
-      : groupBy === 'department' ? personColor(label)
-      : 'var(--text-4)';
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([label, rows]) => ({ key: label, label, color: colorOf(label), rows }));
-  }, [boardRows, groupBy, statusRank]);
-
-  // ---- global keyboard: f/g popovers + arrow-into-first-row ----
+  /* ---------------- keyboard: f/g popovers + arrow-into-first-row ---------------- */
   useEffect(() => {
     function focusRow(dir) {
-      const rows = [...document.querySelectorAll('.board .row[tabindex="0"]')];
+      const rows = [...document.querySelectorAll(ROW_SELECTOR)];
       if (!rows.length) return;
       (dir > 0 ? rows[0] : rows[rows.length - 1]).focus();
     }
@@ -412,23 +482,21 @@ export default function TasksPage() {
       const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable);
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (drawerId || shellModalOpen) return;
-      // A ui Menu/Popover owns its own arrows + j/k (P1 top-bar + New, P2 toolbar menus).
+      // A ui Menu/Popover owns its own arrows + j/k (P1 top-bar + New, P2/P3 menus).
       if (e.defaultPrevented || ae?.closest?.('.ui-pop')) return;
       if (e.key === 'f') { e.preventDefault(); setFilterOpen(o => !o); }
       else if (e.key === 'g') { e.preventDefault(); setGroupMenu(m => !m); }
-      else if ((e.key === 'ArrowDown' || e.key === 'j') && !ae?.classList?.contains('row')) { e.preventDefault(); focusRow(1); }
-      else if ((e.key === 'ArrowUp' || e.key === 'k') && !ae?.classList?.contains('row')) { e.preventDefault(); focusRow(-1); }
+      else if ((e.key === 'ArrowDown' || e.key === 'j') && !ae?.classList?.contains('tl-row')) { e.preventDefault(); focusRow(1); }
+      else if ((e.key === 'ArrowUp' || e.key === 'k') && !ae?.classList?.contains('tl-row')) { e.preventDefault(); focusRow(-1); }
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [drawerId, shellModalOpen]);
 
-  const rowCtx = {
-    saveField, abandonInline, reviseInline, addSubtask, addCollab, childrenByParent,
-    openDrawer: setDrawerId, teamCellOpts, ownerCellOpts, prioOpts, empOpts, expanded, setExpanded, sortFn,
-    gridCols, showSpace: crossSpace,
-    selectMode, selected, toggleSelect,
-    focusedRowRef, subRequest, clearSubRequest: () => setSubRequest(null),
+  // Kanban (unchanged) + The Grid cards + Archived rows still take a plain ctx.
+  const gridCtx = {
+    saveField: actions.saveField, openDrawer: actions.openDrawer, showSpace: crossSpace, ownerCellOpts,
+    selectMode, selected, toggleSelect, enterSelect: actions.enterSelect,
   };
 
   // Toolbar: Subtasks menu (list view, when a visible row has sub-tasks).
@@ -441,7 +509,7 @@ export default function TasksPage() {
     if (boardMode || mineMode || !focusedRowRef.current) return null;
     const t = boardRows.find(x => x.id === focusedRowRef.current);
     if (!t || !t._can_edit || t.status === 'abandoned') return null;
-    if (!document.querySelector(`.board .row[data-task-id="${t.id}"]`)) return null;
+    if (!document.querySelector(`.tl-row[data-task-id="${t.id}"]`)) return null;
     return t;
   };
   function requestSubtask(id) {
@@ -451,9 +519,10 @@ export default function TasksPage() {
     setTimeout(() => setSubRequest(r => (r === id ? null : r)), 250);
   }
   // A focused row from another view is not a target.
-  useEffect(() => { focusedRowRef.current = null; }, [viewMode, spaceId, viewProgramId, mineMode]);
+  useEffect(() => { focusedRowRef.current = null; }, [viewMode, spaceId, viewProgramId, mineMode, subtaskMode]);
   // `g` in My tasks has no group control to show — don't leave the menu armed.
   useEffect(() => { setGroupMenu(false); }, [mineMode]);
+  // + Task / + New → the un-prefilled top "New task" capture (focusing it reveals it).
   const focusCapture = () => {
     const el = document.querySelector('[data-create-primary]');
     try { el?.focus(); el?.select?.(); } catch { /* ignore */ }
@@ -465,111 +534,72 @@ export default function TasksPage() {
     else showToast('Could not copy the link', 'error');
   }
 
-  const groupOpts = [
-    { value: 'none', label: 'No grouping' }, { value: 'person', label: 'Owner' },
-    { value: 'department', label: 'Team' }, { value: 'status', label: 'Status' }, { value: 'program', label: 'Program' },
-  ];
+  // Program mode: the group-foot captures share one "which space" picker.
+  const programSpacePicker = inProgramMode ? (
+    <select className="tk-capture-space" value={programSpace || programDefaultSpace} onChange={e => setProgramSpace(e.target.value)}
+      title="Space this task lives in" aria-label="Space for new tasks">
+      {spaces.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+    </select>
+  ) : null;
+  if (programSpacePicker) for (const g of groups) if (g.capture) g.captureExtra = programSpacePicker;
+
+  const isEmpty = mineMode ? (mineOwner.length + mineCollab.length + mineCreated.length) === 0 : topLevel.length === 0;
+  const anyQuery = !!(q || f.activeFilterCount);
 
   return (
     <div data-density={density}>
-      {/* Views bar + toolbar (P2). The location (Space / Program) is the top-bar breadcrumb. */}
+      {/* Views bar + toolbar (P2/P3). The location (Space / Program) is the top-bar breadcrumb. */}
       <ViewsBar viewMode={viewMode} onView={chooseView} allowBoard={!mineMode} onCopyLink={copyLink}
         space={currentSpace} onSpaceDashboard={() => currentSpace && router.push('/dashboard?space=' + currentSpace.id)}
         onSpaceSettings={() => setSpaceSettingsOpen(true)} />
       <TasksToolbar
-        showGroup={!mineMode} groupBy={groupBy} setGroupBy={setGroupBy} groupOpts={groupOpts} groupMenu={groupMenu} setGroupMenu={setGroupMenu}
+        showGroup={!mineMode} groupBy={groupBy} setGroupBy={setGroupBy} groupOpts={GROUP_OPTS} groupMenu={groupMenu} setGroupMenu={setGroupMenu}
         showSubtasks={!mineMode && !boardMode && parentIds.length > 0} subMenu={subMenu} setSubMenu={setSubMenu}
-        onExpandAll={expandAll} onCollapseAll={collapseAll}
-        filterOpen={filterOpen} setFilterOpen={setFilterOpen} filterCount={panelFilterCount}
-        filter={{ status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId, priority, setPriority,
-          programId, setProgramId, overdue, setOverdue, revised, setRevised, teamOpts, empOpts, programOpts,
-          filterCount: panelFilterCount, clearFilters: clearPanelFilters, hideProgramFilter: inProgramMode, hideOwnerFilter: mineMode }}
-        showMe={!mineMode} mine={mine} setMine={setMine}
+        onExpandAll={expandAll} onCollapseAll={collapseAll} subtaskMode={subtaskMode} chooseSubtaskMode={chooseSubtaskMode}
+        filterOpen={filterOpen} setFilterOpen={setFilterOpen} filterCount={f.panelFilterCount}
+        filter={{ status, setStatus: f.setStatus, departmentId, setDepartmentId: f.setDepartmentId, employeeId, setEmployeeId: f.setEmployeeId,
+          priority, setPriority: f.setPriority, programId, setProgramId: f.setProgramId, overdue, setOverdue: f.setOverdue, revised, setRevised: f.setRevised,
+          teamOpts, empOpts, programOpts, filterCount: f.panelFilterCount, clearFilters: f.clearPanelFilters, hideProgramFilter: inProgramMode, hideOwnerFilter: mineMode }}
+        showMe={!mineMode} mine={mine} setMine={f.setMine}
         showArchive={!mineMode && !boardMode} archiveDone={archiveDone} toggleArchiveDone={toggleArchiveDone}
         showSelect={!boardMode} selectMode={selectMode} toggleSelectMode={() => setSelectMode(m => { if (m) clearSelection(); return !m; })}
         selectableCount={selectableIds.length} allSelected={allSelected} toggleSelectAll={toggleSelectAll} selectedCount={selected.size}
-        q={q} setQ={setQ} searchRef={searchRef}
+        q={q} setQ={f.setQ} searchRef={searchRef}
+        showColumns={!boardMode} colsOpen={colsOpen} setColsOpen={setColsOpen} cols={cols} columnKeys={columnKeys}
+        toggleColumn={toggleColumn} resetColumns={resetColumns}
         showCustomize={!boardMode} density={density} chooseDensity={chooseDensity} custOpen={custOpen} setCustOpen={setCustOpen}
+        showIds={showIds} toggleShowIds={toggleShowIds}
         onNewTask={focusCapture} newTaskMenuOpen={newTaskMenuOpen} setNewTaskMenuOpen={setNewTaskMenuOpen}
         getSubtaskTarget={getSubtaskTarget} onNewSubtask={requestSubtask}
         onNewSpace={() => router.push('/tasks?space=new')} />
 
-      {inProgramMode
-        ? <ProgramCapture session={session} programId={viewProgramId} spaces={spaces} defaultSpaceId={programDefaultSpace} onCreated={load} showToast={showToast} />
-        : mineMode
-          ? <QuickCapture session={session} assignSelf onCreated={load} showToast={showToast}
-              placeholder="Add a task to your list — it's assigned to you" />
-          : <QuickCapture session={session} spaceId={spaceId} onCreated={load} showToast={showToast} />}
+      {/* The one un-prefilled capture ([data-create-primary]): hidden until + Task / + New / `c`
+          reveal it, always open on an empty page. Same create body as the P2 quick capture. */}
+      <NewTaskCapture create={(t) => live.current.createInGroup(t)} alwaysOpen={isEmpty && !boardMode && !(loading && tasks.length === 0)}
+        placeholder={inProgramMode ? "New task — it's tagged to this program" : 'New task'}>{programSpacePicker}</NewTaskCapture>
 
-      {loading && tasks.length === 0 ? <Spinner /> : (
-        (mineMode ? (mineOwner.length + mineCollab.length + mineCreated.length) === 0 : topLevel.length === 0) ? (
+      {loading && tasks.length === 0 ? <Spinner /> : boardMode ? (
+        <div style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity var(--base) var(--ease)' }}>
+          <KanbanBoard rows={kanbanRows} axis={kanbanAxis} ctx={gridCtx} />
+        </div>
+      ) : isEmpty ? (
+        <div className="tl-emptywrap">
           <div className="empty-state">
             <div className="ei"><ListChecks size={24} /></div>
-            <h3>{(q || activeFilterCount) ? 'No tasks match' : (mineMode ? 'Nothing assigned to you' : 'All clear')}</h3>
-            <p>{(q || activeFilterCount) ? 'Try a different search or widen the filters.' : (mineMode ? 'Tasks you own, collaborate on, or raised for someone else — across every space — show up here.' : 'Capture a task above to get started.')}</p>
-            {activeFilterCount > 0 && <Button variant="neutral" size="sm" style={{ margin: '14px auto 0' }} onClick={clearFilters}>Clear filters</Button>}
+            <h3>{anyQuery ? 'No tasks match' : (mineMode ? 'Nothing assigned to you' : 'All clear')}</h3>
+            <p>{anyQuery ? 'Try a different search or widen the filters.' : (mineMode ? 'Tasks you own, collaborate on, or raised for someone else — across every space — show up here.' : 'Add a task above to get started.')}</p>
+            {f.activeFilterCount > 0 && <Button variant="neutral" size="sm" style={{ margin: '14px auto 0' }} onClick={f.clearFilters}>Clear filters</Button>}
           </div>
-        ) : mineMode ? (
-          <div style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity var(--base) var(--ease)' }}>
-            <MineSection title="Assigned to me" rows={mineOwner} ctx={rowCtx} gridCols={gridCols}
-              sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-            <MineSection title="Collaborating" rows={mineCollab} ctx={rowCtx} gridCols={gridCols}
-              sortKey={sortKey} sortDir={sortDir} onSort={onSort} collapsible />
-            {/* Raised by me, owned by someone else — delegated work that used to be absent
-                from this view entirely. Only OPEN ones appear (the RPC excludes done/
-                abandoned for this relation), so a finished delegation leaves the list. */}
-            <MineSection title="Raised by me" rows={mineCreated} ctx={rowCtx} gridCols={gridCols}
-              sortKey={sortKey} sortDir={sortDir} onSort={onSort} collapsible />
-          </div>
-        ) : (
-          <div style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity var(--base) var(--ease)' }}>
-            {boardMode ? (
-              <KanbanBoard rows={kanbanRows} axis={kanbanAxis} ctx={rowCtx} />
-            ) : (<>
-            <GridZone rows={gridRows} ctx={rowCtx} />
-
-            {boardRows.length > 0 && (
-              <div className="board-scroll"><div className="board">
-                <div className="cols" style={{ '--grid-cols': gridCols }}>
-                  <ColHead k="title" label="Task" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-                  {inProgramMode && <span className="ch">Space</span>}
-                  <ColHead k="owner_name" label="Owner" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-                  <ColHead k="status" label="Status" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-                  <ColHead k="priority" label="Pri" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-                  <ColHead k="deadline" label="Deadline" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-                  <span className="ch" style={{ justifyContent: 'flex-end' }} />
-                </div>
-                {groups.map(g => (
-                  <div key={g.key} className="group">
-                    {g.label && (
-                      <div className={'group-head' + (collapsedGroups[g.key] ? ' collapsed' : '')} onClick={() => setCollapsedGroups(c => ({ ...c, [g.key]: !c[g.key] }))}>
-                        <span className="chev"><ChevronDown size={15} /></span>
-                        {g.color && <span className="gdot" style={{ background: g.color }} />}
-                        <span className="gl">{g.label}</span>
-                        <span className="gc">{g.rows.length}</span>
-                      </div>
-                    )}
-                    {!collapsedGroups[g.key] && (
-                      <div className="rows">
-                        {g.rows.flatMap(task => {
-                          const kids = (childrenByParent[task.id] || []);
-                          const hasKids = (task.child_count || 0) > 0 || kids.length > 0;
-                          const isOpen = !!expanded[task.id];
-                          const out = [<TaskRow key={task.id} task={task} ctx={rowCtx} hasKids={hasKids} expanded={isOpen} />];
-                          if (hasKids && isOpen) kids.slice().sort(sortFn).forEach(c => out.push(<TaskRow key={c.id} task={c} ctx={rowCtx} isChild />));
-                          return out;
-                        })}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div></div>
-            )}
-
-            <ArchivedZone rows={archivedRows} ctx={rowCtx} />
-            </>)}
-          </div>
-        )
+        </div>
+      ) : (
+        <TaskListView
+          gridRows={mineMode ? [] : gridRows} groups={groups} archivedRows={mineMode ? [] : archivedRows}
+          childrenByParent={childrenByParent} expanded={expanded} sortFn={sortFn} selected={selected} selectMode={selectMode}
+          showIds={showIds} separate={separate} flat={mineMode} parentById={parentById}
+          visibleCols={visibleCols} cols={cols} moveColumn={moveColumn} resizeColumn={resizeColumn}
+          sortKey={sortKey} sortDir={sortDir} onSort={onSort}
+          collapsed={collapsed} toggleGroupCollapsed={toggleGroupCollapsed} setGroupsCollapsed={setGroupsCollapsed}
+          actions={actions} opts={opts} subRequest={subRequest} gridCtx={gridCtx} loading={loading} />
       )}
 
       {!boardMode && selectMode && selected.size > 0 && (
@@ -596,600 +626,6 @@ export default function TasksPage() {
           onArchived={() => { setSpaceSettingsOpen(false); refreshSpaces(); router.push('/tasks'); }} />
       )}
     </div>
-  );
-}
-
-/* ---------------- Sortable column header ---------------- */
-function ColHead({ k, label, sortKey, sortDir, onSort, style }) {
-  const active = sortKey === k;
-  return (
-    <span className={'ch' + (active ? ' sorted' : '')} style={style} onClick={() => onSort(k)}>
-      {label}<span className="ar">{active ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
-    </span>
-  );
-}
-
-/* ---------------- Editable select cell ---------------- */
-function EditableSelect({ editable, value, options, searchable, onPick, children, empty, align = 'left', width = 210 }) {
-  const [open, setOpen] = useState(false);
-  if (!editable) return <span style={{ display: 'inline-flex', minWidth: 0, maxWidth: '100%' }}>{children}</span>;
-  return (
-    <span style={{ position: 'relative', display: 'inline-flex', maxWidth: '100%' }}>
-      <span className={'editable' + (empty ? ' empty' : '')} onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}>
-        <span className="tx">{children}</span>
-      </span>
-      <Popover open={open} onClose={() => setOpen(false)} width={width} align={align}>
-        <OptionList options={options} value={value} searchable={searchable} onPick={(v, o) => { onPick(v, o); setOpen(false); }} />
-      </Popover>
-    </span>
-  );
-}
-
-/* ---------------- Status cell (settable + abandon) ---------------- */
-function StatusCell({ task, editable, onSet, onAbandon }) {
-  const [open, setOpen] = useState(false);
-  const [abandon, setAbandon] = useState(false);
-  const [reason, setReason] = useState('');
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!open && !abandon) return;
-    function down(e) { if (ref.current && !ref.current.contains(e.target)) { setOpen(false); setAbandon(false); } }
-    function key(e) { if (e.key === 'Escape') { setOpen(false); setAbandon(false); } }
-    document.addEventListener('mousedown', down); document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key, true); };
-  }, [open, abandon]);
-  if (!editable) return <StatusBadge status={task.status} />;
-  return (
-    <span ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
-      <StatusBadge status={task.status} onClick={(e) => { e.stopPropagation(); setOpen(o => !o); setAbandon(false); }} />
-      {open && !abandon && (
-        <div className="pop" style={{ top: 'calc(100% + 5px)', left: 0, width: 190 }} onMouseDown={e => e.stopPropagation()}>
-          {SETTABLE_STATUSES.map(s => (
-            <button key={s.key} className={'menu-item' + (task.status === s.key ? ' active' : '')} onClick={() => { onSet(s.key); setOpen(false); }}>
-              <span className="si" style={{ background: s.color }} />{s.label}
-              {task.status === s.key && <span className="ck"><Check size={14} /></span>}
-            </button>
-          ))}
-          <div style={{ height: 1, background: 'var(--border)', margin: '5px 4px' }} />
-          <button className="menu-item" style={{ color: 'var(--st-abandon)' }} onClick={() => { setAbandon(true); setReason(''); }}>
-            <Ban size={14} /> Abandon…
-          </button>
-        </div>
-      )}
-      {abandon && (
-        <div className="pop" style={{ top: 'calc(100% + 5px)', left: 0, width: 230, padding: 12 }} onMouseDown={e => e.stopPropagation()}>
-          <div className="menu-label" style={{ padding: '0 0 6px' }}>Abandon task</div>
-          <input className="reason-input" style={{ marginTop: 0 }} placeholder="Reason (required, logged)" autoFocus value={reason} onChange={e => setReason(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && reason.trim()) { onAbandon(reason.trim()); setAbandon(false); setOpen(false); } }} />
-          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
-            <button className="btn btn-ghost" onClick={() => setAbandon(false)}>Cancel</button>
-            <button className="btn btn-danger" disabled={!reason.trim()} onClick={() => { onAbandon(reason.trim()); setAbandon(false); setOpen(false); }}>Abandon</button>
-          </div>
-        </div>
-      )}
-    </span>
-  );
-}
-
-/* ---------------- Deadline cell ---------------- */
-function DeadlineCell({ task, editable, onFirstSet, onRevise }) {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState(null);
-  const [reason, setReason] = useState('');
-  const ref = useRef(null);
-  const eff = effectiveDeadline(task);
-  const st = deadlineState(task);
-  function start(e) { e.stopPropagation(); setDraft(eff); setReason(''); setOpen(true); }
-  async function commit() {
-    if (!draft) return;
-    if (task.deadline) { if (!reason.trim()) return; await onRevise(task, draft, reason.trim()); }
-    else { await onFirstSet(draft); }
-    setOpen(false);
-  }
-  return (
-    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-      <span className={'deadline ' + (eff ? st : 'empty')} onClick={editable ? start : undefined} style={{ cursor: editable ? 'pointer' : 'default' }}>
-        {eff ? (st === 'over' ? <AlertTriangle /> : <Calendar />) : null}
-        {eff ? relDeadline(eff) : (editable ? 'set date' : '—')}
-      </span>
-      {task.revised_deadline && <span className="rev-flag">rev</span>}
-      <AnchoredPopover anchorRef={ref} open={open} onClose={() => setOpen(false)} align="right">
-        <DatePicker value={draft} onChange={setDraft} autoFocus />
-        {task.deadline && <input className="reason-input" placeholder="Reason (required, logged)" value={reason} onChange={e => setReason(e.target.value)} />}
-        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
-          <button className="btn btn-ghost" onClick={() => setOpen(false)}>Cancel</button>
-          <button className="btn btn-primary" disabled={!draft || (!!task.deadline && !reason.trim())} onClick={commit}><Check size={13} /> {task.deadline ? 'Revise' : 'Set'}</button>
-        </div>
-      </AnchoredPopover>
-    </span>
-  );
-}
-
-/* ---------------- Task row ---------------- */
-function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
-  const { saveField, abandonInline, reviseInline, addSubtask, addCollab, openDrawer, teamCellOpts, ownerCellOpts, prioOpts, empOpts, setExpanded, gridCols, showSpace, selectMode, selected, toggleSelect } = ctx;
-  const ed = !!task._can_edit && task.status !== 'abandoned';
-  const isSel = !!selected?.has(task.id);
-  const done = task.status === 'done';
-  const collabs = (task.collaborators || []).map(c => c.full_name).filter(Boolean);
-  const [adding, setAdding] = useState(false);
-  const [subTitle, setSubTitle] = useState('');
-  const [collabOpen, setCollabOpen] = useState(false);
-  const collabRef = useRef(null);
-
-  useEffect(() => {
-    if (!collabOpen) return;
-    function down(e) { if (collabRef.current && !collabRef.current.contains(e.target)) setCollabOpen(false); }
-    document.addEventListener('mousedown', down);
-    return () => document.removeEventListener('mousedown', down);
-  }, [collabOpen]);
-
-  const toggleExpand = () => setExpanded(s => ({ ...s, [task.id]: !s[task.id] }));
-  const startAddSub = () => { setSubTitle(''); setAdding(true); setExpanded(s => ({ ...s, [task.id]: true })); };
-  const submitSub = () => { const v = subTitle.trim(); if (!v) return; addSubtask(task, v); setSubTitle(''); setAdding(false); };
-  // + Task → New sub-task (toolbar) asks for this row's inline sub-task input.
-  useEffect(() => {
-    if (!isChild && ctx.subRequest === task.id) { startAddSub(); ctx.clearSubRequest?.(); }
-  }, [ctx.subRequest]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Unmounting (group collapsed, filtered out) drops this row as the + Task sub-task target.
-  useEffect(() => () => {
-    if (ctx.focusedRowRef?.current === task.id) ctx.focusedRowRef.current = null;
-  }, [task.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const addableCollabs = empOpts.filter(o => o.value !== task.owner_employee_id && !(task.collaborators || []).some(c => c.employee_id === o.value));
-
-  const cls = ['row', isChild ? 'sub' : '', done ? 'done' : '', isSel ? 'selected' : '',
-    !isChild && task.priority === 'P0' ? 'p0' : '', !isChild && task.priority === 'P1' ? 'p1' : ''].filter(Boolean).join(' ');
-
-  return (
-    <>
-      <div className={cls} style={{ '--grid-cols': gridCols }} tabIndex={isChild ? undefined : 0} data-task-id={isChild ? undefined : task.id}
-        onFocus={isChild ? undefined : (e) => { if (e.target === e.currentTarget && ctx.focusedRowRef) ctx.focusedRowRef.current = task.id; }}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === 'Enter') { e.preventDefault(); openDrawer(isChild ? (task.parent_task_id || task.id) : task.id); }
-          else if ((e.key === 'x' || e.key === ' ') && ed) { e.preventDefault(); saveField(task, 'status', done ? 'not_started' : 'done'); }
-          else if (e.key === 's' && ed && !isChild) { e.preventDefault(); startAddSub(); }
-          else if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); const r = [...document.querySelectorAll('.board .row[tabindex="0"]')]; const n = r[r.indexOf(e.currentTarget) + 1]; n && n.focus(); }
-          else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); const r = [...document.querySelectorAll('.board .row[tabindex="0"]')]; const n = r[r.indexOf(e.currentTarget) - 1]; n && n.focus(); }
-          else if ((e.key === 'ArrowRight' || e.key === 'l') && hasKids && !expanded) { e.preventDefault(); toggleExpand(); }
-          else if ((e.key === 'ArrowLeft' || e.key === 'h') && hasKids && expanded) { e.preventDefault(); toggleExpand(); }
-        }}>
-        {/* Title */}
-        <span className="cell cell-title">
-          {selectMode && (ed
-            ? <button className={'sel-box' + (isSel ? ' on' : '')} title="Select task" onClick={(e) => { e.stopPropagation(); toggleSelect(task.id); }}>{isSel && <Check size={11} />}</button>
-            : <span className="sel-box disabled" title="You can only bulk-edit tasks you own" />)}
-          {isChild ? <span className="branch"><ChevronRight size={12} style={{ transform: 'rotate(45deg)' }} /></span>
-            : (hasKids
-              ? <button className={'expand' + (expanded ? ' open' : '')} onClick={(e) => { e.stopPropagation(); toggleExpand(); }}><ChevronRight size={14} /></button>
-              : <span className="expand-spacer" />)}
-          <button className={'check' + (done ? ' checked' : '')} title={done ? 'Mark not done' : 'Mark done'}
-            disabled={!ed} onClick={(e) => { e.stopPropagation(); saveField(task, 'status', done ? 'not_started' : 'done'); }}>
-            {done && <Check size={12} />}
-          </button>
-          {!isChild && <span className="cell-id" title="Open" onClick={(e) => { e.stopPropagation(); openDrawer(task.id); }}>{task.task_no}</span>}
-          <span className="ttl" onClick={() => openDrawer(isChild ? (task.parent_task_id || task.id) : task.id)}>{task.title}</span>
-          {task.revised_deadline && <span className="rev-flag">rev</span>}
-          {hasKids && <span className="kid-count">{task.child_done ?? 0}/{task.child_count ?? 0}</span>}
-          {!isChild && (
-            <span className="inline-meta">
-              <EditableSelect editable={ed} value={task.department_id || ''} options={teamCellOpts} searchable empty={!task.department_name}
-                onPick={(v) => saveField(task, 'department_id', v)}>
-                {task.department_name
-                  ? <span className="chip" style={{ maxWidth: 120 }}><span className="dot" style={{ background: personColor(task.department_id) }} /><span className="lbl">{task.department_name}</span></span>
-                  : (ed ? <span className="chip add">team</span> : null)}
-              </EditableSelect>
-            </span>
-          )}
-          {!isChild && ed && <button className="subadd" title="Add sub-task" onClick={(e) => { e.stopPropagation(); startAddSub(); }}><Plus size={13} /></button>}
-        </span>
-
-        {/* Space (program mode only — rows span spaces) */}
-        {showSpace && (
-          <span className="cell" onClick={() => openDrawer(isChild ? (task.parent_task_id || task.id) : task.id)}>
-            <span className="chip" style={{ maxWidth: 118 }} title={task.space_name || 'General'}>
-              <span className="dot" style={{ background: personColor(task.space_id) }} />
-              <span className="lbl">{task.space_name || 'General'}</span>
-            </span>
-          </span>
-        )}
-
-        {/* Owner + collaborators */}
-        <span className="cell cell-owner">
-          <EditableSelect editable={ed} value={task.owner_employee_id || ''} options={ownerCellOpts} searchable empty={!task.owner_name} width={220}
-            onPick={(v) => saveField(task, 'owner_employee_id', v)}>
-            {task.owner_name
-              ? <Avatar name={task.owner_name} size={22} title={task.owner_name} />
-              : (ed ? 'assign' : '—')}
-          </EditableSelect>
-          {collabs.length > 0 && (
-            <span style={{ marginLeft: 4 }} title={collabs.join(', ')}>
-              <AvatarRow names={collabs} size={20} onClick={() => openDrawer(isChild ? (task.parent_task_id || task.id) : task.id)} />
-            </span>
-          )}
-          {!isChild && ed && (
-            <span ref={collabRef} style={{ position: 'relative', display: 'inline-flex', marginLeft: collabs.length ? 4 : 0 }}>
-              <button className="add-collab" title="Add collaborator" onClick={(e) => { e.stopPropagation(); setCollabOpen(o => !o); }}><Plus size={12} /></button>
-              <Popover open={collabOpen} onClose={() => setCollabOpen(false)} width={220}>
-                <OptionList options={addableCollabs} searchable onPick={(v) => { addCollab(task, v); setCollabOpen(false); }} />
-              </Popover>
-            </span>
-          )}
-        </span>
-
-        {/* Status */}
-        <span className="cell">
-          <StatusCell task={task} editable={ed} onSet={(s) => saveField(task, 'status', s)} onAbandon={(r) => abandonInline(task, r)} />
-        </span>
-
-        {/* Priority */}
-        <span className="cell">
-          <EditableSelect editable={ed} value={task.priority} options={prioOpts} width={180} onPick={(v) => saveField(task, 'priority', v)}>
-            <PriorityBadge priority={task.priority} />
-          </EditableSelect>
-        </span>
-
-        {/* Deadline */}
-        <span className="cell">
-          <DeadlineCell task={task} editable={ed} onFirstSet={(iso) => saveField(task, 'deadline', iso)} onRevise={reviseInline} />
-        </span>
-
-        {/* Meta */}
-        <span className="cell cell-meta" onClick={() => openDrawer(isChild ? (task.parent_task_id || task.id) : task.id)}>
-          {task.doc_count > 0 && <span className="m" title="documents"><Link2 />{task.doc_count}</span>}
-          {task.comment_count > 0 && <span className="m" title="comments"><MessageSquare />{task.comment_count}</span>}
-        </span>
-      </div>
-
-      {adding && (
-        <div className="row" style={{ '--grid-cols': '1fr' }}>
-          <span className="cell" style={{ paddingLeft: 40, gap: 6 }}>
-            <span className="branch"><ChevronRight size={12} style={{ transform: 'rotate(45deg)' }} /></span>
-            <input autoFocus value={subTitle} onChange={e => setSubTitle(e.target.value)} placeholder="Sub-task title, Enter to add…"
-              className="cell-input" style={{ maxWidth: 460 }}
-              onKeyDown={e => { if (e.key === 'Enter') submitSub(); if (e.key === 'Escape') setAdding(false); }} />
-            <button className="btn btn-primary" disabled={!subTitle.trim()} onClick={submitSub}><Check size={13} /></button>
-            <button className="btn btn-ghost" onClick={() => setAdding(false)}><X size={13} /></button>
-          </span>
-        </div>
-      )}
-    </>
-  );
-}
-
-/* ---------------- The Grid (triage) ---------------- */
-function GridZone({ rows, ctx }) {
-  const [collapsed, setCollapsed] = useState(false);
-  if (!rows.length) return null;
-  return (
-    <div className={'grid-zone' + (collapsed ? ' collapsed' : '')}>
-      <div className="grid-head" onClick={() => setCollapsed(c => !c)}>
-        <span className="flag"><Inbox /></span>
-        <span className="ttl">The Grid</span>
-        <span className="cnt">{rows.length}</span>
-        <span className="hint">needs an owner and a deadline to hit the board</span>
-        <span className="chev"><ChevronDown size={16} /></span>
-      </div>
-      <div className="grid-body">
-        {rows.map(task => <GridCard key={task.id} task={task} ctx={ctx} />)}
-      </div>
-    </div>
-  );
-}
-
-function GridCard({ task, ctx }) {
-  const { saveField, openDrawer, ownerCellOpts, selectMode, selected, toggleSelect } = ctx;
-  const ed = !!task._can_edit && task.status !== 'abandoned';
-  const done = task.status === 'done';
-  const isSel = !!selected?.has(task.id);
-  return (
-    <div className={'gcard' + (isSel ? ' selected' : '')}>
-      {selectMode && (ed
-        ? <button className={'sel-box' + (isSel ? ' on' : '')} title="Select task" onClick={() => toggleSelect(task.id)}>{isSel && <Check size={11} />}</button>
-        : <span className="sel-box disabled" title="You can only bulk-edit tasks you own" />)}
-      <button className={'check' + (done ? ' checked' : '')} disabled={!ed} style={{ marginRight: 2 }}
-        onClick={() => saveField(task, 'status', done ? 'not_started' : 'done')}>{done && <Check size={12} />}</button>
-      <span className="gtitle" onClick={() => openDrawer(task.id)} style={{ cursor: 'pointer' }}>
-        <div className="t">{task.title}</div>
-        <div className="id">{task.task_no}</div>
-      </span>
-      <PriorityBadge priority={task.priority} />
-      <span className="gsetup">
-        <NeedChip task={task} kind="owner" ed={ed} ownerOpts={ownerCellOpts} saveField={saveField} />
-        <NeedChip task={task} kind="deadline" ed={ed} saveField={saveField} />
-      </span>
-    </div>
-  );
-}
-
-function NeedChip({ task, kind, ed, ownerOpts, saveField }) {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState(null);
-  const ref = useRef(null);
-  const set = kind === 'owner' ? !!task.owner_employee_id : !!task.deadline;
-  const label = kind === 'owner'
-    ? (set ? firstName(task.owner_name) : 'Owner')
-    : (set ? fmtShortDate(task.deadline) : 'Deadline');
-  return (
-    <span ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
-      <button className={'need-chip' + (set ? ' set' : '')} disabled={!ed} onClick={() => ed && setOpen(o => !o)}>
-        {set ? <Check /> : <Plus />}{label}
-      </button>
-      {kind === 'owner' && (
-        <Popover open={open} onClose={() => setOpen(false)} width={210}>
-          <OptionList options={ownerOpts} value={task.owner_employee_id || ''} searchable onPick={(v) => { saveField(task, 'owner_employee_id', v); setOpen(false); }} />
-        </Popover>
-      )}
-      {kind === 'deadline' && (
-        <AnchoredPopover anchorRef={ref} open={open} onClose={() => setOpen(false)}>
-          <DatePicker value={draft} onChange={setDraft} autoFocus />
-          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
-            <button className="btn btn-ghost" onClick={() => setOpen(false)}>Cancel</button>
-            <button className="btn btn-primary" disabled={!draft} onClick={() => { saveField(task, 'deadline', draft); setOpen(false); }}><Check size={13} /> Set</button>
-          </div>
-        </AnchoredPopover>
-      )}
-    </span>
-  );
-}
-
-/* ---------------- Archived (collapsed bottom section) ---------------- */
-function ArchivedZone({ rows, ctx }) {
-  const [open, setOpen] = useState(false);
-  if (!rows.length) return null;
-  return (
-    <div className={'archived-zone' + (open ? ' open' : '')}>
-      <div className="archived-head" onClick={() => setOpen(o => !o)}>
-        <span className="chev"><ChevronRight size={15} /></span>
-        <Archive size={14} />
-        <span className="ttl">Archived</span>
-        <span className="cnt">{rows.length}</span>
-      </div>
-      {open && (
-        <div className="archived-body">
-          {rows.map(t => <ArchivedRow key={t.id} task={t} ctx={ctx} />)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ArchivedRow({ task, ctx }) {
-  const { openDrawer, saveField } = ctx;
-  const ed = !!task._can_edit;
-  return (
-    <div className="archived-row">
-      <button className="ar-check" disabled={!ed} title={ed ? 'Mark not done (return to the board)' : undefined}
-        onClick={() => ed && saveField(task, 'status', 'not_started')}><Check size={11} /></button>
-      <span className="ar-id" onClick={() => openDrawer(task.id)}>{task.task_no}</span>
-      <span className="ar-ttl" onClick={() => openDrawer(task.id)}>{task.title}</span>
-      {task.owner_name && <Avatar name={task.owner_name} size={18} title={task.owner_name} />}
-    </div>
-  );
-}
-
-/* ---------------- My-tasks section (cross-space, flat) ---------------- */
-function MineSection({ title, rows, ctx, gridCols, sortKey, sortDir, onSort, collapsible }) {
-  const [open, setOpen] = useState(true);
-  if (collapsible && !rows.length) return null;
-  return (
-    <div className="mine-section">
-      <div className={'mine-head' + (collapsible ? ' clickable' : '')} onClick={collapsible ? () => setOpen(o => !o) : undefined}>
-        {collapsible && <span className={'chev' + (open ? '' : ' closed')}><ChevronDown size={15} /></span>}
-        <span className="ms-ttl">{title}</span>
-        <span className="ms-cnt">{rows.length}</span>
-      </div>
-      {(!collapsible || open) && (
-        rows.length ? (
-          <div className="board-scroll"><div className="board">
-            <div className="cols" style={{ '--grid-cols': gridCols }}>
-              <ColHead k="title" label="Task" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-              <span className="ch">Space</span>
-              <ColHead k="owner_name" label="Owner" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-              <ColHead k="status" label="Status" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-              <ColHead k="priority" label="Pri" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-              <ColHead k="deadline" label="Deadline" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-              <span className="ch" style={{ justifyContent: 'flex-end' }} />
-            </div>
-            <div className="rows">
-              {rows.map(t => <TaskRow key={t.id} task={t} ctx={ctx} hasKids={false} expanded={false} />)}
-            </div>
-          </div></div>
-        ) : <div className="mine-empty">Nothing here yet.</div>
-      )}
-    </div>
-  );
-}
-
-/* ---------------- Bulk action bar (floating) ---------------- */
-function BulkBar({ count, onClear, onApply, ownerOpts, prioOpts, programOpts,
-                  empOpts = [], spaceOpts = [], onCollaborator, onMove, onAbandon }) {
-  const [menu, setMenu] = useState(null); // owner | status | priority | program | deadline | collab | space | abandon
-  const [draft, setDraft] = useState(null);
-  const [reason, setReason] = useState('');
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!menu) return;
-    function down(e) { if (ref.current && !ref.current.contains(e.target)) close(); }
-    function key(e) { if (e.key === 'Escape') close(); }
-    document.addEventListener('mousedown', down); document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key, true); };
-  }, [menu]);
-  function close() { setMenu(null); setDraft(null); setReason(''); }
-  function go(field, value, r) { onApply(field, value, r); close(); }
-  const toggle = (m) => { setDraft(null); setReason(''); setMenu(cur => (cur === m ? null : m)); };
-
-  return (
-    <div className="bulk-bar" ref={ref} onMouseDown={e => e.stopPropagation()}>
-      <span className="bb-count"><CheckSquare size={15} /> {count} selected</span>
-      <div className="bb-sep" />
-      <div className="bb-actions">
-        {/* Owner */}
-        <div className="bb-item">
-          <button className={'bb-btn' + (menu === 'owner' ? ' on' : '')} onClick={() => toggle('owner')}><Users size={14} /> Owner</button>
-          {menu === 'owner' && <div className="pop bb-pop"><OptionList options={ownerOpts} searchable onPick={(v) => go('owner_employee_id', v)} /></div>}
-        </div>
-        {/* Status */}
-        <div className="bb-item">
-          <button className={'bb-btn' + (menu === 'status' ? ' on' : '')} onClick={() => toggle('status')}><Check size={14} /> Status</button>
-          {menu === 'status' && (
-            <div className="pop bb-pop" style={{ width: 190 }}>
-              {SETTABLE_STATUSES.map(s => (
-                <button key={s.key} className="menu-item" onClick={() => go('status', s.key)}>
-                  <span className="si" style={{ background: s.color }} />{s.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        {/* Priority */}
-        <div className="bb-item">
-          <button className={'bb-btn' + (menu === 'priority' ? ' on' : '')} onClick={() => toggle('priority')}><Flag size={14} /> Priority</button>
-          {menu === 'priority' && (
-            <div className="pop bb-pop" style={{ width: 160 }}>
-              {prioOpts.map(p => <button key={p.value} className="menu-item" onClick={() => go('priority', p.value)}>{p.label}</button>)}
-            </div>
-          )}
-        </div>
-        {/* Deadline */}
-        <div className="bb-item">
-          <button className={'bb-btn' + (menu === 'deadline' ? ' on' : '')} onClick={() => toggle('deadline')}><Calendar size={14} /> Deadline</button>
-          {menu === 'deadline' && (
-            <div className="pop bb-pop" style={{ width: 248, padding: 10 }}>
-              <DatePicker value={draft} onChange={setDraft} autoFocus />
-              <input className="reason-input" placeholder="Reason (required if any already has a deadline)" value={reason} onChange={e => setReason(e.target.value)} />
-              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
-                <button className="btn btn-ghost" onClick={close}>Cancel</button>
-                <button className="btn btn-primary" disabled={!draft} onClick={() => go('deadline', draft, reason.trim() || undefined)}><Check size={13} /> Set</button>
-              </div>
-            </div>
-          )}
-        </div>
-        {/* Program */}
-        <div className="bb-item">
-          <button className={'bb-btn' + (menu === 'program' ? ' on' : '')} onClick={() => toggle('program')}><Tag size={14} /> Program</button>
-          {menu === 'program' && <div className="pop bb-pop"><OptionList options={programOpts} searchable onPick={(v) => go('program_id', v)} /></div>}
-        </div>
-        {/* Collaborators (S153) — child table, so it does not go through onApply. Add vs
-            remove is chosen explicitly: a single tap list would make "remove" unreachable. */}
-        <div className="bb-item">
-          <button className={'bb-btn' + (menu === 'collab' ? ' on' : '')} onClick={() => toggle('collab')}><UserPlus size={14} /> Collaborators</button>
-          {menu === 'collab' && (
-            <div className="pop bb-pop" style={{ width: 250, padding: 8 }}>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                <button className={'btn ' + (draft === 'remove' ? 'btn-ghost' : 'btn-primary')} style={{ flex: 1 }} onClick={() => setDraft('add')}>Add</button>
-                <button className={'btn ' + (draft === 'remove' ? 'btn-primary' : 'btn-ghost')} style={{ flex: 1 }} onClick={() => setDraft('remove')}>Remove</button>
-              </div>
-              <OptionList options={empOpts} searchable
-                onPick={(v) => { onCollaborator(v, draft === 'remove' ? 'remove' : 'add'); close(); }} />
-            </div>
-          )}
-        </div>
-        {/* Move to space (S153) — sub-tasks follow their parent, handled worker-side. */}
-        <div className="bb-item">
-          <button className={'bb-btn' + (menu === 'space' ? ' on' : '')} onClick={() => toggle('space')}><FolderInput size={14} /> Move</button>
-          {menu === 'space' && (
-            <div className="pop bb-pop">
-              <OptionList options={spaceOpts} searchable onPick={(v) => { onMove(v); close(); }} />
-            </div>
-          )}
-        </div>
-        {/* Abandon (S153) — terminal, so a reason is mandatory here exactly as it is on a
-            single task. bulkUpdateTasks deliberately refuses status='abandoned'. */}
-        <div className="bb-item">
-          <button className={'bb-btn' + (menu === 'abandon' ? ' on' : '')} onClick={() => toggle('abandon')}><Ban size={14} /> Abandon</button>
-          {menu === 'abandon' && (
-            <div className="pop bb-pop" style={{ width: 260, padding: 10 }}>
-              <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8, lineHeight: 1.45 }}>
-                Terminal. The same reason is recorded on every selected task.
-              </div>
-              <input className="reason-input" placeholder="Reason (required)" value={reason} autoFocus
-                onChange={e => setReason(e.target.value)} />
-              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
-                <button className="btn btn-ghost" onClick={close}>Cancel</button>
-                <button className="btn btn-primary" disabled={!reason.trim()}
-                  onClick={() => { const r = reason.trim(); close(); onAbandon(r); }}>Abandon</button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-      <button className="bb-clear" onClick={onClear}><X size={14} /> Clear</button>
-    </div>
-  );
-}
-
-/* ---------------- Filter popover ---------------- */
-/* ---------------- Quick capture ---------------- */
-// The 36px capture bar both captures share (P2 restyle; behaviour unchanged): ghost +,
-// the input (data-create-primary — `c` and + Task focus it), a `c` hint, and Add —
-// neutral until there's a title, then primary.
-function CaptureBar({ inputRef, title, setTitle, onAdd, saving, placeholder, children }) {
-  const has = !!title.trim();
-  return (
-    <div className="tk-capture">
-      <Plus className="tk-capture-plus" size={15} strokeWidth={2} aria-hidden />
-      <input ref={inputRef} data-create-primary value={title} onChange={e => setTitle(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') onAdd(); }} placeholder={placeholder} aria-label="New task title" disabled={saving} />
-      {!has && <Kbd className="tk-capture-kbd">c</Kbd>}
-      {children}
-      <Button variant={has ? 'primary' : 'neutral'} size="sm" onClick={onAdd} disabled={!has} loading={saving}>Add</Button>
-    </div>
-  );
-}
-
-function QuickCapture({ session, spaceId, onCreated, showToast, assignSelf, placeholder }) {
-  const [title, setTitle] = useState('');
-  const [saving, setSaving] = useState(false);
-  const ref = useRef(null);
-  async function add() {
-    const t = title.trim();
-    if (!t || saving) return;
-    setSaving(true);
-    try {
-      await docketopsPost('createTask', { title: t, space_id: spaceId || undefined, assign_self: assignSelf || undefined }, session);
-      setTitle(''); await onCreated();
-      showToast(assignSelf ? 'Added to your list' : 'Captured to The Grid', 'success'); ref.current?.focus();
-    }
-    catch (e) { showToast(e.message || 'Create failed', 'error'); }
-    finally { setSaving(false); }
-  }
-  return (
-    <CaptureBar inputRef={ref} title={title} setTitle={setTitle} onAdd={add} saving={saving}
-      placeholder={placeholder || 'Capture a task — press Enter and it lands in The Grid to finish later'} />
-  );
-}
-
-/* ---------------- Program quick capture (auto-tags the program) ---------------- */
-function ProgramCapture({ session, programId, spaces, defaultSpaceId, onCreated, showToast }) {
-  const [title, setTitle] = useState('');
-  const [spaceId, setSpaceId] = useState(defaultSpaceId || '');
-  const [saving, setSaving] = useState(false);
-  const ref = useRef(null);
-  // Re-sync the default space once the program's tasks load (default is computed from them).
-  useEffect(() => { setSpaceId(prev => prev || defaultSpaceId || ''); }, [defaultSpaceId]);
-  async function add() {
-    const t = title.trim();
-    if (!t || saving) return;
-    setSaving(true);
-    try {
-      await docketopsPost('createTask', { title: t, space_id: spaceId || undefined, program_id: programId }, session);
-      setTitle('');
-      await onCreated();
-      if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed')); // refresh sidebar count
-      showToast('Added to program', 'success');
-      ref.current?.focus();
-    } catch (e) { showToast(e.message || 'Create failed', 'error'); }
-    finally { setSaving(false); }
-  }
-  return (
-    <CaptureBar inputRef={ref} title={title} setTitle={setTitle} onAdd={add} saving={saving}
-      placeholder="Add a task to this program — it's tagged automatically">
-      <select className="tk-capture-space" value={spaceId} onChange={e => setSpaceId(e.target.value)} title="Space this task lives in" aria-label="Space" disabled={saving}>
-        {spaces.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-      </select>
-    </CaptureBar>
   );
 }
 

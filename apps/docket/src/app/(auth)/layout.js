@@ -96,7 +96,8 @@ function AuthLayoutInner({ children }) {
   const go = useCallback((r) => router.push(r), [router]);
   // + New → New task: on a program board, stay and focus its ProgramCapture (it
   // auto-tags the program); otherwise as the old sidebar button — the current space's
-  // board (or General) — and focus its quick-capture once that route has landed.
+  // board (or General) — and focus its un-prefilled top "New task" capture
+  // ([data-create-primary]; focusing reveals it) once that route has landed.
   const newTask = useCallback(() => {
     const programId = onTasksBoard ? (search.get('program') || '') : '';
     const target = programId ? `/tasks?program=${programId}` : route.spaceId ? `/tasks?space=${route.spaceId}` : '/tasks';
