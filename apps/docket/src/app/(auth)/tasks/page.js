@@ -53,7 +53,7 @@ export default function TasksPage() {
   const crossSpace = inProgramMode || mineMode;
 
   const view = useTaskViewState({ lensParam });
-  const { filters: f, groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView,
+  const { filters: f, groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView, cardSize, chooseCardSize,
     showIds, toggleShowIds, subtaskMode, chooseSubtaskMode, cols, toggleColumn, moveColumn, resizeColumn, resetColumns,
     collapsed, toggleGroupCollapsed, setGroupsCollapsed } = view;
   const { status, departmentId, employeeId, priority, programId, overdue, revised, mine, q } = f;
@@ -498,6 +498,16 @@ export default function TasksPage() {
     saveField: actions.saveField, openDrawer: actions.openDrawer, showSpace: crossSpace, ownerCellOpts,
     selectMode, selected, toggleSelect, enterSelect: actions.enterSelect,
   };
+  // Board (P4): a column's "+ Add task" creates through the same createInGroup as a list
+  // group foot — the column's axis value prefilled (status via the follow-up changeStatus),
+  // never a program id that no longer resolves.
+  const boardCtx = {
+    ...gridCtx, showIds, cardSize, activeId: drawerId, drawerOpen: drawerId != null, shellModalOpen, sortKey,
+    createIn: (title, value) => {
+      const dead = kanbanAxis === 'program' && value && !programs.some(p => p.id === value);
+      return live.current.createInGroup(title, GROUP_FIELD[kanbanAxis], dead ? undefined : value);
+    },
+  };
 
   // Toolbar: Subtasks menu (list view, when a visible row has sub-tasks).
   const parentIds = useMemo(() => boardRows.filter(t => (t.child_count || 0) > 0 || (childrenByParent[t.id] || []).length > 0).map(t => t.id), [boardRows, childrenByParent]);
@@ -567,7 +577,7 @@ export default function TasksPage() {
         q={q} setQ={f.setQ} searchRef={searchRef}
         showColumns={!boardMode} colsOpen={colsOpen} setColsOpen={setColsOpen} cols={cols} columnKeys={columnKeys}
         toggleColumn={toggleColumn} resetColumns={resetColumns}
-        showCustomize={!boardMode} density={density} chooseDensity={chooseDensity} custOpen={custOpen} setCustOpen={setCustOpen}
+        showCustomize boardMode={boardMode} cardSize={cardSize} chooseCardSize={chooseCardSize} density={density} chooseDensity={chooseDensity} custOpen={custOpen} setCustOpen={setCustOpen}
         showIds={showIds} toggleShowIds={toggleShowIds}
         onNewTask={focusCapture} newTaskMenuOpen={newTaskMenuOpen} setNewTaskMenuOpen={setNewTaskMenuOpen}
         getSubtaskTarget={getSubtaskTarget} onNewSubtask={requestSubtask}
@@ -580,7 +590,7 @@ export default function TasksPage() {
 
       {loading && tasks.length === 0 ? <Spinner /> : boardMode ? (
         <div style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity var(--base) var(--ease)' }}>
-          <KanbanBoard rows={kanbanRows} axis={kanbanAxis} ctx={gridCtx} />
+          <KanbanBoard rows={kanbanRows} axis={kanbanAxis} ctx={boardCtx} />
         </div>
       ) : isEmpty ? (
         <div className="tl-emptywrap">

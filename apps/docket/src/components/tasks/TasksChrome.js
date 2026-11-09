@@ -143,6 +143,18 @@ export function TasksToolbar(p) {
         {p.showCustomize && <>
           <IconButton ref={custRef} icon={Settings2} label="Customize" aria-haspopup="menu" onClick={() => p.setCustOpen(o => !o)} />
           <Menu anchorRef={custRef} open={p.custOpen} onClose={() => p.setCustOpen(false)} align="right" width={200} label="Customize">
+            {p.boardMode ? <>
+              {/* Board (P4): card size instead of row density; DKT ids shared with the list. */}
+              <MenuLabel>Card size</MenuLabel>
+              {[['s', 'Small'], ['m', 'Medium'], ['l', 'Large']].map(([v, l]) => (
+                <MenuItem key={v} keepOpen selected={p.cardSize === v}
+                  icon={<Check size={14} style={{ opacity: p.cardSize === v ? 1 : 0 }} aria-hidden />}
+                  onClick={() => p.chooseCardSize(v)}>{l}</MenuItem>
+              ))}
+              <MenuSeparator />
+              <MenuLabel>Show</MenuLabel>
+              <MenuItem keepOpen icon={<Check size={14} style={{ opacity: p.showIds ? 1 : 0 }} aria-hidden />} onClick={p.toggleShowIds}>DKT ids</MenuItem>
+            </> : <>
             <MenuLabel>Density</MenuLabel>
             {[['compact', 'Compact'], ['default', 'Default'], ['roomy', 'Roomy']].map(([v, l]) => (
               <MenuItem key={v} keepOpen selected={p.density === v}
@@ -153,6 +165,7 @@ export function TasksToolbar(p) {
             <MenuLabel>Show</MenuLabel>
             <MenuItem keepOpen icon={<Check size={14} style={{ opacity: p.showIds ? 1 : 0 }} aria-hidden />} onClick={p.toggleShowIds}>DKT ids</MenuItem>
             <MenuItem keepOpen icon={<Check size={14} style={{ opacity: p.cols.hidden.team ? 0 : 1 }} aria-hidden />} onClick={() => p.toggleColumn('team')}>Team</MenuItem>
+            </>}
           </Menu>
         </>}
 

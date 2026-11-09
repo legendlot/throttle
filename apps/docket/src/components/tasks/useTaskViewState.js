@@ -5,7 +5,7 @@
 //
 // localStorage keys: docket.viewMode · docket.density · docket.archiveDone (all
 // pre-P3, unchanged) · docket.list.columns · docket.list.collapsed ·
-// docket.list.showIds · docket.list.subtasks (P3).
+// docket.list.showIds · docket.list.subtasks (P3) · docket.board.cardSize (P4).
 import { useCallback, useEffect, useState } from 'react';
 
 // Optional list columns, in default order. Title (first) and Status are always shown;
@@ -67,6 +67,7 @@ export function useTaskViewState({ lensParam }) {
   const [density, setDensity] = useState('default');
   const [archiveDone, setArchiveDone] = useState(false);
   const [viewMode, setViewMode] = useState('list');
+  const [cardSize, setCardSize] = useState('m'); // board cards: 's' | 'm' | 'l'
   const [showIds, setShowIds] = useState(true);
   const [subtaskMode, setSubtaskMode] = useState('nested'); // 'nested' | 'separate'
   const [cols, setCols] = useState(DEFAULT_COLS);
@@ -76,6 +77,7 @@ export function useTaskViewState({ lensParam }) {
       const d = localStorage.getItem('docket.density'); if (DENSITIES.includes(d)) setDensity(d);
       const a = localStorage.getItem('docket.archiveDone'); if (a != null) setArchiveDone(a === '1');
       const v = localStorage.getItem('docket.viewMode'); if (v === 'list' || v === 'board') setViewMode(v);
+      const cs = localStorage.getItem('docket.board.cardSize'); if (cs === 's' || cs === 'm' || cs === 'l') setCardSize(cs);
     } catch { /* ignore */ }
     const c = read('docket.list.columns', null);
     if (c && Array.isArray(c.order)) {
@@ -97,6 +99,7 @@ export function useTaskViewState({ lensParam }) {
 
   const chooseDensity = useCallback((d) => { setDensity(d); try { localStorage.setItem('docket.density', d); } catch { /* ignore */ } }, []);
   const toggleArchiveDone = useCallback(() => setArchiveDone(v => { const n = !v; try { localStorage.setItem('docket.archiveDone', n ? '1' : '0'); } catch { /* ignore */ } return n; }), []);
+  const chooseCardSize = useCallback((v) => { setCardSize(v); try { localStorage.setItem('docket.board.cardSize', v); } catch { /* ignore */ } }, []);
   const chooseView = useCallback((v) => { setViewMode(v); try { localStorage.setItem('docket.viewMode', v); } catch { /* ignore */ } }, []);
   const toggleShowIds = useCallback(() => setShowIds(v => { write('docket.list.showIds', !v); return !v; }), []);
   const chooseSubtaskMode = useCallback((m) => { setSubtaskMode(m); write('docket.list.subtasks', m); }, []);
@@ -139,6 +142,7 @@ export function useTaskViewState({ lensParam }) {
       programId, setProgramId, overdue, setOverdue, revised, setRevised, mine, setMine, q, setQ,
       activeFilterCount, clearFilters, panelFilterCount, clearPanelFilters },
     groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView,
+    cardSize, chooseCardSize,
     showIds, toggleShowIds, subtaskMode, chooseSubtaskMode,
     cols, toggleColumn, moveColumn, resizeColumn, resetColumns,
     collapsed, toggleGroupCollapsed, setGroupsCollapsed,
