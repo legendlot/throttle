@@ -1,6 +1,6 @@
 # Ignition → Snorkel payment requests (Reann #2) — plan
 
-> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **APPROVED 2026-11-09 (Afshaan took every recommendation, §Decisions). S1 SHIPPED 2026-11-09 (migration 0005 + 0005b). S2 SHIPPED + DEPLOYED 2026-11-09 (throttle `0458c058`, snorkelops `afc8ee21`). Next: S3.**
+> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **APPROVED 2026-11-09 (Afshaan took every recommendation, §Decisions). S1 SHIPPED 2026-11-09 (migration 0005 + 0005b). S2 SHIPPED + DEPLOYED 2026-11-09 (throttle `0458c058`, snorkelops `afc8ee21`). S3 SHIPPED + DEPLOYED 2026-11-09 (throttle `4c97f899`, migration 0006, ignitionops `63cd1403`). Next: S4 (deal-page Payments card).**
 > Builds on #1 (`2026-11-05-ignition-deal-contract-send.md`), which collects bank details + the invoice.
 
 ## Goal
@@ -68,6 +68,14 @@ or hold shows on the deal and flags the owner. No bank details are typed by hand
 - `ignitionGetPaymentStatus {source_refs[≤200]}` → `{requests:[…], missing:[…]}` for the reconcile cron.
 - Push arrives at ignitionops **`POST /internal/snorkel-status`** with `{action:'snorkelStatusChanged', source_ref, request_id, request_no, status, held_reason, rejection_note, paid_at, paid_amount, payment_ref, tds_amount}`; S3 must build exactly that route (until then the push 404s, harmlessly). Fires on approve, reject, hold, release, paid, cancel and UTR edit.
 - Live threshold ₹5,00,000 → creator requests normally land `approved` at once; the invoice is attached before Finance is notified.
+
+## S3 as built — what S4 calls
+
+- Actions (JWT): `getDealPayments {engagement_id}` → `{requests[], agreed, raised_live_total, paid_total}` (view); `raiseDealPayment {engagement_id, kind, amount, invoice_id?, invoice_no?, invoice_date?, invoice_total?}`, `attachDealPaymentInvoice {request_id, invoice_id, invoice_no, invoice_date, invoice_total}`, `retryDealPayment {request_id}`, `cancelDealPayment {request_id}` (manage, never partners). Refusals come back as plain sentences from `ignition.deal_payment_refusal` — show them verbatim.
+- The money rules live in the DB (migration 0006): `raise_deal_payment` / `claim_deal_payment_send` lock the engagement row; the cap counts live requests + the hand log (`payments` without `snorkel_request_id`). Proven on live data 2026-11-09 in a rolled-back transaction (fully hand-paid deal refused; full after advance refused; balance before Live refused; send without invoice refused).
+- Push is a doorbell: `/internal/snorkel-status` re-reads Snorkel and applies that. Reconcile `*/15` covers open states, `send_failed` (adopts by source_ref) and paid rows ≤ 14 days (UTR edits). Paid → `ignition.payments` row, amount GROSS (net + TDS), `utr`, `tds_amount`, `snorkel_request_id`; `deletePayment` refuses those; `deleteEngagement` refuses any deal with requests.
+- `notifyOwnerOfPaymentProblem(row)` is the S5 hook (no-op today), called on a move into held/rejected.
+- S4 must also hide "Add payment" once Snorkel requests are live (Decision 1).
 
 ## Open questions (as asked)
 
