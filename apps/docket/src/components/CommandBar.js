@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Hash, Lock, Flag,
   SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info } from 'lucide-react';
-import { fuzzyMatch, dktQuery } from '../lib/fuzzy.js';
+import { fuzzyMatch, dktQuery, rankGroups } from '../lib/fuzzy.js';
 import { getCommandSource } from '../lib/commandSources.js';
 import { ADMIN_ITEMS } from '../lib/nav.js';
 import { STATUS_MAP } from '../lib/tasks.js';
@@ -174,7 +174,10 @@ export function CommandBar({ open = true, userId, onClose, router, spaces = [], 
       const list = (!query && (g === 'nav' || g === 'commands')) ? (groups[g] || []) : (groups[g] || []).slice(0, CAP);
       if (list.length) out.push({ group: g, label, items: list });
     }
-    return out;
+    // Searching: the group holding the best match comes first (an exact DKT id scores
+    // 3000, so it still leads), which makes row 0 — the default Enter — the overall best.
+    // Empty query keeps the fixed order.
+    return query ? rankGroups(out) : out;
   }, [q, index, snap]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const flat = useMemo(() => rows.flatMap(r => r.items), [rows]);

@@ -38,6 +38,14 @@ function subsequence(q, text, preferWordStart) {
   return { score, idx };
 }
 
+// Order result groups by their best item's score (desc) — the strongest match leads,
+// whatever group it's in. A stable sort, so ties keep the given order. Each group's
+// items must already be sorted best-first. Pure; used by the ⌘K bar when searching.
+export function rankGroups(groups) {
+  const best = (g) => (g.items.length ? (g.items[0]._score ?? 0) : -Infinity);
+  return groups.map((g, i) => ({ g, i })).sort((a, b) => (best(b.g) - best(a.g)) || (a.i - b.i)).map(x => x.g);
+}
+
 // DKT id query: "DKT-123", "dkt123" or "123". Returns the number string, or null.
 export function dktQuery(q) {
   const m = /^\s*(?:dkt[-\s]?)?(\d+)\s*$/i.exec(q || '');

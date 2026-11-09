@@ -45,3 +45,15 @@ test('DKT id parsing', () => {
   assert.equal(dktQuery('report'), null);
   assert.equal(dktQuery(''), null);
 });
+
+test('rankGroups: best item first across groups, ties keep order', async () => {
+  const { rankGroups } = await import('./fuzzy.js');
+  const g = (group, ...scores) => ({ group, items: scores.map(s => ({ _score: s })) });
+  // "board": mid-word task hits (500) must not sit above a word-start command (700).
+  const order = rankGroups([g('tasks', 500, 499), g('places'), g('nav', 498), g('commands', 700)]).map(x => x.group);
+  assert.deepEqual(order, ['commands', 'tasks', 'nav', 'places']);
+  // An exact DKT id (3000) keeps Tasks first.
+  assert.equal(rankGroups([g('tasks', 3000), g('commands', 1000)])[0].group, 'tasks');
+  // Ties keep the given order.
+  assert.deepEqual(rankGroups([g('recent', 700), g('tasks', 700), g('nav', 700)]).map(x => x.group), ['recent', 'tasks', 'nav']);
+});
