@@ -76,7 +76,9 @@ export function composeContract(deal, products, coupons, campaign, settings) {
   out.push(`Type: ${DEAL_WORDS[d.deal_type] || 'Collaboration'}`, '');
   out.push('What we are sending you:', items || '· (product to be confirmed)', '');
   if (!blank(d.deliverables)) out.push('What we need from you:', trimmed(d.deliverables), '');
-  if (!blank(d.expected_post_date)) out.push(`Post date: ${plainDate(d.expected_post_date)}`, '');
+  // Reann #bugs 1794226469.391889: only a FIXED date (a launch) goes in the contract. Otherwise the
+  // published terms say when to post (Reann adds "within 7 days") and the date stays planning only.
+  if (d.post_date_fixed === true && !blank(d.expected_post_date)) out.push(`Post date (fixed): ${plainDate(d.expected_post_date)}`, '');
   if (d.deal_type !== 'barter' && (hasAmount || (TERMS_WORDS[d.payment_terms] && d.payment_terms !== 'n_a'))) {
     out.push('Payment:');
     if (hasAmount) out.push(`Amount: ₹${amount.toLocaleString('en-IN')}`);
@@ -101,7 +103,7 @@ export function composeContract(deal, products, coupons, campaign, settings) {
   if (isTerminalStage(d.stage)) blockers.push(`This deal is closed (${d.stage}).`);
   if (d.engagement_type === 'ugc') blockers.push('UGC deals do not use this contract.');
   if (blank(d.deliverables)) blockers.push('Add the deliverables on Deal terms first.');
-  if (blank(d.expected_post_date)) blockers.push('Add the expected post date first.');
+  if (d.post_date_fixed === true && blank(d.expected_post_date)) blockers.push('This deal has a fixed post date: add the date first.');
   if (needsAmount(d) && !hasAmount) blockers.push('A paid deal needs a payment amount first.');
 
   const base = trimmed(settings?.subject) || 'Your Legend of Toys collaboration';

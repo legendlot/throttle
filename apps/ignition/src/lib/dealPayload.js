@@ -13,6 +13,7 @@ export function initialDealForm(extra = {}) {
   return {
     engagement_type: 'video_tracking', deal_type: 'paid',
     expected_post_date: '',
+    post_date_fixed: false,
     deliverables: '',
     campaign_id: '',
     payment_amount: '', payment_terms: 'advance', affiliate_pct: '',
@@ -25,6 +26,7 @@ export function initialDealForm(extra = {}) {
 export function dealPayload(form, influencerId, products = []) {
   const payload = { influencer_id: influencerId, ...form };
   if (!payload.expected_post_date) delete payload.expected_post_date;
+  if (form.engagement_type === 'ugc') payload.post_date_fixed = false;   // UGC never uses the contract
   if (String(payload.deliverables ?? '').trim()) payload.deliverables = payload.deliverables.trim();
   else delete payload.deliverables;
   if (!payload.campaign_id) delete payload.campaign_id;

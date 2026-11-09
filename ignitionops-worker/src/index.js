@@ -2692,6 +2692,8 @@ const ENGAGEMENT_FIELDS = [
   // cpm is worker-computed (recomputeCpm), not a manual field (theme ④ B13).
   'compliance_caption_link','compliance_coupon_verbal','compliance_car_motion',
   'expected_post_date','post_date','delivered_date','video_link','utm_link',
+  // Reann #bugs 1794226469.391889: a fixed (launch) post date is printed in the contract.
+  'post_date_fixed',
   // What the creator owes (Reann #1). Printed in the contract; `contract_required` is NOT here:
   // only the worker sets it, or an ordinary patch could lift the Shipping lock.
   'deliverables',
@@ -2979,6 +2981,15 @@ async function clearedPostDateRefusal(env, engagementId, patch) {
   return null;
 }
 
+/** "Post date: 26 Nov 2026 (fixed) → 30 Nov 2026 (expected)", or null when neither changed. */
+export function postDateChangeNote(before, after) {
+  const d = v => (v ? String(v).slice(0, 10) : null);
+  const word = x => `${d(x.expected_post_date) || 'no date'} (${x.post_date_fixed === true ? 'fixed' : 'expected'})`;
+  if (d(before.expected_post_date) === d(after.expected_post_date)
+      && (before.post_date_fixed === true) === (after.post_date_fixed === true)) return null;
+  return `Post date: ${word(before)} → ${word(after)}`;
+}
+
 export async function updateEngagement(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
@@ -3001,6 +3012,15 @@ export async function updateEngagement(body, auth, env) {
     const locked = await refuseIfLocked(env, body.engagement_id, touched); if (locked) return locked;
   }
 
+  // Reann #bugs 1794226469.391889: the post date and its Fixed (launch) tick are editable after
+  // creation and a fixed date is in the contract, so a change to either leaves a history row.
+  const datePatched = 'expected_post_date' in patch || 'post_date_fixed' in patch;
+  let before = null;
+  if (datePatched) {
+    const br = await sb(`/rest/v1/engagements?id=eq.${encodeURIComponent(body.engagement_id)}&select=expected_post_date,post_date_fixed&limit=1`, env);
+    before = br.ok ? (br.data?.[0] || null) : null;
+  }
+
   const r = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}`, env, {
     method: 'PATCH',
     body: JSON.stringify(patch),
@@ -3012,6 +3032,10 @@ export async function updateEngagement(body, auth, env) {
   await mirrorDealVideoFields(env, body.engagement_id, patch);
   await recomputeCpm(env, body.engagement_id);   // views/costs may have changed (B13)
   if (patch.poc_user_id) await writeHistory(env, body.engagement_id, 'owner_change', null, null, patch.poc_name || null, auth.userId);
+  if (datePatched && before) {
+    const note = postDateChangeNote(before, r.data?.[0] || {});
+    if (note) await writeHistory(env, body.engagement_id, 'post_date_change', null, null, note, auth.userId);
+  }
   return ok(r.data?.[0]);
 }
 

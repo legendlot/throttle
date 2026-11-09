@@ -26,7 +26,7 @@ test('a complete paid deal composes every section and has no blockers', () => {
   assert.deepEqual(c.blockers, []);
   assert.equal(c.to, 'creator@example.com');
   assert.equal(c.subject, 'Your deal (IGN-2026-00001)');
-  for (const bit of ['Hi Asha,', 'Campaign: Diwali', 'Type: Paid', 'Crest Sly x 2', '1 reel', 'Post date: 9 Dec 2026',
+  for (const bit of ['Hi Asha,', 'Campaign: Diwali', 'Type: Paid', 'Crest Sly x 2', '1 reel',
     'Amount: ₹5,000', 'Paid in advance', 'https://l.in/x', 'ASHALOT', 'Do show the car.', 'Term one.']) {
     assert.ok(c.body.includes(bit), bit);
   }
@@ -87,7 +87,7 @@ test('blockers: each condition on its own', () => {
     [deal({ engagement_type: 'ugc' }), published, /UGC/],
     [deal({ deliverables: null }), published, /deliverables/],
     [deal({ deliverables: '  \n ' }), published, /deliverables/],
-    [deal({ expected_post_date: '' }), published, /post date/],
+    [deal({ post_date_fixed: true, expected_post_date: '' }), published, /fixed post date/],
     [deal({ payment_amount: null }), published, /amount/],
     [deal({ payment_amount: '0' }), published, /amount/],
     [deal({ payment_amount: 'abc' }), published, /amount/],
@@ -296,4 +296,29 @@ test('a paid deal with not-applicable terms prints no When line', () => {
   const c = compose(deal({ payment_terms: 'n_a' }));
   assert.doesNotMatch(c.body, /When:/);
   assert.match(c.body, /Amount: ₹5,000/);
+});
+
+// Reann #bugs 1794226469.391889 — the contract carries a post date only when it is fixed (a launch).
+test('post date: not needed and not printed unless fixed; a fixed date is printed and required', () => {
+  const none = compose(deal({ expected_post_date: null }));
+  assert.deepEqual(none.blockers, []);
+  assert.doesNotMatch(none.body, /Post date/);
+  const planned = compose(deal({ expected_post_date: '2026-12-09', post_date_fixed: false }));
+  assert.deepEqual(planned.blockers, []);
+  assert.doesNotMatch(planned.body, /Post date/);
+  const fixed = compose(deal({ expected_post_date: '2026-12-09', post_date_fixed: true }));
+  assert.deepEqual(fixed.blockers, []);
+  assert.match(fixed.body, /Post date \(fixed\): 9 Dec 2026/);
+  const fixedNoDate = compose(deal({ expected_post_date: '', post_date_fixed: true }));
+  assert.equal(fixedNoDate.blockers.length, 1);
+  assert.match(fixedNoDate.blockers[0], /fixed post date/);
+});
+
+test('postDateChangeNote: names old → new, null when nothing changed', async () => {
+  const { postDateChangeNote } = await import('../src/index.js');
+  assert.equal(postDateChangeNote({ expected_post_date: '2026-11-26', post_date_fixed: false }, { expected_post_date: '2026-11-26', post_date_fixed: false }), null);
+  assert.equal(postDateChangeNote({ expected_post_date: '2026-11-26', post_date_fixed: true }, { expected_post_date: '2026-11-30', post_date_fixed: true }),
+    'Post date: 2026-11-26 (fixed) → 2026-11-30 (fixed)');
+  assert.equal(postDateChangeNote({ expected_post_date: null, post_date_fixed: false }, { expected_post_date: '2026-12-01', post_date_fixed: true }),
+    'Post date: no date (expected) → 2026-12-01 (fixed)');
 });

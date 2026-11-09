@@ -146,6 +146,10 @@ export default function NewEngagementPage() {
           </DealField>
           <DealField label="Expected post date">
             <input type="date" value={form.expected_post_date} onChange={e => setField('expected_post_date', e.target.value)} style={ctl} />
+            {form.engagement_type !== 'ugc' && <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: 'var(--text-3)', marginTop: 4, cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!form.post_date_fixed} onChange={e => setField('post_date_fixed', e.target.checked)} />
+              Fixed date (launch) — goes in the contract
+            </label>}
           </DealField>
           <DealField label="Deliverables">
             <input value={form.deliverables} onChange={e => setField('deliverables', e.target.value)} placeholder="e.g. 1 reel, 3 stories" style={ctl} />

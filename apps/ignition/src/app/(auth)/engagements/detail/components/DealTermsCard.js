@@ -57,6 +57,10 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
       ad_rights_amount: e.ad_rights_amount ?? '',
       ad_rights_duration: e.ad_rights_duration || '',
       deliverables: e.deliverables || '',
+      // Reann #bugs 1794226469.391889: the post date is editable after creation, and only a FIXED
+      // date (a launch) goes in the contract.
+      expected_post_date: (e.expected_post_date || '').slice(0, 10),
+      post_date_fixed: e.post_date_fixed === true,
     });
     setEditing(true);
   }
@@ -78,6 +82,8 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
         ad_rights_amount: numOrNull(f.ad_rights_amount),
         ad_rights_duration: f.ad_rights_duration || null,
         deliverables: f.deliverables.trim() || null,
+        expected_post_date: f.expected_post_date || null,
+        post_date_fixed: f.post_date_fixed,
       }, session);
       toast('Deal terms updated', 'success');
       setEditing(false);
@@ -104,6 +110,15 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
             <textarea value={f.deliverables} onChange={ev => setF(x => ({ ...x, deliverables: ev.target.value }))} rows={3}
               placeholder="e.g. 1 reel, 3 stories" style={{ width: '100%', boxSizing: 'border-box', background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', padding: '7px 10px', fontFamily: 'var(--font-ui)', fontSize: 13, resize: 'vertical' }} />
           </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0', alignItems: 'center', borderTop: '1px solid var(--row-divider)', fontSize: 14 }}>
+            <span style={{ flexShrink: 0, color: 'var(--text-3)' }}>Post date</span>
+            <input type="date" value={f.expected_post_date} onChange={ev => setF(x => ({ ...x, expected_post_date: ev.target.value }))}
+              style={{ width: '100%', maxWidth: 220, minWidth: 0, background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', padding: '7px 10px', fontFamily: 'var(--font-ui)', fontSize: 13, boxSizing: 'border-box' }} />
+          </div>
+          {e.engagement_type !== 'ugc' && <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '4px 0 8px', fontSize: 13, color: 'var(--text-2)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={f.post_date_fixed} onChange={ev => setF(x => ({ ...x, post_date_fixed: ev.target.checked }))} style={{ marginTop: 2 }} />
+            <span>Fixed date (launch) — put this date in the contract. Leave unticked and the contract terms cover it.</span>
+          </label>}
           <SelectEdit label="Deal type" value={f.deal_type} onChange={v => setF(x => ({ ...x, deal_type: v }))}
             options={DEAL_TYPE_VALUES.map(v => ({ value: v, label: DEAL_TYPE_LABELS[v] }))} />
           <SelectEdit label="Payment terms" value={f.payment_terms} onChange={v => setF(x => ({ ...x, payment_terms: v }))}
@@ -135,6 +150,10 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
               ? <span style={{ whiteSpace: 'pre-wrap' }}>{e.deliverables}</span>
               : <span style={{ color: 'var(--text-4)' }}>—</span>} />
           )}
+          <KV label="Post date" value={e.expected_post_date
+            ? <span><span style={mono}>{String(e.expected_post_date).slice(0, 10)}</span>
+                <span style={{ color: 'var(--text-4)', fontSize: 12 }}>{e.engagement_type === 'ugc' ? '' : e.post_date_fixed ? ' · fixed, in the contract' : ' · expected, not in the contract'}</span></span>
+            : <span style={{ color: 'var(--text-4)' }}>{e.post_date_fixed ? 'Fixed — date not set yet' : '—'}</span>} />
           <KV label="Deal type" value={DEAL_TYPE_LABELS[e.deal_type] || e.deal_type} />
           <KV label="Payment terms" value={PAYMENT_TERMS_LABELS[e.payment_terms] || e.payment_terms || '—'} />
           <KV label="Payment amount" value={<span style={mono}>₹{agreed.toLocaleString()}</span>} />
