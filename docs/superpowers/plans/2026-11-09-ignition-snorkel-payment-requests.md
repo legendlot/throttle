@@ -1,6 +1,6 @@
 # Ignition → Snorkel payment requests (Reann #2) — plan
 
-> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **APPROVED 2026-11-09 (Afshaan took every recommendation, §Decisions). S1 SHIPPED 2026-11-09 (migration 0005 + 0005b). S2 SHIPPED + DEPLOYED 2026-11-09 (throttle `0458c058`, snorkelops `afc8ee21`). S3 SHIPPED + DEPLOYED 2026-11-09 (throttle `4c97f899`, migration 0006, ignitionops `63cd1403`). S4 SHIPPED + DEPLOYED 2026-11-09 (throttle `f27053e6`, ignitionops `aff1eb95`, app `68470d17`). Next: S5 (owner Slack DM), S6 (manual + ₹1 proof).**
+> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **APPROVED 2026-11-09 (Afshaan took every recommendation, §Decisions). S1 SHIPPED 2026-11-09 (migration 0005 + 0005b). S2 SHIPPED + DEPLOYED 2026-11-09 (throttle `0458c058`, snorkelops `afc8ee21`). S3 SHIPPED + DEPLOYED 2026-11-09 (throttle `4c97f899`, migration 0006, ignitionops `63cd1403`). S4 SHIPPED + DEPLOYED 2026-11-09 (throttle `f27053e6`, ignitionops `aff1eb95`, app `68470d17`). S5 SHIPPED + DEPLOYED 2026-11-09 (throttle `963ce91c`, snorkelops `a9667ffa`, ignitionops `786adc89`). Next: S6 (manual + ₹1 proof).**
 > Builds on #1 (`2026-11-05-ignition-deal-contract-send.md`), which collects bank details + the invoice.
 
 ## Goal
@@ -82,6 +82,12 @@ or hold shows on the deal and flags the owner. No bank details are typed by hand
 - Deal page Payments card (`PaymentsCard.js` + `DealPaymentModal.js`): Agreed · Raised · Paid, one row per request with its state, hand-log rows as "Paid by hand". Raise advance / full; balance only at Live; none on dead stages or ₹0 fee.
 - Staff invoice upload: `createDealInvoiceUploadUrl` → browser upload → `uploadDealInvoice` (same helpers, bucket, cap and mime rules as the creator's contract page).
 - **Decision 1 as applied (lane call, S4 review):** "+ Add" (hand log) hides PER DEAL only when the wording is published AND that creator's bank details are on file (`bank_on_file`). On 2026-11-09 that hid it on 0–1 deals; 129 fee-owing deals had no bank details. `/payments` "Record payment" was left as it is.
+
+## S5 as built
+
+- ignitionops `notifyOwnerOfPaymentProblem` → `snorkelCall('ignitionNotifyOwner', {source_ref}, 8000)`, only on a `move` into held/rejected. A racing push/reconcile loses the state-guarded PATCH and re-reads as a refresh, so one DM per move. hold → release → hold DMs twice, by design.
+- snorkelops `ignitionNotifyOwner` takes `source_ref` only and reads everything else itself: its `payment_requests` row (must be held/rejected now), Ignition's `deal_payment_requests.engagement_id` → `engagements.engagement_no, poc_user_id`, the owner's auth email (must be @legendoftoys.com), Slack `lookupByEmail` → `conversations.open` → `chat.postMessage`. Text escaped, newlines collapsed. Misses return `{sent:false, reason}`: not_held_or_rejected · no_deal · no_owner · no_lot_email · no_slack_user · dm_open_failed.
+- Live-probed 2026-11-09: unknown ref 404, bad ref 400, no token 401; no DM sent. The first real DM comes with S6's proof, or the first real hold.
 
 ## Open questions (as asked)
 
