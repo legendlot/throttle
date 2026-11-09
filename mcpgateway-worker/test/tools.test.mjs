@@ -14,7 +14,8 @@ test('every tool parse() returns { ok, value } on success (the shape the core pa
     odo_funnel: { report: 'history' }, odo_amazon: { report: 'geo' }, odo_inventory: { report: 'thresholds' }, odo_pnl: { report: 'product_costs' }, odo_lookup: { report: 'channels' },
     docket_tasks: { report: 'my_tasks' }, docket_create_task: { title: 'x' }, docket_update_task: { id: U, priority: 'P1' }, docket_set_status: { id: U, status: 'done' },
     docket_revise_deadline: { id: U, new_deadline: '2026-11-20', reason: 'r' }, docket_add_comment: { id: U, body: 'b' }, docket_abandon_task: { id: U, reason: 'r' },
-    snorkel_procurement: { report: 'pos' }, snorkel_requests: { report: 'requests', mine: true }, snorkel_sales: { report: 'orders' }, snorkel_assets: { report: 'assets', category_id: 3 } };
+    snorkel_procurement: { report: 'pos' }, snorkel_requests: { report: 'requests', mine: true }, snorkel_sales: { report: 'orders' }, snorkel_assets: { report: 'assets', category_id: 3 },
+    garage_store: { report: 'stock', q: 'screw' }, redline_production: { report: 'dashboard' }, depot_dispatch: { report: 'pipeline' } };
   for (const t of TOOLS) {
     assert.ok(t.name in ok, `add ${t.name} to this test`);
     const p = t.parse(ok[t.name], NOW);
@@ -350,4 +351,74 @@ test('snorkel: removed reports are gone; catalogue reads need a filter; vendors_
   const env = { SNORKELOPS: { fetch: async () => new Response(JSON.stringify({ ok: true, data: [{ part_code: 'LB-WD-PINE-3', part_name: 'Pine wood', part_category: 'Raw' }, { part_code: 'SC-1', part_name: 'Screw', part_category: 'Hardware' }] }), { status: 200 }) } };
   const r = await pr.run({ env, sbAccess: 'J', gate: { snorkel_perms: SROLE.store }, input: pr.parse({ report: 'materials', q: 'pine' }, NOW).value });
   assert.deepEqual(r.data.result, { rows: [{ part_code: 'LB-WD-PINE-3', part_name: 'Pine wood', part_category: 'Raw' }], count: 1 });
+});
+
+// ---- Garage / Redline / Depot (read-only, lotopsproxy), 2026-11-09. Role sets from live store.roles.
+const OROLE = {
+  viewer: { dashboard: true },
+  stock_viewer: { dashboard: true, stock: 'view' },
+  store_associate: { dashboard: true, reports: true, returns: 'write', stock: 'view', stock_issue: 'view' },
+  gate_ops: { gate_pass: true, users_manage: true },
+  admin: { dashboard: true, deviation_propose: true, gate_pass: true, grn: 'write', receiving: 'write', reports: true, returns: 'write', run_request: true, stock: 'write', stock_issue: 'write' },
+};
+const allowed = (tool, perms) => Object.entries(findTool(tool).reports).filter(([, r]) => r.allow({ ops_perms: perms })).map(([k]) => k).sort();
+test('ops: tools need the system grant; reports follow the app screen gates per role', () => {
+  assert.deepEqual(toolsFor({ systems: ['garage'], ops_perms: OROLE.admin }).map(t => t.name), ['whoami', 'garage_store']);
+  assert.deepEqual(toolsFor({ systems: ['garage', 'redline', 'depot'], ops_perms: {} }).map(t => t.name), ['whoami']);
+  assert.deepEqual(allowed('garage_store', OROLE.viewer), ['alerts', 'bom', 'producibility']);
+  assert.deepEqual(allowed('garage_store', OROLE.stock_viewer), ['alerts', 'bom', 'producibility', 'stock']);
+  assert.deepEqual(allowed('garage_store', OROLE.store_associate), ['alerts', 'bom', 'issue_lines', 'issues', 'producibility', 'return_pools', 'return_shipments', 'returns_summary', 'stock']);
+  assert.deepEqual(allowed('garage_store', OROLE.gate_ops), ['gate_passes']);
+  assert.deepEqual(allowed('redline_production', OROLE.viewer), ['dashboard', 'repair_queue', 'unit_trace']);
+  assert.deepEqual(allowed('depot_dispatch', OROLE.gate_ops), []);
+  assert.equal(findTool('depot_dispatch').deny({ ops_perms: OROLE.gate_ops }), 'ops denied');
+  assert.equal(findTool('garage_store').deny({ ops_perms: OROLE.gate_ops }), null);
+});
+test('ops: a report outside the role is refused before calling lotopsproxy', async () => {
+  let calls = 0;
+  const env = { LOTOPS: { fetch: async () => { calls++; return new Response(JSON.stringify({ ok: true, data: [] }), { status: 200 }); } } };
+  const t = findTool('garage_store');
+  assert.deepEqual(await t.run({ env, sbAccess: 'J', gate: { ops_perms: OROLE.viewer }, input: t.parse({ report: 'grns' }, NOW).value }), { ok: false, reason: 'ops denied' });
+  assert.equal(calls, 0);
+  assert.equal((await t.run({ env, sbAccess: 'J', gate: { ops_perms: OROLE.admin }, input: t.parse({ report: 'grns' }, NOW).value })).ok, true);
+});
+test('ops: no admin, export, download, print, cost, address, vendor or PO action is reachable', () => {
+  const acts = TOOLS.filter(t => ['garage', 'redline', 'depot'].includes(t.system)).flatMap(t => Object.values(t.reports).map(r => r.action));
+  for (const a of acts) assert.doesNotMatch(a, /User|Role|Device|ActivityLog|[dD]ownload|Export|Print|Cost|Address|Vendor|getPOs|Price|Settings|calcKit|AuditProvenance|Url$/, a);
+  assert.ok(acts.length >= 35);
+});
+test('ops: ranges renamed for lotopsproxy; gate-pass PII and free text dropped', async () => {
+  const seen = [];
+  const env = { LOTOPS: { fetch: async u => { seen.push(new URL(u)); return new Response(JSON.stringify({ ok: true, data: [{ gate_pass_no: 'GP-1', person_name: 'Raju', person_phone: '9820012345', to_address: 'Plot 4', remarks: 'call me', void_reason: 'x', created_by: '11111111-2222-4333-8444-555555555555', created_by_name: 'Asha' }] }), { status: 200 }); } } };
+  const t = findTool('garage_store');
+  const r = await t.run({ env, sbAccess: 'J', gate: { ops_perms: OROLE.admin }, input: t.parse({ report: 'gate_passes', from: '2026-11-01', direction: 'outbound' }, NOW).value });
+  assert.deepEqual(Object.fromEntries(seen[0].searchParams), { action: 'getGatePasses', direction: 'outbound', date_from: '2026-11-01', date_to: '2026-11-09' });
+  assert.deepEqual(r.data.result, [{ gate_pass_no: 'GP-1', person_name: 'Raju', created_by_name: 'Asha' }]);
+  const c = findTool('depot_dispatch').parse({ report: 'challans', to: '2026-11-05' }, NOW).value.params;
+  assert.deepEqual(c, { from_date: '2026-10-07', to_date: '2026-11-05' });
+  assert.equal(findTool('garage_store').parse({ report: 'issues', from: '2026-09-01', to: '2026-11-01' }, NOW).ok, false); // 31-day cap
+});
+
+test('ops reviews 2026-11-09: money, vendors, warehouse/ship-to text, descriptions and operator ids never leave', async () => {
+  const row = { shipment_no: 'DS-1', status: 'shipped', units: 40, unit_cost: '12.5', po_value: '9000', invoice_value: '1', invoice_number: 'INV-1', payment_terms: '30d', vendor_name: 'V',
+    destination_warehouse: 'Plot 4, Bhiwandi 421302', so_ship_city: 'Pune', so_ship_state: 'MH', subtotal: '100', gst_amount: '18', total_amount: '118', current_state: 'packed',
+    lines: [{ sku: 'VX-1', qty: 2, rate: '50', amount: '100', description: 'call 98200', total_value: '1' }], material_description: 'x', assigned_to: 'u', operator_id: 'o',
+    order_link: { order_no: 'SO-1', collectable_amount: '500' } };
+  const env = { LOTOPS: { fetch: async () => new Response(JSON.stringify({ ok: true, data: [row] }), { status: 200 }) } };
+  const t = findTool('depot_dispatch');
+  const r = await t.run({ env, sbAccess: 'J', gate: { ops_perms: OROLE.viewer }, input: t.parse({ report: 'shipments' }, NOW).value });
+  assert.deepEqual(r.data.result, [{ shipment_no: 'DS-1', status: 'shipped', units: 40, current_state: 'packed', lines: [{ sku: 'VX-1', qty: 2 }], order_link: { order_no: 'SO-1' } }]);
+});
+test('ops reviews: query syntax cannot ride a text filter; stock needs a filter; PO-data report removed; app hasPermission semantics', () => {
+  const d = findTool('depot_dispatch');
+  for (const bad of ['draft&limit=1', 'a=b', 'x,y', 'in.(a)', "o'r", 'a%26b', 'a#b'])
+    assert.equal(d.parse({ report: 'shipments', status: bad }, NOW).ok, false, bad);
+  assert.equal(d.parse({ report: 'shipments', status: 'ready to ship' }, NOW).ok, true);
+  assert.equal(d.parse({ report: 'challans', q: 'a,b)' }, NOW).ok, false);
+  const g = findTool('garage_store');
+  assert.equal(g.parse({ report: 'stock' }, NOW).ok, false);
+  assert.ok(!Object.values(g.reports).some(r => r.action === 'getUpcomingShipments'));
+  assert.deepEqual(allowed('garage_store', { dashboard: 'view' }), []);            // flag key must be exactly true
+  assert.deepEqual(allowed('garage_store', { dashboard: true, stock: 'none' }), ['alerts', 'bom', 'producibility']);
+  assert.ok(allowed('garage_store', { stock: 'view' }).includes('stock'));        // level key: any value but 'none'
 });

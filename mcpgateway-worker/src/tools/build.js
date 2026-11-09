@@ -24,7 +24,9 @@ export const T = {
     check: v => Array.isArray(v) && v.length && v.length <= 50 && v.every(x => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9 _.\-/]{0,59}$/.test(x))
       ? { ok: true, value: v.join(',') } : { ok: false, error: 'must be a list of 1–50 plain codes' },
   },
-  text: { schema: { type: 'string', maxLength: 80 }, check: v => typeof v === 'string' && v.length <= 80 && !/[\u0000-\u001f]/.test(v) ? { ok: true, value: v } : { ok: false, error: 'must be short plain text' } },
+  // No query syntax: some workers paste the decoded value into a PostgREST URL unescaped (lotopsproxy
+  // getDispatchShipments `status=eq.${s}`; Codex + hostile review 2026-11-09).
+  text: { schema: { type: 'string', maxLength: 80 }, check: v => typeof v === 'string' && v.length <= 80 && !/[\u0000-\u001f&=,()*;:'"<>\\%#?+]/.test(v) ? { ok: true, value: v } : { ok: false, error: 'must be short plain text (letters, digits, spaces, - _ . /)' } },
   bool: { schema: { type: 'boolean' }, check: v => typeof v === 'boolean' ? { ok: true, value: v ? 'true' : 'false' } : { ok: false, error: 'must be true or false' } },
   oneOf: (...vals) => ({ schema: { type: 'string', enum: vals }, check: v => vals.includes(v) ? { ok: true, value: v } : { ok: false, error: `must be one of: ${vals.join(', ')}` } }),
   int: (min, max) => ({ schema: { type: 'integer', minimum: min, maximum: max }, check: v => Number.isInteger(v) && v >= min && v <= max ? { ok: true, value: String(v) } : { ok: false, error: `must be a whole number ${min}–${max}` } }),
