@@ -1,6 +1,6 @@
 # Ignition → Snorkel payment requests (Reann #2) — plan
 
-> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **APPROVED 2026-11-09 (Afshaan took every recommendation, §Decisions). S1 SHIPPED 2026-11-09 (migration 0005 + 0005b). Next: S2.**
+> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **APPROVED 2026-11-09 (Afshaan took every recommendation, §Decisions). S1 SHIPPED 2026-11-09 (migration 0005 + 0005b). S2 SHIPPED + DEPLOYED 2026-11-09 (throttle `0458c058`, snorkelops `afc8ee21`). Next: S3.**
 > Builds on #1 (`2026-11-05-ignition-deal-contract-send.md`), which collects bank details + the invoice.
 
 ## Goal
@@ -60,6 +60,14 @@ or hold shows on the deal and flags the owner. No bank details are typed by hand
 - **S3:** `deleteEngagement` refuses with 409 `has_payment_requests_cannot_delete` BEFORE any child delete (today the FK would fire only after products/history are gone).
 - **S3:** sum of live requests (advance + balance + full) ≤ `payment_amount`, and `full` excludes `advance`/`balance` — enforced in `raiseDealPayment` with a test; the DB index is per kind only.
 - Upserts may target the three full unique indexes; `deal_payment_requests_one_live_per_kind` stays partial and is NOT an `on_conflict` target.
+
+## S2 as built — contract S3 must meet
+
+- Call `env.SNORKELOPS.fetch('https://snorkelops/internal/ignition', POST, Authorization: Bearer IGNITION_INTERNAL_TOKEN, {action, ...})`.
+- `ignitionRaisePayment` input: `source_ref` (= deal_payment_requests.id), `influencer:{id,name,channel_name,pan,gstin,email,phone}`, `bank` or null, `amount_to_pay`, `invoice_no`, `invoice_date`, `invoice_total`, `purpose`, `needed_by?`, `requested_by_user_id`, `requested_by_name`, `invoice_file:{bucket:'ignition-creator-invoices',path,file_name,mime,size_bytes}`. Errors to surface on the deal: `bank_incomplete`, `no_bank_details`, `payee_inactive`, `payee_ambiguous` (+candidates), `source_ref_conflict`, `invoice_copy_failed`.
+- `ignitionGetPaymentStatus {source_refs[≤200]}` → `{requests:[…], missing:[…]}` for the reconcile cron.
+- Push arrives at ignitionops **`POST /internal/snorkel-status`** with `{action:'snorkelStatusChanged', source_ref, request_id, request_no, status, held_reason, rejection_note, paid_at, paid_amount, payment_ref, tds_amount}`; S3 must build exactly that route (until then the push 404s, harmlessly). Fires on approve, reject, hold, release, paid, cancel and UTR edit.
+- Live threshold ₹5,00,000 → creator requests normally land `approved` at once; the invoice is attached before Finance is notified.
 
 ## Open questions (as asked)
 
