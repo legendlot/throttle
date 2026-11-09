@@ -1,6 +1,6 @@
 # Ignition monthly affiliate commission (Reann #3) — plan
 
-> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 3. Status: **APPROVED 2026-11-09 — Afshaan took every recommendation (§Decisions). S1 SHIPPED (0008 live); S2 SHIPPED (worker `b299acdb`); S3 next.**
+> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 3. Status: **APPROVED 2026-11-09 — Afshaan took every recommendation (§Decisions). S1 SHIPPED (0008 live); S2 SHIPPED (worker `b299acdb`); S3 SHIPPED (app `c2c4cffb`); S4 (manual + first real verify, from 1 Dec) next.**
 > Builds on #2 (`2026-11-09-ignition-snorkel-payment-requests.md`): commission is paid through the same
 > Ignition → Snorkel request path, contract-collected bank details and invoice rule.
 
@@ -129,3 +129,18 @@ Not a question, a flag: Snorkel needs a creator invoice for every request (#2's 
 - Known limits: the sync re-reads the newest 150 orders of ACTIVE codes only, so a late refund on an old
   order or a retired code is not re-read — D2C's verification is the check. `commission_earned` /
   `commission_accrued` are all-time running figures, not "owed" (S3 copy must say so).
+
+## S3 — as built (2026-11-09, throttle `c2c4cffb` + worker `2ea8a0b8` tds_amount)
+
+- `/commission` (Analyze nav; `ignition_commission_verify` or `ignition_reports_view`): month picker from
+  Nov 2026, statements table, Verify modal (reason required when it differs; raises the request), bulk
+  verify at estimate (confirm names the month and the ₹0 rows), Re-raise, Reopen + Rebuild (admin).
+  Paid shown GROSS (paid + TDS), like the Payments card.
+- Deal page Commission card: affiliate deals, or any deal with commission history (a retyped deal keeps it).
+- Affiliate % required on the new-deal page, New deal window and Deal terms edit (worker's rule + sentence).
+- PaymentsCard: "Commission · <month>" labels, "Raise full" hidden only by a live FEE request, "Commission
+  paid" line; a commission invoice is never pre-picked (Upload first).
+- Hostile review: 7 findings fixed (month-switch race, invoice pre-pick, gross paid, bulk wording,
+  retyped deals, stale state ×3). Build 0 errors, app tests 64/64.
+- Smoke 2026-11-09: /commission renders (Nov 2026 running banner, empty state, admin Rebuild), 375px no
+  page scroll; deal card renders on IGN-2026-00817. Nothing to verify until 1 Dec.
