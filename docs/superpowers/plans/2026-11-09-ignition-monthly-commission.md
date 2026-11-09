@@ -1,6 +1,6 @@
 # Ignition monthly affiliate commission (Reann #3) — plan
 
-> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 3. Status: **APPROVED 2026-11-09 — Afshaan took every recommendation (§Decisions). S1 SHIPPED (0008 live); S2 SHIPPED (worker `b299acdb`); S3 SHIPPED (app `c2c4cffb`); S4 (manual + first real verify, from 1 Dec) next.**
+> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 3. Status: **APPROVED 2026-11-09 — Afshaan took every recommendation (§Decisions). S1 SHIPPED (0008 live); S2 SHIPPED (worker `b299acdb`); S3 SHIPPED (app `c2c4cffb`); S4 manuals SHIPPED (Ignition 1.21.0, Snorkel 1.26.0, throttle `8b712bfd`); only the first real verify is left, possible from 1 Dec 2026.**
 > Builds on #2 (`2026-11-09-ignition-snorkel-payment-requests.md`): commission is paid through the same
 > Ignition → Snorkel request path, contract-collected bank details and invoice rule.
 
