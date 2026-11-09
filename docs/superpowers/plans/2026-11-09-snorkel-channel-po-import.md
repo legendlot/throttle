@@ -36,7 +36,7 @@ Every channel code spot-checked (8 codes, 4 EANs) already resolves to a `product
    - partner = `sales_partners` by ship-to GSTIN within the channel (Instamart has many FCs per GSTIN → also city /
      address match; ambiguous → user picks);
    - each line → `sku_map(channel, channel_code)` → else EAN in `product_master` → else **unmatched** (flagged red);
-   - duplicate guard: refuse if a non-cancelled SO already has this `partner_po_ref`;
+   - duplicate guard (changed 2026-11-09 at build): WARN and require an explicit confirm when a non-cancelled SO in the same channel already has this `partner_po_ref` — splitting one PO across two SOs is normal (10+ Flipkart refs already do);
    - checksum: sum(qty × unit cost) must equal the PO's taxable total within ₹1, else a visible warning.
 4. **Review screen = the existing OrderForm, pre-filled.** Unmatched lines need a product picked before Save. Save goes
    through the existing `createSalesOrder` — no second write path. Rate = the PO's unit base cost ex-GST.
