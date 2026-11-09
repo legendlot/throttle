@@ -55,7 +55,7 @@ Every channel code spot-checked (8 codes, 4 EANs) already resolves to a `product
    needs code. Alternative: send the file to the Claude API and validate the result with the same checksum + matching —
    handles any layout, but needs an Anthropic API key as a worker secret (none of our workers calls it today) and a few
    paise per PO.
-2. **Learn new codes into `sales.sku_map`?** When someone picks a product for an unmatched code, saving that mapping
+2. ✅ **DECIDED 2026-11-09 (Afshaan): yes, shared `sales.sku_map`** — a hand-picked match is saved there (`match_on='so_import'`) and Odo uses it too. Was: **Learn new codes into `sales.sku_map`?** When someone picks a product for an unmatched code, saving that mapping
    makes the next PO match automatically — but `sku_map` is Odo's sell-out map, so the write is shared with Odo's
    numbers. Alternative: a separate SO-import map.
 3. **P1 scope** — confirm the four layouts above, and get a Blinkit sample.
