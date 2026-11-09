@@ -3,6 +3,20 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.5.0] - 2026-11-09
+### Added
+- **Signing In & Getting Around**: the command bar (Cmd/Ctrl+K) now searches tasks in every
+  space you can open, from any screen. 2+ characters or a DKT number, words in any order,
+  typo fallback only when nothing matches, space and parent shown, Enter opens in place,
+  Cmd/Ctrl+Enter full page, visibility rule. Removed the "Open Tasks to search tasks" note.
+- **The Tasks List**: quick-add tokens in the capture line (@owner, !p0 to !p3, dates and
+  times) with Owner / Deadline / Priority chips; tasks added under a status group are
+  created in that status; **Triage The Grid** (Enter, A, S, Left, Esc); **Clean up**
+  stale-work sweep from My tasks (Done, Revise / Set date, Abandon, bulk, Mine | Everyone).
+### Changed
+- **Inside a Task**: abandoned tasks are fully read-only (no edits, moves, comments,
+  collaborator or document changes) until reactivated; the comment box says so.
+
 ## [1.4.0] - 2026-11-09
 ### Changed
 - Whole manual brought in line with the ClickUp-style redesign (P0 to P7). Every

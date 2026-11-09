@@ -17,7 +17,21 @@
 
 <h2 class="sec">Capturing a task in one line</h2>
 <p>Click <strong>+ Task</strong> (or press <span class="kbd">c</span>, or use <strong>+ New</strong> in the top bar) and a <em>New task</em> line opens under the toolbar. Type a title, press <span class="kbd">Enter</span>, and the task exists. That is the whole capture step, no form, no required fields. The new task lands in <strong>The Grid</strong> so you can finish it off later.</p>
-<p>You can also capture straight into a group: every group ends with a <strong>+ Add task</strong> line, and the task is created already carrying that group&rsquo;s value (grouped by Owner, a new task gets that owner; grouped by Program, that program). The group header has an <strong>Add task</strong> button too, which jumps you to that line. With a row focused, <span class="kbd">c</span> opens its own group&rsquo;s line.</p>
+<h3>Quick-add: type it, don&rsquo;t click it</h3>
+<p>The capture line (the top <strong>+ Task</strong> line, each group&rsquo;s <strong>+ Add task</strong> line, and a Board column&rsquo;s add line) reads a few shortcuts out of the title and turns them into <strong>Owner</strong>, <strong>Deadline</strong> and <strong>Priority</strong> chips <em>before</em> you save, so you can check what Docket understood.</p>
+<table class="tbl">
+  <thead><tr><th>Type</th><th>You get</th></tr></thead>
+  <tbody>
+    <tr><td><code>@riya</code></td><td>Owner. A first name, or a prefix that matches only one person. If two people fit, it stays as plain text.</td></tr>
+    <tr><td><code>!p0</code> to <code>!p3</code></td><td>Priority P0 to P3.</td></tr>
+    <tr><td><code>today</code>, <code>tomorrow</code> / <code>tmrw</code></td><td>That day.</td></tr>
+    <tr><td><code>by fri</code>, <code>fri 5pm</code>, or a weekday as the last word</td><td>The next such weekday. A weekday in the middle of a sentence (&ldquo;Sat with Riya&rdquo;) stays text.</td></tr>
+    <tr><td><code>12 nov</code>, <code>nov 12</code>, <code>12/11</code></td><td>A date; slash dates are day/month. <code>12/11</code> counts only if it is a future date within 60 days, so &ldquo;3/4 sleeve&rdquo; stays text.</td></tr>
+    <tr><td><code>5pm</code>, <code>5:30pm</code>, <code>17:00</code></td><td>A time (Indian time). A date with no time means <strong>6 pm</strong>.</td></tr>
+  </tbody>
+</table>
+<p>The words that became a chip leave the title. Docket <strong>never sets a deadline in the past</strong>: a time that has already passed today rolls to tomorrow, and a date that cannot be read as a future one stays in the title. Pick a value from a chip yourself and it wins over the typed words, which go back into the title. Click the <strong>&times;</strong> on a chip to drop it and keep the words as text.</p>
+<p>You can also capture straight into a group: every group ends with a <strong>+ Add task</strong> line, and the task is created already carrying that group&rsquo;s value (grouped by Owner, a new task gets that owner; grouped by Program, that program; grouped by Status, a task added under <em>In progress</em> is created in that status straight away). The group header has an <strong>Add task</strong> button too, which jumps you to that line. With a row focused, <span class="kbd">c</span> opens its own group&rsquo;s line.</p>
 
 <div class="callout tip">
   <div class="c-title">&#10003; Capture first, tidy later</div>
@@ -26,6 +40,19 @@
 
 <h2 class="sec">The Grid: tasks that need setting up</h2>
 <p>Just-captured tasks sit in a dashed yellow group at the top of the list called <strong>The Grid</strong>, with the hint <em>needs an owner and a deadline to hit the board</em>. A task is in the Grid whenever it is missing an <strong>owner</strong> or a <strong>deadline</strong> (or both). Each Grid card has two small chips, <strong>Owner</strong> and <strong>Deadline</strong>: click one to fill it in right there. The moment a task has both, it leaves the Grid on its own and joins the main list below. Click the Grid&rsquo;s header to fold it away.</p>
+<h3>Triage The Grid</h3>
+<p>When the Grid has tasks you can edit, its header shows a <strong>Triage N</strong> button. It walks you through them one at a time, so a backlog of half-finished tasks takes minutes instead of a lot of clicking. Each card shows the task and the fields still needed; set the <strong>Owner</strong> and <strong>Deadline</strong> (you can type something like <em>fri 5pm</em> into the deadline box) and a progress line at the top tracks how far you are.</p>
+<table class="tbl">
+  <thead><tr><th>Key</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><span class="kbd">Enter</span></td><td><strong>Save &amp; next</strong>.</td></tr>
+    <tr><td><span class="kbd">A</span></td><td><strong>Abandon</strong> the task. A reason is required and logged.</td></tr>
+    <tr><td><span class="kbd">S</span></td><td><strong>Skip</strong> it and leave it in the Grid.</td></tr>
+    <tr><td><span class="kbd">&larr;</span></td><td>Back to the previous card.</td></tr>
+    <tr><td><span class="kbd">Esc</span></td><td>Close. The list refreshes when you close.</td></tr>
+  </tbody>
+</table>
+<p>Only the fields you actually touched are saved, and a deadline in the past is refused. A task that has both an owner and a deadline after saving leaves the Grid; one that still lacks one stays. Tasks you cannot edit are skipped.</p>
 
 <h2 class="sec">Reading a row</h2>
 <p>Each task is one row, 36 pixels tall by default. At the left is a round <strong>tick circle</strong> (click it to mark the task done, or not done), then the title. The columns to the right are:</p>
@@ -150,7 +177,16 @@
 </div>
 <p>Because it spans spaces, each row carries a <strong>Space</strong> column so you can see where a task lives. Every task is its own row here (no nesting of sub-tasks). Search, filters and bulk select work as on a normal list.</p>
 
+<h3>Clean up: the stale-work sweep</h3>
+<p>The <strong>Clean up N</strong> button at the top of My tasks opens <code>/tasks?lens=stale</code>, a list of your open work (sub-tasks included, recurring tasks not) that is <strong>overdue by 30 days or more</strong> or <strong>untouched for 60 days or more</strong>. Each row says why: <em>145d over</em> or <em>untouched 154d</em>. A task that is both appears once, under Overdue.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Done</div><div class="a-val"><p>Marks the task done.</p></div></div>
+  <div class="a-row"><div class="a-key">Revise</div><div class="a-val"><p>Pick a new deadline and give a reason (logged). A past date is refused. If the task never had a deadline the button reads <strong>Set date</strong> and no reason is asked.</p></div></div>
+  <div class="a-row"><div class="a-key">Abandon</div><div class="a-val"><p>Stops the task; a reason is required.</p></div></div>
+</div>
+<p>Tick several rows for a bulk <strong>Done all</strong> or <strong>Abandon all</strong> (one reason for all). On a phone the row actions sit in a <strong>&hellip;</strong> menu. People with view-all (Reviewers and admins) get a <strong>Mine | Everyone</strong> switch; Everyone groups the list by owner with an owner filter, but covers only spaces you can access (private spaces need membership). The sweep is pull-only: nothing is sent to anyone.</p>
+
 <div class="callout floor">
   <div class="c-title">&#9874; A typical pass through your list</div>
-  <p>Open <strong>My tasks</strong> and clear <strong>Today &amp; overdue</strong> first. Then glance at <strong>The Grid</strong> on the Tasks list and set an owner and deadline on anything sitting there. Sort by <strong>Deadline</strong> to bring the soonest to the top, and clear anything shown in red. Click a task to open it when you need comments or sub-tasks.</p>
+  <p>Open <strong>My tasks</strong> and clear <strong>Today &amp; overdue</strong> first. Then glance at <strong>The Grid</strong> on the Tasks list and set an owner and deadline on anything sitting there. Sort by <strong>Deadline</strong> to bring the soonest to the top, and clear anything shown in red. Click a task to open it when you need comments or sub-tasks. Once in a while, use <strong>Clean up</strong> to retire or re-date work that has gone stale.</p>
 </div>
