@@ -47,7 +47,11 @@ export async function docketopsPost(action, body = {}, session) {
     body: JSON.stringify({ action, ...body }),
   });
   const data = await res.json();
-  if (!res.ok || data.ok === false) throw new Error(data.error || `docketopsPost ${action} failed (${res.status})`);
+  if (!res.ok || data.ok === false) {
+    const e = new Error(data.error || `docketopsPost ${action} failed (${res.status})`);
+    e.status = res.status;   // callers may tell a 4xx (changed / forbidden) from a 5xx (F3 triage)
+    throw e;
+  }
   // Only after a CONFIRMED success — a failed write must not move a badge.
   if (typeof window !== 'undefined' && !NO_COUNT_CHANGE.test(action)) {
     window.dispatchEvent(new Event('docket:counts-changed'));

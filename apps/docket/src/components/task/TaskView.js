@@ -407,6 +407,9 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
           {canEdit && <><MenuSeparator /><MenuItem icon={Ban} danger onClick={startAbandon}>Abandon…</MenuItem></>}
           {task?.status === 'abandoned' && task._can_edit && <MenuItem icon={RotateCcw} onClick={() => setStatus('not_started')}>Reactivate</MenuItem>}
         </Menu>
+        {/* A caller that pins an overlay mode (Grid triage) can't have it switched — "Full page"
+            would navigate away from the session underneath. */}
+        {(!fixedMode || fixedMode === 'full') && <>
         <IconButton ref={modeRef} icon={ModeIcon} label="Switch layout" size="sm" aria-haspopup="menu" onClick={() => setModeMenu(o => !o)} />
         <Menu anchorRef={modeRef} open={modeMenu} onClose={() => setModeMenu(false)} align="right" width={180} label="Layout" className="tv-pop">
           <MenuLabel>Open tasks as</MenuLabel>
@@ -414,6 +417,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
             <MenuItem key={m} icon={meta.icon} selected={mode === m} onClick={() => chooseMode(m)}>{meta.label}</MenuItem>
           ))}
         </Menu>
+        </>}
         <IconButton icon={X} label={mode === 'full' ? 'Back to the list' : 'Close'} shortcut="Esc" size="sm" onClick={close} />
       </div>
     </div>

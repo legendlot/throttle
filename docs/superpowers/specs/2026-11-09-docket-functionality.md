@@ -12,7 +12,7 @@
 | Active users (last seen) | 9 in 7 days · 14 in 30 days · 53 ever | Same |
 | Open tasks | 313 | |
 | — overdue | 172 (55%) · 152 of them by more than 30 days | The overdue list is mostly old |
-| — no deadline (sitting in The Grid) | 143 (46%) | Capture doesn't set a deadline |
+| — no deadline | 143 (46%) — ⚠️ **118 are sub-tasks**; top-level only **25** (= The Grid) | Corrected 2026-11-09 (F3 review): the gap is mostly sub-tasks, which never enter The Grid. Top-level tasks created Sep–Oct: 14/119 (12%) lack a deadline |
 | — no owner | 30 | |
 | — untouched for 60+ days | 184 | |
 | Median creation → done | 1.3 days | What does get closed closes fast |
@@ -57,10 +57,10 @@ Today's capture row just doesn't send them.
 - **Quick-add tokens** in the title, parsed client-side and shown as chips before saving:
   `@riya` → owner, `!p1` → priority, `today` / `tomorrow` / `fri` / `12 nov` / `5pm` → deadline. Unmatched
   text stays in the title. This is a ClickUp pattern and costs nothing on the server.
-- Target: the 46% no-deadline share should fall for tasks created after it ships (measure in 30 days).
+- Target (corrected): top-level no-deadline is already ~12%, so F2's value is deadlines set AT capture instead of a follow-up edit (39 hand-set `deadline_set` events in the last 30 days). Watch: reference/watchboard.md.
 
 ### F3 — Triage The Grid (recommended · 1 session · frontend only)
-The Grid holds 143 tasks with no owner or deadline. Add a **Triage** button on The Grid header: one task at a
+The Grid holds **25** open top-level tasks missing an owner or deadline (corrected from 143, which counted sub-tasks). Add a **Triage** button on The Grid header: one task at a
 time in the task view, with three keys: **set owner + deadline** (then the next task), **Abandon** (with
 reason), or **Skip**. It shows a progress count. It reuses TaskView and the existing writes, with no new endpoint.
 
@@ -69,7 +69,7 @@ A pull-only cleanup screen, so it stays within S309: *My tasks → "Clean up"* l
 overdue by 30+ days or untouched for 60+. Each row has **Done** / **Revise** (new date and reason) / **Abandon**
 (reason), and there are bulk versions through the existing BulkBar. The same view filtered by owner appears
 for anyone with `docket_view_all`, so a manager can run it in a review meeting. It sends nothing and nags no one.
-It turns "152 tasks overdue by 30+ days" into a ten-minute job.
+It turns "152 tasks overdue by 30+ days" into a ten-minute job. (Of those, 106 are top-level and the rest are sub-tasks; 119 top-level tasks have been untouched for 60+ days. Decide in F4 whether sub-tasks belong in the sweep.)
 
 ### F5 — Cross-space search (recommended · 1 session · worker + RPC)
 ⌘K only finds tasks in the space you've loaded, and there are 58 spaces. Add worker GET `searchTasks(q)`,

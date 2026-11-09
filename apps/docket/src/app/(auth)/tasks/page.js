@@ -24,6 +24,7 @@ import { ViewsBar, TasksToolbar } from '../../../components/tasks/TasksChrome.js
 import { TaskListView } from '../../../components/tasks/TaskListView.js';
 import { NewTaskCapture } from '../../../components/tasks/GroupHeader.js';
 import { CaptureProvider } from '../../../components/tasks/QuickCapture.js';
+import { GridTriage } from '../../../components/tasks/GridTriage.js';
 import { BulkBar } from '../../../components/tasks/BulkBar.js';
 import { ROW_SELECTOR } from '../../../components/tasks/TaskRow.js';
 import { useTaskViewState, visibleColumns, COLUMNS } from '../../../components/tasks/useTaskViewState.js';
@@ -88,6 +89,8 @@ export default function TasksPage() {
   const focusedRowRef = useRef(null);
   const [subRequest, setSubRequest] = useState(null);
   const [drawerId, setDrawerId] = useState(null);
+  // F3 Grid triage: { queue: [id…] snapshotted in display order, skipped: N not editable } | null.
+  const [triage, setTriage] = useState(null);
   // A task opened from the `?task=` link stays an overlay even if "full page" is the
   // remembered layout (fromLink) — otherwise Back from the full page would loop.
   const [linkTaskId, setLinkTaskId] = useState(null);
@@ -145,7 +148,7 @@ export default function TasksPage() {
     if (!el) return;
     e.preventDefault();
     try { el.focus(); el.select?.(); } catch { /* ignore */ }
-  }, { enabled: !drawerId && !newSpaceOpen && !spaceSettingsOpen && !shellModalOpen });
+  }, { enabled: !drawerId && !newSpaceOpen && !spaceSettingsOpen && !shellModalOpen && !triage });
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -382,6 +385,15 @@ export default function TasksPage() {
   const archivedRows = useMemo(() => archiveDone ? topLevel.filter(t => t.status === 'done').sort(sortFn) : [], [topLevel, archiveDone, sortFn]);
   const needsSetup = (t) => t.status !== 'abandoned' && (!t.deadline || !t.owner_employee_id);
   const gridRows = useMemo(() => activeTop.filter(needsSetup).sort(sortFn), [activeTop, sortFn]);
+  // F3: snapshot the editable Grid tasks in display order; the rest are skipped with a note.
+  // The list reloads only when triage closes (and only if it wrote), so rows don't jump.
+  live.current.gridRows = gridRows;   // read by openTriage (stable callback)
+  const tasksById = useMemo(() => Object.fromEntries(tasks.map(t => [t.id, t])), [tasks]);
+  const openTriage = useCallback(() => {
+    const rows = live.current.gridRows || [];
+    const queue = rows.filter(t => t._can_edit && t.status !== 'abandoned').map(t => t.id);
+    if (queue.length) setTriage({ queue, skipped: rows.length - queue.length });
+  }, []);
   const boardRows = useMemo(() => activeTop.filter(t => !needsSetup(t)).sort(sortFn), [activeTop, sortFn]);
   // Subtasks "As separate tasks": sub-tasks become rows of their own (with a parent chip).
   const separate = subtaskMode === 'separate' && !mineMode;
@@ -544,7 +556,7 @@ export default function TasksPage() {
       const ae = document.activeElement;
       const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable);
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (drawerId || shellModalOpen) return;
+      if (drawerId || shellModalOpen || triage) return;
       // A ui Menu/Popover owns its own arrows + j/k (P1 top-bar + New, P2/P3 menus).
       if (e.defaultPrevented || ae?.closest?.('.ui-pop')) return;
       if (e.key === 'f') { e.preventDefault(); setFilterOpen(o => !o); }
@@ -554,7 +566,7 @@ export default function TasksPage() {
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [drawerId, shellModalOpen]);
+  }, [drawerId, shellModalOpen, triage]);
 
   // Kanban (unchanged) + The Grid cards + Archived rows still take a plain ctx.
   const gridCtx = {
@@ -673,7 +685,7 @@ export default function TasksPage() {
         </div>
       ) : (
         <TaskListView
-          gridRows={mineMode ? [] : gridRows} groups={groups} archivedRows={mineMode ? [] : archivedRows}
+          gridRows={mineMode ? [] : gridRows} onTriage={mineMode ? undefined : openTriage} groups={groups} archivedRows={mineMode ? [] : archivedRows}
           childrenByParent={childrenByParent} expanded={expanded} sortFn={sortFn} selected={selected} selectMode={selectMode}
           showIds={showIds} separate={separate} flat={mineMode} parentById={parentById}
           visibleCols={visibleCols} cols={cols} moveColumn={moveColumn} resizeColumn={resizeColumn}
@@ -690,8 +702,17 @@ export default function TasksPage() {
           onCollaborator={applyBulkCollaborator} onMove={applyBulkMove} onAbandon={applyBulkAbandon} />
       )}
 
+      {triage && (
+        // Hidden (not unmounted) while "Open task" shows the full TaskView, then back to the card.
+        <GridTriage queue={triage.queue} skippedCount={triage.skipped} tasksById={tasksById}
+          ownerOpts={ownerCellOpts} empMap={empMap} session={session} showToast={showToast}
+          suspended={drawerId != null} onOpenTask={setDrawerId}
+          onClose={({ wrote }) => { setTriage(null); if (wrote) load(); }} />
+      )}
       {drawerId && (
-        <TaskView id={drawerId} session={session} departments={departments} employees={employees}
+        // Opened from triage: pinned to the modal so the "full page" preference can't navigate
+        // away and drop the triage session underneath.
+        <TaskView id={drawerId} mode={triage ? 'modal' : undefined} session={session} departments={departments} employees={employees}
           onClose={closeTask} onOpen={setDrawerId} getOrder={domTaskOrder} onMutated={load}
           fromLink={drawerId === linkTaskId} refreshKey={tasks} />
       )}

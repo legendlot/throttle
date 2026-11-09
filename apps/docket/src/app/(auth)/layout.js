@@ -159,6 +159,9 @@ function AuthLayoutInner({ children }) {
       if (typing) return;
       // A shell modal (space settings / new program) owns the keyboard; `?` still closes help.
       if (settingsSpace || programModal) return;
+      // So does a page-owned modal marked [data-modal] (F3 Grid triage): no `?` / `[` / `/`
+      // underneath it. ⌘K is already gated on the same selector (canOpenCmd).
+      if (!helpOpen && document.querySelector('[data-modal]')) return;
       if (e.key === '?') { e.preventDefault(); setHelpOpen(o => !o); return; }
       if (helpOpen) return;
       if (e.key === '[') { e.preventDefault(); toggleSidebar(); }

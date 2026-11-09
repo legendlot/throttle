@@ -14,7 +14,7 @@ import { GroupHeader, FootCapture } from './GroupHeader.js';
 import { COLUMNS, gridTemplate, gridMinWidth } from './useTaskViewState.js';
 
 export function TaskListView({
-  gridRows = [], groups = [], archivedRows = [], childrenByParent, expanded, sortFn, selected, selectMode,
+  gridRows = [], onTriage, groups = [], archivedRows = [], childrenByParent, expanded, sortFn, selected, selectMode,
   showIds, separate, flat = false, parentById, visibleCols, cols, moveColumn, resizeColumn, sortKey, sortDir, onSort,
   collapsed, toggleGroupCollapsed, setGroupsCollapsed, actions, opts, subRequest, gridCtx, loading, children,
 }) {
@@ -31,7 +31,7 @@ export function TaskListView({
   return (
     <div className="tl" style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto' }}>
       {gridRows.length > 0 && (
-        <GridGroup rows={gridRows} ctx={gridCtx} collapsed={!!collapsed.grid} onToggle={() => toggleGroupCollapsed('grid')} />
+        <GridGroup rows={gridRows} ctx={gridCtx} collapsed={!!collapsed.grid} onToggle={() => toggleGroupCollapsed('grid')} onTriage={onTriage} />
       )}
 
       <div className="tl-scroll">
@@ -141,16 +141,23 @@ function ColumnHeader({ keys, cols, sortKey, sortDir, onSort, moveColumn, onLive
 }
 
 /* ---------------- The Grid (triage) — a collapsible group with a dashed-yellow header ---------------- */
-function GridGroup({ rows, ctx, collapsed, onToggle }) {
+function GridGroup({ rows, ctx, collapsed, onToggle, onTriage }) {
+  // F3: "Triage N" — only when at least one Grid task is editable (not abandoned).
+  const editable = rows.filter(t => t._can_edit && t.status !== 'abandoned').length;
   return (
     <section className={'tl-grid' + (collapsed ? ' collapsed' : '')} data-group="grid">
-      <button type="button" className="tl-grid-head" aria-expanded={!collapsed} onClick={onToggle}>
-        <ChevronDown className="tl-caret" size={14} strokeWidth={2} aria-hidden />
-        <Inbox size={14} aria-hidden className="tl-grid-ic" />
-        <span className="tl-grid-ttl">The Grid</span>
-        <span className="tl-gcount">{rows.length}</span>
-        <span className="tl-ghint">needs an owner and a deadline to hit the board</span>
-      </button>
+      <div className="tl-grid-bar">
+        <button type="button" className="tl-grid-head" aria-expanded={!collapsed} onClick={onToggle}>
+          <ChevronDown className="tl-caret" size={14} strokeWidth={2} aria-hidden />
+          <Inbox size={14} aria-hidden className="tl-grid-ic" />
+          <span className="tl-grid-ttl">The Grid</span>
+          <span className="tl-gcount">{rows.length}</span>
+          <span className="tl-ghint">needs an owner and a deadline to hit the board</span>
+        </button>
+        {onTriage && editable > 0 && (
+          <Button size="sm" variant="neutral" className="tl-grid-triage" onClick={onTriage}>Triage {editable}</Button>
+        )}
+      </div>
       {!collapsed && (
         <div className="tl-grid-body">
           {rows.map(task => <GridCard key={task.id} task={task} ctx={ctx} />)}
