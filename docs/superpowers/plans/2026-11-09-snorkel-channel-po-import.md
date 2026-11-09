@@ -51,7 +51,7 @@ Every channel code spot-checked (8 codes, 4 EANs) already resolves to a `product
 
 ## Decisions for Afshaan before building
 
-1. **Parsers vs AI extraction.** Plan above uses fixed parsers: free, predictable, but each new channel or layout change
+1. ✅ **DECIDED 2026-11-09 (Afshaan): fixed parsers.** No Claude API. Was: **Parsers vs AI extraction.** Plan above uses fixed parsers: free, predictable, but each new channel or layout change
    needs code. Alternative: send the file to the Claude API and validate the result with the same checksum + matching —
    handles any layout, but needs an Anthropic API key as a worker secret (none of our workers calls it today) and a few
    paise per PO.
