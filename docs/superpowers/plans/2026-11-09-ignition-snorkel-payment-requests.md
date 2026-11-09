@@ -1,6 +1,6 @@
 # Ignition → Snorkel payment requests (Reann #2) — plan
 
-> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **DRAFT, awaiting Afshaan's answers (§Open questions).**
+> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **APPROVED 2026-11-09 (Afshaan took every recommendation, §Decisions). S1 SHIPPED 2026-11-09 (migration 0005 + 0005b). Next: S2.**
 > Builds on #1 (`2026-11-05-ignition-deal-contract-send.md`), which collects bank details + the invoice.
 
 ## Goal
@@ -46,7 +46,22 @@ or hold shows on the deal and flags the owner. No bank details are typed by hand
 | S5 | Owner flag on held/rejected (channel per Q4) | 05_Throttle | quick |
 | S6 | Manual chapter (Ignition + Snorkel), Codex pass (money path), end-to-end proof on a temporary deal with a ₹1 request Afshaan approves | — | quick |
 
-## Open questions (Afshaan)
+## Decisions (Afshaan, 2026-11-09 — took every recommendation)
+
+1. **Hand log:** "Add payment" is hidden on deals once Snorkel requests are live; the 39 existing `ignition.payments` rows stay as history.
+2. **Balance at Live:** a button the owner presses, never auto-raised.
+3. **Creators without #1 bank details:** may be paid only when a matching Snorkel payee WITH a bank row already exists (PAN, then name); otherwise blocked with "collect bank details via the contract".
+4. **Owner flag on held/rejected:** Slack DM to the deal owner (`poc_user_id`).
+5. **Who may raise:** `ignition_manage` (influencer team + admins).
+
+## Carried from the S1 hostile review (must land in the named slice)
+
+- **S2:** look up `(source_system, source_ref)` BEFORE `nextSeq4('pay_request')`, so a retry neither duplicates nor burns a PAY number.
+- **S3:** `deleteEngagement` refuses with 409 `has_payment_requests_cannot_delete` BEFORE any child delete (today the FK would fire only after products/history are gone).
+- **S3:** sum of live requests (advance + balance + full) ≤ `payment_amount`, and `full` excludes `advance`/`balance` — enforced in `raiseDealPayment` with a test; the DB index is per kind only.
+- Upserts may target the three full unique indexes; `deal_payment_requests_one_live_per_kind` stays partial and is NOT an `on_conflict` target.
+
+## Open questions (as asked)
 
 1. **Hand log after cutover**: keep `addPayment` (manual UPI log) for history only and hide "Add payment" on new deals, or keep both?
 2. **Balance at Live**: button the owner presses, or auto-raise the balance request when the deal moves to Live (if an invoice is on file)?
