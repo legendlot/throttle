@@ -382,7 +382,8 @@ export default {
     const { pathname } = new URL(request.url);
     const ip = request.headers.get('CF-Connecting-IP') || '';
 
-    if (IP_GATED_PREFIXES.some(p => pathname === p || pathname.startsWith(p + '/')) && !ipAllowed(ip, cidrs)) {
+    // Plain prefix match, the same rule the OAuth library uses for apiRoute ('/mcpx' is API too).
+    if (IP_GATED_PREFIXES.some(p => pathname.toLowerCase().startsWith(p)) && !ipAllowed(ip, cidrs)) {
       ctx.waitUntil(audit(env, { event: 'ip_blocked', ip, status: 403, detail: `${request.method} ${pathname}` }));
       ctx.waitUntil(countDenied(env, ctx, 'ip', ip));
       return Response.json({ error: 'forbidden' }, { status: 403 });
