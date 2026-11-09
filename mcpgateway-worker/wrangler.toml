@@ -32,7 +32,7 @@ DENIED_ALERT_AT = "20"
 GOOGLE_CLIENT_ID = "150982089263-p64j4hb4d0bea4kqg7gs4lm72t26tpql.apps.googleusercontent.com"
 
 # Secrets (wrangler secret put), never in this file:
-#   SUPABASE_SERVICE_KEY  — a DEDICATED Supabase secret key named mcp-gateway (revocable on its own)
+#   SUPABASE_SERVICE_KEY  — a DEDICATED Supabase secret key named mcpgateway (revocable on its own)
 #   GOOGLE_CLIENT_SECRET  — the Internal OAuth client's secret
 #   SLACK_BOT_TOKEN       — for new-connection DMs and alerts
 #   REVOKE_SECRET         — HMAC key for the signed revoke link (random, 32+ bytes)
