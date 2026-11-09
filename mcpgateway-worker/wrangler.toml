@@ -12,6 +12,12 @@ workers_dev = true
 binding = "OAUTH_KV"
 id = "e9006480ed5c46f6b605a803bd311fcd"
 
+# odo tools call odoops AS THE PERSON over a service binding (workers.dev blocks worker→worker fetch, 1042).
+# Only getSegregation + getSales are ever called (src/odo.js).
+[[services]]
+binding = "ODOOPS"
+service = "odoops"
+
 [triggers]
 crons = ["30 21 * * *"]   # 03:00 IST daily: purge expired grants/tokens from KV
 

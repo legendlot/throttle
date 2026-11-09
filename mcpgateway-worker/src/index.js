@@ -1,6 +1,7 @@
-// lotmcp — LOT team MCP gateway. PHASE 0: sign-in shell only. The one tool, `whoami`, returns no
-// business data. No data tool is added until every attack test passes live, /hostile-review +
-// Codex are done, and Afshaan has seen the results (decisions §Team MCP gateway, 2026-11-09).
+// lotmcp — LOT team MCP gateway, read-only (decisions §Team MCP gateway). Phase 0 (sign-in shell,
+// attack-tested live 2026-11-09) + phase 1 data tools, which reach the LOT workers AS THE PERSON with
+// their own LOT (Supabase) session, so each worker's own permission checks apply on top of the grant.
+// Every new data tool: per-role tests, /hostile-review + Codex, before it ships.
 //
 // Who gets in. Every layer is checked on the server and fails closed:
 //   1. Google sign-in through LOT's own INTERNAL OAuth client (Google refuses non-Workspace
@@ -14,11 +15,12 @@
 import { OAuthProvider, OAuthError } from '@cloudflare/workers-oauth-provider';
 import {
   parseCidrs, ipAllowed, parseList, redirectAllowed, registrationAllowed,
-  decodeJwtPayload, checkGoogleClaims, gateDecision, originAllowed, hmacHex, timingSafeEqualHex, esc, refusalText, refusalResponse, RPC_REFUSED,
+  decodeJwtPayload, checkGoogleClaims, gateDecision, originAllowed, hmacHex, timingSafeEqualHex, esc, refusalText, refusalResponse, RPC_REFUSED, sha256Hex, ttlFor,
 } from './checks.js';
+import { parseRange, odoSalesSummary } from './odo.js';
 
 const SCOPES = ['mcp:read'];
-const SERVER_INFO = { name: 'lot-data', version: '0.1.0-phase0' };
+const SERVER_INFO = { name: 'lot-data', version: '0.2.0' };
 const PROTOCOL_VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26'];
 const IP_GATED_PREFIXES = ['/mcp', '/token', '/register'];
 
@@ -167,14 +169,16 @@ If someone sent you this link, press Cancel. Whoever started it would get your a
     if (!redirectAllowed(approved.request.redirectUri, allowedRedirects)) return refusePage('This sign-in link does not come from Claude.', 400);
     if (!approved.request.codeChallenge || approved.request.codeChallengeMethod !== 'S256') return refusePage('This sign-in link is not valid.', 400);
 
+    // Google gets sha256(nonce); Supabase signInWithIdToken gets the raw nonce and checks the hash.
     const nonce = crypto.randomUUID();
+    const nonceHash = await sha256Hex(nonce);
     const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
     const challenge = b64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
-    const up = await helpers.beginUpstream(approved.request, { data: { nonce, verifier }, headers: approved.headers });
+    const up = await helpers.beginUpstream(approved.request, { data: { nonce, nonceHash, verifier }, headers: approved.headers });
     const g = new URL('https://accounts.google.com/o/oauth2/v2/auth');
     g.search = new URLSearchParams({
       client_id: env.GOOGLE_CLIENT_ID, redirect_uri: `${env.PUBLIC_URL}/callback`, response_type: 'code',
-      scope: 'openid email profile', state: up.state, nonce, hd: 'legendoftoys.com',
+      scope: 'openid email profile', state: up.state, nonce: nonceHash, hd: 'legendoftoys.com',
       prompt: 'select_account consent', code_challenge: challenge, code_challenge_method: 'S256',
     }).toString();
     const h = new Headers(up.headers);
@@ -186,6 +190,28 @@ If someone sent you this link, press Cancel. Whoever started it would get your a
 function b64url(bytes) {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
+
+// ---------------------------------------------------------------- the person's LOT (Supabase) session
+async function sbAuth(env, grant, body) {
+  let res;
+  try {
+    res = await fetch(`${env.SUPABASE_URL}/auth/v1/token?grant_type=${grant}`, {
+      method: 'POST', headers: { apikey: env.SUPABASE_SERVICE_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+  } catch { return { ok: false, transient: true, why: 'unreachable' }; }
+  const j = await res.json().catch(() => null);
+  if (!res.ok || !j || !j.access_token || !j.refresh_token || !j.user || !j.user.id) {
+    return { ok: false, transient: res.status >= 500 || res.status === 429, why: `status ${res.status}` };
+  }
+  const expiresAt = Number(j.expires_at) || Math.floor(Date.now() / 1000) + (Number(j.expires_in) || 3600);
+  return { ok: true, access: j.access_token, refresh: j.refresh_token, expiresAt, userId: j.user.id };
+}
+const sbSignInWithGoogle = (env, idToken, nonce) => sbAuth(env, 'id_token', { provider: 'google', id_token: idToken, nonce });
+const sbRefreshSession = (env, refresh) => sbAuth(env, 'refresh_token', { refresh_token: refresh });
+// Best effort: end a LOT session the gateway opened but will not keep (a refused sign-in).
+const sbLogout = (env, access) => fetch(`${env.SUPABASE_URL}/auth/v1/logout?scope=local`, {
+  method: 'POST', headers: { apikey: env.SUPABASE_SERVICE_KEY, Authorization: `Bearer ${access}` },
+}).catch(() => null);
 
 // ---------------------------------------------------------------- /callback (Google → grant)
 async function callback(request, env, ctx) {
@@ -217,7 +243,7 @@ async function callback(request, env, ctx) {
 
   let claims;
   try { claims = decodeJwtPayload(tok.id_token); } catch { return deny('bad Google token'); }
-  const c = checkGoogleClaims(claims, { clientId: env.GOOGLE_CLIENT_ID, nonce: resumed.data.nonce, nowSec: Math.floor(Date.now() / 1000) });
+  const c = checkGoogleClaims(claims, { clientId: env.GOOGLE_CLIENT_ID, nonce: resumed.data.nonceHash, nowSec: Math.floor(Date.now() / 1000) });
   if (!c.ok) return deny(c.reason, claims && claims.email ? String(claims.email) : null);
 
   let gate;
@@ -228,18 +254,31 @@ async function callback(request, env, ctx) {
   if (!d.ok) return deny(d.reason, c.email, gate.user_id);
   if (!gate.slack_user_id) return deny('your grant has no Slack ID, so you could not be told about this connection', c.email, gate.user_id);
 
+  // The person's OWN LOT session (Supabase signInWithIdToken with this Google token), so every data
+  // call reaches the LOT workers as them and their own app permissions apply. It must be the same user.
+  const sb = await sbSignInWithGoogle(env, tok.id_token, resumed.data.nonce);
+  if (!sb.ok) return deny(`could not open your LOT session (${sb.why})`, c.email, gate.user_id);
+  if (sb.userId !== gate.user_id) {
+    ctx.waitUntil(sbLogout(env, sb.access));
+    return deny('the LOT session belongs to a different account', c.email, gate.user_id);
+  }
+
   // The consent-hijack defence: the person AND Afshaan are told BEFORE the grant exists.
   // If the person's DM cannot be delivered, no connection is created.
   const revoke = await revokeUrl(env, gate.user_id);
   const when = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
   const told = await slackDm(env, gate.slack_user_id, `🔐 A Claude account is being connected to LOT data as *${c.email}* (${when} IST).\n` +
     `If this was not you, open this link and press Revoke: ${revoke}`);
-  if (!told) return deny('could not send your Slack confirmation', c.email, gate.user_id);
+  if (!told) {
+    ctx.waitUntil(sbLogout(env, sb.access));
+    return deny('could not send your Slack confirmation', c.email, gate.user_id);
+  }
   if (gate.slack_user_id !== env.ADMIN_SLACK_ID) {
     const ok = await slackDm(env, env.ADMIN_SLACK_ID, `🔐 New LOT MCP connection: ${c.email} at ${when} IST. Revoke all of their connections: ${revoke}`);
     if (!ok) console.error('[slack] admin DM failed for', c.email);
   }
   if (!(await audit(env, { event: 'connect', email: c.email, user_id: gate.user_id, ip, status: 200, detail: `client ${resumed.request.clientId}` }))) {
+    ctx.waitUntil(sbLogout(env, sb.access));
     return refusePage('LOT systems are not reachable right now. Try again shortly.', 503);
   }
 
@@ -248,7 +287,7 @@ async function callback(request, env, ctx) {
     userId: gate.user_id,
     scope: SCOPES,
     metadata: { email: c.email, connectedAt: new Date().toISOString() },
-    props: { userId: gate.user_id, email: c.email },
+    props: { userId: gate.user_id, email: c.email, sbAccess: sb.access, sbRefresh: sb.refresh, sbExp: sb.expiresAt },
   });
 
   const h = new Headers(resumed.headers);
@@ -298,13 +337,31 @@ async function revoke(request, env, ctx) {
 }
 
 // ---------------------------------------------------------------- /mcp (JSON-RPC over Streamable HTTP, stateless)
+// `system` = the mcp_access grant a tool needs (null = everyone signed in). tools/list shows a person
+// only the tools their grants cover; tools/call re-checks.
 const TOOLS = [{
+  system: null,
   name: 'whoami',
   title: 'Who am I connected as',
   description: 'Shows which LOT account this Claude is connected as and which LOT systems that account has been granted. Returns no business data.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   annotations: { readOnlyHint: true, openWorldHint: false },
+}, {
+  system: 'odo',
+  name: 'odo_sales_summary',
+  title: 'Odo sales summary',
+  description: 'LOT sales from Odo for a date range (IST calendar days, inclusive; default today; at most 92 days): net revenue ex-GST (THE figure to quote), gross sales incl. GST, units, and net/gross per sales channel. Same calculation as the Odo dashboard. No costs, margins or P&L.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      from: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'First day, YYYY-MM-DD (IST). Default: today.' },
+      to: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Last day, YYYY-MM-DD (IST), inclusive. Default: same as from.' },
+    },
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: true, openWorldHint: false },
 }];
+const toolsFor = systems => TOOLS.filter(t => t.system === null || (systems || []).includes(t.system)).map(({ system, ...t }) => t);
 
 const rpcResult = (id, result, status = 200) => Response.json({ jsonrpc: '2.0', id, result }, { status });
 const rpcError = (id, code, message, status = 200) => Response.json({ jsonrpc: '2.0', id: id ?? null, error: { code, message } }, { status });
@@ -356,26 +413,54 @@ const mcpHandler = {
           protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
           capabilities: { tools: { listChanged: false } },
           serverInfo: SERVER_INFO,
-          instructions: 'LOT internal data, read-only. Phase 0: only `whoami` exists.',
+          instructions: 'LOT internal data, read-only. Quote Odo net revenue (ex-GST) as the sales figure. Tools show only the systems this person has been granted.',
         });
       }
       case 'ping': return rpcResult(id, {});
-      case 'tools/list': return rpcResult(id, { tools: TOOLS });
+      case 'tools/list': return rpcResult(id, { tools: toolsFor(gate.systems) });
       case 'tools/call': {
         const name = msg.params && msg.params.name;
         const tool = TOOLS.find(t => t.name === name);
         if (!tool) return rpcError(id, -32602, 'Unknown tool');
+        if (tool.system && !gate.systems.includes(tool.system)) {
+          ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate.email, tool: name, ip, status: 403, detail: `no ${tool.system} grant` }));
+          return refuse(msg, refusalText(`no ${tool.system} grant`));
+        }
+        const args = (msg.params && msg.params.arguments) || {};
+        let range = null;
+        if (name === 'odo_sales_summary') {
+          range = parseRange(args);
+          if (!range.ok) return rpcResult(id, { isError: true, content: [{ type: 'text', text: range.error }] });
+          if (gate.odo_sales_view !== true) {
+            ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate.email, tool: name, ip, status: 403, detail: 'no Odo sales_view role' }));
+            return refuse(msg, refusalText('odo denied'));
+          }
+          if (!ctx.props.sbAccess) {
+            ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate.email, tool: name, ip, status: 401, detail: 'no LOT session in token' }));
+            return refuse(msg, refusalText('session expired'));
+          }
+        }
         if (d.overLimit) {
           ctx.waitUntil(audit(env, { event: 'rate_limited', user_id: userId, email: gate.email, tool: name, ip, status: 429 }));
           ctx.waitUntil(alertOnce(env, `rate:${userId}`, `⚠️ LOT MCP: ${gate.email} hit the ${gate.calls_per_hour}/hour call limit.`));
           return refuse(msg, refusalText('rate limited', { callsPerHour: gate.calls_per_hour }));
         }
         // The audit row IS the rate-limit counter: no row, no call (fail closed).
-        if (!(await audit(env, { event: 'call', user_id: userId, email: gate.email, tool: name, params: (msg.params && msg.params.arguments) || {}, row_count: 1, ip, status: 200 }))) {
+        if (!(await audit(env, { event: 'call', user_id: userId, email: gate.email, tool: name, params: args, row_count: null, ip, status: 200 }))) {
           ctx.waitUntil(alertOnce(env, 'audit-down', '🚨 LOT MCP: audit writes are failing; every tool call is being refused (fail closed).'));
           return refuse(msg, refusalText('unreachable'));
         }
-        const out = { connected_as: gate.email, name: gate.full_name, systems_granted: gate.systems, note: 'Phase 0: no data tools yet.' };
+        let out;
+        if (name === 'odo_sales_summary') {
+          const r = await odoSalesSummary(env, ctx.props.sbAccess, range);
+          if (!r.ok) {
+            ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate.email, tool: name, ip, status: r.reason === 'unreachable' ? 503 : 403, detail: `odoops: ${r.reason}` }));
+            return refuse(msg, refusalText(r.reason));
+          }
+          out = r.data;
+        } else {
+          out = { connected_as: gate.email, name: gate.full_name, systems_granted: gate.systems };
+        }
         return rpcResult(id, { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }], structuredContent: out });
       }
       default: return rpcError(id, -32601, 'Method not found');
@@ -412,7 +497,7 @@ function buildProvider(env) {
     clientIdMetadataDocumentEnabled: true,
     // Every code exchange and refresh re-runs the live gate. Throwing invalid_grant makes the library
     // revoke the grant and its tokens (dist callTokenExchangeCallback); transient errors fail closed as 503.
-    tokenExchangeCallback: async ({ userId, env: e }) => {
+    tokenExchangeCallback: async ({ grantType, props, userId, env: e }) => {
       let g;
       try { g = await rpc(e, 'mcp_gate', { p_user: userId }); }
       catch { throw new OAuthError('temporarily_unavailable', { description: 'try again later', statusCode: 503 }); }
@@ -421,6 +506,28 @@ function buildProvider(env) {
         await audit(e, { event: 'call_denied', user_id: userId, email: g && g.email, tool: 'token', status: 400, detail: `token refused: ${dd.reason}` });
         throw new OAuthError('invalid_grant', { description: 'access no longer allowed' });
       }
+      // Grants from before the LOT-session change carry no session: refuse, so Claude asks to reconnect.
+      if (!props || !props.sbRefresh) {
+        await audit(e, { event: 'call_denied', user_id: userId, email: g.email, tool: 'token', status: 400, detail: 'token refused: no LOT session in grant (pre-phase-1 connection)' });
+        throw new OAuthError('invalid_grant', { description: 'reconnect needed' });
+      }
+      const base = { userId: props.userId, email: props.email };
+      if (grantType === 'authorization_code') {
+        const ttl = ttlFor(props.sbExp);
+        if (ttl) return { accessTokenProps: { ...base, sbAccess: props.sbAccess }, newProps: { ...base, sbRefresh: props.sbRefresh }, accessTokenTTL: ttl };
+        // else: the session from sign-in is nearly spent; fall through and refresh it now.
+      } else if (grantType !== 'refresh_token') {
+        throw new OAuthError('unsupported_grant_type', { description: 'not supported' });
+      }
+      const s = await sbRefreshSession(e, props.sbRefresh);
+      if (!s.ok && s.transient) throw new OAuthError('temporarily_unavailable', { description: 'try again later', statusCode: 503 });
+      if (!s.ok || s.userId !== userId) {
+        await audit(e, { event: 'call_denied', user_id: userId, email: props.email, tool: 'token', status: 400, detail: `token refused: LOT session refresh failed (${s.ok ? 'different user' : s.why})` });
+        throw new OAuthError('invalid_grant', { description: 'LOT session ended' });
+      }
+      const ttl = ttlFor(s.expiresAt);
+      if (!ttl) throw new OAuthError('temporarily_unavailable', { description: 'try again later', statusCode: 503 });
+      return { accessTokenProps: { ...base, sbAccess: s.access }, newProps: { ...base, sbRefresh: s.refresh }, accessTokenTTL: ttl };
     },
     clientRegistrationCallback: ({ clientMetadata }) => {
       if (!registrationAllowed(clientMetadata, allowed)) {

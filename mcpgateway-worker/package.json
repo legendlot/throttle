@@ -8,7 +8,7 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
-    "test": "node --test test/checks.test.mjs"
+    "test": "node --test test/checks.test.mjs test/odo.test.mjs"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.4"

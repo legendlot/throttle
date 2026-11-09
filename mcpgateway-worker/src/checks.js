@@ -114,6 +114,9 @@ const REFUSALS = {
   'account deactivated': 'Your LOT account is deactivated, so Claude cannot reach LOT data for you. Ask Afshaan if this is a mistake.',
   'not a LOT account': 'This connection is not signed in with a LOT Google account, so it cannot reach LOT data.',
   'unknown user': 'This connection is not linked to a LOT account. Disconnect the LOT connector and connect again with your @legendoftoys.com Google account.',
+  'no odo grant': 'Your LOT access in Claude does not include Odo. Ask Afshaan if you need it.',
+  'odo denied': 'Odo says your account does not have sales access (no Odo role, or it was removed). Ask Afshaan if you need it.',
+  'session expired': 'Odo could not confirm your LOT login just now. Try once more in a minute; if it says this again, refresh the connection: in Claude, open Settings, then Connectors, then LOT, press Disconnect, then Connect again.',
 };
 const UNREACHABLE = 'LOT systems could not be reached just now. Try again in a few minutes; if it keeps happening, tell Afshaan.';
 const FOOT_REFUSED = '(For Claude: this is a deliberate refusal, not a server fault. Tell the user this message as it is and do not retry.)';
@@ -138,3 +141,15 @@ export function refusalResponse(msg, { text, fault }) {
   if (msg.method === 'tools/call') return { status: 200, body: { jsonrpc: '2.0', id: msg.id, result: { isError: true, content: [{ type: 'text', text }] } } };
   return { status: 200, body: { jsonrpc: '2.0', id: msg.id, error: { code: fault ? RPC_FAULT : RPC_REFUSED, message: text } } };
 }
+
+export async function sha256Hex(s) {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// The gateway token must die before the LOT session it carries (2 min margin), never after.
+// null = too little life left: refresh the session first (never floor the TTL past the JWT).
+export const ttlFor = (expSec, nowSec = Math.floor(Date.now() / 1000)) => {
+  const t = Math.min(3600, Number(expSec) - nowSec - 120);
+  return Number.isFinite(t) && t >= 60 ? t : null;
+};
