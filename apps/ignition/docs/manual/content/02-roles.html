@@ -1,15 +1,16 @@
-<p class="lead">Ignition gives each person the access that matches their job. This chapter explains the three roles used throughout this manual.</p>
+<p class="lead">Ignition gives each person the access that matches their job. This chapter explains the roles used throughout this manual.</p>
 
-<h2 class="sec">The three roles</h2>
+<h2 class="sec">The roles</h2>
 <div class="anatomy">
   <div class="a-row"><div class="a-key"><span class="role mkt">Marketer</span></div><div class="a-val"><p><strong>Marketing Team.</strong> Runs deals day to day: searches influencers, opens engagements, advances them through the pipeline, sets quality ratings and adds notes.</p></div></div>
   <div class="a-row"><div class="a-key"><span class="role lead">Lead</span></div><div class="a-val"><p><strong>Lead.</strong> Everything a marketer does, plus access to the Reports. <strong>Leads do not approve deals</strong> &mdash; final approval sits with the Marketing head (admin) since 26 Aug 2026.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role d2c">Commission verifier (D2C)</span></div><div class="a-val"><p><strong>Commission verifier (D2C).</strong> Can view Ignition, see the Reports and verify monthly affiliate commission. Admins can verify too.</p></div></div>
   <div class="a-row"><div class="a-key"><span class="role adm">Admin</span></div><div class="a-val"><p><strong>Admin.</strong> Full access, including the admin screens (the user-roles reference and the data-import runbook).</p></div></div>
 </div>
 
 <div class="callout note">
   <div class="c-title">&#9432; How access actually works</div>
-  <p>Ignition uses the shared company permission map. The relevant permissions are <code>ignition_view</code>, <code>ignition_manage</code>, <code>ignition_approve</code>, <code>ignition_reports_view</code> and <code>ignition_admin</code>, bundled into the <strong>ignition_manager</strong> and <strong>ignition_lead</strong> roles (admins get everything). <strong><code>ignition_approve</code> is admin-only</strong>: it is what lets someone sign off a proposed deal, and everyone else keeps <code>ignition_manage</code>, so they can still create deals and move them along. Roles are actually <em>assigned in Garage</em> (the store app) at its Users screen, not inside Ignition. If you cannot reach something you should, ask an admin to set your role there.</p>
+  <p>Ignition uses the shared company permission map. The relevant permissions are <code>ignition_view</code>, <code>ignition_manage</code>, <code>ignition_approve</code>, <code>ignition_reports_view</code>, <code>ignition_commission_verify</code> and <code>ignition_admin</code>, bundled into the <strong>ignition_manager</strong> and <strong>ignition_lead</strong> roles (admins get everything). <strong><code>ignition_approve</code> is admin-only</strong>: it is what lets someone sign off a proposed deal, and everyone else keeps <code>ignition_manage</code>, so they can still create deals and move them along. Roles are assigned inside Ignition, at <strong>Admin &rarr; Users</strong> (<strong>Ignition Access</strong>), by an admin. If you cannot reach something you should, ask an admin to set your role there.</p>
 </div>
 
 <h2 class="sec">Who sees what</h2>
@@ -19,6 +20,8 @@
     <tr><td>Dashboard, Influencers, Engagements, Lists</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
     <tr><td>Create &amp; advance deals, set ratings</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
     <tr><td>Reports</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Commission: view</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Commission: verify (also the Commission verifier)</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
     <tr><td>Approving a proposed deal</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
     <tr><td>User Roles, Sheet Import</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
   </tbody>

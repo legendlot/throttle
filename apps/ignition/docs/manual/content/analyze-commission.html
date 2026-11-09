@@ -1,0 +1,59 @@
+<p class="lead">Commission is the monthly pay-out to a creator on an affiliate deal. This screen is where D2C checks each month&rsquo;s figure, confirms the final amount and sends it on to be paid.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Checking and verifying monthly commission.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read, plus Verify for D2C.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role d2c">Commission verifier (D2C)</span> <span class="role lead">Lead</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Analyze &rarr; Commission.</div></div>
+</div>
+
+<h2 class="sec">What commission is</h2>
+<p>For each affiliate deal, commission for a month is the <strong>sales made with the creator&rsquo;s code that month, after returns, without GST or shipping, times the deal&rsquo;s affiliate %</strong>. It applies to <strong>Affiliate</strong> and <strong>Paid + Affiliate</strong> deals, for sales from <strong>November 2026</strong> onwards. Nothing earlier is counted.</p>
+<p>Ignition works out an <strong>estimate</strong> for every month and refreshes it <strong>every morning until the month is verified</strong>, so late returns lower it by themselves. Once D2C verifies a month, the amount is locked.</p>
+
+<h2 class="sec">Finding it</h2>
+<p>Open <strong>Analyze &rarr; Commission</strong>. The <strong>Month</strong> picker starts at Nov 2026 and opens on last month, the one D2C verifies. The running month is marked &ldquo;so far&rdquo; and shows a banner: its numbers are estimates and <strong>it can be verified only once the month is over</strong>. Estimates show when they were last updated. Leads can see the screen (view only); the people who verify are the Commission verifier and admins.</p>
+
+<h2 class="sec">Reading the table</h2>
+<p>One row per deal. The columns are: <strong>Deal</strong> (opens the deal) and <strong>Creator</strong>; <strong>Orders</strong>; <strong>Net sales (ex-GST)</strong>; <strong>Rate</strong> (the deal&rsquo;s affiliate %); <strong>Ignition estimate</strong>; <strong>State</strong> (Estimate or Verified); <strong>Verified amount</strong> (shown in amber when it differs from the estimate); <strong>Reason</strong>; <strong>Verified by</strong> (name and date); and <strong>Payment</strong> (the status of the payment request, with its Snorkel number). A total row sits at the bottom.</p>
+
+<h2 class="sec">Verifying a month</h2>
+<ol class="steps">
+  <li><span class="s-title">Click Verify</span> on the row (available once the month is over).</li>
+  <li><span class="s-title">Check the amount.</span> <strong>Verified amount (&#8377;)</strong> is filled with Ignition&rsquo;s estimate. Keep it, or type the final figure after returns and cancellations.</li>
+  <li><span class="s-title">Give a reason if it differs.</span> A different amount needs the <strong>Reason for the difference</strong>; at the estimate it is not needed.</li>
+  <li><span class="s-title">Click Verify.</span> Your name and the date are stamped and the amount locks. A payment request is raised in <strong>Snorkel</strong> and <strong>waits for the creator&rsquo;s invoice</strong>.</li>
+</ol>
+<p>A verified amount of <strong>&#8377;0</strong> closes the month with nothing to pay; no request is raised.</p>
+
+<h2 class="sec">Verify at estimate (several rows)</h2>
+<p>Tick the rows that are right as they stand (or the box at the top for all of them), then click <strong>Verify at estimate</strong>. A confirmation names the month, how many raise a request and how many close at &#8377;0. Each row is done in turn; if some are refused, the list shows which and why, and the rest still go through.</p>
+
+<h2 class="sec">What the payment status means</h2>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Not verified yet</strong></td><td>Still an estimate.</td></tr>
+    <tr><td><strong>Waiting for invoice</strong></td><td>Raised, but the creator has not sent this month&rsquo;s invoice.</td></tr>
+    <tr><td><strong>In Snorkel</strong></td><td>With Finance for approval and payment. <strong>Held in Snorkel</strong> and <strong>Send to Snorkel failed</strong> show when it is held or did not go through.</td></tr>
+    <tr><td><strong>Paid</strong></td><td>Shows the amount paid, the TDS held back and the UTR.</td></tr>
+    <tr><td><strong>Rejected</strong> / <strong>Cancelled</strong></td><td>No longer going to be paid. Use <strong>Raise again</strong> on the row to send a fresh request.</td></tr>
+    <tr><td><strong>Nothing to pay</strong></td><td>Verified at &#8377;0.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Admins only</h2>
+<ul>
+  <li><strong>Reopen</strong> clears a wrongly verified month and puts it back to an estimate, to be verified again. It works only while the month&rsquo;s payment request is not live or paid (for example after it was rejected or cancelled).</li>
+  <li><strong>Rebuild estimates</strong> (top right) recalculates the month on screen straight away instead of waiting for the morning update.</li>
+</ul>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; If Verify is refused</div>
+  <p>Two common reasons. The <strong>month is still running</strong>: wait until it is over. Or <strong>some of the month&rsquo;s orders have not synced from Shopify yet</strong>: sync the deal&rsquo;s code first (Reports &rarr; Sync all, or from the code on the deal), then verify.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Commission is on top of the fee</div>
+  <p>Commission is paid separately from the agreed fee. It never uses up the fee, and it never stops you raising or logging the fee. See <em>Paying the Creator</em> for the invoice.</p>
+</div>

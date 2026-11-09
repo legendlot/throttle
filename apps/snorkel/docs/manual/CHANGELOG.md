@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.26.0] - 2026-11-09
+### Added
+- Creator Payments from Ignition: **Monthly commission requests** section (how to recognise one, amount verified by D2C, what Finance checks, rejecting returns it to D2C).
+
 ## [1.25.0] - 2026-11-09
 ### Added
 - Creator Payments from Ignition chapter (Finance): what arrives from Ignition (influencer category, creator invoice attached, payee linked from the contract), approval under the threshold, writing hold and reject reasons for the deal owner, and what marking paid sends back to the deal.

@@ -216,6 +216,7 @@ ul.tight li, ol.tight li { margin-bottom: 0.7mm; }
   padding: 2.5px 7px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; }
 .role.mkt { background: oklch(0.96 0.03 150); color: #1a7a3b; border-color: oklch(0.82 0.08 150); }
 .role.lead { background: oklch(0.96 0.03 264); color: #2138c0; border-color: oklch(0.82 0.08 264); }
+.role.d2c { background: oklch(0.96 0.03 200); color: #0b6f7a; border-color: oklch(0.82 0.08 200); }
 .role.adm { background: oklch(0.96 0.03 27);  color: #c01f1f; border-color: oklch(0.83 0.09 27); }
 
 /* ── Callout boxes (full border + tint + icon-label · no side stripe) ── */

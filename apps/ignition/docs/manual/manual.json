@@ -2,7 +2,7 @@
   "title": "Ignition",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to influencer deals, engagements, codes and campaigns at Legend of Toys.",
-  "version": "1.20.0",
+  "version": "1.21.0",
   "date": "2026-11-09",
   "app_url": "ignition.legendoftoys.com",
   "owner": "Legend of Toys",
@@ -16,6 +16,11 @@
       "label": "Lead",
       "name": "Lead",
       "desc": "Adds approval to a marketer's access, plus the reports."
+    },
+    "d2c": {
+      "label": "Commission verifier (D2C)",
+      "name": "Commission verifier (D2C)",
+      "desc": "Views Ignition and reports and verifies monthly affiliate commission."
     },
     "adm": {
       "label": "Admin",
@@ -257,6 +262,17 @@
           "route": "/reports",
           "file": "analyze-reports.html",
           "roles": [
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "commission",
+          "title": "Affiliate Commission",
+          "route": "/commission",
+          "file": "analyze-commission.html",
+          "roles": [
+            "d2c",
             "lead",
             "adm"
           ]

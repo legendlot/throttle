@@ -3,6 +3,15 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.21.0] - 2026-11-09
+### Added
+- Affiliate Commission chapter (Analyze): what commission is, the Commission screen and month picker, Verify, Verify at estimate, payment statuses, Raise again, admin Reopen and Rebuild estimates, refused-verify messages.
+- Commission card on the deal page; commission invoices on the Payments card ("Commission - month", Upload first, outside the fee).
+- New role: Commission verifier (D2C).
+### Changed
+- Affiliate % is required on Affiliate and Paid + Affiliate deals (new deal page, New deal window, Deal terms).
+- Roles and User Roles chapters: roles are assigned in Ignition (Admin, Users), not Garage.
+
 ## [1.20.0] - 2026-11-09
 ### Changed
 - Contract: no longer needs an expected post date and no longer prints it; when to post is covered by the published terms. A deal marked Fixed date (launch; video deals only) prints "Post date (fixed)" and Send is blocked until the date is set.
