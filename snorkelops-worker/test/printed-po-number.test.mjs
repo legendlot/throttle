@@ -56,11 +56,12 @@ test('ambiguous or failed lookup is refused, never guessed', async () => {
 });
 
 test('createPaymentRequest resolves before the PO gate', () => {
-  const i = src.indexOf("case 'createPaymentRequest': {");
-  const body = src.slice(i, src.indexOf("\n          case '", i + 10));
+  // The body lives in createPaymentRequestCore since Reann #2 S2 (shared with ignitionRaisePayment).
+  const i = src.indexOf('async function createPaymentRequestCore(');
+  const body = src.slice(i, src.indexOf('\n}\n', i));
   const r = body.indexOf('resolvePrintedPoNumber(d.linked_po_number)');
   assert.ok(r > 0 && r < body.indexOf('const poRef = encodeURIComponent(d.linked_po_number)'));
   // refuses only when the category requires a PO; otherwise a miss keeps the typed value
-  assert.match(body, /if \(rp\.error && cat\.data\[0\]\.po_required && type === 'payment'\) return err\(rp\.error, rp\.status \|\| 400\);/);
+  assert.match(body, /if \(rp\.error && cat\.data\[0\]\.po_required && type === 'payment'\) return \{ error: rp\.error, status: rp\.status \|\| 400 \};/);
   assert.match(body, /if \(!rp\.error\) d\.linked_po_number = rp\.po_number;/);
 });

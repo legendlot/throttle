@@ -2335,6 +2335,556 @@ async function notifyRequesterPoRaised(po, env) {
   }
 }
 
+// tell whoever a new request now sits with — approvers if it needs approval, finance if not.
+// Shared by createPaymentRequestCore and Ignition's re-attach replay (a request whose invoice row
+// failed to record was never announced; it is announced once the invoice lands).
+async function notifyNewPaymentRequest(requestId, request_no, needsApproval, payeeId, currency, amount, purpose) {
+  const payeeRow = await query('payment_payees', `?id=eq.${payeeId}&select=name&limit=1`);
+  const payeeName = (payeeRow.ok && payeeRow.data[0]?.name) || 'a payee';
+  const who = await grantHolders(needsApproval ? 'approve' : 'execute');
+  await notify(who.map(uid => ({
+    user_id: uid, request_id: requestId,
+    kind: needsApproval ? 'approval_needed' : 'payment_needed',
+    title: needsApproval
+      ? `${request_no} needs your approval`
+      : `${request_no} is ready to pay`,
+    body: `${payeeName} — ${currency} ${Number(amount).toLocaleString('en-IN')} · ${purpose}`,
+  })));
+}
+
+// The ONE payment-request create path: the user action `createPaymentRequest` and the internal
+// `ignitionRaisePayment` both call this, so validation, the PO gate, the threshold, PAY-NNNN
+// numbering and the notifications never fork. `actor` = { userId, name, role } of the requester;
+// `extra` = internal-only columns, never taken from a user's body. `opts.beforeNotify(created)` runs
+// between the insert and the notifications (Ignition records the invoice there, so Finance is never
+// told about an invoice-less request); a returned { error } stops before anything is notified.
+// Returns { error, status?, created? } or { created, data } (data = the createPaymentRequest
+// response, unchanged).
+async function createPaymentRequestCore(d, actor, extra = {}, opts = {}) {
+  if (!d.payee_id)  return { error: 'payee_id required' };
+  if (!d.purpose)   return { error: 'purpose required' };
+  if (!d.category_key) return { error: 'category_key required' };
+  const type = d.request_type || 'payment';
+  if (!['payment','credit_note','debit_note'].includes(type)) return { error: 'bad request_type' };
+
+  const amount = type === 'payment' ? Number(d.amount_to_pay || 0) : Number(d.invoice_total || 0);
+  if (type === 'payment' && !(amount > 0)) return { error: 'amount_to_pay must be greater than zero' };
+  // Validated BEFORE anything is read or minted — a refused note must not burn a PAY-NNNN.
+  const { note: requesterNote, error: noteError } = parseRequesterNote(d.requester_note);
+  if (noteError) return { error: noteError, status: 400 };
+
+  // PO gate — category-driven (Piyush's escalation, closed by construction rather than
+  // by reminder). Only categories flagged po_required demand one.
+  const cat = await query('payment_categories',
+    `?category_key=eq.${encodeURIComponent(d.category_key)}&limit=1&select=*`);
+  if (!cat.ok || !cat.data[0]) return { error: 'Unknown category' };
+  let po_warning = null, po_overdrawn = null;
+  // Accept the printed PO number too (LOT/PO/202609/533 → IN-PKG-0533) — before the PO
+  // gate, so the gate, the overdraw check and the stored row all see the Snorkel number.
+  // Refuse only where a PO is REQUIRED: elsewhere the field may be hidden on the form
+  // (category switched), so a miss keeps the value as typed, as it always did.
+  if (d.linked_po_number) {
+    const rp = await resolvePrintedPoNumber(d.linked_po_number);
+    if (rp.error && cat.data[0].po_required && type === 'payment') return { error: rp.error, status: rp.status || 400 };
+    if (!rp.error) d.linked_po_number = rp.po_number;
+  }
+  if (cat.data[0].po_required && type === 'payment') {
+    if (!d.linked_po_number) {
+      return { error: `A PO is required for ${cat.data[0].label}. Raise one under Procurement → POs, or pick a different category.` };
+    }
+    const poRef = encodeURIComponent(d.linked_po_number);
+    const po = await query('purchase_orders',
+      `?po_number=eq.${poRef}&select=po_number,status,currency&limit=1`);
+    if (!po.ok || !po.data[0]) return { error: `PO ${d.linked_po_number} not found` };
+
+    // ⛔ EXISTENCE WAS THE ONLY CHECK until 2026-09-02 (S332) — `select=po_number` did not
+    // even fetch the status, so a **Cancelled** PO passed the gate and a payment could be
+    // raised against a PO that commercially does not exist. Cancelled is now refused.
+    // Soft and Closed only WARN: a Soft PO can still be promoted, and a Closed one can
+    // legitimately carry a final payment. Do not harden those into blocks.
+    const poStatus = po.data[0].status;
+    if (poStatus === 'Cancelled') {
+      return { error: `PO ${d.linked_po_number} is Cancelled and cannot carry a payment. Link a live PO, or pick a category that does not require one.` };
+    }
+    if (poStatus === 'Soft' || poStatus === 'Closed') {
+      po_warning = `PO ${d.linked_po_number} is ${poStatus}.`;
+    }
+
+    // Over-consumption WARNING, never a block — same rule as the duplicate-invoice warning
+    // below. Part-payments, advances and genuine vendor over-billing all legitimately push
+    // the total past the PO value; the spec asked to surface it, not to police it.
+    // ⚠️ Skipped when the PO and the request are in different currencies — there is no FX
+    // rate in this schema (see the threshold note below) and a cross-currency comparison
+    // would fire a confidently wrong warning. Silence beats a false alarm here.
+    const poCur  = (po.data[0].currency || 'INR').toUpperCase();
+    const reqCur = (d.currency || 'INR').toUpperCase();
+    if (poCur === reqCur) {
+      const [lines, prior] = await Promise.all([
+        query('po_lines', `?po_number=eq.${poRef}&select=total_value`),
+        // ⚠️ BOTH `rejected` AND `cancelled` are excluded, and the pair is the whole point:
+        // neither is a commitment against the PO, so counting one would inflate consumption
+        // and fire the warning on a PO with budget left. (`neq.rejected` alone was the first
+        // draft — caught in this session's hostile review; `PAY-0001`, the only row in the
+        // table, is cancelled, so the very first real use would have over-counted.)
+        // `pending_approval`, `approved`, `submitted` and `paid` all DO count — an
+        // in-flight request is money already spoken for.
+        query('payment_requests',
+          `?linked_po_number=eq.${poRef}&status=not.in.(rejected,cancelled)&request_type=eq.payment&select=request_no,amount_to_pay`),
+      ]);
+      const poValue   = lines.ok ? lines.data.reduce((s, l) => s + Number(l.total_value || 0), 0) : 0;
+      const priorPaid = prior.ok ? prior.data.reduce((s, p) => s + Number(p.amount_to_pay || 0), 0) : 0;
+      if (poValue > 0 && priorPaid + amount > poValue) {
+        po_overdrawn = {
+          po_number: d.linked_po_number, po_value: poValue,
+          already_requested: priorPaid, this_request: amount,
+          prior_requests: prior.ok ? prior.data.map(p => p.request_no) : [],
+        };
+      }
+    }
+  }
+
+  // Threshold IN FORCE AT SUBMIT, stamped on the row. Editing the threshold later must
+  // never retroactively reinterpret a request that has already been decided.
+  const st = await query('payment_settings', '?id=eq.1&limit=1&select=approval_threshold_inr');
+  const threshold = Number(st.ok && st.data[0]?.approval_threshold_inr) || 100000;
+  // ⚠️ The threshold is `approval_threshold_inr` — an INR figure. Comparing a foreign
+  // amount against it silently under-reads: USD 2,000 (~Rs1.7L) would score 2000 < 100000
+  // and auto-approve. There is no FX rate in this schema for arbitrary currencies and
+  // inventing one would be worse, so a NON-INR request ALWAYS goes for approval.
+  // Do not "optimise" this into a conversion without a real rate source.
+  const isInr = (d.currency || 'INR').toUpperCase() === 'INR';
+  const needsApproval = type === 'payment' && (!isInr || amount >= threshold);
+
+  const request_no = await nextSeq4('pay_request', 'PAY-');
+  const now = new Date().toISOString();
+  const r = await insert('payment_requests', {
+    request_no, request_type: type, category_key: d.category_key,
+    payee_id: d.payee_id, purpose: String(d.purpose).trim(),
+    invoice_no: d.invoice_no || null, invoice_date: d.invoice_date || null,
+    invoice_total: d.invoice_total != null ? Number(d.invoice_total) : null,
+    amount_to_pay: type === 'payment' ? amount : null,
+    currency: d.currency || 'INR',
+    needed_by: d.needed_by || null,
+    is_urgent: !!d.is_urgent, urgency_reason: d.urgency_reason || null,
+    linked_po_number: d.linked_po_number || null,
+    // Internal callers only (ignitionRaisePayment): source_system / source_ref / payee_bank_id.
+    // Never read from a request body — a user cannot forge an Ignition origin.
+    ...extra,
+    // Only sent when there is one: a request with no note writes exactly the row it
+    // always did, so this handler cannot 400 on a missing column if the worker lands
+    // before migration snorkel_payment_request_note_v1 does.
+    ...(requesterNote ? { requester_note: requesterNote } : {}),
+    status: needsApproval ? 'pending_approval' : (type === 'payment' ? 'approved' : 'submitted'),
+    threshold_at_submit: threshold,
+    // never stamp a real approver on something nobody looked at
+    auto_approved: type === 'payment' && !needsApproval,
+    requested_by_user_id: actor.userId, requested_by_name: actor.name || null,
+    requested_at: now,
+  });
+  if (!r.ok) return { error: 'Create failed: ' + JSON.stringify(r.data), dbCode: r.data?.code || null };
+  const created = Array.isArray(r.data) ? r.data[0] : r.data;
+  if (opts.beforeNotify) {
+    const h = await opts.beforeNotify(created);
+    if (h && h.error) return { error: h.error, status: h.status || 502, created };
+  }
+
+  // Duplicate warning — never a block. Genuine re-bills and part-payments legitimately
+  // share an invoice number (evidence: `invoice 100.pdf` submitted twice in #payments).
+  let duplicate_of = null;
+  if (d.invoice_no) {
+    const dup = await query('payment_requests',
+      `?payee_id=eq.${d.payee_id}&invoice_no=eq.${encodeURIComponent(d.invoice_no)}` +
+      `&status=neq.rejected&id=neq.${created?.id}&select=request_no,amount_to_pay,requested_by_name,requested_at&limit=5`);
+    if (dup.ok && dup.data.length) duplicate_of = dup.data;
+  }
+  await notifyNewPaymentRequest(created?.id, request_no, needsApproval, d.payee_id,
+    d.currency || 'INR', amount, d.purpose);
+  await logActivity(actor.name || actor.role, actor.role, 'PAYMENT_REQUESTED', 'Payment',
+    request_no, `${request_no} — ${d.purpose}`, { amount, needs_approval: needsApproval });
+  return {
+    created,
+    data: {
+      id: created?.id, request_no, status: created?.status,
+      needs_approval: needsApproval, threshold, duplicate_of,
+      po_warning, po_overdrawn,
+    },
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// IGNITION → SNORKEL PAYMENT REQUESTS (Reann #2, S2 — plan
+// docs/superpowers/plans/2026-11-09-ignition-snorkel-payment-requests.md)
+// ignitionops reaches these over a [[services]] binding on POST /internal/ignition, bearer
+// IGNITION_INTERNAL_TOKEN, NO user JWT (Ignition gates `ignition_manage` on its own permission
+// layer, which this worker cannot see). Approval and payment stay entirely in Snorkel's roles.
+// ⛔ Nothing here ever returns an account number or a PAN — Ignition keeps #1's masking.
+// ══════════════════════════════════════════════════════════════════════════════
+const IGNITION_SOURCE = 'ignition';
+const IGNITION_INVOICE_BUCKET = 'ignition-creator-invoices';
+const IGNITION_STATUS_SELECT = 'id,request_no,status,held_reason,rejection_note,paid_at,paid_amount,payment_ref,tds_amount,source_system,source_ref';
+const IGNITION_REF_RE = /^[\w\-:.]{1,100}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+
+// Constant-time string compare: the loop runs over the longer input whatever the content, so the
+// time taken says nothing about how many leading characters matched.
+function timingSafeEqualStr(a, b) {
+  a = String(a); b = String(b);
+  const n = Math.max(a.length, b.length);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < n; i++) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return diff === 0;
+}
+// Fail CLOSED: an unset secret must never mean "allow".
+function ignitionAuthorised(request, env) {
+  const want = (env && env.IGNITION_INTERNAL_TOKEN) || '';
+  const a = request.headers.get('Authorization') || '';
+  const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+  return !!want && timingSafeEqualStr(bearer, want);
+}
+
+// What Ignition mirrors on its deal_payment_requests row — the status read and the push carry
+// exactly these fields.
+function ignitionStatusFields(row) {
+  const num = v => (v == null || v === '' ? null : Number(v));
+  return {
+    source_ref: row.source_ref, request_id: row.id, request_no: row.request_no, status: row.status,
+    held_reason: row.held_reason ?? null, rejection_note: row.rejection_note ?? null,
+    paid_at: row.paid_at ?? null, paid_amount: num(row.paid_amount),
+    payment_ref: row.payment_ref ?? null, tds_amount: num(row.tds_amount),
+  };
+}
+
+// Status push to ignitionops after a transition. Fire-and-forget inside ctx.waitUntil: it must
+// never fail or slow the Snorkel action (the ignitionops reconcile cron is the safety net for a
+// missed push). Non-Ignition rows are dropped here, so every call site may pass its rows as-is.
+// Unbound IGNITIONOPS / unset token / no waitUntil (local) → skipped silently.
+function pushIgnitionStatus(env, ctx, rows) {
+  try {
+    const list = (Array.isArray(rows) ? rows : [rows])
+      .filter(r => r && r.source_system === IGNITION_SOURCE && r.source_ref);
+    if (!list.length || !env?.IGNITIONOPS || !env.IGNITION_INTERNAL_TOKEN || !ctx?.waitUntil) return 0;
+    ctx.waitUntil(Promise.all(list.map(row =>
+      Promise.resolve().then(() => env.IGNITIONOPS.fetch('https://ignitionops/internal/snorkel-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.IGNITION_INTERNAL_TOKEN}` },
+        body: JSON.stringify({ action: 'snorkelStatusChanged', ...ignitionStatusFields(row) }),
+      })).then(res => { if (res && !res.ok) console.error('[ignition-push]', row.request_no, res.status); })
+        .catch(e => console.error('[ignition-push] failed (Snorkel action unaffected):', row.request_no, e?.message))
+    )));
+    return list.length;
+  } catch (e) {
+    console.error('[ignition-push] failed (Snorkel action unaffected):', e?.message);
+    return 0;
+  }
+}
+
+// PostgREST error → `code: message`. Never the `details`: a CHECK failure's "Failing row
+// contains (…)" would echo a PAN or an account number back to the caller.
+function ignitionDbErr(r) {
+  const d = r && r.data;
+  if (d && typeof d === 'object') return [d.code, d.message].filter(Boolean).join(': ') || 'db_error';
+  return `db_error ${r?.status || ''}`.trim();
+}
+const ignNormPan  = v => String(v || '').replace(/\s+/g, '').toUpperCase();
+const ignNormName = v => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+const ignNormAcct = v => String(v || '').replace(/\s+/g, '');
+const ignNormIfsc = v => String(v || '').replace(/\s+/g, '').toUpperCase();
+const ignNormUpi  = v => String(v || '').trim().toLowerCase();
+const ignIsoDate  = v => {   // YYYY-MM-DD and a real calendar day (rejects 2026-02-30, 2026-13-01)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v))) return false;
+  const t = new Date(`${v}T00:00:00Z`);
+  return !isNaN(t.getTime()) && t.toISOString().slice(0, 10) === String(v);
+};
+
+// Bank completeness, checked BEFORE any payee is resolved or created (nothing is written for an
+// incomplete one). Account + IFSC go together; otherwise a UPI id. A truthy-but-empty object is
+// incomplete. Returns { bank } (normalised; null = none sent) or { error }.
+function ignitionBankInput(bank) {
+  if (bank == null) return { bank: null };
+  if (typeof bank !== 'object' || Array.isArray(bank)) return { error: 'bank_incomplete' };
+  const acct = ignNormAcct(bank.account_number), ifsc = ignNormIfsc(bank.ifsc), upi = ignNormUpi(bank.upi_id);
+  const hasAcct = !!(acct || ifsc);
+  if (hasAcct && !(acct && IFSC_RE.test(ifsc))) return { error: 'bank_incomplete' };
+  if (!hasAcct && !upi) return { error: 'bank_incomplete' };
+  return { bank: {
+    account_name: bank.account_name ? String(bank.account_name).trim() : null,
+    account_number: acct || null, ifsc: ifsc || null,
+    bank_name: bank.bank_name ? String(bank.bank_name).trim() : null, upi_id: upi || null,
+  } };
+}
+
+// Payee find-or-create (plan Design 3). Order: linked_influencer_id (must be active — an inactive
+// linked payee refuses, never falls through to a second payee) → PAN among UNLINKED active
+// influencer payees → exact normalised payee name = the influencer's person_name OR channel_name
+// among the same (the 12 legacy payees carry no PAN and are mostly named after the channel) →
+// create (only with bank details, Decision 3). Ambiguity is an error with the candidates, never a
+// guess. A name match whose PAN is set and DIFFERS from the influencer's is not a match.
+async function resolveIgnitionPayee(inf, bank, actorId) {
+  const linked = await query('payment_payees',
+    `?linked_influencer_id=eq.${encodeURIComponent(inf.id)}&select=id,payee_code,name,is_active&limit=1`);
+  if (!linked.ok) return { error: 'payee_lookup_failed: ' + ignitionDbErr(linked), status: 502 };
+  if (linked.data[0]) {
+    const p = linked.data[0];
+    if (p.is_active !== true) return { error: 'payee_inactive', status: 409, candidates: [p.payee_code] };
+    return { payee: { id: p.id, payee_code: p.payee_code, name: p.name }, matched_by: 'linked' };
+  }
+
+  const cand = await query('payment_payees',
+    '?payee_type=eq.influencer&linked_influencer_id=is.null&is_active=is.true&select=id,payee_code,name,pan');
+  if (!cand.ok) return { error: 'payee_lookup_failed: ' + ignitionDbErr(cand), status: 502 };
+  const pan = ignNormPan(inf.pan);
+  let hits = [], matched_by = null;
+  if (pan) { hits = cand.data.filter(c => ignNormPan(c.pan) === pan); matched_by = 'pan'; }
+  if (!hits.length) {
+    const names = new Set([ignNormName(inf.name), ignNormName(inf.channel_name)].filter(Boolean));
+    hits = cand.data.filter(c => names.has(ignNormName(c.name)) && (!pan || !c.pan || ignNormPan(c.pan) === pan));
+    matched_by = 'name';
+  }
+  if (hits.length > 1) {
+    return { error: 'payee_ambiguous', status: 409, candidates: hits.map(h => h.payee_code) };
+  }
+  if (hits.length === 1) {
+    // Link — guarded on linked_influencer_id IS NULL so two racing sends cannot both claim it.
+    const lk = await update('payment_payees',
+      { linked_influencer_id: inf.id, updated_at: new Date().toISOString() },
+      `id=eq.${hits[0].id}&linked_influencer_id=is.null`);
+    if (!lk.ok || !(Array.isArray(lk.data) && lk.data.length)) {
+      return { error: 'payee_link_conflict', status: 409, candidates: [hits[0].payee_code] };
+    }
+    return { payee: { id: hits[0].id, payee_code: hits[0].payee_code, name: hits[0].name }, matched_by };
+  }
+
+  if (!bank) return { error: 'no_bank_details', status: 409 };
+  const payee_code = await nextSeq4('payee', 'PAY-');
+  const r = await insert('payment_payees', {
+    payee_code, name: String(inf.name || inf.channel_name).trim(), payee_type: 'influencer',
+    synced_from: IGNITION_SOURCE, linked_influencer_id: inf.id, pan: pan || null,
+    gstin: inf.gstin ? ignNormPan(inf.gstin) : null,
+    email: inf.email || null, phone: inf.phone || null, created_by: actorId,
+  });
+  if (!r.ok) {
+    // A racing send linked/created it first — use that one.
+    if (r.data?.code === '23505') {
+      const again = await query('payment_payees',
+        `?linked_influencer_id=eq.${encodeURIComponent(inf.id)}&is_active=is.true&select=id,payee_code,name&limit=1`);
+      if (again.ok && again.data[0]) return { payee: again.data[0], matched_by: 'linked' };
+    }
+    return { error: 'payee_create_failed: ' + ignitionDbErr(r), status: 502 };
+  }
+  const p = Array.isArray(r.data) ? r.data[0] : r.data;
+  return { payee: { id: p.id, payee_code: p.payee_code, name: p.name }, matched_by: 'created' };
+}
+
+// Bank (Decision 3). `bank` is already normalised + complete (ignitionBankInput). With account +
+// IFSC: reuse an active row with the SAME account + IFSC only — a shared UPI must never pick an
+// old account. UPI-only: reuse a UPI-only row with that UPI (never one carrying an account).
+// Else add one, default only when the payee has no active default (a racing default insert hits payment_payee_banks_one_default → add it
+// non-default instead). Without details: the payee must already have an active bank (default
+// first, else the oldest). Returns the id only.
+async function ensureIgnitionPayeeBank(payeeId, bank, actorId, accountName) {
+  const ex = await query('payment_payee_banks',
+    `?payee_id=eq.${payeeId}&is_active=is.true&select=id,account_number,ifsc,upi_id,is_default&order=id.asc`);
+  if (!ex.ok) return { error: 'bank_lookup_failed: ' + ignitionDbErr(ex), status: 502 };
+  const rows = ex.data || [];
+  if (!bank) {
+    if (!rows.length) return { error: 'no_bank_details', status: 409 };
+    return { bank_id: (rows.find(b => b.is_default) || rows[0]).id, bank_added: false };
+  }
+  const same = bank.account_number
+    ? rows.find(b => ignNormAcct(b.account_number) === bank.account_number && ignNormIfsc(b.ifsc) === bank.ifsc)
+    : rows.find(b => !ignNormAcct(b.account_number) && ignNormUpi(b.upi_id) === bank.upi_id);
+  if (same) return { bank_id: same.id, bank_added: false };
+  const row = {
+    payee_id: payeeId, account_name: bank.account_name || accountName || null,
+    account_number: bank.account_number, ifsc: bank.ifsc, bank_name: bank.bank_name,
+    upi_id: bank.upi_id, is_default: !rows.some(b => b.is_default), created_by: actorId,
+  };
+  let r = await insert('payment_payee_banks', row);
+  if (!r.ok && row.is_default && r.data?.code === '23505') {
+    r = await insert('payment_payee_banks', { ...row, is_default: false });
+  }
+  if (!r.ok) return { error: 'bank_create_failed: ' + ignitionDbErr(r), status: 502 };
+  const b = Array.isArray(r.data) ? r.data[0] : r.data;
+  return { bank_id: b.id, bank_added: true };
+}
+
+function ignitionFilePathOk(p) {
+  const s = String(p || '');
+  if (!s || s.length > 500 || s.startsWith('/') || /[%\\]/.test(s)) return false;
+  return s.split('/').every(seg => seg !== '' && seg !== '.' && seg !== '..');
+}
+// DETERMINISTIC destination keyed on source_ref: a retry or a concurrent send overwrites the same
+// object instead of making a second copy.
+function ignitionInvoiceDest(ref, f) {
+  return `ignition/${assetSafeSeg(ref)}/${assetSafeSeg(f.file_name || String(f.path).split('/').pop())}`;
+}
+
+// Copy the creator's invoice from Ignition's bucket into payment-docs (same Supabase project).
+// Server-side `/object/copy` (destinationBucket, x-upsert) first; if Storage refuses it, download +
+// upload with x-upsert. Returns the destination path, or null on failure. Writes no DB row.
+async function copyIgnitionInvoice(ref, f) {
+  try {
+    const dest = ignitionInvoiceDest(ref, f);
+    const cp = await storageFetch('/object/copy', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-upsert': 'true' },
+      body: JSON.stringify({ bucketId: IGNITION_INVOICE_BUCKET, sourceKey: f.path,
+                             destinationBucket: PAYMENT_BUCKET, destinationKey: dest }),
+    });
+    if (cp.ok) return dest;
+    const auth = { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` };
+    const enc = String(f.path).split('/').map(encodeURIComponent).join('/');
+    const dl = await fetch(`${SUPABASE_URL}/storage/v1/object/${IGNITION_INVOICE_BUCKET}/${enc}`, { headers: auth });
+    if (!dl.ok) { console.error('[ignition-invoice] download', dl.status); return null; }
+    const bytes = await dl.arrayBuffer();
+    const up = await fetch(`${SUPABASE_URL}/storage/v1/object/${PAYMENT_BUCKET}/${dest}`, {
+      method: 'POST', body: bytes,
+      headers: { ...auth, 'x-upsert': 'true',
+                 'Content-Type': f.mime || dl.headers.get('content-type') || 'application/octet-stream' },
+    });
+    if (!up.ok) { console.error('[ignition-invoice] upload', up.status); return null; }
+    return dest;
+  } catch (e) {
+    console.error('[ignition-invoice] failed:', e?.message);
+    return null;
+  }
+}
+async function recordIgnitionInvoice(requestId, dest, f, actorId) {
+  const r = await insert('payment_request_documents', {
+    request_id: requestId, doc_kind: 'invoice', file_path: dest,
+    file_name: f.file_name || null, mime: f.mime || null,
+    size_bytes: f.size_bytes != null ? Number(f.size_bytes) : null, uploaded_by: actorId,
+  });
+  return r.ok ? null : { error: 'invoice_record_failed', status: 502 };
+}
+
+async function ignitionFindBySource(ref) {
+  return query('payment_requests',
+    `?source_system=eq.${IGNITION_SOURCE}&source_ref=eq.${encodeURIComponent(ref)}` +
+    '&select=id,request_no,status,auto_approved,amount_to_pay,invoice_no,currency,purpose,payee_id,' +
+    'payee:payment_payees(payee_code)&limit=1');
+}
+
+// Replay of an existing source_ref. Different amount or invoice number → 409 (the same ref can't
+// mean two payments). Same values → the existing row. A live request with no invoice document (the
+// first send's document row failed) is re-attached and only THEN announced; if that fails the
+// replay says so — it never reports success for a live request with zero invoice documents.
+async function ignitionReplay(row, d, f, actorId) {
+  const sameAmount = Math.abs(Number(row.amount_to_pay) - Number(d.amount_to_pay)) < 0.005;
+  if (!sameAmount || String(row.invoice_no || '').trim() !== String(d.invoice_no).trim()) {
+    return { error: 'source_ref_conflict', status: 409, request_no: row.request_no };
+  }
+  const out = {
+    request_id: row.id, request_no: row.request_no, status: row.status,
+    payee_code: row.payee?.payee_code || null, auto_approved: !!row.auto_approved, idempotent: true,
+  };
+  if (['cancelled', 'rejected'].includes(row.status)) return { data: out };
+  const docs = await query('payment_request_documents',
+    `?request_id=eq.${row.id}&doc_kind=eq.invoice&select=id&limit=1`);
+  if (!docs.ok) return { error: 'lookup_failed: ' + ignitionDbErr(docs), status: 502 };
+  if (docs.data.length) return { data: out };
+  const dest = await copyIgnitionInvoice(d.source_ref.trim(), f);
+  if (!dest) return { error: 'invoice_copy_failed', status: 502, request_no: row.request_no };
+  const rec = await recordIgnitionInvoice(row.id, dest, f, actorId);
+  if (rec) return { ...rec, request_no: row.request_no };
+  if (['pending_approval', 'approved'].includes(row.status)) {
+    await notifyNewPaymentRequest(row.id, row.request_no, row.status === 'pending_approval',
+      row.payee_id, row.currency || 'INR', row.amount_to_pay, row.purpose);
+  }
+  return { data: out };
+}
+
+// Returns { data } or { error, status, candidates? }.
+// Order: validate everything (no reads) → idempotency lookup → copy the invoice → payee → bank →
+// insert + invoice row → notify. Copying before the payee step means a failed copy writes nothing
+// (no payee linked or minted, no PAY number); the deterministic path makes the copy repeatable.
+async function ignitionRaisePayment(d) {
+  d = d || {};
+  const inf = d.influencer || {}, f = d.invoice_file || {};
+  const ref = typeof d.source_ref === 'string' ? d.source_ref.trim() : '';
+  const bad = msg => ({ error: msg, status: 400 });
+  if (!IGNITION_REF_RE.test(ref)) return bad('source_ref required (1-100 of [A-Za-z0-9_-:.])');
+  if (!UUID_RE.test(String(inf.id || ''))) return bad('influencer.id must be a uuid');
+  if (!String(inf.name || '').trim() && !String(inf.channel_name || '').trim())
+    return bad('influencer.name or influencer.channel_name required');
+  if (!UUID_RE.test(String(d.requested_by_user_id || ''))) return bad('requested_by_user_id must be a uuid');
+  const amount = Number(d.amount_to_pay), total = Number(d.invoice_total);
+  if (typeof d.amount_to_pay === 'boolean' || !Number.isFinite(amount) || !(amount > 0))
+    return bad('amount_to_pay must be a finite number greater than zero');
+  if (typeof d.invoice_total === 'boolean' || !Number.isFinite(total) || !(total > 0))
+    return bad('invoice_total must be a finite number greater than zero');
+  if (amount > total) return bad('amount_to_pay exceeds invoice_total');
+  if (typeof d.invoice_no !== 'string' || !d.invoice_no.trim()) return bad('invoice_no required');
+  if (d.invoice_date != null && d.invoice_date !== '' && !ignIsoDate(d.invoice_date)) return bad('invoice_date must be YYYY-MM-DD');
+  if (d.needed_by != null && d.needed_by !== '' && !ignIsoDate(d.needed_by)) return bad('needed_by must be YYYY-MM-DD');
+  if (!String(d.purpose || '').trim()) return bad('purpose required');
+  // Finance never sees an invoice-less creator request (plan Design 5).
+  if (f.bucket !== IGNITION_INVOICE_BUCKET || !ignitionFilePathOk(f.path))
+    return bad(`invoice_file must be a path in ${IGNITION_INVOICE_BUCKET}`);
+  const bi = ignitionBankInput(d.bank);
+  if (bi.error) return bad(bi.error);
+  const actorId = d.requested_by_user_id;
+
+  // ⛔ Idempotency BEFORE any write and before nextSeq4('pay_request'), so a retry neither
+  // duplicates the request nor burns a PAY number (S1 hostile review).
+  const ex = await ignitionFindBySource(ref);
+  if (!ex.ok) return { error: 'lookup_failed: ' + ignitionDbErr(ex), status: 502 };
+  if (ex.data[0]) return ignitionReplay(ex.data[0], d, f, actorId);
+
+  const dest = await copyIgnitionInvoice(ref, f);
+  if (!dest) return { error: 'invoice_copy_failed', status: 502 };
+
+  const pr = await resolveIgnitionPayee(inf, bi.bank, actorId);
+  if (pr.error) return pr;
+  const bk = await ensureIgnitionPayeeBank(pr.payee.id, bi.bank, actorId, inf.name || inf.channel_name);
+  if (bk.error) return bk;
+
+  const out = await createPaymentRequestCore({
+    payee_id: pr.payee.id, purpose: String(d.purpose).trim(), category_key: 'influencer',
+    request_type: 'payment', currency: 'INR', amount_to_pay: amount,
+    invoice_no: d.invoice_no.trim(), invoice_date: d.invoice_date || null,
+    invoice_total: total, needed_by: d.needed_by || null,
+  }, { userId: actorId, name: d.requested_by_name || null, role: IGNITION_SOURCE },
+     { source_system: IGNITION_SOURCE, source_ref: ref, payee_bank_id: bk.bank_id },
+     // The invoice row lands between the insert and the notifications. If it fails, nobody is
+     // told and the request stays un-announced; the retry's replay records it and announces it.
+     { beforeNotify: created => recordIgnitionInvoice(created.id, dest, f, actorId) });
+  if (out.error) {
+    // Two sends raced past the lookup: the unique (source_system, source_ref) index caught the
+    // second. It burnt one PAY number (unavoidable without a lock); replay against the winner.
+    if (out.dbCode === '23505') {
+      const again = await ignitionFindBySource(ref);
+      if (again.ok && again.data[0]) return ignitionReplay(again.data[0], d, f, actorId);
+    }
+    if (String(out.error).startsWith('Create failed')) {
+      console.error('[ignition] create failed:', out.error);
+      return { error: 'create_failed', status: 502 };
+    }
+    return { error: out.error, status: out.status || 400, ...(out.created ? { request_no: out.created.request_no } : {}) };
+  }
+  const c = out.created || {};
+  return { data: {
+    request_id: c.id, request_no: c.request_no, status: c.status,
+    payee_code: pr.payee.payee_code, auto_approved: !!c.auto_approved,
+  } };
+}
+
+// Returns { data } or { error, status }. One IN query for up to 200 refs.
+async function ignitionGetPaymentStatus(d) {
+  const raw = d && d.source_refs;
+  if (!Array.isArray(raw) || !raw.length) return { error: 'source_refs required', status: 400 };
+  const refs = [...new Set(raw.map(x => String(x ?? '').trim()))];
+  if (refs.length > 200) return { error: 'at most 200 source_refs per call', status: 400 };
+  if (!refs.every(x => IGNITION_REF_RE.test(x))) return { error: 'bad source_ref', status: 400 };
+  const r = await query('payment_requests',
+    `?source_system=eq.${IGNITION_SOURCE}&source_ref=in.(${refs.map(x => encodeURIComponent(`"${x}"`)).join(',')})` +
+    `&select=${IGNITION_STATUS_SELECT}`);
+  if (!r.ok) return { error: 'lookup_failed: ' + ignitionDbErr(r), status: 502 };
+  const found = new Set(r.data.map(x => x.source_ref));
+  return { data: { requests: r.data.map(ignitionStatusFields), missing: refs.filter(x => !found.has(x)) } };
+}
+// ══ end IGNITION ══════════════════════════════════════════════════════════════
+
 export default {
   async fetch(request, env, ctx) {
     SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
@@ -2359,6 +2909,34 @@ export default {
         const out = await createVendorRow(bd.data || bd, bd.created_by || 'lotops-di-bridge');
         if (!out.ok) return err(out.error);
         return ok({ vendor_code: out.vendor_code });
+      }
+    }
+
+    // ── Internal: Ignition payment requests (Reann #2 S2) ──
+    // Worker-to-worker over ignitionops' SNORKELOPS service binding; NO user JWT, so it sits ahead
+    // of verifyJWT like /bridge/vendor. Bearer IGNITION_INTERNAL_TOKEN, 401 when unset or wrong.
+    // ⛔ Scope-limited to the two actions below. Do not grow this into a general proxy.
+    {
+      const igUrl = new URL(request.url);
+      if (igUrl.pathname === '/internal/ignition' && request.method === 'POST') {
+        if (!ignitionAuthorised(request, env)) return err('unauthorised', 401);
+        let bd = {};
+        try { bd = await request.json(); } catch { return err('Bad JSON'); }
+        const input = bd.data || bd;
+        try {
+          const out = bd.action === 'ignitionRaisePayment'     ? await ignitionRaisePayment(input)
+                    : bd.action === 'ignitionGetPaymentStatus' ? await ignitionGetPaymentStatus(input)
+                    : { error: 'Unknown action: ' + bd.action, status: 400 };
+          if (out.error) {
+            return new Response(JSON.stringify({ ok: false, error: out.error,
+              ...(out.candidates ? { candidates: out.candidates } : {}), ...(out.request_no ? { request_no: out.request_no } : {}) }),
+              { status: out.status || 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
+          }
+          return ok(out.data);
+        } catch (e) {
+          console.error('[ignition] internal error:', e?.message);
+          return err('internal_error', 500);
+        }
       }
     }
 
@@ -5306,155 +5884,10 @@ export default {
 
           case 'createPaymentRequest': {
             if (!canPayRequest(P)) return err('No permission', 403);
-            const d = body.data || {};
-            if (!d.payee_id)  return err('payee_id required');
-            if (!d.purpose)   return err('purpose required');
-            if (!d.category_key) return err('category_key required');
-            const type = d.request_type || 'payment';
-            if (!['payment','credit_note','debit_note'].includes(type)) return err('bad request_type');
-
-            const amount = type === 'payment' ? Number(d.amount_to_pay || 0) : Number(d.invoice_total || 0);
-            if (type === 'payment' && !(amount > 0)) return err('amount_to_pay must be greater than zero');
-            // Validated BEFORE anything is read or minted — a refused note must not burn a PAY-NNNN.
-            const { note: requesterNote, error: noteError } = parseRequesterNote(d.requester_note);
-            if (noteError) return err(noteError, 400);
-
-            // PO gate — category-driven (Piyush's escalation, closed by construction rather than
-            // by reminder). Only categories flagged po_required demand one.
-            const cat = await query('payment_categories',
-              `?category_key=eq.${encodeURIComponent(d.category_key)}&limit=1&select=*`);
-            if (!cat.ok || !cat.data[0]) return err('Unknown category');
-            let po_warning = null, po_overdrawn = null;
-            // Accept the printed PO number too (LOT/PO/202609/533 → IN-PKG-0533) — before the PO
-            // gate, so the gate, the overdraw check and the stored row all see the Snorkel number.
-            // Refuse only where a PO is REQUIRED: elsewhere the field may be hidden on the form
-            // (category switched), so a miss keeps the value as typed, as it always did.
-            if (d.linked_po_number) {
-              const rp = await resolvePrintedPoNumber(d.linked_po_number);
-              if (rp.error && cat.data[0].po_required && type === 'payment') return err(rp.error, rp.status || 400);
-              if (!rp.error) d.linked_po_number = rp.po_number;
-            }
-            if (cat.data[0].po_required && type === 'payment') {
-              if (!d.linked_po_number) {
-                return err(`A PO is required for ${cat.data[0].label}. Raise one under Procurement → POs, or pick a different category.`);
-              }
-              const poRef = encodeURIComponent(d.linked_po_number);
-              const po = await query('purchase_orders',
-                `?po_number=eq.${poRef}&select=po_number,status,currency&limit=1`);
-              if (!po.ok || !po.data[0]) return err(`PO ${d.linked_po_number} not found`);
-
-              // ⛔ EXISTENCE WAS THE ONLY CHECK until 2026-09-02 (S332) — `select=po_number` did not
-              // even fetch the status, so a **Cancelled** PO passed the gate and a payment could be
-              // raised against a PO that commercially does not exist. Cancelled is now refused.
-              // Soft and Closed only WARN: a Soft PO can still be promoted, and a Closed one can
-              // legitimately carry a final payment. Do not harden those into blocks.
-              const poStatus = po.data[0].status;
-              if (poStatus === 'Cancelled') {
-                return err(`PO ${d.linked_po_number} is Cancelled and cannot carry a payment. Link a live PO, or pick a category that does not require one.`);
-              }
-              if (poStatus === 'Soft' || poStatus === 'Closed') {
-                po_warning = `PO ${d.linked_po_number} is ${poStatus}.`;
-              }
-
-              // Over-consumption WARNING, never a block — same rule as the duplicate-invoice warning
-              // below. Part-payments, advances and genuine vendor over-billing all legitimately push
-              // the total past the PO value; the spec asked to surface it, not to police it.
-              // ⚠️ Skipped when the PO and the request are in different currencies — there is no FX
-              // rate in this schema (see the threshold note below) and a cross-currency comparison
-              // would fire a confidently wrong warning. Silence beats a false alarm here.
-              const poCur  = (po.data[0].currency || 'INR').toUpperCase();
-              const reqCur = (d.currency || 'INR').toUpperCase();
-              if (poCur === reqCur) {
-                const [lines, prior] = await Promise.all([
-                  query('po_lines', `?po_number=eq.${poRef}&select=total_value`),
-                  // ⚠️ BOTH `rejected` AND `cancelled` are excluded, and the pair is the whole point:
-                  // neither is a commitment against the PO, so counting one would inflate consumption
-                  // and fire the warning on a PO with budget left. (`neq.rejected` alone was the first
-                  // draft — caught in this session's hostile review; `PAY-0001`, the only row in the
-                  // table, is cancelled, so the very first real use would have over-counted.)
-                  // `pending_approval`, `approved`, `submitted` and `paid` all DO count — an
-                  // in-flight request is money already spoken for.
-                  query('payment_requests',
-                    `?linked_po_number=eq.${poRef}&status=not.in.(rejected,cancelled)&request_type=eq.payment&select=request_no,amount_to_pay`),
-                ]);
-                const poValue   = lines.ok ? lines.data.reduce((s, l) => s + Number(l.total_value || 0), 0) : 0;
-                const priorPaid = prior.ok ? prior.data.reduce((s, p) => s + Number(p.amount_to_pay || 0), 0) : 0;
-                if (poValue > 0 && priorPaid + amount > poValue) {
-                  po_overdrawn = {
-                    po_number: d.linked_po_number, po_value: poValue,
-                    already_requested: priorPaid, this_request: amount,
-                    prior_requests: prior.ok ? prior.data.map(p => p.request_no) : [],
-                  };
-                }
-              }
-            }
-
-            // Threshold IN FORCE AT SUBMIT, stamped on the row. Editing the threshold later must
-            // never retroactively reinterpret a request that has already been decided.
-            const st = await query('payment_settings', '?id=eq.1&limit=1&select=approval_threshold_inr');
-            const threshold = Number(st.ok && st.data[0]?.approval_threshold_inr) || 100000;
-            // ⚠️ The threshold is `approval_threshold_inr` — an INR figure. Comparing a foreign
-            // amount against it silently under-reads: USD 2,000 (~Rs1.7L) would score 2000 < 100000
-            // and auto-approve. There is no FX rate in this schema for arbitrary currencies and
-            // inventing one would be worse, so a NON-INR request ALWAYS goes for approval.
-            // Do not "optimise" this into a conversion without a real rate source.
-            const isInr = (d.currency || 'INR').toUpperCase() === 'INR';
-            const needsApproval = type === 'payment' && (!isInr || amount >= threshold);
-
-            const request_no = await nextSeq4('pay_request', 'PAY-');
-            const now = new Date().toISOString();
-            const r = await insert('payment_requests', {
-              request_no, request_type: type, category_key: d.category_key,
-              payee_id: d.payee_id, purpose: String(d.purpose).trim(),
-              invoice_no: d.invoice_no || null, invoice_date: d.invoice_date || null,
-              invoice_total: d.invoice_total != null ? Number(d.invoice_total) : null,
-              amount_to_pay: type === 'payment' ? amount : null,
-              currency: d.currency || 'INR',
-              needed_by: d.needed_by || null,
-              is_urgent: !!d.is_urgent, urgency_reason: d.urgency_reason || null,
-              linked_po_number: d.linked_po_number || null,
-              // Only sent when there is one: a request with no note writes exactly the row it
-              // always did, so this handler cannot 400 on a missing column if the worker lands
-              // before migration snorkel_payment_request_note_v1 does.
-              ...(requesterNote ? { requester_note: requesterNote } : {}),
-              status: needsApproval ? 'pending_approval' : (type === 'payment' ? 'approved' : 'submitted'),
-              threshold_at_submit: threshold,
-              // never stamp a real approver on something nobody looked at
-              auto_approved: type === 'payment' && !needsApproval,
-              requested_by_user_id: userId, requested_by_name: authResult?.fullName || null,
-              requested_at: now,
-            });
-            if (!r.ok) return err('Create failed: ' + JSON.stringify(r.data));
-            const created = Array.isArray(r.data) ? r.data[0] : r.data;
-
-            // Duplicate warning — never a block. Genuine re-bills and part-payments legitimately
-            // share an invoice number (evidence: `invoice 100.pdf` submitted twice in #payments).
-            let duplicate_of = null;
-            if (d.invoice_no) {
-              const dup = await query('payment_requests',
-                `?payee_id=eq.${d.payee_id}&invoice_no=eq.${encodeURIComponent(d.invoice_no)}` +
-                `&status=neq.rejected&id=neq.${created?.id}&select=request_no,amount_to_pay,requested_by_name,requested_at&limit=5`);
-              if (dup.ok && dup.data.length) duplicate_of = dup.data;
-            }
-            // tell whoever it now sits with — approvers if it needs approval, finance if not
-            const payeeRow = await query('payment_payees', `?id=eq.${d.payee_id}&select=name&limit=1`);
-            const payeeName = (payeeRow.ok && payeeRow.data[0]?.name) || 'a payee';
-            const who = await grantHolders(needsApproval ? 'approve' : 'execute');
-            await notify(who.map(uid => ({
-              user_id: uid, request_id: created?.id,
-              kind: needsApproval ? 'approval_needed' : 'payment_needed',
-              title: needsApproval
-                ? `${request_no} needs your approval`
-                : `${request_no} is ready to pay`,
-              body: `${payeeName} — ${d.currency || 'INR'} ${amount.toLocaleString('en-IN')} · ${d.purpose}`,
-            })));
-            await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_REQUESTED', 'Payment',
-              request_no, `${request_no} — ${d.purpose}`, { amount, needs_approval: needsApproval });
-            return ok({
-              id: created?.id, request_no, status: created?.status,
-              needs_approval: needsApproval, threshold, duplicate_of,
-              po_warning, po_overdrawn,
-            });
+            const out = await createPaymentRequestCore(body.data || {},
+              { userId, name: authResult?.fullName || null, role: postRole });
+            if (out.error) return err(out.error, out.status || 400);
+            return ok(out.data);
           }
 
           case 'approvePaymentRequests': {
@@ -5472,6 +5905,7 @@ export default {
             if (!r.ok) return err('Approve failed: ' + JSON.stringify(r.data));
             const movedRows = Array.isArray(r.data) ? r.data : [];
             const moved = movedRows.length;
+            pushIgnitionStatus(env, ctx, movedRows);   // Reann #2: no-op unless source_system='ignition'
             const financeIds = moved ? await grantHolders('execute') : [];
             await notify([
               ...movedRows.map(row => ({
@@ -5510,6 +5944,7 @@ export default {
             }, `id=eq.${encodeURIComponent(d.id)}&status=in.(submitted,pending_approval,approved,held)`);
             if (!r.ok) return err('Reject failed: ' + JSON.stringify(r.data));
             const rej = (Array.isArray(r.data) ? r.data : [])[0];
+            pushIgnitionStatus(env, ctx, rej);   // Reann #2: no-op unless source_system='ignition'
             if (rej) await notify([{
               user_id: rej.requested_by_user_id, request_id: rej.id, kind: 'rejected',
               title: `${rej.request_no} was rejected`,
@@ -5540,6 +5975,7 @@ export default {
             if (!r.ok) return err('Hold failed: ' + JSON.stringify(r.data));
             const row = (Array.isArray(r.data) ? r.data : [])[0];
             if (!row) return err('Only a request that is with Finance (approved) can be put on hold', 409);
+            pushIgnitionStatus(env, ctx, row);   // Reann #2: no-op unless source_system='ignition'
             await notify([{
               user_id: row.requested_by_user_id, request_id: row.id, kind: 'held',
               title: `${row.request_no} is on hold with Finance`,
@@ -5563,6 +5999,7 @@ export default {
             if (!r.ok) return err('Release failed: ' + JSON.stringify(r.data));
             const row = (Array.isArray(r.data) ? r.data : [])[0];
             if (!row) return err('This request is not on hold', 409);
+            pushIgnitionStatus(env, ctx, row);   // Reann #2: no-op unless source_system='ignition'
             await notify([{
               user_id: row.requested_by_user_id, request_id: row.id, kind: 'released',
               title: `${row.request_no} is back with Finance`,
@@ -5638,6 +6075,7 @@ export default {
               `id=in.(${ids.map(encodeURIComponent).join(',')})&status=eq.approved`);
             if (!r.ok) return err('Mark paid failed: ' + JSON.stringify(r.data));
             const moved = Array.isArray(r.data) ? r.data : [];
+            pushIgnitionStatus(env, ctx, moved);   // Reann #2: no-op unless source_system='ignition'
             // Keep the PO-side mirror truthful so procurement's own screens agree.
             // ONE batched write — never a loop of awaits per row (CORE.md global invariant).
             const poNumbers = [...new Set(moved.map(x => x.linked_po_number).filter(Boolean))];
@@ -5677,6 +6115,9 @@ export default {
               `id=eq.${encodeURIComponent(d.id)}&status=eq.paid`);
             if (!r.ok) return err('UTR update failed: ' + JSON.stringify(r.data));
             if (!(Array.isArray(r.data) && r.data.length)) return err("Only a paid request's UTR can be edited");
+            // Not a status move, but it rewrites the UTR the deal shows, and a paid request is out of
+            // Ignition's reconcile set — without this push an edited UTR never reaches the deal.
+            pushIgnitionStatus(env, ctx, r.data);   // Reann #2: no-op unless source_system='ignition'
             const oldRef = ex.data[0].payment_ref;
             await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_REF_UPDATED', 'Payment',
               String(d.id), `${ex.data[0].request_no} UTR ${oldRef || '(none)'} → ${payment_ref}`,
@@ -5700,6 +6141,7 @@ export default {
               `id=eq.${encodeURIComponent(d.id)}&status=neq.paid`);
             if (!r.ok) return err('Cancel failed: ' + JSON.stringify(r.data));
             if (!(Array.isArray(r.data) && r.data.length)) return err('A paid request cannot be cancelled', 409);
+            pushIgnitionStatus(env, ctx, r.data);   // Reann #2: no-op unless source_system='ignition'
             return ok({ cancelled: d.id });
           }
 

@@ -12,3 +12,11 @@ workers_dev = true
 
 # Secrets set via `wrangler secret put` — never stored in this file:
 # SUPABASE_SERVICE_KEY   (Supabase service_role key — same project as lotopsproxy)
+
+# Service binding to ignitionops — the Ignition payment-request status push (Reann #2 S2,
+# plan docs/superpowers/plans/2026-11-09-ignition-snorkel-payment-requests.md). A public
+# workers.dev fetch between two workers on the same zone is blocked by Cloudflare error 1042.
+# Auth travels on the request (secret IGNITION_INTERNAL_TOKEN) — the binding is transport, not trust.
+[[services]]
+binding = "IGNITIONOPS"
+service = "ignitionops"
