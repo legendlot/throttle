@@ -150,3 +150,9 @@ export function visibleColumns(cols, { crossSpace }) {
 export function gridTemplate(keys, cols) {
   return ['minmax(240px, 1fr)', ...keys.map(k => `${cols.widths[k] || COLUMNS[k].width}px`)].join(' ');
 }
+// The list's minimum width: the title's 240px floor + every fixed column. The list is
+// otherwise 100% wide, so the 1fr title column fills the leftover space and never grows
+// to its longest title (a max-content list did that and pushed Owner/Deadline off-screen).
+export function gridMinWidth(keys, cols) {
+  return 240 + keys.reduce((n, k) => n + (cols.widths[k] || COLUMNS[k].width), 0);
+}

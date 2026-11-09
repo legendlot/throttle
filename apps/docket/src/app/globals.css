@@ -397,7 +397,7 @@ button { cursor: pointer; background: none; border: none; }
    ============================================================ */
 .tl { transition: opacity var(--base) var(--ease); font-family: var(--f-ui); }
 .tl-scroll { overflow-x: auto; overflow-y: visible; padding-bottom: 4px; }
-.tl-list { min-width: max-content; padding-left: 28px; }
+.tl-list { min-width: calc(var(--tl-minw, 0px) + 28px); padding-left: 28px; }
 .tl-head, .tl-row { display: grid; grid-template-columns: var(--tl-cols); align-items: center; }
 .tl-head { height: 32px; border-bottom: 1px solid var(--border); }
 .tl-hcell { position: relative; display: flex; align-items: center; height: 100%; min-width: 0; padding: 0 8px; font-size: 12px; font-weight: 500; color: var(--text-3); white-space: nowrap; cursor: grab; }

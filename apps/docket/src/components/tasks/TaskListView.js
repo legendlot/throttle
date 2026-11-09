@@ -11,7 +11,7 @@ import { DatePicker } from '../DatePicker.js';
 import { PriorityFlag, contain } from './TaskCells.js';
 import { TaskRow } from './TaskRow.js';
 import { GroupHeader, FootCapture } from './GroupHeader.js';
-import { COLUMNS, gridTemplate } from './useTaskViewState.js';
+import { COLUMNS, gridTemplate, gridMinWidth } from './useTaskViewState.js';
 
 export function TaskListView({
   gridRows = [], groups = [], archivedRows = [], childrenByParent, expanded, sortFn, selected, selectMode,
@@ -20,9 +20,9 @@ export function TaskListView({
 }) {
   // Live column width while dragging a resize handle (persisted on mouse-up).
   const [live, setLive] = useState(null);
-  const template = useMemo(() => {
+  const [template, minW] = useMemo(() => {
     const c = live ? { ...cols, widths: { ...cols.widths, [live.k]: live.w } } : cols;
-    return gridTemplate(visibleCols, c);
+    return [gridTemplate(visibleCols, c), gridMinWidth(visibleCols, c)];
   }, [visibleCols, cols, live]);
 
   const groupKeys = groups.map(g => g.key);
@@ -35,7 +35,7 @@ export function TaskListView({
       )}
 
       <div className="tl-scroll">
-        <div className="tl-list" style={{ '--tl-cols': template }}>
+        <div className="tl-list" style={{ '--tl-cols': template, '--tl-minw': `${minW}px` }}>
           <ColumnHeader keys={visibleCols} cols={cols} sortKey={sortKey} sortDir={sortDir} onSort={onSort}
             moveColumn={moveColumn} onLive={setLive} onResize={(k, w) => { setLive(null); resizeColumn(k, w); }} />
           {groups.map(g => {
