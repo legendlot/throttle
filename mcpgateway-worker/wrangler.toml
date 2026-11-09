@@ -1,0 +1,37 @@
+name = "lotmcp"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+# global_fetch_strictly_public: required by workers-oauth-provider for Client ID Metadata Documents.
+compatibility_flags = ["global_fetch_strictly_public"]
+workers_dev = true
+
+# LOT team MCP gateway — PHASE 0 sign-in shell (whoami only). Threat model + build order:
+# reference/decisions.md §Team MCP gateway. No write path exists in this worker.
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "e9006480ed5c46f6b605a803bd311fcd"
+
+[triggers]
+crons = ["30 21 * * *"]   # 03:00 IST daily: purge expired grants/tokens from KV
+
+[vars]
+PUBLIC_URL = "https://lotmcp.afshaan.workers.dev"
+SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
+# Anthropic OUTBOUND ranges, from https://platform.claude.com/docs/en/api/ip-addresses (read 2026-11-09).
+# An extra layer only: every Claude customer shares these. Applies to /mcp, /token, /register.
+ALLOWED_CIDRS = "160.79.104.0/21,153.61.208.0/20"
+# Exact-match only. Claude's hosted callback (claude.ai, claude.com). Claude Code (loopback) is out of phase 1.
+ALLOWED_REDIRECTS = "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback"
+ALLOWED_CLIENT_DOMAINS = "claude.ai,claude.com"
+ALLOWED_ORIGINS = "https://claude.ai,https://claude.com"
+ADMIN_SLACK_ID = "U090FJP8NTX"   # Afshaan
+DENIED_ALERT_AT = "20"
+# Set by Afshaan once the Internal Google OAuth client exists (Google Cloud console):
+GOOGLE_CLIENT_ID = "PENDING"
+
+# Secrets (wrangler secret put), never in this file:
+#   SUPABASE_SERVICE_KEY  — a DEDICATED Supabase secret key named mcp-gateway (revocable on its own)
+#   GOOGLE_CLIENT_SECRET  — the Internal OAuth client's secret
+#   SLACK_BOT_TOKEN       — for new-connection DMs and alerts
+#   REVOKE_SECRET         — HMAC key for the signed revoke link (random, 32+ bytes)
