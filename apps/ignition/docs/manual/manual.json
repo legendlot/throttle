@@ -2,7 +2,7 @@
   "title": "Ignition",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to influencer deals, engagements, codes and campaigns at Legend of Toys.",
-  "version": "1.18.0",
+  "version": "1.19.0",
   "date": "2026-11-05",
   "app_url": "ignition.legendoftoys.com",
   "owner": "Legend of Toys",
@@ -134,6 +134,17 @@
           "id": "contract",
           "title": "The Deal Contract",
           "file": "work-contract.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "paying-creator",
+          "title": "Paying the Creator",
+          "route": "/engagements/detail",
+          "file": "work-paying.html",
           "roles": [
             "mkt",
             "lead",

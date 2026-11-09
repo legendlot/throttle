@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.19.0] - 2026-11-09
+### Added
+- Paying the Creator chapter: the Payments card (Agreed, Raised, Paid), raising an advance, balance (at Live only) or full payment, adding the creator's invoice, every request state, Cancel and Retry, Paid details (date, gross amount, UTR, TDS), the Slack message on held or rejected, the fee cap, and the hand-log "+ Add" hiding once bank details are on file.
+
 ## [1.18.0] - 2026-11-05
 ### Added
 - The Deal Contract chapter: Send contract, checking and editing the text, Resend (clears an earlier acceptance, reason needed), Mark accepted by hand (reason needed), Allow bank details update (7 days, one change), what the creator sees, the Shipping lock.

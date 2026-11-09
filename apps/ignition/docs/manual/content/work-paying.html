@@ -1,0 +1,58 @@
+<p class="lead">Creator payments are raised from the deal itself. The request goes to Finance in Snorkel, and the deal shows where it is until the money is paid. You never type bank details in Ignition.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Asking Finance to pay a creator.</div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">The Payments card on the deal page.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who raises</div><div class="g-val"><span class="role lead">Lead</span> <span class="role adm">Admin</span> (manage access)</div></div>
+  <div class="g-cell"><div class="g-lbl">Who pays</div><div class="g-val">Finance, in Snorkel.</div></div>
+</div>
+
+<h2 class="sec">The Payments card</h2>
+<p>Three tiles sit at the top: <strong>Agreed</strong> (the deal fee), <strong>Raised</strong> (requests still alive, not rejected or cancelled) and <strong>Paid</strong>. Under them is one row per request: the kind (Advance, Balance or Full payment), a state badge, the Snorkel request number once it has one, and the amount. Payments logged by hand in the past sit lower down under <strong>Paid by hand</strong>. The line at the bottom reads &ldquo;&#8377;X of &#8377;Y&rdquo; and turns green with a tick when the fee is cleared.</p>
+<p>People without manage access can read the card but see no buttons.</p>
+
+<h2 class="sec">Raising a payment</h2>
+<ol class="steps">
+  <li><span class="s-title">Pick the button.</span> <strong>Raise advance</strong> or <strong>Raise full</strong> any time the fee is above zero. <strong>Raise balance</strong> shows only once the deal is at <strong>Live</strong>, and you press it yourself; Ignition never raises it for you. No buttons show on cancelled, dropped or ghosted deals.</li>
+  <li><span class="s-title">Enter the amount.</span> Full and balance start filled with what is left of the fee. An advance starts blank: you decide it.</li>
+  <li><span class="s-title">Add the creator&rsquo;s invoice.</span> Pick one the creator already uploaded through the contract, or choose <strong>Upload an invoice&hellip;</strong> (PDF, JPG or PNG, up to 10 MB). Then fill the invoice number, date and total. For an advance the total is the full-fee invoice, not just the advance.</li>
+  <li><span class="s-title">Send.</span> The button reads <strong>Send to Snorkel</strong>. If you have no invoice yet, choose &ldquo;No invoice yet&rdquo; and press <strong>Raise</strong>; the request waits on the deal.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Advance, then balance</div>
+  <p>An advance and its balance are two requests against the same invoice. A full payment replaces both: once you have a live advance or balance you cannot raise a full, and the other way round.</p>
+</div>
+
+<h2 class="sec">What each state means</h2>
+<table class="tbl">
+  <thead><tr><th>State</th><th>Meaning, and what you do</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Waiting for invoice</strong></td><td>Raised, but not sent. Finance cannot see it until the invoice is added. Press <strong>Add invoice</strong>, or <strong>Cancel</strong>.</td></tr>
+    <tr><td><strong>Sending</strong></td><td>On its way to Snorkel. Wait a moment.</td></tr>
+    <tr><td><strong>Send failed</strong></td><td>It did not reach Snorkel. The reason shows under the row. Fix it if you can (<strong>Change invoice</strong>), then press <strong>Retry</strong>. Or <strong>Cancel</strong>.</td></tr>
+    <tr><td><strong>Submitted</strong>, <strong>Awaiting approval</strong>, <strong>Approved</strong></td><td>In Snorkel. Requests under &#8377;5,00,000 normally approve at once. Over that, an approver signs off. Nothing for you to do.</td></tr>
+    <tr><td><strong>Held</strong></td><td>Finance paused it. The reason shows under the row, and you get a Slack message. Fix what they asked, then tell Finance.</td></tr>
+    <tr><td><strong>Rejected</strong></td><td>Finance refused it. The note shows under the row and you get a Slack message. It no longer counts as raised, so you can raise it again once fixed.</td></tr>
+    <tr><td><strong>Paid</strong></td><td>Done. The row shows the date, the gross amount, the UTR and any TDS (for example &ldquo;9 Nov 2026 &middot; &#8377;50,000 &middot; UTR 1234&hellip; &middot; TDS &#8377;5,000&rdquo;). Gross is what was paid plus TDS. If it says &ldquo;no UTR yet&rdquo;, Finance has not entered it; it fills in by itself.</td></tr>
+    <tr><td><strong>Cancelled</strong></td><td>Withdrawn. It does not count as raised.</td></tr>
+  </tbody>
+</table>
+<p>The card updates by itself as Finance works, and a safety check runs every 15 minutes. You do not need to refresh. The invoice on a row opens with <strong>file</strong>.</p>
+
+<h2 class="sec">Cancelling</h2>
+<p><strong>Cancel</strong> shows only while the request is <em>Waiting for invoice</em> or <em>Send failed</em>, that is, before Snorkel has it. You are asked to confirm. Once it is in Snorkel, ask Finance to cancel or reject it. If the click finds Snorkel has already moved it, the message says so and nothing is cancelled.</p>
+
+<h2 class="sec">The fee cap</h2>
+<p>Raised requests plus anything paid by hand can never add up to more than the agreed fee. If you try, Ignition refuses with a plain sentence saying why (for example, a balance before the deal is Live, or a full after an advance). Read it and adjust the amount.</p>
+
+<h2 class="sec">Bank details</h2>
+<p>Bank details come only from the creator, through the contract (see <em>The Deal Contract</em>). Ignition never asks you to type them and never shows the full number. If the creator has no bank details, a raise may be refused with &ldquo;collect bank details via the contract&rdquo;: send the contract, or ask Finance if the creator is already a payee with a bank on file.</p>
+
+<h2 class="sec">+ Add (paying by hand)</h2>
+<p>The old <strong>+ Add</strong> log is for payments made outside Snorkel. It is <strong>hidden once the creator&rsquo;s bank details are on file</strong>, because from then on you pay through Snorkel. Old hand-logged payments stay as history and still count towards the cap. The <em>Payments</em> screen&rsquo;s <strong>Record Payment</strong> is unchanged.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; A deal with payment requests cannot be deleted</div>
+  <p>Delete is refused for any deal that has a request, and hand-logged payments that came from Snorkel cannot be removed. This keeps the money trail whole.</p>
+</div>

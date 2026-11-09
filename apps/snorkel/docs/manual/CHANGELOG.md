@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.25.0] - 2026-11-09
+### Added
+- Creator Payments from Ignition chapter (Finance): what arrives from Ignition (influencer category, creator invoice attached, payee linked from the contract), approval under the threshold, writing hold and reject reasons for the deal owner, and what marking paid sends back to the deal.
+
 ## [1.24.0] - 2026-11-05
 ### Added
 - PO Requests: **Edit request** for the requester (pending, no PO started); **Download PO** in the Linked Purchase Order panel (requester and PO-access users, not for a cancelled PO); procurement note that saving a PO after the request was edited asks for a reload.
