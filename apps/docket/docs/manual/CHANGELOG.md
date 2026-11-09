@@ -3,6 +3,35 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.4.0] - 2026-11-09
+### Changed
+- Whole manual brought in line with the ClickUp-style redesign (P0 to P7). Every
+  passage describing the old layout was rewritten.
+- **Signing In & Getting Around** rewritten: the icon rail, the Programs / Spaces
+  sidebar (My spaces, By others, Customize sidebar, collapse), the top bar (breadcrumb,
+  search box, yellow + New split button, app launcher), the new **command bar**
+  (Cmd/Ctrl+K, "/" fuzzy search with recents), keyboard shortcuts, the phone bottom tab
+  bar with More, and the Manual's Contents / PDF buttons on mobile.
+- **The Tasks List** rewritten: views bar and toolbar, grouped rows with collapsible
+  group headers and "+ Add task" per group, The Grid as a collapsible group with Owner /
+  Deadline chips, column show/hide, resize and reorder (Program hidden by default),
+  density 32 / 36 / 44, ids and sub-task toggles, Filter panel, Me and Archive done,
+  expanded bulk bar (adds Collaborators, Move, Abandon), keyboard on the list, Board
+  restyle (card size, collapsible columns, Shift+arrow move, per-column add), and the
+  new My tasks groups (Today & overdue by IST end of day, Assigned to me,
+  Collaborating, Raised by me).
+- **Inside a Task** rewritten around the new task view: opens as a modal by default,
+  switchable to side panel or full page, previous / next arrows, properties panel,
+  Comments / History stream, deep link /tasks?task=<id>, abandoned tasks read-only.
+- **Checklists**: My day / Manage / Oversight tabs, "Recurring this week" group,
+  the schedule popover with an Ends date, templates, Stop.
+- **Scratchpad**: notes column, editor, show / hide calculator, phone "< Notes" flow.
+- **Dashboard**: summary cards, single status bar, By team / By person (Last seen, Load);
+  removed the "Blocked" column the screen does not show.
+- **Programs, Spaces, Lifecycle, Admin** (Roles & permissions, Users, Spaces): new
+  creation paths (+ New, sidebar +), admin sidebar sub-nav and card layout, the
+  Visibility column on admin Spaces.
+
 ## [1.3.0] - 2026-06-30
 ### Added
 - The Tasks List chapter gained a **List view and Board view (Kanban)** section: the

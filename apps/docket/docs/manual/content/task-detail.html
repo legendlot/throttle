@@ -1,46 +1,68 @@
-<p class="lead">Clicking a task's title or ID opens its detail view: everything about that one task in a single place. It comes in two forms, a quick slide-over panel for fast edits and a full page for the deep work, but they show the same task.</p>
+<p class="lead">Click a task anywhere in Docket and it opens in the <strong>task view</strong>: everything about that one task in a single place. By default it opens as a <strong>modal</strong>, a window over your list, and you can switch it to a <strong>side panel</strong> or a <strong>full page</strong> whenever you prefer. All three show the same task.</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Working on one task in depth.</div></div>
-  <div class="g-cell"><div class="g-lbl">How to open</div><div class="g-val">Click a task&rsquo;s title or DKT-id.</div></div>
+  <div class="g-cell"><div class="g-lbl">How to open</div><div class="g-val">Click a task row, card or Grid item.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mem">Member</span> <span class="role view">Reviewer</span> <span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Two views</div><div class="g-val">Slide-over panel, or full page.</div></div>
+  <div class="g-cell"><div class="g-lbl">Three layouts</div><div class="g-val">Modal (default), side panel, full page.</div></div>
 </div>
 
-<h2 class="sec">The panel vs the full page</h2>
-<p>Clicking a task slides a <strong>panel</strong> in from the right over your list, a quick &ldquo;peek&rdquo;. From its top corner, the <strong>expand</strong> button opens the same task as a <strong>full page</strong> with more room. Press <span class="kbd">Esc</span> or click outside to close the panel. Use the panel for a quick status change or comment; use the full page when you are settling in to work.</p>
+<h2 class="sec">Modal, side panel, full page</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Modal</div><div class="a-val"><p>The default. A centred window over a dimmed list. Click the dimmed area or press <span class="kbd">Esc</span> to close it.</p></div></div>
+  <div class="a-row"><div class="a-key">Side panel</div><div class="a-val"><p>A panel on the right while the list stays visible, scrollable and clickable behind it. Good for working down a list.</p></div></div>
+  <div class="a-row"><div class="a-key">Full page</div><div class="a-val"><p>The task takes the whole screen inside Docket&rsquo;s normal frame. The top-right button then reads <em>Back to the list</em> and returns you to the list with the task still open.</p></div></div>
+</div>
+<p>Switch with the <strong>Switch layout</strong> button in the task&rsquo;s top bar (<em>Open tasks as</em> Modal, Side panel or Full page). Docket remembers your choice on this device. On a phone the task always fills the screen, with <strong>Details</strong> and <strong>Activity</strong> tabs at the top.</p>
 
-<h2 class="sec">What's on the task</h2>
-<p>Both views show the same sections.</p>
+<h2 class="sec">The top bar of the task</h2>
 <table class="tbl">
-  <thead><tr><th>Section</th><th>What it holds</th></tr></thead>
+  <thead><tr><th>Part</th><th>What it does</th></tr></thead>
   <tbody>
-    <tr><td><strong>Header</strong></td><td>The ID, the status and priority badges, the title, and (on a sub-task) a link up to its parent.</td></tr>
-    <tr><td><strong>Status controls</strong></td><td>Buttons to move the task between Not started, In progress, Done and Blocked, plus an <strong>Abandon</strong> button.</td></tr>
-    <tr><td><strong>Details</strong></td><td>Team, Owner, Priority, Program and Space.</td></tr>
-    <tr><td><strong>Timeline</strong></td><td>When it was created and by whom, the locked original deadline, the current deadline, and the completion date if done.</td></tr>
-    <tr><td><strong>Collaborators</strong></td><td>The helpers on the task; add or remove them here.</td></tr>
-    <tr><td><strong>Sub-tasks</strong></td><td>The child tasks, with their own owners and statuses.</td></tr>
-    <tr><td><strong>Documents</strong></td><td>Links to outside files (Drive, Sheets, anything with a web address). Docket stores the link, not the file.</td></tr>
-    <tr><td><strong>Comments / History</strong></td><td>Two tabs at the bottom: the discussion, and the full audit trail.</td></tr>
+    <tr><td><strong>&lsaquo; &rsaquo; arrows</strong></td><td>Step to the previous or next task in the list you opened it from, without closing (<span class="kbd">Ctrl</span> <span class="kbd">Shift</span> <span class="kbd">&larr;</span> / <span class="kbd">&rarr;</span>). They grey out at either end.</td></tr>
+    <tr><td><strong>Breadcrumb</strong></td><td>The space, the program (if any) and the <code>DKT-</code> number. Click the number to copy it.</td></tr>
+    <tr><td><strong>Copy link</strong></td><td>Copies a link that opens straight to this task as a full page.</td></tr>
+    <tr><td><strong>More actions</strong> (&hellip;)</td><td>Copy link, Copy task id, Add sub-task, Mark done, and <strong>Abandon&hellip;</strong>. On an abandoned task it offers <strong>Reactivate</strong>.</td></tr>
+    <tr><td><strong>Switch layout</strong></td><td>Modal / Side panel / Full page.</td></tr>
+    <tr><td><strong>Close</strong> (x)</td><td>Closes the task. Also <span class="kbd">Esc</span>.</td></tr>
   </tbody>
 </table>
 
-<h2 class="sec">Editing</h2>
-<p>On the full page, click <strong>Edit</strong> to change the title, description, team, owner, priority and program together, then <strong>Save</strong>. On the panel, the same fields are click-to-edit directly. Either way, you can only edit a task you own, created, or (as an admin) any task. Reviewers see all of this but without the edit controls.</p>
+<h2 class="sec">What&rsquo;s on the task</h2>
+<p>The left side holds the task itself; the right side (or the Activity tab on a phone) holds the conversation.</p>
+<table class="tbl">
+  <thead><tr><th>Section</th><th>What it holds</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Title and description</strong></td><td>The title (and, on a sub-task, a link up to its parent) and a free-text description. If you can edit the task, click either to change it.</td></tr>
+    <tr><td><strong>Properties panel</strong></td><td>A tidy list of fields: Status, Owner, Collaborators, Deadline, Priority, Team, Program, Space, Created (and Completed once done). Click a value to change it. A recurring checklist item shows <strong>Repeats</strong> in place of Deadline.</td></tr>
+    <tr><td><strong>Sub-tasks</strong></td><td>The child tasks, with their own owners and statuses, and a done/total count.</td></tr>
+    <tr><td><strong>Documents</strong></td><td>Links to outside files (Drive, Sheets, anything with a web address). Docket stores the link, not the file.</td></tr>
+    <tr><td><strong>Activity</strong></td><td>Two tabs: <strong>Comments</strong>, with a box at the bottom to write a comment, and <strong>History</strong>, the full audit trail.</td></tr>
+  </tbody>
+</table>
+<p>Sub-tasks and Documents are sections you can fold shut by clicking their headings.</p>
 
-<h2 class="sec">The Timeline, and the locked deadline</h2>
-<p>The Timeline section is where Docket's honesty shows. The <strong>Created</strong> date and the <strong>Original deadline</strong> are marked <span class="mono">locked</span>, they never change. The <strong>Current deadline</strong> sits below; if it differs from the original, a <span class="mono">revised</span> tag appears. To move the deadline, use the <strong>Revise deadline</strong> button, which asks for a new date and a required reason.</p>
+<h2 class="sec">Editing</h2>
+<p>Every property is click-to-edit in the panel: click it, pick the new value, and it saves. The title and description save when you click away. You can only edit a task you own, created, or (as an admin) any task. Reviewers see all of this without the edit controls.</p>
+<p>With focus outside a text box, these keys work inside an open task: <span class="kbd">Shift</span>+<span class="kbd">S</span> status, <span class="kbd">Shift</span>+<span class="kbd">A</span> owner, <span class="kbd">Shift</span>+<span class="kbd">D</span> deadline, <span class="kbd">Shift</span>+<span class="kbd">P</span> priority, <span class="kbd">s</span> add a sub-task.</p>
+
+<h2 class="sec">The deadline, and why it is locked</h2>
+<p>Under Deadline the panel shows the current date, and, once it has been moved, a <span class="mono">REV</span> tag with the number of revisions plus a line reading <em>Original &hellip; &middot; locked</em>. The first date you set is the original promise and never changes. To move the deadline, open it and enter the new date and a <strong>required reason</strong>; the button reads <strong>Set</strong> the first time and <strong>Revise</strong> after that.</p>
 
 <div class="callout danger">
   <div class="c-title">&#9940; Abandoning is the only way to stop a task</div>
-  <p>There is no delete button anywhere in Docket. If a task should not be done, click <strong>Abandon</strong> and give a reason; it is required and recorded. The task stays visible, marked <em>Abandoned</em>, with your reason shown. An abandoned task can be <strong>reactivated</strong> later if plans change, which is also logged.</p>
+  <p>There is no delete button anywhere in Docket. If a task should not be done, choose <strong>Abandon&hellip;</strong> (in the Status picker or the More actions menu) and give a reason; it is required and recorded. The task stays visible with a banner reading <em>Abandoned</em> and your reason. An abandoned task is <strong>read-only</strong> in the task view, nothing on it can be edited, until it is <strong>reactivated</strong>. The owner, creator or an admin can use the banner&rsquo;s <strong>Reactivate</strong> button, which is also logged.</p>
 </div>
 
 <h2 class="sec">Comments and History</h2>
-<p>The <strong>Comments</strong> tab is a simple running discussion on the task, you can edit or delete your own comments. The <strong>History</strong> tab is the unchangeable record: every status change, every deadline revision (with its reason), every owner or priority change, every collaborator or document added or removed. You cannot edit history; that is the point of it.</p>
+<p>The <strong>Comments</strong> tab is a running discussion on the task. Type in the box at the bottom and press <strong>Comment</strong>; you can edit or delete your own comments. The <strong>History</strong> tab is the unchangeable record: every status change, every deadline revision (with its reason), every owner or priority change, every collaborator or document added or removed. You cannot edit history; that is the point of it.</p>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; Share a task with a link</div>
+  <p>Use <strong>Copy link</strong> to send someone a direct link to the task; it opens on the full page. An address of the form <code>/tasks?task=&hellip;</code> opens the task over the Tasks list instead, which is also how Docket returns you to the list after you leave the full page. Either way the person only sees the task if they are allowed to see it.</p>
+</div>
 
 <div class="callout note">
   <div class="c-title">&#9432; Moving a task to another space</div>
-  <p>The <strong>Space</strong> field in Details lets the owner move a task into a different space, including a private one you belong to. Moving a task changes who can see it. Sub-tasks always follow their parent's space.</p>
+  <p>The <strong>Space</strong> property lets the owner move a task into a different space, including a private one you belong to. Moving a task changes who can see it. Sub-tasks always follow their parent&rsquo;s space.</p>
 </div>

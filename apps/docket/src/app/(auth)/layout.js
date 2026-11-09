@@ -70,9 +70,17 @@ function AuthLayoutInner({ children }) {
     docketopsGet('getMe', {}, session).then(me => {
       setSpaces(me?.spaces || []);
       setPrograms(me?.programs || []);
-      setCanViewDashboard(!!me?.can_view_dashboard);
+      const can = !!me?.can_view_dashboard;
+      setCanViewDashboard(can);
+      // Remembered so the next load's mobile tab bar / rail don't flip Scratchpad → Dashboard.
+      try { if (user?.id) localStorage.setItem(`docket.canViewDashboard.${user.id}`, can ? '1' : '0'); } catch { /* ignore */ }
     }).catch(() => {});
-  }, [session]);
+  }, [session, user?.id]);
+  // Last-known value per user, read before getMe answers (getMe still decides).
+  useEffect(() => {
+    if (!user?.id) return;
+    try { if (localStorage.getItem(`docket.canViewDashboard.${user.id}`) === '1') setCanViewDashboard(true); } catch { /* ignore */ }
+  }, [user?.id]);
   useEffect(() => { loadMe(); }, [loadMe]);
   // `counts-changed` fires from docketopsPost on EVERY successful task write, so it
   // arrives in bursts (a bulk update, or the drawer saving several fields). Debounced

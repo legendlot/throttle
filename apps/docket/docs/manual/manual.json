@@ -2,8 +2,8 @@
   "title": "Docket",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to Legend of Toys' org-wide task manager: capturing, owning and tracking work across every department.",
-  "version": "1.3.0",
-  "date": "2026-06-30",
+  "version": "1.4.0",
+  "date": "2026-11-09",
   "app_url": "docket.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -23,7 +23,7 @@
     },
     {
       "part": "Working with Tasks",
-      "subtitle": "Capturing work, the task list, the detail panel, and how a task lives from first idea to done.",
+      "subtitle": "Capturing work, the task list, the task view, and how a task lives from first idea to done.",
       "chapters": [
         { "id": "tasks",  "title": "The Tasks List", "route": "/tasks",        "file": "task-list.html",   "roles": ["mem","view","adm"] },
         { "id": "detail", "title": "Inside a Task",  "route": "/tasks/detail", "file": "task-detail.html", "roles": ["mem","view","adm"] },

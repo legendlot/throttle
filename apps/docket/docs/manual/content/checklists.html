@@ -4,37 +4,40 @@
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Routine, repeating work you tick off.</div></div>
   <div class="g-cell"><div class="g-lbl">Whose it is</div><div class="g-val">One person&rsquo;s checklist at a time.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mem">Member</span> <span class="role view">Reviewer</span> <span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Find it</div><div class="g-val"><code>/checklist</code> in the sidebar.</div></div>
+  <div class="g-cell"><div class="g-lbl">Find it</div><div class="g-val"><strong>Checklist</strong> on the icon rail.</div></div>
 </div>
 
 <h2 class="sec">Checklists vs Tasks</h2>
 <p>A normal task happens <em>once</em> and has a deadline. A checklist item happens <em>again and again</em> on a schedule and has no deadline, just a repeat rule. Because of that, checklist items are kept completely separate from the Tasks board:</p>
 <div class="callout note">
   <div class="c-title">&#9432; Recurring work stays off the board</div>
-  <p>Checklist items <strong>never appear on the Tasks list or the Dashboard</strong>, and they don&rsquo;t count toward anyone&rsquo;s task totals. They live only on the <code>/checklist</code> page. If you open one in the slide-over panel it shows <strong>Repeats</strong> (its schedule) where a task would show a deadline.</p>
+  <p>Checklist items <strong>never appear on the Tasks list or the Dashboard</strong>, and they don&rsquo;t count toward anyone&rsquo;s task totals. They live only on the <code>/checklist</code> page. If you open one in the task view it shows <strong>Repeats</strong> (its schedule) where a task would show a deadline.</p>
 </div>
 
 <h2 class="sec">The layout</h2>
+<p>The Checklist screen has three tabs along the top: <strong>My day</strong>, <strong>Manage</strong> and <strong>Oversight</strong>. Under each, work is grouped under collapsible headers, the same style as the Tasks list.</p>
 <div class="anatomy">
-  <div class="a-row"><div class="a-key">Today</div><div class="a-val"><p>Everything due <strong>today</strong>, ready to tick. Items you&rsquo;ve already ticked show as done; the header shows your progress (e.g. 3 of 5 done).</p></div></div>
-  <div class="a-row"><div class="a-key">Manage list</div><div class="a-val"><p>Every checklist item you own, due today or not, with its repeat schedule. This is where you add, edit and retire items.</p></div></div>
-  <div class="a-row"><div class="a-key">Person picker</div><div class="a-val"><p>Managers and reviewers can switch to a report&rsquo;s checklist to <em>see</em> how they&rsquo;re tracking (read-only, see below).</p></div></div>
+  <div class="a-row"><div class="a-key">My day</div><div class="a-val"><p>What is due on the day you are viewing. The <strong>Today</strong> group lists every item due, ready to tick, with a done count (for example 3/5). Below it come any checklist templates assigned to you, and a <strong>Recurring this week</strong> group previewing the rest of this week&rsquo;s items with the days they fall on (read-only: you tick an item on its own day). Arrows beside the date step back to earlier days; the <strong>Today</strong> button brings you back.</p></div></div>
+  <div class="a-row"><div class="a-key">Manage</div><div class="a-val"><p>Where you set things up. <strong>My recurring tasks</strong> lists every recurring item you own with its schedule, and a <strong>New</strong> button to add one. <strong>Checklist templates</strong> below it holds reusable multi-section checklists for a role, with a <strong>New template</strong> button.</p></div></div>
+  <div class="a-row"><div class="a-key">Oversight</div><div class="a-val"><p>For managers: per-person checklist adherence for a chosen date, covering people you manage or have assigned a checklist to. Click a person to see their run for that day, read-only.</p></div></div>
 </div>
+<p>Managers and reviewers who can view other people&rsquo;s checklists also get a person picker on My day, to <em>see</em> how a report is tracking (read-only, see below).</p>
 
 <h2 class="sec">Creating a checklist item</h2>
 <ol class="steps">
-  <li><span class="s-title">Add an item.</span> Give it a title (e.g. &ldquo;Check the cold-storage temperature log&rdquo;).</li>
-  <li><span class="s-title">Choose how often it repeats.</span> <strong>Daily</strong>, on <strong>specific weekdays</strong> (e.g. Mon/Wed/Fri), <strong>weekly</strong>, or <strong>monthly</strong>.</li>
+  <li><span class="s-title">Open Manage and click New.</span> Give the item a title (e.g. &ldquo;Check the cold-storage temperature log&rdquo;), and optionally set who it is assigned to, its priority, team and a description.</li>
+  <li><span class="s-title">Choose how often it repeats</span> with the schedule picker: <strong>Daily</strong>, <strong>Weekly</strong> (tick the weekdays, e.g. Mon, Wed, Fri) or <strong>Monthly</strong> (a day of the month; in shorter months it falls on the last day).</li>
   <li><span class="s-title">Set a time of day.</span> The time it should be done by, used only to order your day, it doesn&rsquo;t nag you.</li>
-  <li><span class="s-title">Save.</span> From now on it appears under <strong>Today</strong> whenever the schedule says it&rsquo;s due.</li>
+  <li><span class="s-title">Click Add.</span> From now on it appears under <strong>Today</strong> whenever the schedule says it&rsquo;s due.</li>
 </ol>
 <div class="callout tip">
   <div class="c-title">&#10003; Optional end date</div>
-  <p>A checklist item can carry an optional <strong>expiry</strong>. Set one for a routine that should only run for a while (a temporary daily check during a launch, say), and the item <strong>auto-drops off your checklist</strong> once that date passes, no need to remember to retire it.</p>
+  <p>The schedule picker has an optional <strong>Ends</strong> date. Set one for a routine that should only run for a while (a temporary daily check during a launch, say), and the item <strong>auto-drops off your checklist</strong> once that date passes, no need to remember to retire it.</p>
 </div>
+<p>To change a schedule later, click the pencil beside the item in Manage. It opens the same schedule picker as a small popover; choose the new pattern and click <strong>Save</strong>.</p>
 
 <h2 class="sec">Ticking things off</h2>
-<p>On any day it&rsquo;s due, tick the item to mark it done for that day; the progress count goes up and the tick <strong>sticks across reloads</strong> (it records a completion for that date). Made a mistake? Un-tick it and the completion is removed. Each day is its own slate, ticking today has no effect on yesterday or tomorrow.</p>
+<p>On the My day tab, tick the item to mark it done for that day; the progress count goes up and the tick <strong>sticks across reloads</strong> (it records a completion for that date). Made a mistake? Un-tick it and the completion is removed. Each day is its own slate, ticking today has no effect on yesterday or tomorrow.</p>
 
 <h2 class="sec">Assigning a checklist item to someone else</h2>
 <p>You can create a checklist item for another person, it lands on <strong>their</strong> checklist, not yours, and they tick it off. Use this to hand someone a recurring responsibility (a daily open/close routine, a weekly stock check).</p>
@@ -45,4 +48,4 @@
 </div>
 
 <h2 class="sec">Editing &amp; retiring</h2>
-<p>Open an item from the manage list to change its title, schedule or time. When a routine is no longer needed, retire the item the same way you would abandon a task, it stops appearing under Today; the history of what was completed is kept.</p>
+<p>Click an item&rsquo;s title to open it and change its title or details, or use the pencil in Manage to change the schedule. When a routine is no longer needed, use <strong>Stop</strong> (the circle-slash button) in Manage. It asks for a reason, works like abandoning a task, and the item stops appearing under Today; the history of what was completed is kept.</p>
