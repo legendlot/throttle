@@ -490,7 +490,8 @@ body.tl-resizing { cursor: col-resize; user-select: none; }
 .tl-chip { max-width: 100%; }
 .tl-collabs { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .tl-pri { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; white-space: nowrap; }
-.tl-dl-wrap { display: inline-flex; min-width: 0; }
+.tl-dl-wrap { display: inline-flex; min-width: 0; margin: 0 -6px; }
+.tl-dl-wrap > .tl-edit { margin: 0; } /* the wrapper sizes to its content: a negative margin on the button inside it shrank the label by 12px ("09…") */
 .tl-dl { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 13px; color: var(--text-2); white-space: nowrap; }
 .tl-dl.soon { color: var(--st-blocked); }
 .tl-dl.over { color: var(--overdue); }

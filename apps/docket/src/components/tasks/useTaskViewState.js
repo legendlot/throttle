@@ -18,11 +18,13 @@ export const COLUMNS = {
   owner:    { label: 'Owner',         width: 72,  min: 56,  sort: 'owner_name' },
   collabs:  { label: 'Collaborators', width: 104, min: 64 },
   priority: { label: 'Priority',      width: 84,  min: 64,  sort: 'priority' },
-  deadline: { label: 'Deadline',      width: 128, min: 88,  sort: 'deadline' },
+  deadline: { label: 'Deadline',      width: 144, min: 88,  sort: 'deadline' },
   meta:     { label: 'Activity',      width: 64,  min: 48 },
 };
 const DEFAULT_ORDER = ['status', 'team', 'program', 'space', 'owner', 'collabs', 'priority', 'deadline', 'meta'];
-const DEFAULT_COLS = { order: DEFAULT_ORDER, hidden: {}, widths: {} };
+// Program starts hidden (Columns menu turns it on): with every column on, a 1440 screen left
+// the title its 240px floor.
+const DEFAULT_COLS = { order: DEFAULT_ORDER, hidden: { program: true }, widths: {} };
 const MAX_W = 400;
 
 function read(key, fallback) {
