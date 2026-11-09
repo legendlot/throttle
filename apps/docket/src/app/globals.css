@@ -1044,7 +1044,8 @@ body.tl-resizing { cursor: col-resize; user-select: none; }
 .kb-card.dragging { opacity: .4; }
 .kb-card[draggable="true"]:active { cursor: grabbing; }
 .kb-title { font-size: 14px; font-weight: 500; line-height: 1.4; color: var(--text-1); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.kb-meta { display: flex; align-items: center; gap: 10px; min-height: 20px; min-width: 0; }
+.kb-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 20px; min-width: 0; }
+.kb-meta > * { flex-shrink: 0; } /* wrap a crowded meta row (overdue + REV + priority + id) instead of clipping the deadline to '⚠ 80…' */
 .kb-meta .tl-dl { font-size: 12px; }
 .kb-meta .tl-pri { font-size: 11.5px; }
 .kb-noowner { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; border: 1px dashed var(--border-2); color: var(--text-4); flex-shrink: 0; }
