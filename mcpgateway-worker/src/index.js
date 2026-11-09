@@ -14,7 +14,7 @@
 import { OAuthProvider, OAuthError } from '@cloudflare/workers-oauth-provider';
 import {
   parseCidrs, ipAllowed, parseList, redirectAllowed, registrationAllowed,
-  decodeJwtPayload, checkGoogleClaims, gateDecision, originAllowed, hmacHex, timingSafeEqualHex, esc,
+  decodeJwtPayload, checkGoogleClaims, gateDecision, originAllowed, hmacHex, timingSafeEqualHex, esc, refusalText, refusalResponse, RPC_REFUSED,
 } from './checks.js';
 
 const SCOPES = ['mcp:read'];
@@ -308,6 +308,11 @@ const TOOLS = [{
 
 const rpcResult = (id, result, status = 200) => Response.json({ jsonrpc: '2.0', id, result }, { status });
 const rpcError = (id, code, message, status = 200) => Response.json({ jsonrpc: '2.0', id: id ?? null, error: { code, message } }, { status });
+// A refusal the person should read (shape: checks.js refusalResponse, tested).
+const refuse = (msg, r) => {
+  const { status, body } = refusalResponse(msg, r);
+  return body === null ? new Response(null, { status }) : Response.json(body, { status });
+};
 
 const mcpHandler = {
   async fetch(request, env, ctx) {
@@ -319,7 +324,7 @@ const mcpHandler = {
 
     const userId = ctx.props && ctx.props.userId;
     if (!ctx.auth || !SCOPES.every(s => ctx.auth.scope.includes(s)) || !userId) {
-      return rpcError(null, -32001, 'Not authorised', 403);
+      return rpcError(null, RPC_REFUSED, 'Not authorised', 403);
     }
 
     let msg;
@@ -331,12 +336,15 @@ const mcpHandler = {
     // Live gate on EVERY request, tools/list included: kill switch, domain, active profile, grant, rate.
     let gate;
     try { gate = await rpc(env, 'mcp_gate', { p_user: userId }); }
-    catch { return rpcError(msg.id, -32002, 'LOT systems unreachable', 503); }
+    catch {
+      ctx.waitUntil(alertOnce(env, 'gate-down', '🚨 LOT MCP: the mcp_gate call to Supabase is failing; every Claude request is being refused.'));
+      return refuse(msg, refusalText('unreachable'));
+    }
     const d = gateDecision(gate);
     if (!d.ok) {
       ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate && gate.email, tool: msg.method, ip, status: d.status, detail: d.reason }));
       ctx.waitUntil(countDenied(env, ctx, 'call', ip));
-      return rpcError(msg.id, -32001, `Access refused: ${d.reason}`, d.status);
+      return refuse(msg, refusalText(d.reason));
     }
 
     const id = msg.id;
@@ -360,11 +368,12 @@ const mcpHandler = {
         if (d.overLimit) {
           ctx.waitUntil(audit(env, { event: 'rate_limited', user_id: userId, email: gate.email, tool: name, ip, status: 429 }));
           ctx.waitUntil(alertOnce(env, `rate:${userId}`, `⚠️ LOT MCP: ${gate.email} hit the ${gate.calls_per_hour}/hour call limit.`));
-          return rpcResult(id, { isError: true, content: [{ type: 'text', text: `Hourly limit of ${gate.calls_per_hour} calls reached. Try again later.` }] }, 429);
+          return refuse(msg, refusalText('rate limited', { callsPerHour: gate.calls_per_hour }));
         }
         // The audit row IS the rate-limit counter: no row, no call (fail closed).
         if (!(await audit(env, { event: 'call', user_id: userId, email: gate.email, tool: name, params: (msg.params && msg.params.arguments) || {}, row_count: 1, ip, status: 200 }))) {
-          return rpcError(id, -32002, 'LOT systems unreachable', 503);
+          ctx.waitUntil(alertOnce(env, 'audit-down', '🚨 LOT MCP: audit writes are failing; every tool call is being refused (fail closed).'));
+          return refuse(msg, refusalText('unreachable'));
         }
         const out = { connected_as: gate.email, name: gate.full_name, systems_granted: gate.systems, note: 'Phase 0: no data tools yet.' };
         return rpcResult(id, { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }], structuredContent: out });

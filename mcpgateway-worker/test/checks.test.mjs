@@ -113,3 +113,40 @@ test('hmac + compare', async () => {
 test('escape', () => {
   assert.equal(esc(`<script>"x"&'y'</script>`), '&lt;script&gt;&quot;x&quot;&amp;&#39;y&#39;&lt;/script&gt;');
 });
+
+import { refusalText, refusalResponse, RPC_REFUSED, RPC_FAULT } from '../src/checks.js';
+test('refusal text: refusals vs faults are labelled honestly', () => {
+  for (const r of ['gateway switched off', 'no gateway grant', 'account deactivated', 'not a LOT account', 'unknown user']) {
+    const { text, fault } = refusalText(r);
+    assert.equal(fault, false, r);
+    assert.match(text, /deliberate refusal/);
+  }
+  for (const r of ['unreachable', 'gate unreadable', 'something new', undefined]) {
+    const { text, fault } = refusalText(r);
+    assert.equal(fault, true, String(r));
+    assert.doesNotMatch(text, /deliberate/);
+    assert.match(text, /temporary fault/);
+  }
+  assert.match(refusalText('gateway switched off').text, /switched off for everyone/);
+  assert.match(refusalText('no gateway grant').text, /Ask Afshaan/);
+  assert.match(refusalText('rate limited', { callsPerHour: 60 }).text, /all 60 LOT data calls/);
+  assert.match(refusalText('rate limited', { callsPerHour: 0 }).text, /all your LOT data calls/);
+  assert.match(refusalText('rate limited', { callsPerHour: -5 }).text, /all your LOT data calls/);
+  assert.equal(refusalText('rate limited').fault, false);
+});
+test('refusal response: HTTP 200, right shape per method, notifications silent', () => {
+  const r = refusalText('no gateway grant'), f = refusalText('unreachable');
+  assert.deepEqual(refusalResponse({ method: 'notifications/initialized' }, r), { status: 202, body: null });
+  assert.deepEqual(refusalResponse({ method: 'tools/call' }, r), { status: 202, body: null });
+  const call = refusalResponse({ id: 7, method: 'tools/call' }, r);
+  assert.equal(call.status, 200);
+  assert.equal(call.body.result.isError, true);
+  assert.equal(call.body.result.content[0].text, r.text);
+  assert.equal(call.body.error, undefined);
+  const init = refusalResponse({ id: 1, method: 'initialize' }, r);
+  assert.equal(init.status, 200);
+  assert.equal(init.body.error.code, RPC_REFUSED);
+  assert.equal(refusalResponse({ id: 1, method: 'tools/list' }, f).body.error.code, RPC_FAULT);
+  assert.notEqual(RPC_REFUSED, -32001); // MCP SDK RequestTimeout
+  assert.equal(refusalResponse({ id: null, method: 'tools/call' }, r).body.id, null);
+});
