@@ -34,7 +34,7 @@ function snorkel(reply) {
   const sent = [];
   return { sent, fetch: async (url, init) => {
     const body = JSON.parse(init.body);
-    sent.push({ url, auth: init.headers.Authorization, body });
+    sent.push({ url, auth: init.headers.Authorization, body, signal: !!init.signal });
     const [status, j] = reply(body);
     return new Response(JSON.stringify(j), { status });
   } };
@@ -539,4 +539,45 @@ test('staff invoice: a repeat of an already-recorded path returns its id, with n
   assert.equal(res.status, 200);
   assert.equal((await res.json()).data.invoice_id, INV);
   assert.equal(writes(calls, /deal_invoices|engagement_history/).length, 0);
+});
+
+// ── S5: owner DM on a move into held/rejected (Snorkel's Slack app sends it; Ignition passes ids only) ──
+const notifyReply = (over = {}, notify = [200, { ok: true, data: { sent: true, reason: null } }]) => b =>
+  b.action === 'ignitionNotifyOwner' ? notify : statusReply(over)(b);
+const OWNER = '77777777-7777-7777-7777-777777777777';
+
+test('S5: a move into held or rejected asks Snorkel to DM the owner — source_ref only, once, time-boxed', async () => {
+  for (const status of ['held', 'rejected']) {
+    db([['GET', /deal_payment_requests/, 200, [dpr({ state: 'approved', snorkel_request_id: 812 })]],
+      ['PATCH', /deal_payment_requests/, 200, c => [dpr({ ...c.body })]]]);
+    const sn = snorkel(notifyReply({ status, held_reason: 'PAN mismatch' }));
+    assert.equal((await push(env(sn), { ...PUSH, status })).status, 200);
+    const dm = sn.sent.filter(s => s.body.action === 'ignitionNotifyOwner');
+    assert.equal(dm.length, 1, status);
+    assert.deepEqual(dm[0].body, { action: 'ignitionNotifyOwner', source_ref: RID });
+    assert.equal(dm[0].auth, `Bearer ${TOK}`);
+    assert.equal(dm[0].signal, true);
+    assert.equal(sn.sent.find(s => s.body.action === 'ignitionGetPaymentStatus').signal, false);
+  }
+});
+
+test('S5: no DM on a refresh (held → held), on release (held → approved), or on paid', async () => {
+  for (const [from, to] of [['held', 'held'], ['held', 'approved'], ['approved', 'paid']]) {
+    db([['GET', /deal_payment_requests/, 200, [dpr({ state: from, snorkel_request_id: 812 })]],
+      ['PATCH', /deal_payment_requests/, 200, c => [dpr({ ...c.body })]],
+      ['POST', /payments/, 200, [{ id: 'p1' }]]]);
+    const sn = snorkel(notifyReply(to === 'paid' ? PAIDS : { status: to }));
+    await push(env(sn), { ...PUSH, status: to });
+    assert.equal(sn.sent.filter(s => s.body.action === 'ignitionNotifyOwner').length, 0, `${from}→${to}`);
+  }
+});
+
+test('S5: a failed or refused DM never fails the status update', async () => {
+  for (const notify of [[500, { ok: false, error: 'slack down' }], [200, { ok: true, data: { sent: false, reason: 'no_owner' } }]]) {
+    const calls = db([['GET', /deal_payment_requests/, 200, [dpr({ state: 'approved', snorkel_request_id: 812 })]],
+      ['PATCH', /deal_payment_requests/, 200, c => [dpr({ ...c.body })]]]);
+    const sn = snorkel(notifyReply({ status: 'held' }, notify));
+    assert.equal((await push(env(sn), PUSH)).status, 200);
+    assert.equal(writes(calls, /deal_payment_requests/)[0].body.state, 'held');
+  }
 });

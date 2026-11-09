@@ -6412,10 +6412,10 @@ export function snorkelErrorSentence(status, body) {
 }
 
 // One call to snorkelops. Never logs the payload (it carries bank details).
-async function snorkelCall(env, action, input) {
+async function snorkelCall(env, action, input, timeoutMs) {
   try {
     const res = await env.SNORKELOPS.fetch(SNORKEL_INTERNAL_URL, {
-      method: 'POST',
+      method: 'POST', ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.IGNITION_INTERNAL_TOKEN || ''}` },
       body: JSON.stringify({ action, ...input }),
     });
@@ -6433,10 +6433,20 @@ async function snorkelStatusOf(env, ids) {
   return new Map((r.data?.requests || []).map(q => [q.source_ref, q]));
 }
 
-// S5 fills this (Decision 4: Slack DM to the deal owner, poc_user_id). Called once per move INTO
-// held or rejected — never on a refresh, so a re-read does not flag the owner twice.
-async function notifyOwnerOfPaymentProblem(row) {   // eslint-disable-line no-unused-vars
-  return null;
+// S5 (Decision 4): Slack DM to the deal owner (poc_user_id). Called once per move INTO held or
+// rejected — never on a refresh, so a re-read does not flag the owner twice (a racing push/reconcile
+// loses the state-guarded PATCH and re-reads as a refresh). Snorkel's own Slack app sends it (it has
+// the DM scopes; a webhook cannot DM) and reads the owner, deal and text itself — Ignition passes the
+// source_ref only. Best-effort and time-boxed: never fails or stalls the status update.
+async function notifyOwnerOfPaymentProblem(env, row) {
+  try {
+    const r = await snorkelCall(env, 'ignitionNotifyOwner', { source_ref: row.id }, 8000);
+    if (!r.ok || !r.data?.sent) console.log('[snorkel-pay] owner DM not sent', row.id, r.status, r.data?.reason || r.body?.error || '');
+    return r.data || null;
+  } catch (err) {
+    console.error('[snorkel-pay] owner DM failed (status update unaffected):', err?.message);
+    return null;
+  }
 }
 
 // Invoice fields on a raise/attach — shape only; that the invoice is THIS deal's is checked by the
@@ -6620,7 +6630,7 @@ async function applySnorkelStatus(env, row, s) {
     });
     if (!r.ok) return { error: 'db_error' };
     if (r.data?.[0]) {
-      if (move === 'move' && (s.status === 'held' || s.status === 'rejected')) await notifyOwnerOfPaymentProblem(r.data[0]);
+      if (move === 'move' && (s.status === 'held' || s.status === 'rejected')) await notifyOwnerOfPaymentProblem(env, r.data[0]);
       return { applied: true, move, row: r.data[0] };
     }
     const rr = await sb(`/rest/v1/deal_payment_requests?id=eq.${row.id}&select=${DPR_SELECT}&limit=1`, env);

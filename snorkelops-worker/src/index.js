@@ -2869,6 +2869,54 @@ async function ignitionRaisePayment(d) {
   } };
 }
 
+// S5 (Decision 4): DM the Ignition deal OWNER when Finance holds or rejects their creator payment.
+// Ignition sends the source_ref ONLY. Everything else is read here: the request from Snorkel's own
+// row, the deal, its number and its owner from Ignition's tables (deal_payment_requests →
+// engagements.poc_user_id). So a token holder cannot choose the recipient, the link or any text.
+// The owner's email comes from Supabase auth and must be a LOT address (Slack lookupByEmail is the
+// mapping, as for PO requesters). Best-effort: every miss returns {sent:false, reason}.
+const IGNITION_APP_URL = 'https://ignition.legendoftoys.com';
+const slackEsc = t => String(t ?? '').replace(/[\r\n\t]+/g, ' ')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const ignitionRead = path => sb(path, { headers: { 'Accept-Profile': 'ignition' } });
+async function ignitionNotifyOwner(d, env) {
+  const ref = String(d?.source_ref ?? '').trim();
+  if (!UUID_RE.test(ref)) return { error: 'source_ref must be a uuid', status: 400 };
+  const r = await query('payment_requests',
+    `?source_system=eq.${IGNITION_SOURCE}&source_ref=eq.${ref}&select=request_no,status,amount_to_pay,held_reason,rejection_note&limit=1`);
+  const q = r.ok ? r.data?.[0] : null;
+  if (!q) return { error: 'not_found', status: 404 };
+  if (q.status !== 'held' && q.status !== 'rejected') return { data: { sent: false, reason: 'not_held_or_rejected' } };
+  const dr = await ignitionRead(`/rest/v1/deal_payment_requests?id=eq.${ref}&select=engagement_id&limit=1`);
+  const eid = dr.ok ? dr.data?.[0]?.engagement_id : null;
+  if (!eid) return { data: { sent: false, reason: 'no_deal' } };
+  const er = await ignitionRead(`/rest/v1/engagements?id=eq.${eid}&select=engagement_no,poc_user_id&limit=1`);
+  const e = er.ok ? er.data?.[0] : null;
+  if (!e?.poc_user_id || !UUID_RE.test(String(e.poc_user_id))) return { data: { sent: false, reason: 'no_owner' } };
+  let email = '';
+  try {
+    const ur = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${e.poc_user_id}`, {
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
+    });
+    const u = ur.ok ? await ur.json().catch(() => null) : null;
+    email = String(u?.email || '').trim().toLowerCase();
+  } catch { /* fall through to no_lot_email */ }
+  if (!email.endsWith('@legendoftoys.com')) return { data: { sent: false, reason: 'no_lot_email' } };
+  const slackId = await slackUserIdByEmail(email, env);
+  if (!slackId) return { data: { sent: false, reason: 'no_slack_user' } };
+  const dm = await slackApi('conversations.open', { users: slackId }, env);
+  const channel = dm.ok ? dm.channel?.id : null;
+  if (!channel) return { data: { sent: false, reason: 'dm_open_failed' } };
+  const amt = '₹' + Number(q.amount_to_pay || 0).toLocaleString('en-IN');
+  const why = q.status === 'held'
+    ? `was put on hold by Finance: ${slackEsc(q.held_reason || 'no reason given')}`
+    : `was rejected by Finance: ${slackEsc(q.rejection_note || 'no reason given')}`;
+  const text = `${slackEsc(e.engagement_no || 'An Ignition deal')}: creator payment ${slackEsc(q.request_no)} (${amt}) ${why}\n`
+             + `${IGNITION_APP_URL}/engagements/detail/?id=${eid}`;
+  const p = await slackApi('chat.postMessage', { channel, text, unfurl_links: false }, env);
+  return { data: { sent: !!p.ok, reason: p.ok ? null : (p.error || 'post_failed') } };
+}
+
 // Returns { data } or { error, status }. One IN query for up to 200 refs.
 async function ignitionGetPaymentStatus(d) {
   const raw = d && d.source_refs;
@@ -2915,7 +2963,7 @@ export default {
     // ── Internal: Ignition payment requests (Reann #2 S2) ──
     // Worker-to-worker over ignitionops' SNORKELOPS service binding; NO user JWT, so it sits ahead
     // of verifyJWT like /bridge/vendor. Bearer IGNITION_INTERNAL_TOKEN, 401 when unset or wrong.
-    // ⛔ Scope-limited to the two actions below. Do not grow this into a general proxy.
+    // ⛔ Scope-limited to the three actions below. Do not grow this into a general proxy.
     {
       const igUrl = new URL(request.url);
       if (igUrl.pathname === '/internal/ignition' && request.method === 'POST') {
@@ -2926,6 +2974,7 @@ export default {
         try {
           const out = bd.action === 'ignitionRaisePayment'     ? await ignitionRaisePayment(input)
                     : bd.action === 'ignitionGetPaymentStatus' ? await ignitionGetPaymentStatus(input)
+                    : bd.action === 'ignitionNotifyOwner'      ? await ignitionNotifyOwner(input, env)
                     : { error: 'Unknown action: ' + bd.action, status: 400 };
           if (out.error) {
             return new Response(JSON.stringify({ ok: false, error: out.error,
