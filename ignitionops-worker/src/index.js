@@ -4046,7 +4046,7 @@ async function getCommissionStatements(url, auth, env) {
   const latest = new Map();
   for (const ids of chunk(sts.map(x => x.id), 100)) {
     const rr = await sb(`/rest/v1/deal_payment_requests?statement_id=in.(${ids.join(',')})`
-      + `&select=id,statement_id,state,amount,snorkel_request_no,paid_amount,utr,raised_at&order=raised_at.desc`, env);
+      + `&select=id,statement_id,state,amount,snorkel_request_no,paid_amount,tds_amount,utr,raised_at&order=raised_at.desc`, env);
     if (!rr.ok) return err('db_error', 500);
     for (const q of rr.data || []) if (!latest.has(q.statement_id)) latest.set(q.statement_id, q);
   }
@@ -4062,7 +4062,8 @@ async function getCommissionStatements(url, auth, env) {
       difference_reason: x.difference_reason, verified_by_name: x.verified_by_name, verified_at: x.verified_at,
       last_computed_at: x.last_computed_at,
       request: q && { id: q.id, state: q.state, amount: Number(q.amount), snorkel_request_no: q.snorkel_request_no,
-        paid_amount: q.paid_amount != null ? Number(q.paid_amount) : null, utr: q.utr },
+        paid_amount: q.paid_amount != null ? Number(q.paid_amount) : null,
+        tds_amount: q.tds_amount != null ? Number(q.tds_amount) : null, utr: q.utr },
       month_open: x.month >= cur,
     };
   });
