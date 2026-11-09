@@ -22,6 +22,7 @@ import { runTrackingPages, trackingWindow, UNI_TRACK_RUN_BUDGET, UNI_TRACK_MAX_G
          isUntrackedChannel, dedupePackageRows } from './uni-track-run.mjs';
 import { parseReportDate, parseReportHtml, toDailyFacts, b64urlDecode, parseReportXlsx, toFsnFacts, toSkuSnapshot, stageSelloutRows } from './flipkart-sellout.mjs';
 import { UNMAPPED_QUEUE_INSERT } from './unmapped-queue.mjs';
+import { shopifyLineDiscount, SHOPIFY_LINE_DISCOUNT_SELECTION } from './shopify-line-discount.mjs';
 // Max windows a single ConnectorWorkflow instance pulls before ending (a still-backfilling
 // connector simply continues on the next cron tick). Bounds instance lifetime.
 const MAX_WINDOWS = 24;
@@ -266,7 +267,7 @@ const shopifyAdapter = {
     const ver = env.SHOPIFY_API_VERSION || SHOPIFY_API_VERSION_DEFAULT;
     const since = cursor || BACKFILL_START;
     const rows = [], orderRows = []; let after = null, hasNext = true, subreqs = 0, maxUpdated = since, partial = false;
-    const gql = `query($q:String!,$after:String){ orders(first:50, query:$q, sortKey:UPDATED_AT, after:$after){ pageInfo{ hasNextPage endCursor } edges{ node{ id name createdAt updatedAt cancelledAt displayFinancialStatus currencyCode tags totalPriceSet{ shopMoney{ amount } } totalDiscountsSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItems(first:100){ edges{ node{ id title quantity sku variantTitle originalTotalSet{ shopMoney{ amount currencyCode } } discountedTotalSet{ shopMoney{ amount } } taxLines{ priceSet{ shopMoney{ amount } } } } } } refunds{ id createdAt totalRefundedSet{ shopMoney{ amount } } refundLineItems(first:50){ edges{ node{ quantity subtotalSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItem{ id sku title variantTitle } } } } } } } } }`;
+    const gql = `query($q:String!,$after:String){ orders(first:50, query:$q, sortKey:UPDATED_AT, after:$after){ pageInfo{ hasNextPage endCursor } edges{ node{ id name createdAt updatedAt cancelledAt displayFinancialStatus currencyCode tags totalPriceSet{ shopMoney{ amount } } totalDiscountsSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItems(first:100){ edges{ node{ id title quantity sku variantTitle originalTotalSet{ shopMoney{ amount currencyCode } } discountedTotalSet{ shopMoney{ amount } } ${SHOPIFY_LINE_DISCOUNT_SELECTION} taxLines{ priceSet{ shopMoney{ amount } } } } } } refunds{ id createdAt totalRefundedSet{ shopMoney{ amount } } refundLineItems(first:50){ edges{ node{ quantity subtotalSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItem{ id sku title variantTitle } } } } } } } } }`;
     let token = await getShopifyToken(env); subreqs++;
     if (!token) throw new Error('Shopify auth failed (client credentials)');
     // Cap pages per run at 12 (~600 orders): the chunked staging inserts that follow each cost a
@@ -317,7 +318,7 @@ function mapShopifyOrderNode(o, rows, orderRows) {
         for (const le of (o.lineItems?.edges || [])) {
           const l = le.node;
           const gross = num(l.originalTotalSet?.shopMoney?.amount);              // pre-discount, tax-incl (IN store)
-          const disc  = Math.max(0, gross - num(l.discountedTotalSet?.shopMoney?.amount));
+          const disc  = shopifyLineDiscount(l);   // ⚠️ incl. ORDER-level codes via discountAllocations — see shopify-line-discount.mjs
           const tax   = (l.taxLines || []).reduce((a, t) => a + num(t.priceSet?.shopMoney?.amount), 0);
           oGross += gross;
           rows.push({
@@ -330,7 +331,7 @@ function mapShopifyOrderNode(o, rows, orderRows) {
         }
         // order-grain row: gross = line-sum merchandise (pre-discount, reconciles to sales_fact);
         // discount/tax = ORDER-level totals (authoritative — order-level discount codes aren't
-        // reflected in per-line discountedTotalSet, which undercounts; per-line stays for sales_fact).
+        // reflected in per-line discountedTotalSet; per-line now reads discountAllocations, which DOES carry them).
         orderRows.push({
           source_order_id: o.id, refund_id: '', row_kind: 'order', sale_date: saleDate, order_name: o.name,
           gross: oGross, discount: num(o.totalDiscountsSet?.shopMoney?.amount), tax: num(o.totalTaxSet?.shopMoney?.amount),
@@ -395,7 +396,7 @@ async function fetchAndStageShopifyOrder(env, numericOrderId) {
   const cc = await sbSales('/rest/v1/connector_config?adapter_kind=eq.shopify&select=channel_id&limit=1');
   const channelId = (cc.ok && cc.data[0]) ? cc.data[0].channel_id : null;
   if (!channelId) throw new Error('shopify webhook: no shopify connector_config row');
-  const gql = `query($q:String!){ orders(first:1, query:$q){ edges{ node{ id name createdAt updatedAt cancelledAt displayFinancialStatus currencyCode tags totalPriceSet{ shopMoney{ amount } } totalDiscountsSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItems(first:100){ edges{ node{ id title quantity sku variantTitle originalTotalSet{ shopMoney{ amount currencyCode } } discountedTotalSet{ shopMoney{ amount } } taxLines{ priceSet{ shopMoney{ amount } } } } } } refunds{ id createdAt totalRefundedSet{ shopMoney{ amount } } refundLineItems(first:50){ edges{ node{ quantity subtotalSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItem{ id sku title variantTitle } } } } } } } } }`;
+  const gql = `query($q:String!){ orders(first:1, query:$q){ edges{ node{ id name createdAt updatedAt cancelledAt displayFinancialStatus currencyCode tags totalPriceSet{ shopMoney{ amount } } totalDiscountsSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItems(first:100){ edges{ node{ id title quantity sku variantTitle originalTotalSet{ shopMoney{ amount currencyCode } } discountedTotalSet{ shopMoney{ amount } } ${SHOPIFY_LINE_DISCOUNT_SELECTION} taxLines{ priceSet{ shopMoney{ amount } } } } } } refunds{ id createdAt totalRefundedSet{ shopMoney{ amount } } refundLineItems(first:50){ edges{ node{ quantity subtotalSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItem{ id sku title variantTitle } } } } } } } } }`;
   let token = await getShopifyToken(env);
   if (!token) throw new Error('Shopify auth failed (client credentials)');
   const run = (tok) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${ver}/graphql.json`, {
