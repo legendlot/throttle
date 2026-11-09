@@ -1869,8 +1869,12 @@ async function createProgram(body, auth, env) {
   if (!d.name || !String(d.name).trim()) return err('name required', 400);
   const name = String(d.name).trim();
   // Idempotent inline create: reuse an existing (case-insensitive) program if present.
-  const existing = await sbDocket(`/rest/v1/programs?archived_at=is.null&name=ilike.${enc(name)}&select=id,name,color&limit=1`, env);
-  if (existing.ok && existing.data?.[0]) return ok(existing.data[0]);
+  // ILIKE treats % and _ as wildcards (escaped here) and PostgREST maps * to % (can't be
+  // escaped), so the query may over-match — the exact case-insensitive compare decides.
+  const pattern = name.replace(/[\\%_]/g, (c) => '\\' + c);
+  const existing = await sbDocket(`/rest/v1/programs?archived_at=is.null&name=ilike.${enc(pattern)}&select=id,name,color&limit=50`, env);
+  const same = existing.ok ? (existing.data || []).find(p => String(p.name).toLowerCase() === name.toLowerCase()) : null;
+  if (same) return ok(same);
   const r = await sbDocket(`/rest/v1/programs`, env, {
     method: 'POST', body: JSON.stringify([{ name, color: d.color || null, created_by_user_id: auth.userId }]) });
   if (!r.ok || !r.data?.[0]) return err('create_failed: ' + JSON.stringify(r.data), 400);

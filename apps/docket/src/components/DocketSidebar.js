@@ -67,7 +67,7 @@ const dot = (color) => <span className="dks-dot" style={{ background: color }} /
 
 export function DocketSidebar({
   activeKey = '', path = '', spaces = [], programs = [], isAdmin = false,
-  collapsed = false, mobileOpen = false, onSelect, onNewSpace, onSpaceSettings,
+  collapsed = false, mobileOpen = false, onSelect, onNewSpace, onNewProgram, onSpaceSettings,
 }) {
   const privates = (spaces || []).filter(s => s.is_private);
   const mySpaces = privates.filter(s => s.is_owner);
@@ -126,8 +126,9 @@ export function DocketSidebar({
       <div className="dks-scroll">
         {/* Programs (S138): cross-space jump-to — every task tagged to the program, in any
             space you can access. Only programs you have visible tasks in are listed (counts). */}
-        {programs.length > 0 && shown('programs', programActive) && <div className="dks-section">
-          <SectionHead label="Programs" open={open('programs', programActive)} onToggle={() => toggle('programs')} />
+        {(programs.length > 0 || onNewProgram) && shown('programs', programActive) && <div className="dks-section">
+          <SectionHead label="Programs" open={open('programs', programActive)} onToggle={() => toggle('programs')}
+            onAdd={onNewProgram} addLabel="New program" />
           {open('programs', programActive) && programs.map(p => (
             <Row key={p.id} depth={1} lead={dot(p.color || personColor(p.id))} label={p.name} count={p.task_count}
               active={activeKey === '/tasks?program=' + p.id} onClick={go('/tasks?program=' + p.id)} />

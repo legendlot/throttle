@@ -4,9 +4,9 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import {
-  Search, X, Plus, Check, Ban, ListFilter, Layers, List, Rows3, Inbox,
+  Search, X, Plus, Check, Ban, Inbox,
   ChevronRight, ChevronDown, Calendar, AlertTriangle, Link2, MessageSquare,
-  Lock, Settings2, LayoutDashboard, ListChecks, Archive, CheckSquare, Users, Flag, Tag, Columns3,
+  Lock, ListChecks, Archive, CheckSquare, Users, Flag, Tag,
   UserPlus, FolderInput,
 } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
@@ -20,6 +20,8 @@ import { KanbanBoard } from '../../../components/KanbanBoard.js';
 import { STATUSES, STATUS_MAP, SETTABLE_STATUSES, PRIORITIES, effectiveDeadline } from '../../../lib/tasks.js';
 import { useHotkey } from '../../../lib/hotkeys.js';
 import { useChrome } from '../../../lib/chrome.js';
+import { ViewsBar, TasksToolbar } from '../../../components/tasks/TasksChrome.js';
+import { Button, Kbd } from '../../../components/ui/index.js';
 
 // Task(flex) · Owner(150) · Status(132) · Pri(76) · Deadline(140) · meta(46)
 const GRID_COLS = 'minmax(230px,1fr) 150px 132px 76px 140px 46px';
@@ -73,6 +75,14 @@ export default function TasksPage() {
   const [q, setQ] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
   const [groupMenu, setGroupMenu] = useState(false);
+  const [subMenu, setSubMenu] = useState(false);          // toolbar Subtasks menu
+  const [custOpen, setCustOpen] = useState(false);        // toolbar Customize menu
+  const [newTaskMenuOpen, setNewTaskMenuOpen] = useState(false); // + Task split menu
+  // New sub-task from the + Task menu: the last focused top-level row (a ref — j/k moves
+  // focus constantly and must not re-render the page), and a one-shot request the
+  // matching TaskRow picks up (it owns the inline sub-task input).
+  const focusedRowRef = useRef(null);
+  const [subRequest, setSubRequest] = useState(null);
   const [drawerId, setDrawerId] = useState(null);
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
   const [spaceSettingsOpen, setSpaceSettingsOpen] = useState(false);
@@ -167,6 +177,17 @@ export default function TasksPage() {
   }
   // The shell's sidebar ⋯ (SpaceSettings in the layout) renames / archives / transfers
   // spaces too — keep this page's own `spaces` (bulk Move list, ProgramCapture, is_owner) in step.
+  // Programs created elsewhere (top-bar / sidebar New program, drawer inline create)
+  // feed the Program filter + cell options. Re-read only — this page never re-dispatches
+  // from here, so ProgramCapture's own dispatch can't loop.
+  const fetchPrograms = useCallback(() => {
+    if (!session) return;
+    docketopsGet('getPrograms', {}, session).then(p => setPrograms(p || [])).catch(() => {});
+  }, [session]);
+  useEffect(() => {
+    window.addEventListener('docket:programs-changed', fetchPrograms);
+    return () => window.removeEventListener('docket:programs-changed', fetchPrograms);
+  }, [fetchPrograms]);
   useEffect(() => {
     window.addEventListener('docket:spaces-changed', fetchSpaces);
     return () => window.removeEventListener('docket:spaces-changed', fetchSpaces);
@@ -185,6 +206,13 @@ export default function TasksPage() {
   function clearFilters() {
     setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId('');
     setOverdue(false); setRevised(false); setMine(false);
+  }
+  // The Filter popover's own count + clear. Me mode is its own toolbar toggle now (P2),
+  // so it's neither counted on the Filter badge nor cleared from inside the popover.
+  const panelFilterCount = activeFilterCount - (mine ? 1 : 0);
+  function clearPanelFilters() {
+    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId('');
+    setOverdue(false); setRevised(false);
   }
 
   function patchRow(id, patch) { setTasks(ts => ts.map(t => (t.id === id ? { ...t, ...patch } : t))); }
@@ -384,6 +412,8 @@ export default function TasksPage() {
       const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable);
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (drawerId || shellModalOpen) return;
+      // A ui Menu/Popover owns its own arrows + j/k (P1 top-bar + New, P2 toolbar menus).
+      if (e.defaultPrevented || ae?.closest?.('.ui-pop')) return;
       if (e.key === 'f') { e.preventDefault(); setFilterOpen(o => !o); }
       else if (e.key === 'g') { e.preventDefault(); setGroupMenu(m => !m); }
       else if ((e.key === 'ArrowDown' || e.key === 'j') && !ae?.classList?.contains('row')) { e.preventDefault(); focusRow(1); }
@@ -398,94 +428,78 @@ export default function TasksPage() {
     openDrawer: setDrawerId, teamCellOpts, ownerCellOpts, prioOpts, empOpts, expanded, setExpanded, sortFn,
     gridCols, showSpace: crossSpace,
     selectMode, selected, toggleSelect,
+    focusedRowRef, subRequest, clearSubRequest: () => setSubRequest(null),
   };
+
+  // Toolbar: Subtasks menu (list view, when a visible row has sub-tasks).
+  const parentIds = useMemo(() => boardRows.filter(t => (t.child_count || 0) > 0 || (childrenByParent[t.id] || []).length > 0).map(t => t.id), [boardRows, childrenByParent]);
+  const expandAll = () => setExpanded(Object.fromEntries(parentIds.map(id => [id, true])));
+  const collapseAll = () => setExpanded({});
+  // + Task → New sub-task targets the last focused top-level row, if still visible + editable.
+  // Only a row that is on screen right now (not board mode, not in a collapsed group).
+  const getSubtaskTarget = () => {
+    if (boardMode || mineMode || !focusedRowRef.current) return null;
+    const t = boardRows.find(x => x.id === focusedRowRef.current);
+    if (!t || !t._can_edit || t.status === 'abandoned') return null;
+    if (!document.querySelector(`.board .row[data-task-id="${t.id}"]`)) return null;
+    return t;
+  };
+  function requestSubtask(id) {
+    if (getSubtaskTarget()?.id !== id) return;
+    setSubRequest(id);
+    // The row consumes it on its next effect; never leave a stale request to fire later.
+    setTimeout(() => setSubRequest(r => (r === id ? null : r)), 250);
+  }
+  // A focused row from another view is not a target.
+  useEffect(() => { focusedRowRef.current = null; }, [viewMode, spaceId, viewProgramId, mineMode]);
+  // `g` in My tasks has no group control to show — don't leave the menu armed.
+  useEffect(() => { setGroupMenu(false); }, [mineMode]);
+  const focusCapture = () => {
+    const el = document.querySelector('[data-create-primary]');
+    try { el?.focus(); el?.select?.(); } catch { /* ignore */ }
+  };
+  function copyLink() {
+    const url = typeof window !== 'undefined' ? window.location.href : '';
+    const done = () => showToast('Link copied', 'success');
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(done).catch(() => showToast('Could not copy the link', 'error'));
+    else showToast('Could not copy the link', 'error');
+  }
 
   const groupOpts = [
     { value: 'none', label: 'No grouping' }, { value: 'person', label: 'Owner' },
     { value: 'department', label: 'Team' }, { value: 'status', label: 'Status' }, { value: 'program', label: 'Program' },
   ];
-  const groupLabel = { none: 'Group', person: 'By owner', department: 'By team', status: 'By status', program: 'By program' }[groupBy];
 
   return (
     <div data-density={density}>
-      {/* Space actions (private space) — title + lock now live in the topbar. */}
-      {currentSpace && currentSpace.is_private && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginBottom: 8 }}>
-          <button className="dr-icon" title="Space dashboard" onClick={() => router.push('/dashboard?space=' + currentSpace.id)}><LayoutDashboard size={15} /></button>
-          {currentSpace.is_owner && (
-            <button className="dr-icon" title="Space settings" onClick={() => setSpaceSettingsOpen(true)}><Settings2 size={15} /></button>
-          )}
-        </div>
-      )}
+      {/* Views bar + toolbar (P2). The location (Space / Program) is the top-bar breadcrumb. */}
+      <ViewsBar viewMode={viewMode} onView={chooseView} allowBoard={!mineMode} onCopyLink={copyLink}
+        space={currentSpace} onSpaceDashboard={() => currentSpace && router.push('/dashboard?space=' + currentSpace.id)}
+        onSpaceSettings={() => setSpaceSettingsOpen(true)} />
+      <TasksToolbar
+        showGroup={!mineMode} groupBy={groupBy} setGroupBy={setGroupBy} groupOpts={groupOpts} groupMenu={groupMenu} setGroupMenu={setGroupMenu}
+        showSubtasks={!mineMode && !boardMode && parentIds.length > 0} subMenu={subMenu} setSubMenu={setSubMenu}
+        onExpandAll={expandAll} onCollapseAll={collapseAll}
+        filterOpen={filterOpen} setFilterOpen={setFilterOpen} filterCount={panelFilterCount}
+        filter={{ status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId, priority, setPriority,
+          programId, setProgramId, overdue, setOverdue, revised, setRevised, teamOpts, empOpts, programOpts,
+          filterCount: panelFilterCount, clearFilters: clearPanelFilters, hideProgramFilter: inProgramMode, hideOwnerFilter: mineMode }}
+        showMe={!mineMode} mine={mine} setMine={setMine}
+        showArchive={!mineMode && !boardMode} archiveDone={archiveDone} toggleArchiveDone={toggleArchiveDone}
+        showSelect={!boardMode} selectMode={selectMode} toggleSelectMode={() => setSelectMode(m => { if (m) clearSelection(); return !m; })}
+        selectableCount={selectableIds.length} allSelected={allSelected} toggleSelectAll={toggleSelectAll} selectedCount={selected.size}
+        q={q} setQ={setQ} searchRef={searchRef}
+        showCustomize={!boardMode} density={density} chooseDensity={chooseDensity} custOpen={custOpen} setCustOpen={setCustOpen}
+        onNewTask={focusCapture} newTaskMenuOpen={newTaskMenuOpen} setNewTaskMenuOpen={setNewTaskMenuOpen}
+        getSubtaskTarget={getSubtaskTarget} onNewSubtask={requestSubtask}
+        onNewSpace={() => router.push('/tasks?space=new')} />
 
       {inProgramMode
         ? <ProgramCapture session={session} programId={viewProgramId} spaces={spaces} defaultSpaceId={programDefaultSpace} onCreated={load} showToast={showToast} />
         : mineMode
           ? <QuickCapture session={session} assignSelf onCreated={load} showToast={showToast}
-              placeholder="Add a task to your list. Type a title, press Enter — it's assigned to you.   ( c )" />
+              placeholder="Add a task to your list — it's assigned to you" />
           : <QuickCapture session={session} spaceId={spaceId} onCreated={load} showToast={showToast} />}
-
-      <div className="toolbar">
-        <div className="search">
-          <Search className="ic" />
-          <input data-search-primary ref={searchRef} value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks, owners, DKT-no…" />
-          {!q && <span className="kbd">/</span>}
-        </div>
-        {!mineMode && (
-          <div style={{ position: 'relative' }}>
-            <button className={'tool' + (groupBy !== 'none' ? ' on' : '')} onClick={() => setGroupMenu(m => !m)}>
-              <Layers className="ic" /> {groupLabel}
-            </button>
-            {groupMenu && (
-              <Popover open onClose={() => setGroupMenu(false)} width={180}>
-                <OptionList label="Group by" value={groupBy} options={groupOpts} onPick={(v) => { setGroupBy(v); setGroupMenu(false); }} />
-              </Popover>
-            )}
-          </div>
-        )}
-        <div style={{ position: 'relative' }}>
-          <button className={'tool' + (activeFilterCount > 0 ? ' on' : '')} onClick={() => setFilterOpen(o => !o)}>
-            <ListFilter className="ic" /> Filter {activeFilterCount > 0 && <span className="badge">{activeFilterCount}</span>}
-          </button>
-          {filterOpen && (
-            <FilterPop onClose={() => setFilterOpen(false)} hideProgramFilter={inProgramMode}
-              hideOwnerFilter={mineMode} hideMineToggle={mineMode}
-              {...{ status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId, priority, setPriority,
-                programId, setProgramId, overdue, setOverdue, revised, setRevised, mine, setMine,
-                teamOpts, empOpts, programOpts, activeFilterCount, clearFilters }} />
-          )}
-        </div>
-        {!boardMode && (
-          <button className={'tool' + (selectMode ? ' on' : '')} onClick={() => setSelectMode(m => { if (m) clearSelection(); return !m; })}
-            title="Select multiple tasks to update them in bulk">
-            <CheckSquare className="ic" /> Select
-          </button>
-        )}
-        {!boardMode && selectMode && selectableIds.length > 0 && (
-          <button className="tool" onClick={toggleSelectAll}>
-            <span className={'sel-box' + (allSelected ? ' on' : '')}>{allSelected && <Check size={11} />}</span>
-            {allSelected ? 'Clear all' : 'Select all'}{selected.size > 0 && <span className="badge">{selected.size}</span>}
-          </button>
-        )}
-        {!mineMode && !boardMode && (
-          <button className={'tool' + (archiveDone ? ' on' : '')} onClick={toggleArchiveDone}
-            title={archiveDone ? 'Done tasks are archived — click to show them on the board' : 'Archive done tasks into a collapsed section'}>
-            <Archive className="ic" /> {archiveDone ? 'Done archived' : 'Archive done'}
-          </button>
-        )}
-        {!mineMode && (
-          <div className="seg" title="View">
-            <button className={viewMode === 'list' ? 'on' : ''} title="List view" onClick={() => chooseView('list')}><ListChecks /></button>
-            <button className={viewMode === 'board' ? 'on' : ''} title="Board view (Kanban)" onClick={() => chooseView('board')}><Columns3 /></button>
-          </div>
-        )}
-        {!boardMode && (
-          <div className="seg">
-            <button className={density === 'compact' ? 'on' : ''} title="Compact" onClick={() => chooseDensity('compact')}><List /></button>
-            <button className={density === 'roomy' ? 'on' : ''} title="Roomy" onClick={() => chooseDensity('roomy')}><Rows3 /></button>
-          </div>
-        )}
-      </div>
 
       {loading && tasks.length === 0 ? <Spinner /> : (
         (mineMode ? (mineOwner.length + mineCollab.length + mineCreated.length) === 0 : topLevel.length === 0) ? (
@@ -493,7 +507,7 @@ export default function TasksPage() {
             <div className="ei"><ListChecks size={24} /></div>
             <h3>{(q || activeFilterCount) ? 'No tasks match' : (mineMode ? 'Nothing assigned to you' : 'All clear')}</h3>
             <p>{(q || activeFilterCount) ? 'Try a different search or widen the filters.' : (mineMode ? 'Tasks you own, collaborate on, or raised for someone else — across every space — show up here.' : 'Capture a task above to get started.')}</p>
-            {activeFilterCount > 0 && <button className="fp-clear" style={{ width: 'auto', margin: '14px auto 0' }} onClick={clearFilters}>Clear filters</button>}
+            {activeFilterCount > 0 && <Button variant="neutral" size="sm" style={{ margin: '14px auto 0' }} onClick={clearFilters}>Clear filters</Button>}
           </div>
         ) : mineMode ? (
           <div style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity var(--base) var(--ease)' }}>
@@ -713,6 +727,14 @@ function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
   const toggleExpand = () => setExpanded(s => ({ ...s, [task.id]: !s[task.id] }));
   const startAddSub = () => { setSubTitle(''); setAdding(true); setExpanded(s => ({ ...s, [task.id]: true })); };
   const submitSub = () => { const v = subTitle.trim(); if (!v) return; addSubtask(task, v); setSubTitle(''); setAdding(false); };
+  // + Task → New sub-task (toolbar) asks for this row's inline sub-task input.
+  useEffect(() => {
+    if (!isChild && ctx.subRequest === task.id) { startAddSub(); ctx.clearSubRequest?.(); }
+  }, [ctx.subRequest]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Unmounting (group collapsed, filtered out) drops this row as the + Task sub-task target.
+  useEffect(() => () => {
+    if (ctx.focusedRowRef?.current === task.id) ctx.focusedRowRef.current = null;
+  }, [task.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addableCollabs = empOpts.filter(o => o.value !== task.owner_employee_id && !(task.collaborators || []).some(c => c.employee_id === o.value));
 
@@ -721,7 +743,8 @@ function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
 
   return (
     <>
-      <div className={cls} style={{ '--grid-cols': gridCols }} tabIndex={isChild ? undefined : 0}
+      <div className={cls} style={{ '--grid-cols': gridCols }} tabIndex={isChild ? undefined : 0} data-task-id={isChild ? undefined : task.id}
+        onFocus={isChild ? undefined : (e) => { if (e.target === e.currentTarget && ctx.focusedRowRef) ctx.focusedRowRef.current = task.id; }}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
           if (e.key === 'Enter') { e.preventDefault(); openDrawer(isChild ? (task.parent_task_id || task.id) : task.id); }
@@ -1098,46 +1121,24 @@ function BulkBar({ count, onClear, onApply, ownerOpts, prioOpts, programOpts,
 }
 
 /* ---------------- Filter popover ---------------- */
-function FilterPop({ onClose, status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId,
-  priority, setPriority, programId, setProgramId, overdue, setOverdue, revised, setRevised, mine, setMine,
-  teamOpts, empOpts, programOpts, activeFilterCount, clearFilters, hideProgramFilter, hideOwnerFilter, hideMineToggle }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    function down(e) { if (ref.current && !ref.current.contains(e.target)) onClose(); }
-    function key(e) { if (e.key === 'Escape') onClose(); }
-    document.addEventListener('mousedown', down); document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key, true); };
-  }, [onClose]);
-  const Sel = ({ label, value, set, any, options }) => (
-    <div className="fp-grp">
-      <div className="fp-lbl">{label}</div>
-      <select className="date-input" value={value || ''} onChange={e => set(e.target.value || '')} style={{ cursor: 'pointer' }}>
-        <option value="">{any}</option>
-        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    </div>
-  );
+/* ---------------- Quick capture ---------------- */
+// The 36px capture bar both captures share (P2 restyle; behaviour unchanged): ghost +,
+// the input (data-create-primary — `c` and + Task focus it), a `c` hint, and Add —
+// neutral until there's a title, then primary.
+function CaptureBar({ inputRef, title, setTitle, onAdd, saving, placeholder, children }) {
+  const has = !!title.trim();
   return (
-    <div ref={ref} className="filter-pop" onMouseDown={e => e.stopPropagation()}>
-      <Sel label="Status" value={status} set={setStatus} any="Any status" options={STATUSES.map(s => ({ value: s.key, label: s.label }))} />
-      <Sel label="Team" value={departmentId} set={setDepartmentId} any="Any team" options={teamOpts} />
-      {!hideOwnerFilter && <Sel label="Owner" value={employeeId} set={setEmployeeId} any="Anyone" options={empOpts} />}
-      <Sel label="Priority" value={priority} set={setPriority} any="Any priority" options={PRIORITIES.map(p => ({ value: p.key, label: p.label }))} />
-      {!hideProgramFilter && <Sel label="Program" value={programId} set={setProgramId} any="Any program" options={programOpts} />}
-      <div className="fp-grp">
-        <div className="fp-lbl">Quick</div>
-        <div className="fp-toggles">
-          {!hideMineToggle && <button className={'fp-toggle' + (mine ? ' on' : '')} onClick={() => setMine(m => !m)}>My tasks</button>}
-          <button className={'fp-toggle' + (overdue ? ' on' : '')} onClick={() => setOverdue(o => !o)}>Overdue</button>
-          <button className={'fp-toggle' + (revised ? ' on' : '')} onClick={() => setRevised(r => !r)}>Revised</button>
-        </div>
-      </div>
-      {activeFilterCount > 0 && <button className="fp-clear" onClick={clearFilters}>Clear all filters</button>}
+    <div className="tk-capture">
+      <Plus className="tk-capture-plus" size={15} strokeWidth={2} aria-hidden />
+      <input ref={inputRef} data-create-primary value={title} onChange={e => setTitle(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') onAdd(); }} placeholder={placeholder} aria-label="New task title" disabled={saving} />
+      {!has && <Kbd className="tk-capture-kbd">c</Kbd>}
+      {children}
+      <Button variant={has ? 'primary' : 'neutral'} size="sm" onClick={onAdd} disabled={!has} loading={saving}>Add</Button>
     </div>
   );
 }
 
-/* ---------------- Quick capture ---------------- */
 function QuickCapture({ session, spaceId, onCreated, showToast, assignSelf, placeholder }) {
   const [title, setTitle] = useState('');
   const [saving, setSaving] = useState(false);
@@ -1155,14 +1156,8 @@ function QuickCapture({ session, spaceId, onCreated, showToast, assignSelf, plac
     finally { setSaving(false); }
   }
   return (
-    <div className="capture">
-      <Plus className="plus" />
-      <input ref={ref} data-create-primary value={title} onChange={e => setTitle(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') add(); }}
-        placeholder={placeholder || 'Capture a task. Type a title, press Enter — it lands in The Grid to finish later.   ( c )'}
-        disabled={saving} />
-      <button className="go" onClick={add} disabled={!title.trim() || saving}>{saving ? '…' : 'Add'}</button>
-    </div>
+    <CaptureBar inputRef={ref} title={title} setTitle={setTitle} onAdd={add} saving={saving}
+      placeholder={placeholder || 'Capture a task — press Enter and it lands in The Grid to finish later'} />
   );
 }
 
@@ -1189,17 +1184,12 @@ function ProgramCapture({ session, programId, spaces, defaultSpaceId, onCreated,
     finally { setSaving(false); }
   }
   return (
-    <div className="capture">
-      <Plus className="plus" />
-      <input ref={ref} data-create-primary value={title} onChange={e => setTitle(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') add(); }}
-        placeholder="Add a task to this program. Type a title, press Enter — it's tagged automatically.   ( c )"
-        disabled={saving} />
-      <select className="capture-space" value={spaceId} onChange={e => setSpaceId(e.target.value)} title="Space this task lives in" disabled={saving}>
+    <CaptureBar inputRef={ref} title={title} setTitle={setTitle} onAdd={add} saving={saving}
+      placeholder="Add a task to this program — it's tagged automatically">
+      <select className="tk-capture-space" value={spaceId} onChange={e => setSpaceId(e.target.value)} title="Space this task lives in" aria-label="Space" disabled={saving}>
         {spaces.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
       </select>
-      <button className="go" onClick={add} disabled={!title.trim() || saving}>{saving ? '…' : 'Add'}</button>
-    </div>
+    </CaptureBar>
   );
 }
 

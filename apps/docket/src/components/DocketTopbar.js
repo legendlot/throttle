@@ -2,14 +2,14 @@
 // Docket top bar (ClickUp redesign P1): 40px, full width above the rail + sidebar.
 // Left: sidebar toggle ( [ / ⌘\ ) + the route breadcrumb + the board count pill.
 // Centre: the search trigger (focuses the page's [data-search-primary]; ⌘K is P6).
-// Right: + New split (task / space), "?" shortcuts, Live dot, AppLauncher.
+// Right: + New split (task / space / program), "?" shortcuts, Live dot, AppLauncher.
 // ≤767px: menu button (slide-over sidebar) · last crumb · + (new task) · AppLauncher.
 import { Fragment, useRef, useState } from 'react';
-import { PanelLeft, Menu as MenuIcon, Lock, Search, Plus, FolderPlus, SquarePen } from 'lucide-react';
+import { PanelLeft, Menu as MenuIcon, Lock, Search, Plus, FolderPlus, SquarePen, Flag } from 'lucide-react';
 import { AppLauncher } from '@throttle/ui';
 import { IconButton, SplitButton, Menu, MenuItem, Kbd } from './ui/index.js';
 
-export function DocketTopbar({ crumbs = [], count, onCrumb, onToggleSidebar, onOpenMobileNav, onSearch, onNewTask, onNewSpace, onHelp }) {
+export function DocketTopbar({ crumbs = [], count, onCrumb, onToggleSidebar, onOpenMobileNav, onSearch, onNewTask, onNewSpace, onNewProgram, onHelp }) {
   const newRef = useRef(null);
   const [newOpen, setNewOpen] = useState(false);
   const last = crumbs[crumbs.length - 1];
@@ -59,6 +59,7 @@ export function DocketTopbar({ crumbs = [], count, onCrumb, onToggleSidebar, onO
         <Menu anchorRef={newRef} open={newOpen} onClose={() => setNewOpen(false)} align="right" width={180} label="Create">
           <MenuItem icon={SquarePen} shortcut="c" onClick={onNewTask}>New task</MenuItem>
           <MenuItem icon={FolderPlus} onClick={onNewSpace}>New space</MenuItem>
+          <MenuItem icon={Flag} onClick={onNewProgram}>New program</MenuItem>
         </Menu>
         <AppLauncher current="docket" />
       </div>

@@ -311,41 +311,83 @@ button { cursor: pointer; background: none; border: none; }
   .dks-actions { display: inline-flex; }
 }
 
-/* ---------- Toolbar ---------- */
-.toolbar { display: flex; align-items: center; gap: 9px; margin-bottom: 16px; flex-wrap: wrap; }
-.search { position: relative; flex: 1; min-width: 220px; max-width: 420px; }
-.search .ic { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-4); width: 15px; height: 15px; pointer-events: none; }
-.search input { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 9px 12px 9px 36px; font-size: 13px; color: var(--text-1); outline: none; transition: border-color var(--fast), background var(--fast); }
-.search input::placeholder { color: var(--text-placeholder); }
-.search input:focus { border-color: var(--border-strong); background: var(--surface-2); }
-.search .kbd { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); }
+/* ---------- /tasks views bar + toolbar (ClickUp redesign P2) ----------
+   components/tasks/TasksChrome.js. The views bar bleeds to the canvas edges so it
+   reads as a strip under the top bar; the toolbar sits under it at 40px. */
+.tk-views { display: flex; align-items: center; gap: 6px; height: 36px; margin: -22px -26px 0; padding: 0 20px; border-bottom: 1px solid var(--border); }
+.tk-views .ui-tabs { height: 36px; }
+.tk-views-add[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+.tk-views-add[aria-disabled="true"]:hover { background: transparent; color: var(--text-2); }
+.tk-spacer { flex: 1; }
 
+.tk-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; padding: 6px 0; margin-bottom: 8px; flex-wrap: wrap; font-family: var(--f-ui); }
+.tk-tb-left, .tk-tb-right { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+.tk-tb-right { margin-left: auto; justify-content: flex-end; }
+.tk-badge { display: inline-grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px; margin-left: 2px; border-radius: var(--r-full); background: var(--surface-hi); color: var(--text-1); font-size: 11px; font-weight: 600; }
+
+/* Group pill: one rounded control; the × is its own button so clearing never opens the menu. */
+.tk-pill { display: inline-flex; align-items: center; height: 24px; border-radius: var(--r-ctl); background: rgba(255,255,255,.07); color: var(--text-2); font-size: 12px; font-weight: 500; }
+.tk-pill.on { background: var(--selected); color: var(--text-1); box-shadow: inset 0 0 0 1px var(--border-2); }
+.tk-pill-main { display: inline-flex; align-items: center; gap: 5px; height: 100%; padding: 0 8px; border-radius: var(--r-ctl); color: inherit; white-space: nowrap; }
+.tk-pill.on .tk-pill-main { padding-right: 4px; border-radius: var(--r-ctl) 0 0 var(--r-ctl); }
+.tk-pill-main:hover { color: var(--text-1); }
+.tk-pill-x { display: grid; place-items: center; width: 20px; height: 100%; border-radius: 0 var(--r-ctl) var(--r-ctl) 0; color: var(--text-3); }
+.tk-pill-x:hover { color: var(--text-1); background: var(--hover); }
+.tk-pill-main:focus-visible, .tk-pill-x:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.tk-search { display: inline-flex; align-items: center; gap: 6px; width: 220px; height: 28px; padding: 0 6px 0 8px; margin-left: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-ctl); color: var(--text-3); transition: border-color var(--fast), background var(--fast); }
+.tk-search:focus-within { border-color: var(--border-hover); background: var(--surface-2); }
+.tk-search input { flex: 1; min-width: 0; background: none; border: none; outline: none; font-size: 13px; color: var(--text-1); }
+.tk-search input::placeholder { color: var(--text-placeholder); }
+.tk-search-x { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--text-3); }
+.tk-search-x:hover { color: var(--text-1); background: var(--hover); }
+
+/* Filter popover body (on ui/Popover). */
+.ui-pop.tk-fp { padding: 12px; }
+.tk-fp-body { display: flex; flex-direction: column; gap: 10px; }
+.tk-fp-grp { display: flex; flex-direction: column; gap: 4px; }
+.tk-fp-lbl { font-size: 12px; font-weight: 500; color: var(--text-3); }
+.tk-fp-sel { height: 28px; width: 100%; padding: 0 8px; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-ctl); color: var(--text-1); font-size: 13px; outline: none; cursor: pointer; }
+.tk-fp-sel:focus-visible { box-shadow: var(--focus-ring); }
+.tk-fp-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
+.tk-fp-toggles .ui-btn.is-on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+.tk-fp-clear { align-self: flex-start; color: var(--text-3); }
+
+/* Quick capture: 36px bar (both captures share CaptureBar). */
+.tk-capture { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 4px 0 10px; margin-bottom: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); transition: border-color var(--fast), box-shadow var(--fast); }
+.tk-capture:focus-within { border-color: var(--border-hover); box-shadow: var(--ring); }
+.tk-capture-plus { flex-shrink: 0; color: var(--text-3); }
+.tk-capture input { flex: 1; min-width: 0; height: 100%; background: none; border: none; outline: none; font-size: 14px; color: var(--text-1); }
+.tk-capture input::placeholder { color: var(--text-placeholder); }
+.tk-capture-kbd { flex-shrink: 0; }
+.tk-capture-space { flex-shrink: 0; max-width: 170px; height: 24px; padding: 0 6px; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-ctl); color: var(--text-2); font-size: 12px; cursor: pointer; outline: none; }
+.tk-capture-space:focus-visible { box-shadow: var(--focus-ring); }
+
+/* Small shell modal (New program). */
+.dk-modal-backdrop { z-index: 170; }   /* above the mobile tab bar (150) */
+.dk-modal { width: 420px; max-width: 92vw; margin-top: 14vh; padding: 16px; background: var(--surface); border-radius: var(--r-card); box-shadow: var(--elev-5); font-family: var(--f-ui); }
+.dk-modal-title { display: flex; align-items: center; gap: 7px; font-size: 16px; font-weight: 600; color: var(--text-1); }
+.dk-modal-title svg { color: var(--text-3); }
+.dk-modal-sub { margin: 6px 0 12px; font-size: 13px; line-height: 1.45; color: var(--text-3); }
+.dk-modal-input { width: 100%; height: 32px; padding: 0 10px; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-ctl); font-size: 14px; color: var(--text-1); outline: none; }
+.dk-modal-input:focus { border-color: var(--border-hover); }
+.dk-modal-input[aria-invalid="true"] { border-color: var(--overdue); }
+.dk-modal-err { margin-top: 6px; font-size: 12px; color: var(--overdue); }
+.dk-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+@media (max-width: 767px) {
+  .tk-views { margin: -12px -12px 0; padding: 0 8px; }
+  .tk-search { width: 100%; margin-left: 0; order: 10; }
+  .tk-tb-right { width: 100%; justify-content: flex-start; margin-left: 0; }
+}
+
+/* .kbd (ShortcutsSheet) and .seg (AdminTabs, RecurrenceEditor) outlived the old toolbar. */
 .kbd { font-family: var(--f-mono); font-size: 10px; color: var(--text-4); background: var(--surface-2); border: 1px solid var(--border-2); border-radius: 4px; padding: 1px 5px; }
-
-.tool { display: inline-flex; align-items: center; gap: 7px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 8px 12px; color: var(--text-2); font-size: 13px; font-weight: 400; white-space: nowrap; transition: border-color var(--fast), color var(--fast), background var(--fast); }
-.tool .ic { width: 15px; height: 15px; color: var(--text-3); }
-.tool:hover { color: var(--text-1); border-color: var(--border-2); }
-.tool.on { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
-.tool.on .ic { color: var(--accent); }
-.tool .badge { font-family: var(--f-mono); font-size: 10px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--r-full); background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-weight: 700; }
 .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 2px; }
 .seg button { display: grid; place-items: center; width: 32px; height: 30px; border-radius: 6px; color: var(--text-3); transition: color var(--fast), background var(--fast); }
 .seg button .ic { width: 15px; height: 15px; }
 .seg button:hover { color: var(--text-1); }
 .seg button.on { background: var(--surface-3); color: var(--text-1); }
-
-/* ---------- Quick capture ---------- */
-.capture { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 4px 6px 4px 14px; margin-bottom: 18px; transition: border-color var(--base) var(--ease), box-shadow var(--base) var(--ease); }
-.capture:focus-within { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
-.capture .plus { color: var(--accent); width: 18px; height: 18px; flex-shrink: 0; }
-.capture input { flex: 1; background: none; border: none; outline: none; font-size: 14px; color: var(--text-1); padding: 9px 0; }
-.capture input::placeholder { color: var(--text-placeholder); }
-.capture .go { background: var(--accent); color: var(--accent-ink); border-radius: var(--r-sm); font-family: var(--f-display); font-weight: 700; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; padding: 8px 16px; transition: transform var(--fast), filter var(--fast), opacity var(--fast); }
-.capture .go:hover { filter: brightness(1.06); }
-.capture .go:active { transform: scale(.97); }
-.capture .go:disabled { opacity: .4; cursor: default; }
-.capture .capture-space { flex-shrink: 0; max-width: 170px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-2); font-size: 12px; padding: 7px 8px; cursor: pointer; outline: none; }
-.capture .capture-space:focus { border-color: var(--accent-line); }
 
 /* ============================================================
    THE GRID — triage zone
@@ -523,16 +565,6 @@ button { cursor: pointer; background: none; border: none; }
 .menu-search { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 7px 9px; font-size: 12px; color: var(--text-1); outline: none; margin-bottom: 4px; }
 .menu-search:focus { border-color: var(--border-strong); }
 
-.filter-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; width: 270px; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-md); padding: 14px; box-shadow: var(--shadow-pop); animation: pop-in 130ms var(--ease); }
-.fp-grp { margin-bottom: 12px; }
-.fp-grp:last-child { margin-bottom: 0; }
-.fp-lbl { font-family: var(--f-mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-4); margin-bottom: 6px; }
-.fp-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
-.fp-toggle { font-size: 12px; color: var(--text-2); border: 1px solid var(--border-2); border-radius: var(--r-full); padding: 5px 12px; transition: all var(--fast); }
-.fp-toggle:hover { border-color: var(--border-strong); color: var(--text-1); }
-.fp-toggle.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
-.fp-clear { width: 100%; margin-top: 4px; text-align: center; font-size: 12px; color: var(--text-3); padding: 8px; border-radius: var(--r-sm); border: 1px solid var(--border); transition: color var(--fast), border-color var(--fast); }
-.fp-clear:hover { color: var(--overdue); border-color: var(--st-abandon-bg); }
 
 .cell-input { background: var(--surface); border: 1px solid var(--accent-line); border-radius: var(--r-sm); padding: 5px 8px; font-size: 13px; color: var(--text-1); outline: none; width: 100%; box-shadow: 0 0 0 3px var(--accent-soft); }
 .date-input { background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-sm); padding: 7px 9px; font-size: 13px; color: var(--text-1); outline: none; width: 100%; }
@@ -1019,7 +1051,8 @@ button { cursor: pointer; background: none; border: none; }
 
   /* 16px inputs stop iOS Safari's focus auto-zoom (native-picker dates exempt) */
   .dk-canvas input:not([type="date"]):not([type="checkbox"]):not([type="radio"]),
-  .dk-canvas select, .dk-canvas textarea { font-size: 16px !important; }
+  .dk-canvas select, .dk-canvas textarea,
+  .tk-fp-sel, .dk-modal-input { font-size: 16px !important; }   /* portalled — outside .dk-canvas */
 }
 
 /* ============================================================

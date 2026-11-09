@@ -5,7 +5,7 @@
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { Spinner, useSearchShortcut, useToast } from '@throttle/ui';
+import { Spinner, useToast } from '@throttle/ui';
 import { docketopsGet } from '../../lib/docketopsFetch.js';
 import { ChromeContext } from '../../lib/chrome.js';
 import { routeModel, focusWhenReady, atRoute } from '../../lib/nav.js';
@@ -15,6 +15,7 @@ import { DocketTopbar } from '../../components/DocketTopbar.js';
 import { DocketTabBar } from '../../components/DocketTabBar.js';
 import { ShortcutsSheet } from '../../components/ShortcutsSheet.js';
 import { SpaceSettings } from '../../components/SpaceSettings.js';
+import { NewProgramModal } from '../../components/NewProgramModal.js';
 
 export default function AuthLayout({ children }) {
   return (
@@ -39,6 +40,10 @@ function AuthLayoutInner({ children }) {
   const [count, setCount] = useState(null);   // board task count, published by the tasks page
   const [settingsSpace, setSettingsSpace] = useState(null);   // sidebar ⋯ → SpaceSettings
   const [employees, setEmployees] = useState(null);           // lazy, only for SpaceSettings
+  const [programModal, setProgramModal] = useState(false);     // + New → New program
+  // Programs created this session: getMe lists only programs with visible tasks, so a
+  // brand-new one would otherwise breadcrumb as "Program". Breadcrumb lookup only.
+  const [createdPrograms, setCreatedPrograms] = useState([]);
 
   // Mobile slide-over sidebar; closes itself on navigation. Keyed on the FULL route
   // (path + query) — /tasks?space=… → /tasks?program=… is a navigation even though
@@ -46,8 +51,6 @@ function AuthLayoutInner({ children }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const searchKey = search.toString();
   useEffect(() => { setMobileNavOpen(false); }, [pathname, searchKey]);
-
-  useSearchShortcut(); // `/` focuses [data-search-primary]
 
   // Sticky sidebar collapse.
   useEffect(() => {
@@ -87,7 +90,7 @@ function AuthLayoutInner({ children }) {
   }, [loadMe]);
 
   // Route → active rail item, active sidebar row, breadcrumb.
-  const route = useMemo(() => routeModel(pathname, search, { spaces, programs }), [pathname, search, spaces, programs]);
+  const route = useMemo(() => routeModel(pathname, search, { spaces, programs: [...programs, ...createdPrograms] }), [pathname, search, spaces, programs, createdPrograms]);
   const onTasksBoard = route.path === '/tasks';
 
   const go = useCallback((r) => router.push(r), [router]);
@@ -101,6 +104,7 @@ function AuthLayoutInner({ children }) {
     focusWhenReady('[data-create-primary]', { route: target });
   }, [router, route.spaceId, onTasksBoard, search]);
   const newSpace = useCallback(() => router.push('/tasks?space=new'), [router]);
+  const newProgram = useCallback(() => { setMobileNavOpen(false); setProgramModal(true); }, []);
   // Search trigger: on a board, focus its search (same as `/`); elsewhere go to /tasks first.
   const openSearch = useCallback(() => {
     if (onTasksBoard) { focusWhenReady('[data-search-primary]', { select: true }); return; }
@@ -129,20 +133,28 @@ function AuthLayoutInner({ children }) {
       if (e.key === 'Escape' && helpOpen) { setHelpOpen(false); return; }
       if (e.key === 'Escape' && mobileNavOpen) { setMobileNavOpen(false); return; }
       if (typing) return;
+      // A shell modal (space settings / new program) owns the keyboard; `?` still closes help.
+      if (settingsSpace || programModal) return;
+      if (e.key === '?') { e.preventDefault(); setHelpOpen(o => !o); return; }
+      if (helpOpen) return;
       if (e.key === '[') { e.preventDefault(); toggleSidebar(); }
-      else if (e.key === '?') { e.preventDefault(); setHelpOpen(o => !o); }
-      else if (e.key === '/' && !settingsSpace && !document.querySelector('[data-search-primary]')) { e.preventDefault(); openSearch(); }
+      else if (e.key === '/') {
+        // Was @throttle/ui useSearchShortcut (no modal guard); same behaviour on a board.
+        e.preventDefault();
+        const t = document.querySelector('[data-search-primary]');
+        if (t) { try { t.focus(); t.select?.(); } catch { /* ignore */ } } else openSearch();
+      }
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [helpOpen, mobileNavOpen, settingsSpace, toggleSidebar, openSearch]);
+  }, [helpOpen, mobileNavOpen, settingsSpace, programModal, toggleSidebar, openSearch]);
 
   if (loading && !user) return <Spinner />;
 
   const displayName = user?.full_name || user?.email || '';
   const isAdmin = !!perms?.docket_admin;
   // shellModalOpen: a layout-owned modal is up; pages fold it into their hotkey guards.
-  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, shellModalOpen: !!settingsSpace || helpOpen };
+  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, shellModalOpen: !!settingsSpace || helpOpen || programModal };
 
   return (
     <ChromeContext.Provider value={ctxValue}>
@@ -156,6 +168,7 @@ function AuthLayoutInner({ children }) {
           onSearch={openSearch}
           onNewTask={newTask}
           onNewSpace={newSpace}
+          onNewProgram={newProgram}
           onHelp={() => setHelpOpen(true)}
         />
         <div className="dk-body">
@@ -180,6 +193,7 @@ function AuthLayoutInner({ children }) {
             mobileOpen={mobileNavOpen}
             onSelect={go}
             onNewSpace={newSpace}
+            onNewProgram={newProgram}
             onSpaceSettings={openSpaceSettings}
           />
           {mobileNavOpen && <div className="dks-backdrop" onMouseDown={() => setMobileNavOpen(false)} />}
@@ -200,6 +214,14 @@ function AuthLayoutInner({ children }) {
           onSignOut={signOut}
         />
         {helpOpen && <ShortcutsSheet onClose={() => setHelpOpen(false)} />}
+        {programModal && (
+          <NewProgramModal session={session} onClose={() => setProgramModal(false)}
+            onCreated={(prog) => {
+              setProgramModal(false);
+              setCreatedPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog]);
+              router.push('/tasks?program=' + prog.id);
+            }} />
+        )}
         {settingsSpace && (
           <SpaceSettings space={settingsSpace} session={session} employees={employees || []} showToast={showToast}
             onClose={() => setSettingsSpace(null)}
