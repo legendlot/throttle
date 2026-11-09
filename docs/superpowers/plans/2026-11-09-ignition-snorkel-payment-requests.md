@@ -1,6 +1,6 @@
 # Ignition → Snorkel payment requests (Reann #2) — plan
 
-> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **APPROVED 2026-11-09 (Afshaan took every recommendation, §Decisions). S1 SHIPPED 2026-11-09 (migration 0005 + 0005b). S2 SHIPPED + DEPLOYED 2026-11-09 (throttle `0458c058`, snorkelops `afc8ee21`). S3 SHIPPED + DEPLOYED 2026-11-09 (throttle `4c97f899`, migration 0006, ignitionops `63cd1403`). S4 SHIPPED + DEPLOYED 2026-11-09 (throttle `f27053e6`, ignitionops `aff1eb95`, app `68470d17`). S5 SHIPPED + DEPLOYED 2026-11-09 (throttle `963ce91c`, snorkelops `a9667ffa`, ignitionops `786adc89`). Next: S6 (manual + ₹1 proof).**
+> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **APPROVED 2026-11-09 (Afshaan took every recommendation, §Decisions). S1 SHIPPED 2026-11-09 (migration 0005 + 0005b). S2 SHIPPED + DEPLOYED 2026-11-09 (throttle `0458c058`, snorkelops `afc8ee21`). S3 SHIPPED + DEPLOYED 2026-11-09 (throttle `4c97f899`, migration 0006, ignitionops `63cd1403`). S4 SHIPPED + DEPLOYED 2026-11-09 (throttle `f27053e6`, ignitionops `aff1eb95`, app `68470d17`). S5 SHIPPED + DEPLOYED 2026-11-09 (throttle `963ce91c`, snorkelops `a9667ffa`, ignitionops `786adc89`). S6 DONE 2026-11-09 (throttle `4b3edea8` + manuals `3adc9921`, migration 0007, ignitionops `7fe344ee`, snorkelops `3dfb597b`). REANN #2 COMPLETE.**
 > Builds on #1 (`2026-11-05-ignition-deal-contract-send.md`), which collects bank details + the invoice.
 
 ## Goal
@@ -88,6 +88,11 @@ or hold shows on the deal and flags the owner. No bank details are typed by hand
 - ignitionops `notifyOwnerOfPaymentProblem` → `snorkelCall('ignitionNotifyOwner', {source_ref}, 8000)`, only on a `move` into held/rejected. A racing push/reconcile loses the state-guarded PATCH and re-reads as a refresh, so one DM per move. hold → release → hold DMs twice, by design.
 - snorkelops `ignitionNotifyOwner` takes `source_ref` only and reads everything else itself: its `payment_requests` row (must be held/rejected now), Ignition's `deal_payment_requests.engagement_id` → `engagements.engagement_no, poc_user_id`, the owner's auth email (must be @legendoftoys.com), Slack `lookupByEmail` → `conversations.open` → `chat.postMessage`. Text escaped, newlines collapsed. Misses return `{sent:false, reason}`: not_held_or_rejected · no_deal · no_owner · no_lot_email · no_slack_user · dm_open_failed.
 - Live-probed 2026-11-09: unknown ref 404, bad ref 400, no token 401; no DM sent. The first real DM comes with S6's proof, or the first real hold.
+
+## S6 as built
+
+- Codex (gpt-6-astra) money-path review: 8 findings, all fixed + hostile re-review (3 more small fixes). Migration 0007 — see `reference/db-schema.md`. Pinned bank shown + enforced; cap counts paid gross; fee-cut and hand-log triggers; net-0-with-TDS accepted; cancel guarded on updated_at; a lost PATCH re-reads Snorkel; no paid without invoice.
+- Live ₹1 proof on IGN-TEST-S6 / PAY-0297 (deleted after; snapshot `store.safety_s6_proof_2026_11_09`): every step passed. Paid was written in SQL + doorbell (super_admin lacks Snorkel `execute`), so Snorkel's markPaymentPaid handler is proven by unit tests only. Two 760-byte dummy PDFs remain in the private buckets (`payment-docs/ignition/2813a55d…/`, `ignition-creator-invoices/c1c5872a…/`).
 
 ## Open questions (as asked)
 
