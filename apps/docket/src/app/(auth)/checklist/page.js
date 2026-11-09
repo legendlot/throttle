@@ -11,7 +11,7 @@ import { RecurrenceEditor } from '../../../components/RecurrenceEditor.js';
 import { ChecklistRun } from '../../../components/ChecklistRun.js';
 import { ChecklistTemplateEditor } from '../../../components/ChecklistTemplateEditor.js';
 import { OversightPanel } from '../../../components/OversightPanel.js';
-import { TaskDrawer } from '../../../components/TaskDrawer.js';
+import { TaskView } from '../../../components/task/TaskView.js';
 import { recurrenceSummary, templateRecurrenceSummary, fmtTime, fmtISTDate, isValidRecurrence } from '../../../lib/recurrence.js';
 import { fmtClockIST } from '../../../lib/checklist.js';
 import { PRIORITIES } from '../../../lib/tasks.js';
@@ -304,7 +304,7 @@ export default function ChecklistPage() {
 
       {tab === 'oversight' && <OversightPanel session={session} employees={employees} departments={departments} />}
 
-      {drawerId && (<TaskDrawer id={drawerId} session={session} departments={departments} employees={employees} onClose={() => setDrawerId(null)} onMutated={() => load(personId, viewDate)} />)}
+      {drawerId && (<TaskView id={drawerId} session={session} departments={departments} employees={employees} onClose={() => setDrawerId(null)} onOpen={setDrawerId} onMutated={() => load(personId, viewDate)} />)}
     </div>
   );
 }

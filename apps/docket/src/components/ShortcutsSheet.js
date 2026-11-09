@@ -14,8 +14,17 @@ const BINDINGS = [
   ['x', 'Toggle done'],
   ['→← lh', 'Expand / collapse sub-tasks'],
   ['s', 'Add sub-task'],
-  ['Esc', 'Close panel'],
   ['?', 'This sheet'],
+];
+// While a task is open (TaskView), focus not in a field.
+const TASK_BINDINGS = [
+  ['⇧ S', 'Status'],
+  ['⇧ A', 'Owner'],
+  ['⇧ D', 'Deadline'],
+  ['⇧ P', 'Priority'],
+  ['s', 'Add sub-task'],
+  ['Ctrl ⇧ ←→', 'Previous / next task'],
+  ['Esc', 'Close the task'],
 ];
 
 export function ShortcutsSheet({ onClose }) {
@@ -29,6 +38,15 @@ export function ShortcutsSheet({ onClose }) {
         <div className="help-grid">
           {BINDINGS.map(([k, d]) => (
             <div key={d} className="help-row">
+              <span className="help-keys">{k.split(' ').map((kk, i) => <span key={i} className="kbd">{kk}</span>)}</span>
+              <span className="help-desc">{d}</span>
+            </div>
+          ))}
+        </div>
+        <div className="help-sub">In an open task</div>
+        <div className="help-grid">
+          {TASK_BINDINGS.map(([k, d]) => (
+            <div key={'t-' + d} className="help-row">
               <span className="help-keys">{k.split(' ').map((kk, i) => <span key={i} className="kbd">{kk}</span>)}</span>
               <span className="help-desc">{d}</span>
             </div>

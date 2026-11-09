@@ -10,7 +10,8 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { Lock, ListChecks } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
-import { TaskDrawer } from '../../../components/TaskDrawer.js';
+import { TaskView } from '../../../components/task/TaskView.js';
+import { domTaskOrder } from '../../../components/task/taskViewMode.js';
 import { SpaceSettings } from '../../../components/SpaceSettings.js';
 import { personColor } from '../../../components/primitives.js';
 import { KanbanBoard } from '../../../components/KanbanBoard.js';
@@ -47,6 +48,8 @@ export default function TasksPage() {
   const spaceId = spaceParam && spaceParam !== 'new' ? spaceParam : '';
   const lensParam = search.get('lens');
   const viewProgramId = search.get('program') || '';
+  // `?task=<id>` opens that task in TaskView (deep link; also how full page hands back).
+  const taskParam = search.get('task') || '';
   const inProgramMode = !!viewProgramId;
   // My-tasks mode: cross-space list of tasks I own / collaborate on / raised, in sections.
   const mineMode = lensParam === 'mine' && !spaceId && !inProgramMode;
@@ -80,6 +83,10 @@ export default function TasksPage() {
   const focusedRowRef = useRef(null);
   const [subRequest, setSubRequest] = useState(null);
   const [drawerId, setDrawerId] = useState(null);
+  // A task opened from the `?task=` link stays an overlay even if "full page" is the
+  // remembered layout (fromLink) — otherwise Back from the full page would loop.
+  const [linkTaskId, setLinkTaskId] = useState(null);
+  useEffect(() => { if (taskParam) { setDrawerId(taskParam); setLinkTaskId(taskParam); } }, [taskParam]);
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
   const [spaceSettingsOpen, setSpaceSettingsOpen] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
@@ -286,7 +293,7 @@ export default function TasksPage() {
 
   /* ---------------- stable actions for memoised rows ---------------- */
   const live = useRef({});
-  live.current = { saveField, abandonInline, reviseInline, addSubtask, addCollab, copyTaskLink, createInGroup };
+  live.current = { saveField, abandonInline, reviseInline, addSubtask, addCollab, copyTaskLink, createInGroup, viewOpen: drawerId != null };
   const toggleSelect = useCallback((id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }), []);
   const actions = useMemo(() => ({
     saveField: (...a) => live.current.saveField(...a),
@@ -296,6 +303,8 @@ export default function TasksPage() {
     addCollab: (...a) => live.current.addCollab(...a),
     copyTaskLink: (...a) => live.current.copyTaskLink(...a),
     openDrawer: (id) => setDrawerId(id),
+    // Rows ignore their own keys (x / s / j / k…) while TaskView is open — Enter still opens.
+    isViewOpen: () => !!live.current.viewOpen,
     toggleExpand: (id) => setExpanded(s => ({ ...s, [id]: !s[id] })),
     setExpandedOn: (id) => setExpanded(s => (s[id] ? s : { ...s, [id]: true })),
     toggleSelect,
@@ -537,6 +546,14 @@ export default function TasksPage() {
     const el = document.querySelector('[data-create-primary]');
     try { el?.focus(); el?.select?.(); } catch { /* ignore */ }
   };
+  // Closing TaskView also drops a `?task=` deep link, so a reload doesn't reopen it.
+  function closeTask() {
+    setDrawerId(null);
+    if (taskParam) {
+      const p = new URLSearchParams(search.toString()); p.delete('task');
+      router.replace('/tasks' + (p.toString() ? '?' + p.toString() : ''));
+    }
+  }
   function copyLink() {
     const url = typeof window !== 'undefined' ? window.location.href : '';
     const done = () => showToast('Link copied', 'success');
@@ -621,8 +638,9 @@ export default function TasksPage() {
       )}
 
       {drawerId && (
-        <TaskDrawer id={drawerId} session={session} departments={departments} employees={employees}
-          onClose={() => setDrawerId(null)} onMutated={load} />
+        <TaskView id={drawerId} session={session} departments={departments} employees={employees}
+          onClose={closeTask} onOpen={setDrawerId} getOrder={domTaskOrder} onMutated={load}
+          fromLink={drawerId === linkTaskId} refreshKey={tasks} />
       )}
       {newSpaceOpen && (
         <NewSpaceModal session={session} showToast={showToast}

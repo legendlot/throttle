@@ -14,7 +14,8 @@ import { fmtDate } from '../lib/format.js';
 // other (the input keeps focus); owner / program / team carry over from the parent
 // (worker-side, createSubtask) — fill the rest in later from the sub-task itself.
 // Hidden when this task is itself a sub-task (a child can't take children — one level).
-export function SubtaskPanel({ task, session, canEdit = false, onChange }) {
+// `onOpen(id)` (TaskView) opens a child in place; without it a row routes to /tasks/detail.
+export function SubtaskPanel({ task, session, canEdit = false, onChange, onOpen }) {
   const router = useRouter();
   const { showToast } = useToast();
   const children = task.children || [];
@@ -56,7 +57,7 @@ export function SubtaskPanel({ task, session, canEdit = false, onChange }) {
       {children.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: canAdd ? 8 : 0 }}>
           {children.map(c => (
-            <div key={c.id} style={row} onClick={() => router.push(`/tasks/detail/?id=${c.id}`)}>
+            <div key={c.id} style={row} onClick={() => (onOpen ? onOpen(c.id) : router.push(`/tasks/detail/?id=${c.id}`))}>
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-4)', width: 70 }}>{c.task_no}</span>
               <span style={{ flex: 1, fontSize: 13, color: 'var(--text-1)' }}>{c.title}</span>
               <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{c.owner_name || '—'}</span>

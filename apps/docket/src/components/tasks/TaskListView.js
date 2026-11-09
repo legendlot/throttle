@@ -166,7 +166,7 @@ function GridCard({ task, ctx }) {
   const done = task.status === 'done';
   const isSel = !!selected?.has(task.id);
   return (
-    <div className={'gcard' + (isSel ? ' selected' : '') + (selectMode ? ' selecting' : '')}>
+    <div className={'gcard' + (isSel ? ' selected' : '') + (selectMode ? ' selecting' : '')} data-nav-id={task.id}>
       {ed
         ? <button type="button" className={'tl-sel' + (isSel ? ' on' : '')} aria-label={isSel ? 'Deselect task' : 'Select task'} aria-pressed={isSel}
             onClick={() => { if (!selectMode) enterSelect(); toggleSelect(task.id); }}>{isSel && <Check size={11} strokeWidth={3} />}</button>
@@ -243,7 +243,7 @@ function ArchivedRow({ task, ctx }) {
   const { openDrawer, saveField } = ctx;
   const ed = !!task._can_edit;
   return (
-    <div className="archived-row">
+    <div className="archived-row" data-nav-id={task.id}>
       <button type="button" className="ar-check" disabled={!ed} title={ed ? 'Mark not done (return to the board)' : undefined}
         onClick={() => ed && saveField(task, 'status', 'not_started')}><Check size={11} /></button>
       <button type="button" className="ar-id" onClick={() => openDrawer(task.id)}>{task.task_no}</button>

@@ -129,6 +129,7 @@ export const TaskRow = memo(function TaskRow({
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
           if (e.key === 'Enter') { e.preventDefault(); openDrawer(openId); }
+          else if (actions.isViewOpen?.()) return; // TaskView open (side mode): no row shortcuts
           else if ((e.key === 'x' || e.key === ' ') && ed) { e.preventDefault(); saveField(task, 'status', done ? 'not_started' : 'done'); }
           else if (e.key === 's' && canAddSub) { e.preventDefault(); startAddSub(); }
           else if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveFocus(e.currentTarget, 1); }
