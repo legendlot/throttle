@@ -6119,7 +6119,49 @@ export default {
             const { value: paidAmount, error: paidAmountError } = parsePaidAmount(d.paid_amount);
             if (paidAmountError) return err(paidAmountError);
             if (paidAmount !== null) patch.paid_amount = paidAmount;
-            if (d.payee_bank_id) patch.payee_bank_id = d.payee_bank_id;
+            if (d.payee_bank_id) {
+              // The override must be an ACTIVE account of the payee of EVERY request being paid —
+              // never another payee's account, never a deactivated one.
+              const [bq, rq] = await Promise.all([
+                query('payment_payee_banks', `?id=eq.${encodeURIComponent(d.payee_bank_id)}&is_active=is.true&select=id,payee_id&limit=1`),
+                query('payment_requests', `?id=in.(${ids.map(encodeURIComponent).join(',')})&select=id,payee_id`),
+              ]);
+              if (!bq.ok || !rq.ok) return err('Could not check the bank account — retry');
+              const acct = bq.data[0];
+              if (!acct || !rq.data.length || rq.data.some(x => String(x.payee_id) !== String(acct.payee_id)))
+                return err("That bank account is not an active account of this request's payee");
+              patch.payee_bank_id = acct.id;
+            }
+            // A request that PINS an account (payee_bank_id) is paid into that account only. If it has
+            // since been deactivated, refuse rather than record a payment into a dead account — the
+            // screens only warn (S6 review). An explicit override above has already been checked.
+            if (!d.payee_bank_id) {
+              const pq = await query('payment_requests',
+                `?id=in.(${ids.map(encodeURIComponent).join(',')})&payee_bank_id=not.is.null&select=id,request_no,payee_id,payee_bank_id`);
+              if (!pq.ok) return err('Could not check the bank account — retry');
+              if (pq.data.length) {
+                const bq = await query('payment_payee_banks',
+                  `?id=in.(${[...new Set(pq.data.map(x => x.payee_bank_id))].join(',')})&is_active=is.true&select=id,payee_id`);
+                if (!bq.ok) return err('Could not check the bank account — retry');
+                const live = new Map(bq.data.map(b => [String(b.id), String(b.payee_id)]));
+                const dead = pq.data.filter(x => live.get(String(x.payee_bank_id)) !== String(x.payee_id)).map(x => x.request_no);
+                if (dead.length) return err(`${dead.join(', ')}: the bank account this request pins is no longer active — fix the payee's bank first`, 409);
+              }
+            }
+            // Reann #2: an Ignition creator payment is never paid without its invoice. If the invoice
+            // row failed after the request was created (auto-approved, so already in this queue) and
+            // Ignition then adopted the request, nothing re-attaches it — Finance attaches it here.
+            const ig = await query('payment_requests',
+              `?id=in.(${ids.map(encodeURIComponent).join(',')})&source_system=eq.${IGNITION_SOURCE}&select=id,request_no`);
+            if (!ig.ok) return err('Could not check the invoice — retry');
+            if (ig.data.length) {
+              const iv = await query('payment_request_documents',
+                `?request_id=in.(${ig.data.map(x => x.id).join(',')})&doc_kind=eq.invoice&select=request_id`);
+              if (!iv.ok) return err('Could not check the invoice — retry');
+              const has = new Set(iv.data.map(x => String(x.request_id)));
+              const bare = ig.data.filter(x => !has.has(String(x.id))).map(x => x.request_no);
+              if (bare.length) return err(`${bare.join(', ')}: attach the creator's invoice on the request before paying it`, 409);
+            }
             const r = await update('payment_requests', patch,
               `id=in.(${ids.map(encodeURIComponent).join(',')})&status=eq.approved`);
             if (!r.ok) return err('Mark paid failed: ' + JSON.stringify(r.data));

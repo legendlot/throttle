@@ -33,6 +33,10 @@ function parseFilters(search) {
 }
 function matches(row, fs) {
   return fs.every(({ key, op, v }) => {
+    if (op === 'not') {                      // not.<op>.<v> — the negation of that one filter
+      const d = v.indexOf('.');
+      return !matches(row, [{ key, op: v.slice(0, d), v: v.slice(d + 1) }]);
+    }
     const x = row[key];
     if (op === 'eq')  return x != null && String(x) === v;
     if (op === 'neq') return x == null || String(x) !== v;
@@ -421,4 +425,69 @@ test('createPaymentRequest delegates to the shared core, can never set a source,
   const b = caseBody('createPaymentRequest');
   assert.match(b, /await createPaymentRequestCore\(body\.data \|\| \{\},\s*\{ userId, name: authResult\?\.fullName \|\| null, role: postRole \}\);/);
   assert.equal((src.match(/await nextSeq4\('pay_request'/g) || []).length, 1);
+});
+
+// ── review fixes: the pinned bank, and never paying a creator request without its invoice ──
+const { bankToPay } = await import('../../apps/snorkel/src/lib/bankToPay.js');
+test('bankToPay: a pinned account is shown only when it is among the active ones — never the default instead', () => {
+  const banks = [{ id: 1, is_default: true }, { id: 2, is_default: false }];
+  assert.deepEqual(bankToPay(banks, { payee_bank_id: null }), { bank: banks[0], pinned: false, pinnedMissing: false });
+  assert.deepEqual(bankToPay(banks, {}), { bank: banks[0], pinned: false, pinnedMissing: false });
+  assert.deepEqual(bankToPay(banks, { payee_bank_id: '2' }), { bank: banks[1], pinned: true, pinnedMissing: false });
+  assert.deepEqual(bankToPay(banks, { payee_bank_id: 9 }), { bank: null, pinned: true, pinnedMissing: true });
+  assert.deepEqual(bankToPay(undefined, { payee_bank_id: 9 }), { bank: null, pinned: true, pinnedMissing: true });
+  assert.deepEqual(bankToPay(undefined, {}), { bank: null, pinned: false, pinnedMissing: false });
+});
+
+const markPaid = (w, data) => worker.fetch(new Request('https://snorkelops.test/', { method: 'POST', headers: { Authorization: 'Bearer user-jwt' },
+  body: JSON.stringify({ action: 'markPaymentPaid', data }) }), w.env, { waitUntil() {} })
+  .then(async res => ({ status: res.status, body: await res.json() }));
+const payWorld = (over = {}, docs = true) => {
+  const w = world({ banks: [{ id: 70, payee_id: 1, is_active: true }, { id: 71, payee_id: 2, is_active: true }, { id: 72, payee_id: 1, is_active: false }],
+    requests: [{ id: 5, request_no: 'PAY-0500', status: 'approved', payee_id: 1, requested_by_user_id: USER, amount_to_pay: 5000,
+      source_system: 'ignition', source_ref: 'dpr-1', ...over }] });
+  if (docs) w.db.payment_request_documents.push({ id: 900, request_id: 5, doc_kind: 'invoice' });
+  return w;
+};
+test("markPaymentPaid: a payee_bank_id override must be an ACTIVE account of the request's payee", async () => {
+  for (const bad of [71, 72, 999]) {
+    const w = payWorld();
+    const r = await markPaid(w, { id: 5, payee_bank_id: bad });
+    assert.equal(r.status, 400, `bank ${bad}`);
+    assert.match(r.body.error, /not an active account of this request's payee/);
+    assert.equal(w.db.payment_requests[0].status, 'approved');
+  }
+  const w = payWorld();
+  const r = await markPaid(w, { id: 5, payee_bank_id: 70 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(w.db.payment_requests[0].status, 'paid');
+  assert.equal(w.db.payment_requests[0].payee_bank_id, 70);
+});
+
+test('markPaymentPaid: an Ignition request with no invoice document is refused (409); others pay as before', async () => {
+  let w = payWorld({}, false);
+  let r = await markPaid(w, { id: 5 });
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /PAY-0500: attach the creator's invoice/);
+  assert.equal(w.db.payment_requests[0].status, 'approved');
+  w = payWorld({}, true);
+  r = await markPaid(w, { id: 5 });
+  assert.equal(r.status, 200); assert.equal(w.db.payment_requests[0].status, 'paid');
+  w = payWorld({ source_system: null, source_ref: null }, false);       // a hand-raised request: no invoice rule here
+  r = await markPaid(w, { id: 5 });
+  assert.equal(r.status, 200); assert.equal(w.db.payment_requests[0].status, 'paid');
+});
+
+test('markPaymentPaid: a request PINNING a deactivated (or another payee\'s) account is refused; a live pin pays', async () => {
+  for (const pin of [72, 71]) {
+    const w = payWorld({ payee_bank_id: pin });
+    const r = await markPaid(w, { id: 5 });
+    assert.equal(r.status, 409, `pin ${pin}`);
+    assert.match(r.body.error, /PAY-0500: the bank account this request pins is no longer active/);
+    assert.equal(w.db.payment_requests[0].status, 'approved');
+  }
+  const w = payWorld({ payee_bank_id: 70 });
+  const r = await markPaid(w, { id: 5 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(w.db.payment_requests[0].status, 'paid');
 });

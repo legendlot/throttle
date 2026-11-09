@@ -1732,6 +1732,14 @@ async function getSchedule(url, auth, env) {
 // Simple per-deal payment log (advance / final / other). One table; spend
 // tiles are aggregated in JS from a single read.
 const PAYMENT_KINDS = ['advance', 'final', 'other'];
+const SNORKEL_OWNS_PAYMENTS = 'This deal has a payment request in Snorkel; Finance pays it there.';
+// Migration 0007's triggers refuse with errcode P0001 and one of these HINTs; the message is the
+// plain sentence to show. Anything else is not theirs (→ null, the caller's own error path).
+const DEAL_PAYMENT_TRIGGER_HINTS = new Set(['ignition_snorkel_owns_payments', 'ignition_payment_amount_below_committed']);
+export function dealPaymentTriggerRefusal(r) {
+  if (r.ok || !DEAL_PAYMENT_TRIGGER_HINTS.has(r.data?.hint)) return null;
+  return err(String(r.data.message || 'refused'), 409);
+}
 
 async function addPayment(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
@@ -1747,6 +1755,14 @@ async function addPayment(body, auth, env) {
 
   const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=influencer_id&limit=1`, env);
   if (!er.ok || !er.data?.[0]) return err('engagement_not_found', 404);
+  // Reann #2: once a deal has a live Snorkel request, Snorkel is its one payment path — a hand-logged
+  // payment beside it would pay the creator twice. Rejected/cancelled requests don't count. The same
+  // rule is enforced under the engagement lock by the payments trigger (migration 0007); this read
+  // only gives the common case its sentence without a round trip through the error.
+  const live = await sb(`/rest/v1/deal_payment_requests?engagement_id=eq.${body.engagement_id}`
+    + `&state=not.in.(${DPR_DEAD.join(',')})&select=id&limit=1`, env);
+  if (!live.ok) return err('db_error', 500);
+  if (live.data?.[0]) return err(SNORKEL_OWNS_PAYMENTS, 409);
 
   const row = {
     engagement_id: body.engagement_id,
@@ -1763,6 +1779,7 @@ async function addPayment(body, auth, env) {
     created_by: auth.userId,
   };
   const r = await sb(`/rest/v1/payments`, env, { method: 'POST', body: JSON.stringify([row]) });
+  const refused = dealPaymentTriggerRefusal(r); if (refused) return refused;
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   return ok(r.data?.[0]);
 }
@@ -2988,6 +3005,9 @@ export async function updateEngagement(body, auth, env) {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
+  // Reann #2: a payment_amount cut below what is raised + hand-paid is refused by the engagements
+  // trigger (migration 0007) under the row lock — its sentence is shown as-is.
+  const refused = dealPaymentTriggerRefusal(r); if (refused) return refused;
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   await mirrorDealVideoFields(env, body.engagement_id, patch);
   await recomputeCpm(env, body.engagement_id);   // views/costs may have changed (B13)
@@ -3267,6 +3287,8 @@ async function advanceStage(body, auth, env) {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
+  // `extra` may carry payment_amount: same trigger refusal as updateEngagement (PATTERN-218: 2 sites).
+  const refused = dealPaymentTriggerRefusal(r); if (refused) return refused;
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   // Go-live carries video_link/post_date in the SAME call (the AdvanceModal), so this path writes
   // them without going through updateEngagement — mirror seq 1 here too (PATTERN-218: 2 sites).
@@ -6599,7 +6621,8 @@ async function upsertSnorkelPayment(env, row, s) {
 /**
  * The one status updater (receiver, reconcile, send, cancel). `s` is Snorkel's CURRENT status
  * (always re-read, never a push payload). The PATCH is guarded on the state it read, so a racing
- * update is re-read and re-decided, never overwritten. On paid the payments row is written FIRST:
+ * update is re-read and re-decided against a FRESH Snorkel read (never the old snapshot), never
+ * overwritten. On paid the payments row is written FIRST:
  * if that fails the request stays open and the next reconcile retries, instead of showing Paid
  * with no payment behind "₹X paid". A row without a Snorkel id (send_failed whose reply was lost)
  * adopts Snorkel's request id + no.
@@ -6609,8 +6632,11 @@ async function applySnorkelStatus(env, row, s) {
     const move = snorkelStatusMove(row.state, s.status);
     if (move === 'ignore') return { applied: false, reason: 'terminal', row };
     if (s.status === 'paid') {
-      if (s.paid_amount != null && !(Number(s.paid_amount) > 0)) {
-        console.error('[snorkel-pay] paid with a non-positive amount — not recorded', row.id);
+      // paid_amount is NET of TDS: a net of 0 with TDS deducted is a real payment (gross > 0). Refused
+      // only when the GROSS is not above zero, or the net is negative.
+      if (s.paid_amount != null && (Number(s.paid_amount) < 0
+          || !(Number(s.paid_amount) + (Number(s.tds_amount) || 0) > 0))) {
+        console.error('[snorkel-pay] paid with a non-positive gross amount — not recorded', row.id);
         return { error: 'bad_paid_amount' };
       }
       const p = await upsertSnorkelPayment(env, row, s);
@@ -6636,6 +6662,13 @@ async function applySnorkelStatus(env, row, s) {
     const rr = await sb(`/rest/v1/deal_payment_requests?id=eq.${row.id}&select=${DPR_SELECT}&limit=1`, env);
     if (!rr.ok || !rr.data?.[0]) return { error: 'db_error' };
     row = rr.data[0];
+    if (attempt === 1) break;
+    // Lost the guarded PATCH: someone applied a status meanwhile, possibly a NEWER one than `s`.
+    // Re-deciding with the old snapshot could walk the row back (approved → held, plus a DM), so
+    // re-read Snorkel; unreachable or a different request → busy, and the reconcile re-reads later.
+    const fresh = (await snorkelStatusOf(env, [row.id]))?.get(row.id);
+    if (!fresh || (row.snorkel_request_id != null && Number(fresh.request_id) !== Number(row.snorkel_request_id))) break;
+    s = fresh;
   }
   return { applied: false, reason: 'busy', row };
 }
@@ -6746,7 +6779,12 @@ async function getDealPayments(url, auth, env) {
   const bankOnFile = !!bank && ((!!bank.account_number && !!bank.ifsc) || !!bank.upi_id);
   const requests = rr.data || [];
   const agreed = Number(er.data[0].payment_amount) || 0;
-  const raised = requests.filter(r => !DPR_DEAD.includes(r.state)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  // Same count as ignition.deal_payment_committed (0007): a PAID request counts at what was actually
+  // paid gross (net + TDS) when that is more than was asked, so "left to raise" matches the DB cap.
+  const committed = r => r.state === 'paid'
+    ? Math.max(Number(r.amount) || 0, (Number(r.paid_amount) || 0) + (Number(r.tds_amount) || 0))
+    : (Number(r.amount) || 0);
+  const raised = requests.filter(r => !DPR_DEAD.includes(r.state)).reduce((s, r) => s + committed(r), 0);
   // paid_total = the same ignition.payments sum getEngagement shows ("₹X paid of ₹Y").
   const paid = (pr.data || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
   // The hand log counts against the fee exactly as deal_payment_refusal counts it (no snorkel id).
@@ -6831,8 +6869,11 @@ async function cancelDealPayment(body, auth, env) {
       return err(inSnorkel(hit.request_no), 409);
     }
   }
-  // Guarded on the EXACT state read, so a send that started meanwhile is never cancelled under it.
-  const r = await sb(`/rest/v1/deal_payment_requests?id=eq.${row.id}&state=eq.${row.state}&select=${DPR_SELECT}`, env, {
+  // Guarded on the EXACT state AND updated_at read, so a send that started meanwhile is never
+  // cancelled under it — including a retry that went send_failed → sending → send_failed (it may
+  // have reached Snorkel) between the Snorkel check above and this write: same state, newer updated_at.
+  const r = await sb(`/rest/v1/deal_payment_requests?id=eq.${row.id}&state=eq.${row.state}`
+    + `&updated_at=eq.${encodeURIComponent(row.updated_at)}&select=${DPR_SELECT}`, env, {
     method: 'PATCH', body: JSON.stringify({ state: 'cancelled', updated_at: nowIso() }),
   });
   if (!r.ok) return err('db_error', 500);

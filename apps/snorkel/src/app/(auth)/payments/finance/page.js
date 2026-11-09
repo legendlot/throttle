@@ -10,6 +10,7 @@ import { money } from '../PaymentList.js';
 import PriorTdsWarning from '../PriorTdsWarning.js';
 import { computeTds, netPayable, defaultGstRate, GST_RATES } from '@/lib/tds.js';
 import { searchPaymentRows } from '@/lib/paymentList.js';
+import { bankToPay } from '@/lib/bankToPay.js';
 import { useSessionState } from '@/lib/useSessionState.js';
 
 const todayISO = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
@@ -240,7 +241,8 @@ export default function FinanceQueuePage() {
               : 'Nothing approved is waiting to be paid.'} />
         </Panel>
       ) : rows.map(r => {
-        const bank = (d.banks[r.payee_id] || [])[0];
+        // The request's pinned account when it has one (Ignition creator payments), else the default.
+        const { bank, pinned, pinnedMissing } = bankToPay(d.banks[r.payee_id], r);
         const docs = d.documents[r.id] || [];
         const late = r.needed_by && r.needed_by < todayISO();
         // Live as the rate is typed — finance sees the deduction and the net BEFORE committing,
@@ -284,9 +286,19 @@ export default function FinanceQueuePage() {
                   one at a time, which is the Slack workflow with extra steps. */}
               <div style={{ padding: 12, borderRadius: 8, background: 'var(--accent-soft)',
                             border: '1px solid var(--accent-bd)', fontSize: 13 }}>
-                {bank ? (
+                {pinnedMissing ? (
+                  // Never fall back to another account: the request names the one to pay.
+                  <div style={{ color: 'var(--red-fg)' }}>
+                    This request must be paid into a specific bank account of {r.payee?.name}, and that
+                    account is no longer active on the payee. Do not pay into another account — check the
+                    payee's accounts under Payees with the requester first.
+                  </div>
+                ) : bank ? (
                   <>
                     <div style={{ fontWeight: 600 }}>{bank.account_name || r.payee?.name}</div>
+                    {pinned && (
+                      <div style={{ fontSize: 12, color: 'var(--t2)' }}>The account named on this request</div>
+                    )}
                     <div style={{ color: 'var(--t2)', marginTop: 2 }}>
                       {bank.account_number}<Copy value={bank.account_number} label="Account number" />
                       {bank.ifsc ? <> · {bank.ifsc}<Copy value={bank.ifsc} label="IFSC" /></> : null}

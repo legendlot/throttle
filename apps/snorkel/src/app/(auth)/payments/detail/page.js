@@ -10,6 +10,7 @@ import { STATUS_TONE, STATUS_LABEL, money } from '../PaymentList.js';
 import PriorTdsWarning from '../PriorTdsWarning.js';
 import InvoiceUpload from '@/components/InvoiceUpload.js';
 import { computeTds, netPayable, hasTds, defaultGstRate, GST_RATES } from '@/lib/tds.js';
+import { bankToPay } from '@/lib/bankToPay.js';
 
 export default function PaymentRequestDetail() {
   const sp = useSearchParams();
@@ -172,6 +173,7 @@ export default function PaymentRequestDetail() {
   const canAttachInvoice = !['cancelled', 'rejected'].includes(r.status)
     && (r.requested_by_user_id === userId || !!can.execute);
   const alreadyRequested = (d.related || []).reduce((a, x) => a + (Number(x.amount_to_pay) || 0), 0);
+  const pinnedBank = bankToPay(d.banks, r);
   const Row = ({ k, v }) => (
     <div style={{ display: 'flex', gap: 12, padding: '7px 0', borderBottom: '1px solid var(--bd)' }}>
       <div style={{ width: 150, color: 'var(--t2)', fontSize: 13, flexShrink: 0 }}>{k}</div>
@@ -293,12 +295,28 @@ export default function PaymentRequestDetail() {
           </Panel>
         )}
 
+        {/* A request pinned to one account (Ignition creator payments) is paid into that one only.
+            If it is no longer among the payee's active accounts, say so — never imply another. */}
+        {pinnedBank.pinnedMissing && ['approved', 'held', 'pending_approval'].includes(r.status) && (
+          <Panel title="Bank details">
+            <div style={{ padding: 16, fontSize: 14, color: 'var(--red-fg)' }}>
+              This request must be paid into a specific bank account of {r.payee?.name}, and that account
+              is no longer active on the payee. Do not pay into another account — check the payee's
+              accounts under Payees with the requester first.
+            </div>
+          </Panel>
+        )}
         {can.bank_view && d.banks?.length > 0 && (
           <Panel title="Bank details">
             <div style={{ padding: 16, fontSize: 14 }}>
               {d.banks.map(b => (
                 <div key={b.id} style={{ marginBottom: 10 }}>
-                  <div>{b.account_name}</div>
+                  <div>
+                    {b.account_name}
+                    {pinnedBank.pinned && pinnedBank.bank && String(pinnedBank.bank.id) === String(b.id) && (
+                      <> <Badge tone="blue" label="Pay into this account" /></>
+                    )}
+                  </div>
                   <div style={{ color: 'var(--t2)' }}>
                     {b.account_number} · {b.ifsc} · {b.bank_name} {b.branch ? `· ${b.branch}` : ''}
                   </div>

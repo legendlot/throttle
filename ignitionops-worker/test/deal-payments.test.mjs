@@ -3,8 +3,9 @@
 // shape of the writes.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import worker, {
-  snorkelStatusMove, snorkelErrorSentence, snorkelPaymentRow, reconcileDealPayments,
+  snorkelStatusMove, snorkelErrorSentence, snorkelPaymentRow, reconcileDealPayments, dealPaymentTriggerRefusal,
 } from '../src/index.js';
 
 const EID = '11111111-1111-1111-1111-111111111111';
@@ -218,9 +219,10 @@ test('cancel: a send_failed row Finance already PAID is adopted (payments writte
   assert.equal(writes(calls, /payments\?on_conflict/).length, 1);
 });
 
-test('cancel: guarded on the exact state read; a send_failed row Snorkel does not have is cancelled', async () => {
+test('cancel: guarded on the exact state AND updated_at read; a send_failed row Snorkel does not have is cancelled', async () => {
+  const at = '2026-11-09T10:00:00.123456+00:00';
   for (const state of ['waiting_for_invoice', 'send_failed']) {
-    const calls = db([...authRoutes, ['GET', /deal_payment_requests\?id=eq/, 200, [dpr({ state })]],
+    const calls = db([...authRoutes, ['GET', /deal_payment_requests\?id=eq/, 200, [dpr({ state, updated_at: at })]],
       ['PATCH', /deal_payment_requests/, 200, c => [dpr({ ...c.body })]]]);
     const sn = snorkel(() => [200, { ok: true, data: { requests: [], missing: [RID] } }]);
     const res = await post(env(sn), { action: 'cancelDealPayment', request_id: RID });
@@ -228,8 +230,18 @@ test('cancel: guarded on the exact state read; a send_failed row Snorkel does no
     assert.equal(sn.sent.length, state === 'send_failed' ? 1 : 0);
     const [p] = writes(calls, /deal_payment_requests/);
     assert.match(p.at, new RegExp(`state=eq\\.${state}&`));
+    assert.ok(p.at.includes(`&updated_at=eq.${at}&`), p.at);
     assert.equal(p.body.state, 'cancelled');
   }
+});
+
+test('cancel: a retry that went send_failed → sending → send_failed meanwhile (newer updated_at) is not cancelled', async () => {
+  const calls = db([...authRoutes, ['GET', /deal_payment_requests\?id=eq/, 200, [dpr({ state: 'send_failed', updated_at: '2026-11-09T10:00:00+00:00' })]],
+    ['PATCH', /deal_payment_requests/, 200, []]]);                       // the guard no longer matches
+  const res = await post(env(snorkel(() => [200, { ok: true, data: { requests: [], missing: [RID] } }])), { action: 'cancelDealPayment', request_id: RID });
+  assert.equal(res.status, 409);
+  assert.match((await res.json()).error, /changed while you were cancelling/);
+  assert.equal(writes(calls, /deal_payment_requests/).length, 1);
 });
 
 // ── the receiver: a doorbell ──
@@ -307,10 +319,48 @@ test('paid: no paid_amount falls back to the requested amount; advance stays adv
   assert.equal(p.kind, 'advance');
 });
 
-test('paid: a paid_amount of zero or less is refused and nothing is written', async () => {
-  const calls = db([['GET', /deal_payment_requests/, 200, [dpr({ state: 'approved', snorkel_request_id: 812 })]]]);
-  assert.equal((await push(env(snorkel(statusReply({ ...PAIDS, paid_amount: 0 }))), PUSH)).status, 500);
-  assert.equal(writes(calls, /./).length, 0);
+test('paid: a GROSS of zero or less (net + TDS), or a negative net, is refused and nothing is written', async () => {
+  for (const over of [{ paid_amount: 0, tds_amount: null }, { paid_amount: 0, tds_amount: 0 }, { paid_amount: -5, tds_amount: 600 }]) {
+    const calls = db([['GET', /deal_payment_requests/, 200, [dpr({ state: 'approved', snorkel_request_id: 812 })]]]);
+    assert.equal((await push(env(snorkel(statusReply({ ...PAIDS, ...over }))), PUSH)).status, 500, JSON.stringify(over));
+    assert.equal(writes(calls, /./).length, 0);
+  }
+});
+
+test('paid: a NET of zero with TDS deducted is a real payment — payments gets the gross (the TDS)', async () => {
+  const calls = db([['GET', /deal_payment_requests/, 200, [dpr({ state: 'approved', snorkel_request_id: 812 })]],
+    ['PATCH', /deal_payment_requests/, 200, c => [dpr({ ...c.body })]]]);
+  assert.equal((await push(env(snorkel(statusReply({ ...PAIDS, paid_amount: 0, tds_amount: 600 }))), PUSH)).status, 200);
+  const [pay] = writes(calls, /payments\?on_conflict/);
+  assert.equal(pay.body[0].amount, 600);
+  assert.equal(writes(calls, /deal_payment_requests/)[0].body.state, 'paid');
+});
+
+// Finding 6: losing the guarded PATCH must not re-apply the OLD snapshot.
+test('status: a lost PATCH re-reads Snorkel and applies the FRESH status, never the stale one (no DM)', async () => {
+  let reads = 0;
+  const calls = db([['GET', /deal_payment_requests/, 200, () => [dpr({ state: reads++ === 0 ? 'approved' : 'held', snorkel_request_id: 812 })]],
+    ['PATCH', /deal_payment_requests\?id=eq\.[^&]+&state=eq\.approved/, 200, []],      // lost to a racing writer
+    ['PATCH', /deal_payment_requests/, 200, c => [dpr({ ...c.body })]]]);
+  let n = 0;   // 1st read (the doorbell) says held — stale; the re-read after losing says approved
+  const sn = snorkel(b => b.action === 'ignitionGetPaymentStatus' ? statusReply({ status: n++ === 0 ? 'held' : 'approved' })(b) : [200, { ok: true, data: { sent: true } }]);
+  assert.equal((await push(env(sn), PUSH)).status, 200);
+  assert.equal(sn.sent.filter(x => x.body.action === 'ignitionGetPaymentStatus').length, 2);
+  const w = writes(calls, /deal_payment_requests/);
+  assert.equal(w.length, 2);
+  assert.match(w[1].at, /state=eq\.held/);
+  assert.equal(w[1].body.state, 'approved', 'the fresh status wins');
+  assert.equal(sn.sent.filter(x => x.body.action === 'ignitionNotifyOwner').length, 0);
+});
+
+test('status: a lost PATCH with Snorkel unreachable on the re-read is busy — nothing re-applied', async () => {
+  let reads = 0;
+  const calls = db([['GET', /deal_payment_requests/, 200, () => [dpr({ state: reads++ === 0 ? 'approved' : 'held', snorkel_request_id: 812 })]],
+    ['PATCH', /deal_payment_requests/, 200, []]]);
+  let n = 0;
+  const sn = snorkel(b => n++ === 0 ? statusReply({ status: 'held' })(b) : [503, { ok: false }]);
+  assert.equal((await push(env(sn), PUSH)).status, 200);
+  assert.equal(writes(calls, /deal_payment_requests/).length, 1, 'only the first (lost) PATCH');
 });
 
 test('paid: a UTR edit re-upserts the same payments row (idempotent) and updates the request', async () => {
@@ -411,6 +461,74 @@ test('deleteEngagement: 409 has_payment_requests_cannot_delete before any child 
   assert.equal(res.status, 409);
   assert.equal((await res.json()).error, 'has_payment_requests_cannot_delete');
   assert.equal(writes(calls, /./).length, 0);
+});
+
+// Finding 4: the hand log is not a second payment path once Snorkel has the deal.
+const ADD = { action: 'addPayment', engagement_id: EID, kind: 'advance', amount: 1000, proof_path: `${EID}/1_shot.png` };
+test('addPayment: refused 409 with the plain sentence when the deal has a live Snorkel request; nothing inserted', async () => {
+  const calls = db([...authRoutes, ['GET', /engagements\?id/, 200, [{ influencer_id: IID }]],
+    ['GET', /deal_payment_requests\?engagement_id/, 200, [{ id: RID }]]]);
+  const res = await post(env(), ADD);
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).error, 'This deal has a payment request in Snorkel; Finance pays it there.');
+  const [q] = calls.filter(c => /deal_payment_requests\?engagement_id/.test(c.at));
+  assert.match(q.at, /state=not\.in\.\(rejected,cancelled\)/);
+  assert.equal(writes(calls, /payments/).length, 0);
+});
+
+test('addPayment: no live request (none, or only rejected/cancelled) → the hand-log row is written as before', async () => {
+  const calls = db([...authRoutes, ['GET', /engagements\?id/, 200, [{ influencer_id: IID }]],
+    ['POST', /payments/, 201, c => c.body]]);
+  const res = await post(env(), ADD);
+  assert.equal(res.status, 200);
+  assert.equal(writes(calls, /payments/).length, 1);
+});
+
+test('addPayment: the 0007 trigger refusal (a raise raced in) comes back as the same 409 sentence', async () => {
+  db([...authRoutes, ['GET', /engagements\?id/, 200, [{ influencer_id: IID }]],
+    ['POST', /payments/, 400, { code: 'P0001', hint: 'ignition_snorkel_owns_payments', message: 'This deal has a payment request in Snorkel; Finance pays it there.' }]]);
+  const res = await post(env(), ADD);
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).error, 'This deal has a payment request in Snorkel; Finance pays it there.');
+});
+
+// Finding 5: the fee guard is the engagements trigger (0007); the worker shows its sentence.
+test('updateEngagement: a fee cut below raised + hand-paid is the trigger sentence as a 409', async () => {
+  const msg = 'The fee cannot go below ₹10000.00: ₹4000.00 is already raised in Snorkel and ₹6000.00 paid by hand on this deal.';
+  db([...authRoutes, ['GET', /engagements\?id/, 200, [{ ...DEAL, stage: 'planning' }]],
+    ['PATCH', /engagements\?id/, 400, { code: 'P0001', hint: 'ignition_payment_amount_below_committed', message: msg }]]);
+  const res = await post(env(), { action: 'updateEngagement', engagement_id: EID, payment_amount: 5000 });
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).error, msg);
+});
+
+test('trigger refusals: only the two 0007 hints map to a 409; any other DB error is not swallowed', () => {
+  assert.equal(dealPaymentTriggerRefusal({ ok: true, data: [] }), null);
+  assert.equal(dealPaymentTriggerRefusal({ ok: false, data: { code: 'P0001', hint: 'other', message: 'x' } }), null);
+  assert.equal(dealPaymentTriggerRefusal({ ok: false, data: 'text' }), null);
+  assert.equal(dealPaymentTriggerRefusal({ ok: false, data: { hint: 'ignition_snorkel_owns_payments', message: 'm' } }).status, 409);
+});
+
+test('the fee-cut refusal is mapped on BOTH engagements writers that can carry payment_amount', () => {
+  const src = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  for (const fn of ['export async function updateEngagement(', 'async function advanceStage(', 'async function addPayment(']) {
+    const i = src.indexOf(fn); assert.ok(i > 0, fn);
+    const body = src.slice(i, src.indexOf('\n}\n', i));
+    assert.match(body, /const refused = dealPaymentTriggerRefusal\(r\); if \(refused\) return refused;/, fn);
+  }
+});
+
+test('0007: refusal counts a paid request at greatest(amount, net + TDS); both triggers exist and are re-runnable', () => {
+  const sql = readFileSync(new URL('../migrations/0007_deal_payment_cap_fixes.sql', import.meta.url), 'utf8');
+  assert.match(sql, /greatest\(r\.amount, coalesce\(r\.paid_amount, 0\) \+ coalesce\(r\.tds_amount, 0\)\)/);
+  assert.match(sql, /create or replace function ignition\.deal_payment_refusal\(/);
+  assert.match(sql, /from ignition\.deal_payment_committed\(p_engagement_id, p_exclude\)/);
+  for (const t of ['engagements_payment_amount_guard on ignition.engagements', 'payments_hand_log_guard on ignition.payments'])
+    assert.ok(sql.includes(`drop trigger if exists ${t}`), t);
+  assert.match(sql, /before update of payment_amount on ignition\.engagements/);
+  assert.match(sql, /if new\.snorkel_request_id is not null or new\.engagement_id is null then return new/);
+  assert.match(sql, /ignition_payment_amount_below_committed/);
+  assert.match(sql, /ignition_snorkel_owns_payments/);
 });
 
 test('deletePayment: a Snorkel payout row cannot be deleted from the hand log', async () => {
@@ -580,4 +698,15 @@ test('S5: a failed or refused DM never fails the status update', async () => {
     assert.equal((await push(env(sn), PUSH)).status, 200);
     assert.equal(writes(calls, /deal_payment_requests/)[0].body.state, 'held');
   }
+});
+
+test('getDealPayments: a paid request counts at its gross (net + TDS) when that is more — "left to raise" matches the DB cap', async () => {
+  db([...authRoutes, dealRoute(),
+    ['GET', /deal_payment_requests\?engagement_id/, 200, [dpr({ amount: 4000, state: 'paid', paid_amount: 5400, tds_amount: 600 })]],
+    ['GET', /payments\?engagement_id/, 200, [{ amount: 6000, snorkel_request_id: 812 }]],
+    ['GET', /contract_settings/, 200, [{ published_at: '2026-11-09T00:00:00Z' }]]]);
+  const res = await worker.fetch(new Request(`https://w.test/?action=getDealPayments&engagement_id=${EID}`, { headers: { Authorization: 'Bearer jwt' } }), env());
+  const d = (await res.json()).data;
+  assert.equal(d.raised_live_total, 6000);
+  assert.equal(d.remaining, 4000);
 });
