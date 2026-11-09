@@ -760,6 +760,36 @@ async function getStaleTasks(url, auth, env) {
   return ok({ tasks: rows, total: exactTotal ?? all.length, truncated: truncated || (exactTotal != null && exactTotal > all.length) });
 }
 
+// F5 — cross-space search for ⌘K. One RPC (migration 0012 search_tasks) over every space the
+// caller can open: General through canSeeTask, private spaces through ownership/membership
+// (accessibleSpaces — RULE-DOCKET-003, view_all doesn't widen it). Title + DKT number; terms in
+// any order; a typo fallback only when nothing matched exactly. ≤20 rows, + owner_name.
+// Queries under 2 characters return [] unless they are a DKT number ("7", "dkt-7").
+const SEARCH_MAX_Q = 100;
+async function searchTasks(url, auth, env) {
+  const q = String(url.searchParams.get('q') || '').trim().slice(0, SEARCH_MAX_Q);
+  const m = /^(?:dkt[-\s]?)?#?(\d{1,7})$/i.exec(q);
+  const num = m ? m[1].replace(/^0+(?=\d)/, '') : null;
+  if (!num && q.length < 2) return ok([]);
+  const spaces = await accessibleSpaces(auth, env);
+  if (!spaces.length) return ok([]);
+  const general = spaces.find(s => !s.is_private);
+  const r = await sbDocket(`/rest/v1/rpc/search_tasks`, env, { method: 'POST', body: JSON.stringify({
+    p_user: auth.userId, p_employee: auth.employeeId, p_dept: auth.departmentId,
+    p_view_all: canViewAll(auth),
+    p_member_space_ids: spaces.filter(s => s.is_private).map(s => s.id),
+    // No General row (archived) → no General results; never fall back to a space id the caller wasn't given.
+    p_default_space_id: general ? general.id : null,
+    p_q: q, p_num: num, p_limit: 20,
+  }) });
+  if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
+  const rows = r.data || [];
+  const empIds = uniq(rows.map(t => t.owner_employee_id));
+  const empRes = await sbIn(sbPodium, empIds, l => `/rest/v1/employees?id=in.${l}&select=id,full_name`, env);
+  const name = {}; (empRes.data || []).forEach(e => { name[e.id] = e.full_name; });
+  return ok(rows.map(t => ({ ...t, owner_name: name[t.owner_employee_id] || null })));
+}
+
 async function getTask(url, auth, env) {
   const id = url.searchParams.get('id');
   if (!id) return err('id required', 400);
@@ -2145,7 +2175,7 @@ async function deleteScratchNote(body, auth, env) {
 // ════════════════════════════════════════════════════════════════════════════
 const GET_ACTIONS = {
   getMe, getDepartments, getEmployees,
-  getTasks, getProgramTasks, getMyTasks, getStaleTasks, getTask, getDashboard,
+  getTasks, getProgramTasks, getMyTasks, getStaleTasks, searchTasks, getTask, getDashboard,
   getChecklist, getChecklistTemplates, getChecklistTemplate, getChecklistOversight,
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,

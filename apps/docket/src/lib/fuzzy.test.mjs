@@ -57,3 +57,25 @@ test('rankGroups: best item first across groups, ties keep order', async () => {
   // Ties keep the given order.
   assert.deepEqual(rankGroups([g('recent', 700), g('tasks', 700), g('nav', 700)]).map(x => x.group), ['recent', 'tasks', 'nav']);
 });
+
+test('scoreTask: DKT exact > DKT prefix > title; server floor lifts out-of-order + typo hits', async () => {
+  const { scoreTask, serverFloor } = await import('./fuzzy.js');
+  const mk = (title, no) => ({ lc: title.toLowerCase(), lcSub: no.toLowerCase(), num: no.replace(/\D/g, '') });
+  const a = mk('SF <> LOT - Summary Sheet', 'DKT-247');
+  assert.equal(scoreTask(a, '247', '247').score, 3000);
+  assert.ok(scoreTask(mk('x', 'DKT-2471'), '247', '247').score >= 1990);
+  // "sop qc" vs "...new QC SOP": fuzzy alone ranks it low or not at all; the floor keeps it.
+  const b = mk('Approval from afshaan implementation for new QC SOP', 'DKT-844');
+  const raw = scoreTask(b, 'sop qc', null);
+  const lifted = scoreTask(b, 'sop qc', null, serverFloor(3, 0));
+  assert.ok(lifted.score >= 450 && (!raw || lifted.score >= raw.score));
+  // typo: no fuzzy match at all → only the server floor makes it a result
+  const c = mk('Checklist Tracker', 'DKT-1');
+  assert.equal(scoreTask(c, 'chekclistz', null), null);
+  assert.equal(scoreTask(c, 'chekclistz', null, serverFloor(4, 2)).score, 248);
+  // a missing rank is the weakest floor, never the exact-id one
+  assert.equal(serverFloor(null), 250); assert.equal(serverFloor(''), 250);
+  assert.equal(dktQuery('#12'), '12');
+  // a floor never lowers a better fuzzy score
+  assert.ok(scoreTask(c, 'check', null, serverFloor(4)).score > 900);
+});

@@ -10,11 +10,17 @@
 // Empty query: Recent (last 5 picks, localStorage `docket.cmdk.recent`) + Navigation +
 // Commands. ↑↓ (wrap) · Home/End · Enter runs · ⌘/Ctrl+Enter opens a task full-page ·
 // Esc closes and gives focus back. ARIA combobox + listbox (aria-activedescendant).
-// Searching tasks across every space needs a worker action — out of scope (P6 spec).
+// F5: typing ≥2 chars (or a DKT number) also asks the worker (searchTasks, debounced) for
+// matches in EVERY space the caller can open; those merge into Tasks, deduped against the
+// page's rows, ranked by scoreTask (lib/fuzzy.js) with the server's match rank as a floor.
+// Until the user moves the highlight it follows the TOP row, so a late exact hit (DKT-247 from
+// another space) takes it — the best match leads. Once they arrow or hover, it is held by key
+// and a late reply never moves it (if their row drops out of the results, it returns to the top).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Hash, Lock, Flag,
-  SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info } from 'lucide-react';
-import { fuzzyMatch, dktQuery, rankGroups } from '../lib/fuzzy.js';
+  SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info, Loader2 } from 'lucide-react';
+import { fuzzyMatch, dktQuery, rankGroups, scoreTask, serverFloor } from '../lib/fuzzy.js';
+import { docketopsGet } from '../lib/docketopsFetch.js';
 import { getCommandSource } from '../lib/commandSources.js';
 import { ADMIN_ITEMS } from '../lib/nav.js';
 import { STATUS_MAP } from '../lib/tasks.js';
@@ -24,6 +30,8 @@ import { useModLabel } from '../lib/platform.js';
 // Per user (a shared browser must not show the last person's spaces / tasks / Admin).
 const RECENT_KEY = (userId) => `docket.cmdk.recent.${userId || 'anon'}`;
 const CAP = 8;          // per group while searching; Navigation + Commands are uncapped when empty
+const TASK_CAP = 12;    // Tasks while searching — the group that now spans every space
+const SEARCH_DEBOUNCE = 180;
 const GROUPS = [
   ['recent', 'Recent'],
   ['tasks', 'Tasks'],
@@ -59,11 +67,21 @@ function Highlight({ text, idx }) {
   return out;
 }
 
-export function CommandBar({ open = true, userId, onClose, router, spaces = [], programs = [], canViewDashboard, isAdmin, onNewTask, onNewSpace, onNewProgram, onToggleSidebar, onHelp }) {
+// Task row → bar item. meta = parent crumb + space (server hits and My-tasks rows carry space_name).
+function taskMeta(t) {
+  return [t.parent_task_no ? '↳ ' + t.parent_task_no : null, t.space_name || null].filter(Boolean).join(' · ');
+}
+
+export function CommandBar({ open = true, userId, session, onClose, router, spaces = [], programs = [], canViewDashboard, isAdmin, onNewTask, onNewSpace, onNewProgram, onToggleSidebar, onHelp }) {
   // The layout mounts the bar on each open, so this state starts fresh and the page
   // sources are read synchronously — no frame of the previous results.
   const [q, setQ] = useState('');
-  const [active, setActive] = useState(0);
+  // Highlight by key (group|key), not index: a server reply re-ranks the list, and the row
+  // the user arrowed to must stay highlighted. null = follow the top row (see the header).
+  const [activeK, setActiveK] = useState(null);
+  // Cross-space server search (F5). rows are kept for the query they answered (q).
+  const [remote, setRemote] = useState({ q: '', rows: [], status: 'idle' });
+  const reqRef = useRef(0);
   const [snap] = useState(() => (typeof window === 'undefined' ? { tasks: null, view: null, recent: [] } : snapshot(userId)));
   const mod = useModLabel();
   const inputRef = useRef(null);
@@ -79,12 +97,33 @@ export function CommandBar({ open = true, userId, onClose, router, spaces = [], 
     return () => clearTimeout(t);
   }, [open]);
 
+  useEffect(() => {
+    const query = q.trim();
+    const id = ++reqRef.current;   // any change retires the in-flight request
+    if (!open || !session || (!dktQuery(query) && query.length < 2)) {
+      setRemote(r => (r.status === 'idle' && !r.rows.length ? r : { q: '', rows: [], status: 'idle' }));
+      return undefined;
+    }
+    setRemote(r => (r.status === 'loading' ? r : { ...r, status: 'loading' }));
+    const t = setTimeout(() => {
+      docketopsGet('searchTasks', { q: query }, session)
+        .then(rows => { if (reqRef.current === id) setRemote({ q: query, rows: Array.isArray(rows) ? rows : [], status: 'done' }); })
+        .catch(() => { if (reqRef.current === id) setRemote({ q: query, rows: [], status: 'error' }); });
+    }, SEARCH_DEBOUNCE);
+    return () => clearTimeout(t);
+  }, [q, open, session]);
+
   const go = (route) => router.push(route);
   const openTask = (id, full) => {
     if (full) { router.push(`/tasks/detail/?id=${id}`); return; }
     const src = getCommandSource('tasks');
     if (src?.open) src.open(id); else router.push(`/tasks?task=${id}`);
   };
+
+  const taskItem = (t) => ({ key: 'task:' + t.id, group: 'tasks', kind: 'task', taskId: t.id, label: t.title || '(untitled)',
+    sub: t.task_no || '', meta: taskMeta(t),
+    num: String(t.task_no || '').replace(/\D/g, '').replace(/^0+(?=\d)/, ''), status: t.status,
+    run: (full) => openTask(t.id, full) });
 
   // The searchable index — built once per open (lowercase strings precomputed).
   const index = useMemo(() => {
@@ -127,11 +166,7 @@ export function CommandBar({ open = true, userId, onClose, router, spaces = [], 
     ];
     for (const c of cmds) add({ ...c, group: 'commands', kind: 'cmd' });
 
-    for (const t of (snap.tasks?.rows || [])) {
-      add({ key: 'task:' + t.id, group: 'tasks', kind: 'task', taskId: t.id, label: t.title || '(untitled)', sub: t.task_no || '',
-        num: String(t.task_no || '').replace(/\D/g, '').replace(/^0+(?=\d)/, ''), status: t.status,
-        run: (full) => openTask(t.id, full) });
-    }
+    for (const t of (snap.tasks?.rows || [])) add(taskItem(t));
     return items;
   }, [open, spaces, programs, canViewDashboard, isAdmin, snap]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -154,36 +189,52 @@ export function CommandBar({ open = true, userId, onClose, router, spaces = [], 
       groups.commands = index.filter(i => i.group === 'commands');
     } else {
       const num = dktQuery(query);
+      // Server hits count with their rank floor only while they answer THIS query; an older
+      // reply (still typing) keeps just the rows that fuzzy-match what's typed now.
+      const fresh = remote.q.toLowerCase() === query;
+      const floorById = new Map();
+      if (fresh) remote.rows.forEach((t, pos) => floorById.set(t.id, serverFloor(t.match_rank, pos)));
+      const localTaskIds = new Set();
+      const push = (it, r) => { (groups[it.group] = groups[it.group] || []).push({ ...it, _score: r.score, _idx: r.idx }); };
       for (const it of index) {
-        let m = fuzzyMatch(query, it.lc);
-        let score = m ? m.score : -1;
         if (it.kind === 'task') {
-          if (num && it.num === num) score = Math.max(score, 3000);
-          else if (num && it.num.startsWith(num)) score = Math.max(score, 2000 - (it.num.length - num.length));
-          else if (!m) { const ms = fuzzyMatch(query, it.lcSub); if (ms && ms.score >= 500) { score = ms.score; m = { idx: [] }; } }
-        } else if (!m && it.lcSub) {
-          const ms = fuzzyMatch(query, it.lcSub); if (ms) score = ms.score - 200;
+          localTaskIds.add(it.taskId);
+          const r = scoreTask(it, query, num, floorById.get(it.taskId) ?? null);
+          if (r) push(it, r);
+          continue;
         }
-        if (score < 0) continue;
-        (groups[it.group] = groups[it.group] || []).push({ ...it, _score: score, _idx: m?.idx || [] });
+        const m = fuzzyMatch(query, it.lc);
+        let score = m ? m.score : -1;
+        if (!m && it.lcSub) { const ms = fuzzyMatch(query, it.lcSub); if (ms) score = ms.score - 200; }
+        if (score >= 0) push(it, { score, idx: m?.idx || [] });
+      }
+      for (const t of remote.rows) {
+        if (localTaskIds.has(t.id)) continue;   // the page's own row wins (same task)
+        const it = taskItem(t);
+        it.lc = it.label.toLowerCase(); it.lcSub = it.sub.toLowerCase();
+        const r = scoreTask(it, query, num, floorById.get(t.id) ?? null);
+        if (r) push(it, r);
       }
       for (const g of Object.keys(groups)) groups[g].sort((a, b) => b._score - a._score);
     }
     const out = [];
     for (const [g, label] of GROUPS) {
-      const list = (!query && (g === 'nav' || g === 'commands')) ? (groups[g] || []) : (groups[g] || []).slice(0, CAP);
+      const list = (!query && (g === 'nav' || g === 'commands')) ? (groups[g] || []) : (groups[g] || []).slice(0, g === 'tasks' ? TASK_CAP : CAP);
       if (list.length) out.push({ group: g, label, items: list });
     }
     // Searching: the group holding the best match comes first (an exact DKT id scores
     // 3000, so it still leads), which makes row 0 — the default Enter — the overall best.
     // Empty query keeps the fixed order.
     return query ? rankGroups(out) : out;
-  }, [q, index, snap]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [q, index, snap, remote]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const flat = useMemo(() => rows.flatMap(r => r.items), [rows]);
-  const noTasksHint = !snap.tasks && (!!q.trim());
-  useEffect(() => { setActive(0); }, [q]);
-  const cur = flat.length ? Math.min(active, flat.length - 1) : -1;
+  const flat = useMemo(() => rows.flatMap(r => r.items.map(it => ({ ...it, _k: r.group + '|' + it.key }))), [rows]);
+  const searching = remote.status === 'loading';
+  const searchFailed = remote.status === 'error' && !!q.trim();
+  useEffect(() => { setActiveK(null); }, [q]);
+  const found = activeK ? flat.findIndex(x => x._k === activeK) : -1;
+  const cur = flat.length ? (found >= 0 ? found : 0) : -1;
+  const setActive = (i) => setActiveK(flat[i]?._k ?? null);
   const optId = (i) => `cmdk-opt-${i}`;
   useEffect(() => { if (cur >= 0) document.getElementById(optId(cur))?.scrollIntoView({ block: 'nearest' }); }, [cur]);
 
@@ -226,7 +277,7 @@ export function CommandBar({ open = true, userId, onClose, router, spaces = [], 
         <div className="cmdk-input">
           <Search size={16} strokeWidth={2} aria-hidden />
           <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
-            placeholder={snap.tasks ? 'Search tasks, spaces, programs, commands…' : 'Search spaces, programs, commands…'}
+            placeholder="Search tasks, spaces, programs, commands…"
             role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-autocomplete="list"
             aria-activedescendant={cur >= 0 ? optId(cur) : undefined} autoComplete="off" spellCheck={false} />
           <Kbd>Esc</Kbd>
@@ -257,6 +308,7 @@ export function CommandBar({ open = true, userId, onClose, router, spaces = [], 
                         : Ic ? <Ic size={15} strokeWidth={1.75} aria-hidden /> : null}
                     </span>
                     <span className="cmdk-label"><Highlight text={it.label} idx={it._idx} /></span>
+                    {it.meta && <span className="cmdk-meta">{it.meta}</span>}
                     {it.sub && <span className={'cmdk-sub' + (it.kind === 'task' ? ' mono' : '')}>{it.sub}</span>}
                     {it.kbd && <Kbd>{it.kbd}</Kbd>}
                     {me === cur && <CornerDownLeft className="cmdk-enter" size={13} aria-hidden />}
@@ -265,15 +317,17 @@ export function CommandBar({ open = true, userId, onClose, router, spaces = [], 
               })}
             </div>
           ))}
-          {noTasksHint && (
-            <div className="cmdk-hint" role="presentation"><Info size={13} aria-hidden />Open Tasks to search tasks</div>
-          )}
-          {q.trim() && flat.length === 0 && !noTasksHint && <div className="cmdk-empty">No matches</div>}
+          {q.trim() && flat.length === 0 && !searching && !searchFailed && <div className="cmdk-empty">No matches</div>}
+        </div>
+        {/* Outside the listbox (only options/groups belong in it); a live region for SR users. */}
+        <div role="status" aria-live="polite">
+          {searching && <div className="cmdk-hint"><Loader2 className="cmdk-spin" size={13} aria-hidden />Searching all spaces…</div>}
+          {searchFailed && <div className="cmdk-hint"><Info size={13} aria-hidden />Couldn’t search other spaces — showing what’s loaded here</div>}
         </div>
         <div className="cmdk-foot" aria-hidden>
           <span><Kbd>↑</Kbd><Kbd>↓</Kbd> move</span>
           <span><Kbd>↵</Kbd> open</span>
-          {snap.tasks && <span><Kbd>{mod} ↵</Kbd> task full page</span>}
+          <span><Kbd>{mod} ↵</Kbd> task full page</span>
           <span><Kbd>Esc</Kbd> close</span>
         </div>
       </div>

@@ -46,8 +46,39 @@ export function rankGroups(groups) {
   return groups.map((g, i) => ({ g, i })).sort((a, b) => (best(b.g) - best(a.g)) || (a.i - b.i)).map(x => x.g);
 }
 
-// DKT id query: "DKT-123", "dkt123" or "123". Returns the number string, or null.
+// DKT id query: "DKT-123", "dkt123", "#123" or "123" (same grammar as the worker's searchTasks).
+// Returns the number string, or null.
 export function dktQuery(q) {
-  const m = /^\s*(?:dkt[-\s]?)?(\d+)\s*$/i.exec(q || '');
+  const m = /^\s*(?:dkt[-\s]?)?#?(\d+)\s*$/i.exec(q || '');
   return m ? m[1].replace(/^0+(?=\d)/, '') : null;
+}
+
+// ⌘K task scoring (F5), shared by the page's loaded rows and the cross-space server hits.
+// `it` carries lc (title, lowercased), lcSub (task_no, lowercased) and num (DKT digits).
+// An exact DKT id scores 3000, a DKT prefix 2000-, then the fuzzy title score; a task_no
+// substring counts only when strong (≥500). `floor` (from serverFloor) lifts a hit the server
+// matched in ways fuzzy can't see — terms out of order, a typo — so it isn't dropped or buried.
+// Returns { score, idx } or null.
+export function scoreTask(it, query, num, floor = null) {
+  let m = fuzzyMatch(query, it.lc);
+  let score = m ? m.score : -1;
+  if (num && it.num === num) score = Math.max(score, 3000);
+  else if (num && it.num && it.num.startsWith(num)) score = Math.max(score, 2000 - (it.num.length - num.length));
+  else if (!m) { const ms = fuzzyMatch(query, it.lcSub); if (ms && ms.score >= 500) { score = ms.score; m = { idx: [] }; } }
+  if (floor != null && floor > score) { score = floor; m = m || { idx: [] }; }
+  if (score < 0) return null;
+  return { score, idx: m?.idx || [] };
+}
+
+// Server match_rank (migration 0012) → a score floor. pos = the row's place in the server's
+// order, so ties keep it. Rank 2 (title prefix) is already ~1000 on fuzzy; 3 = all terms, any
+// order; 4 = typo fallback (only returned when nothing matched exactly).
+export function serverFloor(rank, pos = 0) {
+  if (rank == null || rank === '') return 250 - pos;   // Number(null) is 0 — never the exact-id floor
+  const r = Number(rank);
+  if (r === 0) return 3000;
+  if (r === 1) return 1900 - pos;
+  if (r === 2) return 900 - pos;
+  if (r === 3) return 450 - pos;
+  return 250 - pos;
 }

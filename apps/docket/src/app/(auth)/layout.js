@@ -242,7 +242,7 @@ function AuthLayoutInner({ children }) {
           onSignOut={signOut}
         />
         {/* Mounted per open: fresh state, sources read synchronously (no stale frame). */}
-        {cmdOpen && <CommandBar userId={user?.id} onClose={() => setCmdOpen(false)} router={router}
+        {cmdOpen && <CommandBar userId={user?.id} session={session} onClose={() => setCmdOpen(false)} router={router}
           spaces={spaces} programs={[...programs, ...createdPrograms.filter(c => !programs.some(p => p.id === c.id))]}
           canViewDashboard={canViewDashboard} isAdmin={isAdmin}
           onNewTask={newTask} onNewSpace={newSpace} onNewProgram={newProgram}
