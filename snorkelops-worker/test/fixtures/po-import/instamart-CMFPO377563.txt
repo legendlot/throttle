@@ -1,0 +1,38 @@
+Purchase Order
+Vendor Name :  PO No :  CMFPO377563
+Fraternitas Ventures Private Limited  PO Date :  Oct 30, 2026
+Ground Floor, 938,3rd Cross Rd, HRBR Layout 1st Block,, HRBR Layout, Kalyan Nagar,  PO Release Date :  Oct 30, 2026
+Bengaluru, Karnataka, 560043  Payment Terms :  30 Days
+GSTIN : 29AAFCF7834H1ZA  Expected Delivery Date:  Nov 14, 2026
+PAN : AAFCF7834H  PO Expiry Date:  Nov 16, 2026
+Contact : 9000000000  Reference PO Code:
+Billing Address  Shipping Address
+SCOOTSY LOGISTICS PRIVATE LIMITED  SCOOTSY LOGISTICS PRIVATE LIMITED
+MUM FC22, Survey No.26,27,28 C1 Building, Savad Naka Road, , Global Logistics Company, village Janval-Lonad,  MUM FC22, Survey No.26,27,28 C1 Building, Savad Naka Road, , Global Logistics Company, village Janval-Lonad,
+Bhiwandi, Thane  Bhiwandi, Thane
+Mumbai, Maharashtra, 421302  Mumbai, Maharashtra, 421302
+email@example.invalid  email@example.invalid
+Contact :  9000000000  Contact :  5432154321
+GSTIN : 27AAVCS1691R1Z5  GSTIN : 27AAVCS1691R1Z5
+Unit  CGST  SGST/UGST  IGST  CESS
+Taxable
+S.  Item  HSN  Base  Additional
+Item Desc  Qty  MRP  Value  Amt  Amt  Amt  Amt  Total (INR)
+No  Code  Code  Cost  Rate  Rate  Rate  Rate  CESS
+(INR)  (INR)  (INR)  (INR)  (INR)
+(INR)
+L.O.T Cars
+Ghost RC
+Drift Car
+(20Kmph,
+1  140019  95030090  36  3499.00  1135.09932  40863.58  0.00  0.00  0.00  0.00  18.00  7355.44  0.00  0.00  0.00  48219.02
+LED Lights,
+Underground
+White) 1.00
+Piece
+Total  40863.58  0.00  0.00  7355.44  0.00  0.00  48219.02
+Total Amount (INR)  40863.58
+GST Compensation Cess  0.00
+GST Additional Cess  0.00
+Total Tax (INR)  7355.44
+Grand Total (INR)  48219.02

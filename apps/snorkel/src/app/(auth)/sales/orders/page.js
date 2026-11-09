@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, Download } from 'lucide-react';
+import { Plus, Download, FileUp } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, inrCompact } from '@/components/format.js';
 import { orderStatusLabel, ORDER_STATUS_TONES, FULFILMENT, fulfilmentMeta, paymentMeta, inr, fyLabel, csvCell } from '@/lib/sales';
@@ -196,6 +196,7 @@ export default function SalesOrdersPage() {
           <Btn onClick={exportCsv} disabled={!filtered.length}><Download size={14} /> Export</Btn>
           <Btn onClick={exportCsvWithLines} disabled={!filtered.length || exportingLines}><Download size={14} /> {exportingLines ? 'Loading lines…' : 'Export + lines'}</Btn>
           <Btn onClick={exportSkuSummary} disabled={!filtered.length || exportingLines} title="Confirmed orders only"><Download size={14} /> SKU to send</Btn>
+          {canManage && <Btn onClick={() => router.push('/sales/orders/import')} title="Zepto / Instamart PDF or Flipkart xlsx → a pre-filled draft order"><FileUp size={14} /> Import PO</Btn>}
           {canManage && <Btn kind="primary" onClick={() => router.push('/sales/orders/new')}><Plus size={14} /> New order</Btn>}
         </>} />
 

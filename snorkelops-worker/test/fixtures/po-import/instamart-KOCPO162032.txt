@@ -1,0 +1,36 @@
+Purchase Order
+Vendor Name :  PO No :  KOCPO162032
+Fraternitas Ventures Private Limited  PO Date :  Nov 5, 2026
+Ground Floor, 938,3rd Cross Rd, HRBR Layout 1st Block,, HRBR Layout, Kalyan Nagar,  PO Release Date :  Nov 5, 2026
+Bengaluru, Karnataka, 560043  Payment Terms :  30 Days
+GSTIN : 29AAFCF7834H1ZA  Expected Delivery Date:  Nov 20, 2026
+PAN : AAFCF7834H  PO Expiry Date:  Nov 22, 2026
+Contact : 9000000000  Reference PO Code:
+Billing Address  Shipping Address
+SCOOTSY LOGISTICS PRIVATE LIMITED  SCOOTSY LOGISTICS PRIVATE LIMITED
+Koc IM1, Survey No. 321/1, Thrikkakara North Village, Kanayannur Taluk,, GS Business Park, Medical College, NAD  Koc IM1, Survey No. 321/1, Thrikkakara North Village, Kanayannur Taluk,, GS Business Park, Medical College, NAD
+Road, HMT Colony,, Kalamassery,  Road, HMT Colony,, Kalamassery,
+Kochi, Kerala, 683503  Kochi, Kerala, 683503
+email@example.invalid  email@example.invalid
+Contact :  9000000000  Contact :  9000000000
+GSTIN : 32AAVCS1691R1ZE  GSTIN : 32AAVCS1691R1ZE
+Unit  CGST  SGST/UGST  IGST  CESS
+Taxable
+S.  Item  HSN  Base  Additional
+Item Desc  Qty  MRP  Value  Amt  Amt  Amt  Amt  Total (INR)
+No  Code  Code  Cost  Rate  Rate  Rate  Rate  CESS
+(INR)  (INR)  (INR)  (INR)  (INR)
+(INR)
+L.O.T Cars
+Fang 6-
+Channel RC
+1  646970  95030090  36  2499.00  1134.71542  40849.76  0.00  0.00  0.00  0.00  18.00  7352.96  0.00  0.00  0.00  48202.71
+Excavator
+Toy 1.00
+pack
+Total  40849.76  0.00  0.00  7352.96  0.00  0.00  48202.71
+Total Amount (INR)  40849.76
+GST Compensation Cess  0.00
+GST Additional Cess  0.00
+Total Tax (INR)  7352.96
+Grand Total (INR)  48202.71

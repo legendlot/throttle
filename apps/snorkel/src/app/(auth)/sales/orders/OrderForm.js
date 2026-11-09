@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Fragment } from 'react';
 import { Combobox, Modal } from '@throttle/ui';
 import { garageFetch } from '@throttle/db';
 import { useAuth } from '@throttle/auth';
@@ -11,6 +11,7 @@ import {
 } from '@/lib/snorkelui';
 import { inr } from '@/lib/sales';
 import PartnerForm from '../partners/PartnerForm';
+import { afterImportLineEdit, importLineProblems } from '@/lib/poImport/form.js';
 
 function Field({ label, children, span }) {
   return (<div style={{ gridColumn: span ? '1 / -1' : 'auto' }}><label style={labelStyle}>{label}</label>{children}</div>);
@@ -42,7 +43,13 @@ export function lineMath(l) {
 // Shared create/edit order form. `partners` + `channels` preloaded. `initial` optional (edit).
 // `onCreatePartner` (optional, async (data) => newPartnerRow) enables the inline
 // "+ Add" partner quick-create — pass it only when the user can manage partners.
-export default function OrderForm({ partners, channels, initial, saving, onSubmit, onCancel, onCreatePartner }) {
+// `importInfo` (optional, Import PO — sales/orders/import): { channel_key, po_no, po_total_taxable,
+// duplicateOf: [order_no…], duplicateConfirmed }. A PO already on an SO blocks Save until the user
+// ticks "import it again" (the page owns the tick); the save then carries confirm_duplicate_po_ref.
+// Its lines carry `_import` = { channel_code, ean, title, qty, unit_cost_ex_gst, matched, learn, note };
+// a line the preview could not match must get a product before Save, and that pick is sent
+// back as a `learn_mappings` entry so the next PO with the same code matches on its own.
+export default function OrderForm({ partners, channels, initial, saving, onSubmit, onCancel, onCreatePartner, importInfo }) {
   const { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_COLORS } = useProducts();
   const { session } = useAuth();
   const [partnerId, setPartnerId] = useState(initial?.partner_id || '');
@@ -127,6 +134,7 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
       }
     }
     if (k === 'model') { next.color = ''; }
+    if (next._import) return afterImportLineEdit(next, k);   // Import PO: a stale pre-filled SKU is cleared
     if (k === 'gst_pct' || k === 'hsn_code') setHsnTouched(t => ({ ...t, [i]: true }));
     return next;
   }));
@@ -144,11 +152,12 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
   // the same PRODUCT_VARIANTS/PRODUCT_COLORS maps the pickers use — so a genuinely
   // model-less / colour-less product is never falsely blocked.
   const lineErrors = useMemo(() => lines.map((l, i) => {
-    const started = l.product || Number(l.qty) > 0;
+    const started = l.product || Number(l.qty) > 0 || l._import;   // an imported line is never silently dropped
     if (!started) return null;
     const miss = [];
     if (!l.product) miss.push('product');
-    if (!(Number(l.qty) > 0)) miss.push('quantity');
+    if (l._import) miss.push(...importLineProblems(l));
+    else if (!(Number(l.qty) > 0)) miss.push('quantity');
     if (l.product && (PRODUCT_VARIANTS[l.product] || []).length && !l.model) miss.push('model');
     if (l.product && ((PRODUCT_COLORS[l.product] || {})[l.model] || []).length && !l.color) miss.push('colour');
     if (!isUsableSku(l.sku)) miss.push('a real SKU in the SKU box (letters or a 13-digit EAN) — or clear it');
@@ -166,6 +175,14 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
       expected_dispatch_date: meta.expected_dispatch_date || null,
       destination_warehouse: meta.destination_warehouse.trim() || null,
       notes: meta.notes.trim() || null,
+      ...(importInfo ? {
+        from_import: true,
+        ...(importInfo.duplicateConfirmed ? { confirm_duplicate_po_ref: true } : {}),
+        learn_mappings: lines.filter(l => l._import?.learn && l._import.channel_code && l.product).map(l => ({
+          channel_key: importInfo.channel_key, channel_sku: l._import.channel_code,
+          product: l.product, model: l.model || null, color: l.color || null,
+        })),
+      } : {}),
       lines: lines.filter(l => l.product || Number(l.qty) > 0).map((l, i) => ({
         product: l.product || null, model: l.model || null, color: l.color || null,
         sku: l.sku?.trim() || null, hsn_code: l.hsn_code?.trim() || null,
@@ -177,7 +194,10 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
     });
   }
 
-  const valid = partnerId && lines.some(l => l.product && Number(l.qty) > 0) && lineErrors.length === 0;
+  const dupBlocked = !!(importInfo?.duplicateOf?.length && !importInfo.duplicateConfirmed);
+  const valid = partnerId && lines.some(l => l.product && Number(l.qty) > 0) && lineErrors.length === 0 && !dupBlocked;
+  const poTotal = importInfo?.po_total_taxable == null ? null : Number(importInfo.po_total_taxable);
+  const poDiff = poTotal == null ? null : +(totals.taxable - poTotal).toFixed(2);
   const grid = { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 };
 
   return (
@@ -247,16 +267,19 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
                 const numCell = { ...cell, textAlign: 'right' };
                 const cbInput = { padding: '4px 6px', fontSize: 12 };
                 const cbInputBad = { ...cbInput, borderColor: '#ff7070' };
+                const imp = l._import;
+                const needPick = imp && !imp.matched && !l.product;
                 return (
-                  <tr key={i}>
+                  <Fragment key={i}>
+                  <tr>
                     <td style={tableTdStyle}>
                       <Combobox
                         value={l.product}
                         options={productOptions}
                         onChange={v => setLine(i, 'product', v)}
-                        placeholder="Search…"
+                        placeholder={needPick ? 'Pick product' : 'Search…'}
                         emptyLabel="No match"
-                        inputStyle={cbInput}
+                        inputStyle={needPick ? cbInputBad : cbInput}
                         maxDropdownHeight={220}
                         portal
                       />
@@ -303,6 +326,18 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
                     <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{m.total.toLocaleString('en-IN')}</td>
                     <td style={tableTdStyle}><button style={{ ...btnSecondary, padding: '3px 8px', color: '#ff7070' }} onClick={() => removeLine(i)}>×</button></td>
                   </tr>
+                  {imp && (
+                    <tr>
+                      <td colSpan={12} style={{ ...tableTdStyle, whiteSpace: 'normal', paddingTop: 0, fontSize: 11, color: imp.matched ? 'var(--t3)' : '#ff7070' }}>
+                        PO line {i + 1}: {imp.title || '—'}
+                        <span style={{ fontFamily: 'var(--mono)' }}>{imp.channel_code ? ` · code ${imp.channel_code}` : ''}{imp.ean ? ` · EAN ${imp.ean}` : ''}</span>
+                        {imp.matched
+                          ? <span>{` · matched by ${imp.matched_by === 'ean' ? 'EAN' : 'the channel SKU map'}`}</span>
+                          : <b>{` · not matched — ${l.product ? 'your pick' : 'pick the product'}${imp.learn && imp.channel_code ? ' (it will be remembered for this code)' : ''}${imp.note ? ` · ${imp.note}` : ''}`}</b>}
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -319,8 +354,20 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
           <span style={{ color: 'var(--t3)' }}>GST <b style={{ color: 'var(--t1)' }}>{inr(totals.gst)}</b></span>
           <span style={{ color: 'var(--t3)' }}>Grand total <b style={{ color: 'var(--yellow)' }}>{inr(totals.total)}</b></span>
         </div>
+        {poTotal != null && (
+          <div style={{ ...panelBodyStyle, paddingTop: 0, textAlign: 'right', fontSize: 12, color: Math.abs(poDiff) > 1 ? '#ff7070' : 'var(--t3)' }}>
+            {Math.abs(poDiff) > 1
+              ? `PO ${importInfo.po_no || ''} says ${inr(poTotal)} before GST — these lines are ${inr(Math.abs(poDiff))} ${poDiff < 0 ? 'short' : 'over'}. Check quantities and rates against the PO.`
+              : `Matches the PO's taxable total of ${inr(poTotal)}${poDiff ? ` (paise rounding ${inr(Math.abs(poDiff))})` : ''}.`}
+          </div>
+        )}
       </div>
 
+      {dupBlocked && (
+        <div style={{ marginBottom: 8, fontSize: 12, color: '#ff7070' }}>
+          This PO is already on {importInfo.duplicateOf.join(', ')} — tick &quot;import it again as a separate order&quot; above to save.
+        </div>
+      )}
       {lineErrors.length > 0 && (
         <div style={{ marginBottom: 8, fontSize: 12, color: '#ff7070' }}>
           {lineErrors.map(e => `Line ${e.i + 1} needs ${e.miss.join(' + ')}`).join('  ·  ')}

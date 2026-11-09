@@ -1313,6 +1313,351 @@ async function queryPublicIn(table, col, ids, rest) {
   return { ok: rs.every(r => r.ok), data: rs.flatMap(r => (r.ok && Array.isArray(r.data) ? r.data : [])) };
 }
 
+// ── Channel PO import → draft sales order (Harsh #bugs 1793871854.409349; plan
+// docs/superpowers/plans/2026-11-09-snorkel-channel-po-import.md) ───────────────────────────────
+// The BROWSER parses the PO file (apps/snorkel/src/lib/poImport — fixed parsers, no AI, Afshaan
+// 2026-11-09) and posts the neutral shape to previewSalesOrderImport, which WRITES NOTHING: it
+// resolves the partner and every line's product and returns what OrderForm pre-fills. Saving is
+// the ordinary createSalesOrder (one write path), which also learns the user's hand-picked
+// matches into the SHARED sales.sku_map (Odo's sell-out map too — decided 2026-11-09) through
+// learnSkuMappings: insert-if-absent, never an overwrite of a mapping someone already made.
+// test/po-import-route.test.mjs lifts this block up to its end marker.
+const SO_IMPORT_CHANNELS = ['ZEPTO', 'INSTAMART', 'FLIPKART_MGD'];
+const SO_IMPORT_MAX_LINES = 200;
+const soImportRound2 = n => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const salesSchema = (path, opts = {}) =>
+  sb(path, { ...opts, headers: { 'Accept-Profile': 'sales', 'Content-Profile': 'sales', ...(opts.headers || {}) } });
+// in.() list with every value double-quoted — product family names can carry commas/spaces.
+const soImportIn = vals => vals.map(v => encodeURIComponent(`"${String(v).replace(/["\\]/g, '')}"`)).join(',');
+
+// Words every partner of a channel shares say nothing about WHICH one; dropped before scoring.
+const SO_IMPORT_STOP = new Set(['private', 'limited', 'pvt', 'ltd', 'india', 'the', 'and', 'opp', 'near',
+  'scootsy', 'logistics', 'flipkart', 'zepto', 'formerly', 'known', 'technologies', 'kiranakart', 'swiggy', 'instamart']);
+function soImportTokens(s) {
+  return new Set(String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(t =>
+    t && !SO_IMPORT_STOP.has(t) && (/[a-z]/.test(t) ? (t.length >= 3 || /\d/.test(t)) : t.length >= 6)));
+}
+function soImportPins(p) {
+  const pins = new Set();
+  const add = s => (String(s || '').match(/(?<!\d)[1-9]\d{5}(?!\d)/g) || []).forEach(x => pins.add(x));
+  add(p.pincode); add(p.shipping_address);
+  // billing_address only when there is no shipping one: on SP-0143 it is OUR office (560043).
+  if (!String(p.shipping_address || '').trim()) add(p.billing_address);
+  return pins;
+}
+// Words that describe WHERE in India, not WHICH warehouse — they never decide between partners
+// even when only one candidate happens to carry them (hostile review: "village", state names).
+const SO_IMPORT_GENERIC = new Set([
+  'andhra', 'pradesh', 'arunachal', 'assam', 'bihar', 'chhattisgarh', 'goa', 'gujarat', 'haryana', 'himachal', 'jharkhand',
+  'karnataka', 'kerala', 'madhya', 'maharashtra', 'manipur', 'meghalaya', 'mizoram', 'nagaland', 'odisha', 'punjab',
+  'rajasthan', 'sikkim', 'tamil', 'nadu', 'telangana', 'tripura', 'uttar', 'uttarakhand', 'west', 'bengal', 'delhi',
+  'bangalore', 'bengaluru', 'banglore', 'mumbai', 'hyderabad', 'chennai', 'kolkata', 'pune', 'gurgaon', 'gurugram', 'noida',
+  'village', 'villages', 'taluk', 'taluka', 'hobli', 'district', 'distric', 'dist', 'mandal', 'revenue', 'road', 'survey',
+  'nos', 'warehouse', 'building', 'ground', 'floor', 'nagar', 'post', 'urban', 'rural', 'area', 'industrial', 'park',
+  'phase', 'block', 'cross', 'main', 'layout', 'part', 'comprised', 'situated', 'minutes', 'india',
+]);
+const soImportPartnerView = r => ({
+  id: r.p.id, partner_code: r.p.partner_code, name: r.p.name, city: r.p.city || null,
+  gstin: r.p.gstin || null, pincode: r.p.pincode || null, pin_match: r.pinHit, score: r.score,
+});
+
+// Partner = ship-to GSTIN within the channel. Instamart and Flipkart run several FCs per state
+// GSTIN (21 Scootsy partners), so a GSTIN shared by >1 partner narrows on the ship-to PIN, then
+// on address words. An address word decides only when exactly ONE candidate holds it (df === 1)
+// and it is not a generic place word (SO_IMPORT_GENERIC) — and only when exactly one candidate
+// has such a word; anything else (SP-0144/0145 are byte-identical) is the user's call. A PO PIN
+// that NO candidate shares means the FC is not in our master as printed → the picker, never an
+// address-word guess. A GSTIN nobody carries is NEVER matched on address alone — that invoice
+// would go out under the wrong GSTIN — it comes back 'none' with the channel's partners ranked.
+function resolveImportPartner(partners, po, pickedId) {
+  const list = Array.isArray(partners) ? partners : [];
+  if (pickedId) {
+    const p = list.find(x => x.id === pickedId);
+    if (!p) return { error: 'That partner is not an active partner on this channel' };
+    return { status: 'matched', via: 'picked', partner: p, candidates: [] };
+  }
+  const g = String(po.ship_to_gstin || po.bill_to_gstin || '').trim().toUpperCase();
+  const byG = g ? list.filter(p => String(p.gstin || '').trim().toUpperCase() === g) : [];
+  if (byG.length === 1) return { status: 'matched', via: 'gstin', partner: byG[0], candidates: [] };
+  const pool = byG.length ? byG : list;
+  const shipT = soImportTokens([po.ship_to_address, po.ship_to_city].join(' '));
+  const toks = pool.map(p => soImportTokens([p.name, p.city, p.shipping_address || p.billing_address].join(' ')));
+  const df = new Map();
+  toks.forEach(ts => ts.forEach(t => df.set(t, (df.get(t) || 0) + 1)));
+  const pin = po.ship_to_pincode ? String(po.ship_to_pincode) : null;
+  const ranked = pool.map((p, i) => {
+    let score = 0;
+    for (const t of toks[i]) if (shipT.has(t) && df.get(t) < pool.length) score += Math.log(pool.length / df.get(t));
+    return { p, score: +score.toFixed(3), pinHit: !!pin && soImportPins(p).has(pin) };
+  }).sort((a, b) => (Number(b.pinHit) - Number(a.pinHit)) || (b.score - a.score) || String(a.p.partner_code).localeCompare(String(b.p.partner_code)));
+  const candidates = ranked.slice(0, 25).map(soImportPartnerView);
+  if (!byG.length) {
+    return { status: 'none', candidates,
+      reason: g ? `No active partner on this channel has GSTIN ${g} (the PO's ship-to)` : 'No ship-to GSTIN could be read from the PO' };
+  }
+  const pinned = ranked.filter(r => r.pinHit);
+  if (pinned.length === 1) return { status: 'matched', via: 'gstin+pincode', partner: pinned[0].p, candidates: [] };
+  if (pin && !pinned.length) {
+    return { status: 'ambiguous', candidates, reason: `${byG.length} partners share GSTIN ${g} and none of them has the PO's PIN ${pin}` };
+  }
+  const field = pinned.length ? pinned : ranked;
+  const fieldToks = field.map(r => toks[pool.indexOf(r.p)]);
+  const fdf = new Map();
+  fieldToks.forEach(ts => ts.forEach(t => fdf.set(t, (fdf.get(t) || 0) + 1)));
+  const deciders = field.filter((r, i) => [...fieldToks[i]].some(t => shipT.has(t) && fdf.get(t) === 1 && !SO_IMPORT_GENERIC.has(t) && !/^\d+$/.test(t)));   // a PIN already had its say above
+  if (deciders.length === 1) {
+    return { status: 'matched', via: pinned.length ? 'gstin+pincode+address' : 'gstin+address', partner: deciders[0].p, candidates: [] };
+  }
+  return { status: 'ambiguous', candidates, reason: `${byG.length} partners share GSTIN ${g} and the PO's address does not single one out` };
+}
+
+// Line → product: sales.sku_map (channel, code) first, then the EAN on public.product_master.
+// HSN + GST% come from the product master (hsnMasterAll), NEVER the PO: a PO's 8-digit HSN typed
+// onto a line would reach syncHsnToMaster on save for an Admin/Finance user (S358).
+function matchImportLines(lines, { skuByCode, pmByCode, pmByEan, hsnMaster }) {
+  return lines.map((l, i) => {
+    const code = String(l.channel_code || '').trim();
+    const ean = String(l.ean || '').replace(/\D/g, '');
+    let pm = null, matched_by = null, note = null;
+    const pc = code ? skuByCode.get(code) : null;
+    const eanHits = ean ? (pmByEan.get(ean) || []) : [];
+    if (pc) {
+      pm = pmByCode.get(pc) || null;
+      if (pm) matched_by = 'sku_map';
+      else note = `sku_map points ${code} at ${pc}, which is not in the product master`;
+    }
+    // Code and barcode both resolve but to DIFFERENT products → trust neither; the user picks.
+    // (Also the backstop for a Zepto UUID dealt to the wrong row.)
+    if (pm && eanHits.length === 1 && eanHits[0].product_code !== pm.product_code) {
+      note = `code and barcode point to different products (code ${code} → ${pm.product_code}, EAN ${ean} → ${eanHits[0].product_code}) — pick the right one`;
+      pm = null; matched_by = null;
+    } else if (!pm && ean) {
+      if (eanHits.length === 1) { pm = eanHits[0]; matched_by = 'ean'; note = null; }
+      else if (eanHits.length > 1) note = `EAN ${ean} is on ${eanHits.length} products — pick the right one`;
+    }
+    const qty = Math.round(Number(l.qty) || 0);
+    // A blank price is "unknown", never ₹0: Number(null) and Number('') are both 0.
+    const unit = l.unit_cost_ex_gst == null || l.unit_cost_ex_gst === '' ? NaN : Number(l.unit_cost_ex_gst);
+    const poGst = l.gst_pct == null || l.gst_pct === '' ? null : Number(l.gst_pct);
+    const m = pm ? hsnMaster.get(pm.product) : null;
+    const gst = m && m.gst != null ? m.gst : poGst;
+    return {
+      idx: i, channel_code: code || null, ean: ean || null, title: l.title || null,
+      qty, unit_cost_ex_gst: Number.isFinite(unit) ? unit : null,
+      // numeric(12,2) on sales_order_lines.rate — round HERE so the checksum below is what the SO will hold
+      rate: Number.isFinite(unit) ? soImportRound2(unit) : null,
+      pending_qty: l.pending_qty == null || l.pending_qty === '' || !Number.isFinite(Number(l.pending_qty)) ? null : Math.round(Number(l.pending_qty)),
+      mrp: l.mrp == null ? null : Number(l.mrp), po_gst_pct: poGst,
+      matched: !!pm, matched_by,
+      code_mapped: !!pc,   // the code already has a sku_map row → a pick here is never learned over it
+      product_code: pm?.product_code || null, product: pm?.product || null, model: pm?.model || null,
+      color: pm?.color || null, sku: pm?.sku || null,
+      hsn_code: pm ? (m?.hsn || normHsn(pm.hsn_code) || null) : null,
+      gst_pct: gst,
+      gst_mismatch: !!(pm && m && m.gst != null && poGst != null && Math.abs(m.gst - poGst) > 0.001),
+      inactive: !!(pm && pm.is_active === false),
+      note: pm ? null : (note || (code || ean ? `No product mapped to ${code || ean} yet` : 'The PO line has no code or EAN')),
+    };
+  });
+}
+
+// Σ qty × rate (each line to paise, as computeSalesLine stores it) vs the PO's own taxable total.
+function importChecksum(lines, poTotal) {
+  // ⚠️ For Flipkart this is TRUE BY CONSTRUCTION — its unit cost is Taxable ÷ Qty — so it proves
+  // nothing there; flipkart.js cross-checks against the printed Supplier Unit Price instead.
+  const so = soImportRound2(lines.reduce((s, l) => s + +(l.qty * (Number(l.rate) || 0)).toFixed(2), 0));
+  const total = poTotal == null || poTotal === '' ? null : Number(poTotal);
+  const inr = n => '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (total == null || !Number.isFinite(total)) {
+    return { ok: false, so_taxable: so, po_total_taxable: null, diff: null,
+      message: `The PO's taxable total could not be read, so the lines (${inr(so)}) were not cross-checked — compare them with the PO before saving.` };
+  }
+  const diff = soImportRound2(so - total);
+  const ok = Math.abs(diff) <= 1;
+  return { ok, so_taxable: so, po_total_taxable: total, diff,
+    message: ok ? null : `These lines add up to ${inr(so)} before GST but the PO says ${inr(total)} — ${inr(Math.abs(diff))} ${diff < 0 ? 'short' : 'over'}. A line may be missing or misread; check it against the PO before saving.` };
+}
+
+async function previewSalesOrderImport(d) {
+  const channel_key = String(d.channel_key || '').trim().toUpperCase();
+  if (!SO_IMPORT_CHANNELS.includes(channel_key)) return { error: `PO import does not support channel ${channel_key || '(none)'} yet`, status: 422 };
+  const inLines = Array.isArray(d.lines) ? d.lines : [];
+  if (!inLines.length) return { error: 'The PO has no item lines', status: 422 };
+  if (inLines.length > SO_IMPORT_MAX_LINES) return { error: `A PO can carry at most ${SO_IMPORT_MAX_LINES} lines here`, status: 422 };
+  const po_no = String(d.po_no || '').trim() || null;
+  const iso = v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+
+  const codes = [...new Set(inLines.map(l => String(l.channel_code || '').trim()).filter(Boolean))];
+  const eans  = [...new Set(inLines.map(l => String(l.ean || '').replace(/\D/g, '')).filter(Boolean))];
+  const pmSel = 'select=product_code,product,model,color,sku,ean,hsn_code,is_active,component_type';
+  // Round 1, in parallel: partners, the channel's dispatch id, EAN hits, the HSN master, and any
+  // live SO already carrying this PO ref (partner filter applied below, once it is known).
+  const [pR, chR, eanR, hsnMaster, dupR] = await Promise.all([
+    query('sales_partners', `?channel_key=eq.${encodeURIComponent(channel_key)}&is_active=eq.true&select=id,partner_code,name,gstin,city,state,pincode,shipping_address,billing_address,default_credit_days,channel_key&order=partner_code.asc&limit=500`),
+    query('sales_channels', `?channel_key=eq.${encodeURIComponent(channel_key)}&select=dispatch_channel_id&limit=1`),
+    queryPublicIn('product_master', 'ean', eans, pmSel),
+    hsnMasterAll(),
+    po_no ? query('sales_orders', `?partner_po_ref=ilike.${encodeURIComponent(po_no.replace(/[%*_,()\\]/g, ''))}&status=neq.cancelled&select=id,order_no,status,partner_id,order_date&order=created_at.desc&limit=50`)
+          : Promise.resolve({ ok: true, data: [] }),
+  ]);
+  if (!pR.ok || !chR.ok || !eanR.ok || !dupR.ok) return { error: 'Could not load partners / products — please try again', status: 502 };
+  const channelId = chR.data?.[0]?.dispatch_channel_id || null;
+
+  // Round 2: sku_map for this channel's codes, then the product rows those codes point at.
+  const skuByCode = new Map();
+  if (channelId && codes.length) {
+    const parts = [];
+    for (let i = 0; i < codes.length; i += IN_CHUNK) parts.push(codes.slice(i, i + IN_CHUNK));
+    const rs = await Promise.all(parts.map(p => salesSchema(
+      `/rest/v1/sku_map?channel_id=eq.${encodeURIComponent(channelId)}&channel_sku=in.(${soImportIn(p)})&select=channel_sku,product_code`)));
+    if (!rs.every(r => r.ok)) return { error: 'Could not read the channel SKU map — please try again', status: 502 };
+    for (const r of rs) for (const row of r.data || []) if (row.product_code) skuByCode.set(String(row.channel_sku), String(row.product_code));
+  }
+  const pcR = await queryPublicIn('product_master', 'product_code', [...new Set(skuByCode.values())], pmSel);
+  if (!pcR.ok) return { error: 'Could not load products — please try again', status: 502 };
+  const pmByCode = new Map((pcR.data || []).map(r => [r.product_code, r]));
+  const pmByEan = new Map();
+  for (const r of eanR.data || []) {
+    if (r.component_type === 'remote') continue;
+    const k = String(r.ean || '').trim();
+    if (!pmByEan.has(k)) pmByEan.set(k, []);
+    pmByEan.get(k).push(r);
+  }
+  for (const [k, rows] of pmByEan) { const act = rows.filter(r => r.is_active !== false); if (act.length) pmByEan.set(k, act); }
+
+  const partner = resolveImportPartner(pR.data || [], d, d.partner_id || null);
+  if (partner.error) return { error: partner.error, status: 422 };
+  const inChannel = new Set((pR.data || []).map(p => p.id));
+  const nameOf = new Map((pR.data || []).map(p => [p.id, p.name]));
+  // A PO ref already on a live SO of ANY partner on this channel (an FC mis-picked last time is
+  // still the same PO) is a WARNING the user confirms, not a refusal: splitting one channel PO
+  // across two SOs is normal (10+ Flipkart refs carry two confirmed SOs). createSalesOrder then
+  // needs `confirm_duplicate_po_ref: true` to save it.
+  const existing = (dupR.data || []).filter(o => inChannel.has(o.partner_id)).map(o => ({ ...o, partner_name: nameOf.get(o.partner_id) || null }));
+  const dupOrders = existing;
+  const lines = matchImportLines(inLines, { skuByCode, pmByCode, pmByEan, hsnMaster });
+  const checksum = importChecksum(lines, d.po_total_taxable);
+  const warnings = [];
+  if (!channelId) warnings.push(`Channel ${channel_key} has no dispatch channel set, so the SKU map could not be used — lines matched on EAN only.`);
+  if (!po_no) warnings.push('No PO number was read — type it into Partner PO ref so this PO cannot be imported twice.');
+  if (partner.status === 'matched' && partner.via === 'picked') {
+    const pg = String(partner.partner.gstin || '').toUpperCase(), g = String(d.ship_to_gstin || '').toUpperCase();
+    if (g && pg !== g) warnings.push(`The PO ships to GSTIN ${g}, but ${partner.partner.name} is on ${pg || 'no GSTIN'} — the invoice will carry the partner's.`);
+  }
+  for (const l of lines) {
+    if (l.gst_mismatch) warnings.push(`Line ${l.idx + 1}: the PO charges ${l.po_gst_pct}% GST, our product master says ${l.gst_pct}% — the master's rate is used.`);
+    if (l.inactive) warnings.push(`Line ${l.idx + 1}: ${l.product} ${l.model || ''} ${l.color || ''} is marked inactive in the product master.`.replace(/\s+/g, ' '));
+  }
+  const view = p => ({ id: p.id, partner_code: p.partner_code, name: p.name, gstin: p.gstin || null, city: p.city || null,
+    state: p.state || null, channel_key: p.channel_key, default_credit_days: p.default_credit_days ?? null });
+  return { data: {
+    channel_key,
+    po: { po_no, po_date: iso(d.po_date), delivery_date: iso(d.delivery_date), expiry_date: iso(d.expiry_date),
+          ship_to_gstin: d.ship_to_gstin || null, ship_to_address: d.ship_to_address || null },
+    partner: { status: partner.status, via: partner.via || null, reason: partner.reason || null,
+               partner: partner.partner ? view(partner.partner) : null, candidates: partner.candidates },
+    // For an unresolved partner: which candidates ALREADY carry this PO, so the picker can say so.
+    existing_orders: partner.status === 'matched' ? [] : existing,
+    duplicate_of: dupOrders.map(o => o.order_no),
+    duplicate_orders: dupOrders.map(o => ({ id: o.id, order_no: o.order_no, status: o.status, order_date: o.order_date || null,
+      partner_id: o.partner_id, partner_name: o.partner_name })),
+    lines, unmatched: lines.filter(l => !l.matched).length, checksum, warnings,
+  } };
+}
+
+// createSalesOrder's save-time duplicate check for the import path (see the call site). Returns
+// null to proceed, or { error, status } to refuse.
+// Scope = every partner on the order's channel (same as the preview), not just this partner.
+async function importDuplicateRefusal(d, channelKey) {
+  if (!d.from_import || !d.partner_po_ref || d.confirm_duplicate_po_ref === true) return null;
+  const ref = String(d.partner_po_ref).trim().replace(/[%*_,()\\]/g, '');
+  const ch = String(channelKey || '').trim();
+  const psR = ch ? await query('sales_partners', `?channel_key=eq.${encodeURIComponent(ch)}&select=id,name&limit=1000`)
+                 : { ok: true, data: [] };
+  if (!psR.ok) return { error: 'Could not check for an existing order with this PO ref — please try again', status: 502 };
+  const nameOf = new Map((psR.data || []).map(p => [p.id, p.name]));
+  if (!nameOf.has(d.partner_id)) nameOf.set(d.partner_id, null);
+  const dupR = await query('sales_orders', `?partner_id=in.(${[...nameOf.keys()].map(encodeURIComponent).join(',')})&partner_po_ref=ilike.${encodeURIComponent(ref)}&status=neq.cancelled&select=order_no,status,partner_id&limit=20`);
+  if (!dupR.ok) return { error: 'Could not check for an existing order with this PO ref — please try again', status: 502 };
+  if (!dupR.data?.length) return null;
+  const list = dupR.data.map(o => `${o.order_no} (${o.status}${nameOf.get(o.partner_id) ? `, ${nameOf.get(o.partner_id)}` : ''})`).join(', ');
+  return { status: 409,
+    error: `PO ${ref} is already on ${list}. Tick "import it again as a separate order" to save it anyway.` };
+}
+
+// Hand-picked PO-code → product matches into sales.sku_map (decided 2026-11-09: shared with Odo).
+// maps: [{ channel_key, channel_sku, product_code } | { channel_key, channel_sku, product, model, color }]
+// The triple form is what OrderForm knows; it must resolve to exactly ONE active non-remote
+// product_master row or the mapping is skipped (reported, never guessed).
+// ⛔ ON CONFLICT DO NOTHING (Prefer: resolution=ignore-duplicates): an existing mapping — Odo's
+// manual/seed rows included — is never overwritten from a sales order.
+// `channelKey` = the order's PARTNER's channel: a mapping for any other channel, or for a
+// channel PO import does not cover (GT, MT…), is dropped — an import can only teach its own channel.
+async function learnSkuMappings(maps, userId, channelKey) {
+  const skipped = [];
+  const own = String(channelKey || '').trim().toUpperCase();
+  const list = [];
+  for (const m of (Array.isArray(maps) ? maps : []).slice(0, SO_IMPORT_MAX_LINES)) {
+    const x = {
+      channel_key: String(m?.channel_key || '').trim().toUpperCase(),
+      channel_sku: String(m?.channel_sku || '').trim(),
+      product_code: String(m?.product_code || '').trim() || null,
+      product: m?.product || null, model: m?.model || null, color: m?.color || null,
+    };
+    if (!x.channel_key || !x.channel_sku || !(x.product_code || x.product)) continue;
+    if (!SO_IMPORT_CHANNELS.includes(x.channel_key) || x.channel_key !== own) {
+      skipped.push({ ...x, reason: `not this order's channel (${own || 'none'})` });
+      continue;
+    }
+    list.push(x);
+  }
+  if (!list.length) return { learned: [], skipped };
+  const keys = [...new Set(list.map(m => m.channel_key))];
+  const codes = [...new Set(list.map(m => m.product_code).filter(Boolean))];
+  const fams = [...new Set(list.filter(m => !m.product_code).map(m => m.product))];
+  const sel = 'select=product_code,product,model,color,is_active,component_type';
+  const [chR, byCodeR, byFamR] = await Promise.all([
+    query('sales_channels', `?channel_key=in.(${soImportIn(keys)})&select=channel_key,dispatch_channel_id`),
+    codes.length ? queryPublic('product_master', `?product_code=in.(${soImportIn(codes)})&${sel}`) : Promise.resolve({ ok: true, data: [] }),
+    fams.length ? queryPublic('product_master', `?product=in.(${soImportIn(fams)})&is_active=eq.true&${sel}`) : Promise.resolve({ ok: true, data: [] }),
+  ]);
+  if (!chR.ok || !byCodeR.ok || !byFamR.ok) return { learned: [], skipped: list.map(m => ({ ...m, reason: 'lookup failed' })), error: 'lookup failed' };
+  const chId = new Map((chR.data || []).map(r => [r.channel_key, r.dispatch_channel_id]));
+  // A product_code must be a live, sellable variant — same bar as the triple path below.
+  const known = new Set((byCodeR.data || []).filter(r => r.is_active !== false && r.component_type !== 'remote').map(r => r.product_code));
+  const same = (a, b) => String(a || '').trim() === String(b || '').trim();
+  const rows = [], seen = new Set();
+  for (const m of list) {
+    const channel_id = chId.get(m.channel_key);
+    if (!channel_id) { skipped.push({ ...m, reason: 'channel has no dispatch channel' }); continue; }
+    let pc = m.product_code;
+    if (pc && !known.has(pc)) { skipped.push({ ...m, reason: 'unknown, inactive or remote product_code' }); continue; }
+    if (!pc) {
+      const hits = (byFamR.data || []).filter(r => r.component_type !== 'remote' && same(r.product, m.product) && same(r.model, m.model) && same(r.color, m.color));
+      if (hits.length !== 1) { skipped.push({ ...m, reason: hits.length ? 'more than one product matches' : 'no product matches' }); continue; }
+      pc = hits[0].product_code;
+    }
+    const k = `${channel_id}|${m.channel_sku}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    rows.push({ channel_id, channel_sku: m.channel_sku, product_code: pc, match_on: 'so_import', created_by: userId || null });
+  }
+  if (!rows.length) return { learned: [], skipped };
+  const r = await salesSchema('/rest/v1/sku_map?on_conflict=channel_id,channel_sku', {
+    method: 'POST', body: JSON.stringify(rows), prefer: 'resolution=ignore-duplicates,return=representation',
+  });
+  if (!r.ok) return { learned: [], skipped, error: typeof r.data === 'string' ? r.data : JSON.stringify(r.data) };
+  const inserted = new Set((Array.isArray(r.data) ? r.data : []).map(x => `${x.channel_id}|${x.channel_sku}`));
+  for (const row of rows) if (!inserted.has(`${row.channel_id}|${row.channel_sku}`)) skipped.push({ ...row, reason: 'already mapped — kept the existing mapping' });
+  return { learned: rows.filter(row => inserted.has(`${row.channel_id}|${row.channel_sku}`)).map(x => ({ channel_sku: x.channel_sku, product_code: x.product_code })), skipped };
+}
+// createSalesOrder's learn step: ONLY on the import path, bound to the order's channel.
+async function learnFromImportOrder(d, partner, userId) {
+  if (!d.from_import || !Array.isArray(d.learn_mappings) || !d.learn_mappings.length) return null;
+  return learnSkuMappings(d.learn_mappings, userId, partner?.channel_key || null);
+}
+// ── end channel PO import ──
+
 // Batched loader: orders[] → { [sales_order_id]: { request, shipments:[{...,_shipped_units}], legacyShipment } }.
 // New orders link via a fulfilment request; legacy (pre-cutover) orders link via the single
 // sales_orders.dispatch_shipment_id — both paths resolved here so historical orders keep their dates/status.
@@ -6655,6 +7000,13 @@ export default {
             const pr = await query('sales_partners', `?id=eq.${encodeURIComponent(d.partner_id)}&select=channel_key,default_credit_days&limit=1`);
             if (!pr.ok || !pr.data[0]) return err('Partner not found', 404);
             const partner = pr.data[0];
+            // Import PO: re-run the duplicate check at SAVE — the preview's can be minutes old, and
+            // two people can import the same PO file. A repeat is allowed (one PO split across two
+            // SOs is normal — Flipkart today) but only when the user ticked "import it again":
+            // `confirm_duplicate_po_ref: true`. Before nextSeq4, so a refusal burns no SO- number.
+            // Only on the import path: hand-entered orders are not checked at all, as before.
+            const dupRefusal = await importDuplicateRefusal(d, partner.channel_key);
+            if (dupRefusal) return err(dupRefusal.error, dupRefusal.status);
             const order_no = await nextSeq4('sales_order', 'SO-');
             // HSN/GST default in from the product master, corrections sync back out.
             const hsnMaster = await hsnMasterAll();
@@ -6681,10 +7033,26 @@ export default {
             const li = await insert('sales_order_lines', lineRows, false);
             if (!li.ok) return err('Line insert failed: ' + JSON.stringify(li.data));
             const hsnSynced = await syncHsnToMaster(hsnPlan, authResult?.fullName || postRole, postRole, order_no);
+            // Import PO: hand-picked code → product matches go into sales.sku_map (insert-if-absent).
+            // AFTER the order exists and best-effort — a mapping hiccup must not lose a saved order.
+            let skuLearn = null;
+            try { skuLearn = await learnFromImportOrder(d, partner, userId); }
+            catch (e) { console.error('learnSkuMappings failed:', e); skuLearn = { learned: [], skipped: [], error: String(e?.message || e) }; }
             // Reject→cancel sweep (see reconcileRejections). Best-effort: never fails the create.
             try { await reconcileRejections(); } catch (e) { console.error('reconcileRejections failed:', e); }
             return ok({ id: order.id, order_no, hsn_synced: hsnSynced, hsn_realigned: hsnPlan.realign,
-                        hsn_blocked: hsnPlan.blocked, hsn_gaps: hsnGaps(lines, hsnMaster) });
+                        hsn_blocked: hsnPlan.blocked, hsn_gaps: hsnGaps(lines, hsnMaster),
+                        ...(skuLearn ? { sku_learned: skuLearn.learned, sku_skipped: skuLearn.skipped, sku_learn_error: skuLearn.error || null } : {}) });
+          }
+
+          // Import PO step 1 — read-only. The browser has parsed the file; this resolves partner +
+          // products and returns the pre-fill (see previewSalesOrderImport). A PO already on an SO
+          // comes back as `duplicate_of`, never a refusal.
+          case 'previewSalesOrderImport': {
+            if (!canSalesManage(P)) return err('No permission', 403);
+            const r = await previewSalesOrderImport(body.data || {});
+            if (r.error) return err(r.error, r.status || 400);
+            return ok(r.data);
           }
 
           case 'updateSalesOrder': {

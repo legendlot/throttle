@@ -1,0 +1,30 @@
+Purchase Order
+Vendor Details  PO Details
+Name:  FRATERNITAS VENTURES PRIVATE LIMITED  PO No:  P6150806  Gate Pass
+Address:  1st Floor Social Coworking spaces Community Horamavu Main Road Outer Ring Rd,  above KFC, Banaswadi,  PO Date:  2026-11-05
+Name:  FRATERNITAS VENTURES PRIVATE LIMITED  PO Release Date:  2026-11-05
+Postal Code:  560043  Payment Terms:
+GSTIN:  29AAFCF7834H1ZA  Expected Delivery Date:  2026-11-06
+PAN:  AAFCF7834H  PO Expiry Date:  2026-12-12
+Billing Address  Shipping Address
+ZEPTO LIMITED (Formerly known as Zepto Private Limited and Kiranakart Technologies Private Limited)  ZEPTO LIMITED (Formerly known as Zepto Private Limited and Kiranakart Technologies Private Limited)
+Address:  MUM-SS-MH-SHAKTI (MUM175M)  Address:  MUM-SS-MH-SHAKTI (MUM175M)
+R2,Shakti Logistics Park Phase 2,Dohale village,Post Padgha, Bhiwandi,thane,Maharashtra 421302  R2,Shakti Logistics Park Phase 2,Dohale village,Post Padgha, Bhiwandi,thane,Maharashtra 421302
+GSTIN:  27AAICK4821A1ZV  GSTIN:  27AAICK4821A1ZV
+PAN:  AAICK4821A  PAN:  AAICK4821A
+Unit Base  Taxable  CGST  SGST  IGST  CESS  Additional
+Sr.  Material Code  Item Description  SKU Code  HSN Code  EAN No  Quantity  MRP/RSP  Total(INR)
+Cost  Value INR  Rate  AMT  Rate  AMT  Rate  AMT  Rate  AMT  Cess
+Legend of Toys Shadow Remote Control
+05285852-99e0-4b15-
+1  96747869  Drift Car 20Kmph 2.4Ghz | LED Lights  95030030  5949999234230  12  3999.00  1203.86  14446.27  0.00%  0.00  0.00%  0.00  18.00%  2600.33  0.00%  0.00  0.00  17046.60
+8ce1-d8dc026e4bf4
+Asphalt Black - 1 pc
+Legend of Toys Shadow Remote Control
+125e53c2-3c24-423d-
+2  37743593  Drifting Car | 20Kmph 2.4Ghz | Multi  95030030  5949998500299  24  3999.00  1203.86  28892.54  0.00%  0.00  0.00%  0.00  18.00%  5200.66  0.00%  0.00  0.00  34093.20
+8388-4ff47200d1ac
+Mode | Black - 1 pc
+Total Taxable Amount (INR)  43338.81
+Total Tax (INR)  7800.99
+Grand Total Amount (INR)  51139.80
