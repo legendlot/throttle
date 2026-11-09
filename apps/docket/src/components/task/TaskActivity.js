@@ -16,6 +16,8 @@ import { HistoryPanel } from '../HistoryPanel.js';
 export const TaskActivity = forwardRef(function TaskActivity({ task, session, onChange, tab, setTab, onSetOwner }, composerRef) {
   const { user } = useAuth();
   const { showToast } = useToast();
+  // Abandoned = read-only, comments included (worker refuses them since functionality F1 / G3).
+  const locked = task?.status === 'abandoned';
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -55,10 +57,10 @@ export const TaskActivity = forwardRef(function TaskActivity({ task, session, on
           <div className="tv-feed-empty">
             <div className="tv-feed-empty-t">No comments yet</div>
             <div className="tv-feed-empty-s">Start the conversation on this task.</div>
-            <div className="tv-suggest">
+            {!locked && <div className="tv-suggest">
               <button type="button" className="tv-suggest-chip" onClick={() => composerRef?.current?.focus()}><AtSign size={13} />Mention a teammate</button>
               {onSetOwner && <button type="button" className="tv-suggest-chip" onClick={onSetOwner}><UserPlus size={13} />Set an owner</button>}
-            </div>
+            </div>}
           </div>
         ) : comments.map(c => (
           <div key={c.id} className="tv-comment">
@@ -68,7 +70,7 @@ export const TaskActivity = forwardRef(function TaskActivity({ task, session, on
                 <span className="tv-comment-a">{c.author_name || 'User'}</span>
                 <span className="tv-comment-t">{fmtDateTime(c.created_at)}{c.edited_at ? ' · edited' : ''}</span>
               </div>
-              {editId === c.id ? (
+              {editId === c.id && !locked ? (
                 <div>
                   <textarea className="tv-input" value={editBody} onChange={e => setEditBody(e.target.value)} rows={2} />
                   <div className="tl-pop-actions">
@@ -78,7 +80,7 @@ export const TaskActivity = forwardRef(function TaskActivity({ task, session, on
                 </div>
               ) : <>
                 <div className="tv-comment-b">{c.body}</div>
-                {c.author_user_id === user?.id && (
+                {c.author_user_id === user?.id && !locked && (
                   <div className="tv-comment-acts">
                     <button type="button" onClick={() => { setEditId(c.id); setEditBody(c.body); }}>Edit</button>
                     <button type="button" onClick={() => del(c.id)}>Delete</button>
@@ -90,7 +92,10 @@ export const TaskActivity = forwardRef(function TaskActivity({ task, session, on
         ))}
       </div>
 
-      {tab === 'comments' && (
+      {tab === 'comments' && locked && (
+        <div className="tv-composer tv-hint">This task is abandoned — reactivate it to comment.</div>
+      )}
+      {tab === 'comments' && !locked && (
         <div className="tv-composer">
           <textarea ref={composerRef} className="tv-input" value={body} onChange={e => setBody(e.target.value)} rows={2} disabled={busy}
             placeholder="Write a comment…" aria-label="Write a comment"

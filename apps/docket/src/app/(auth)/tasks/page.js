@@ -32,8 +32,8 @@ const GROUP_OPTS = [
   { value: 'none', label: 'No grouping' }, { value: 'person', label: 'Owner' },
   { value: 'department', label: 'Team' }, { value: 'status', label: 'Status' }, { value: 'program', label: 'Program' },
 ];
-// Group axis → the createTask field a group-foot capture prefills (status is set
-// with a follow-up changeStatus: createTask always starts a task as not_started).
+// Group axis → the createTask field a group-foot capture prefills (status included —
+// createTask takes an initial status since functionality F1).
 const GROUP_FIELD = { person: 'owner_employee_id', department: 'department_id', program: 'program_id', status: 'status' };
 
 // IST calendar date 'YYYY-MM-DD' (My tasks "Today & overdue" boundary).
@@ -277,18 +277,12 @@ export default function TasksPage() {
     const body = mineMode ? { title, assign_self: true }
       : inProgramMode ? { title, space_id: (programSpace || programDefaultSpace) || undefined, program_id: viewProgramId }
       : { title, space_id: spaceId || undefined };
-    if (field && field !== 'status' && value) body[field] = value;
-    let statusErr = null;
+    // A status group's value goes in the create itself (worker F1): one write, one history row.
+    if (field && value && !(field === 'status' && value === 'abandoned')) body[field] = value;
     try {
-      const r = await docketopsPost('createTask', body, session);
-      if (field === 'status' && value && value !== 'not_started' && r?.id) {
-        try { await docketopsPost('changeStatus', { id: r.id, status: value }, session); }
-        catch (se) { statusErr = se.message || 'unknown error'; }
-      }
+      await docketopsPost('createTask', body, session);
       await load();
       if (inProgramMode && typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed')); // sidebar count
-      // One message: a half-done create (task made, status not set) is not a success.
-      if (statusErr) { showToast(`Task created, but its status was not set (${statusErr}) — it is Not started`, 'error'); return true; }
       // Without an owner AND a deadline a new task lands in The Grid (RULE-DOCKET-001).
       showToast(mineMode ? 'Added to your list' : inProgramMode ? 'Added to program — in The Grid until it has an owner and a deadline' : 'Captured to The Grid', 'success');
       return true;

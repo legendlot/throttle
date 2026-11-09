@@ -249,7 +249,7 @@ function ColumnHead({ col, count, statusAxis, onCollapse, onAdd }) {
 
 // "+ Add task" at a column's foot: a button that opens an inline capture. Enter adds and
 // stays open for the next one; Esc / blur-when-empty closes. The page prefills the
-// column's value (status via a follow-up changeStatus — same path as the list's group foot).
+// column's value (status included in the create since F1 — same path as the list's group foot).
 function ColumnAdd({ col, create }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');

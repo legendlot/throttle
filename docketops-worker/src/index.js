@@ -199,6 +199,10 @@ async function logHistoryBatch(env, actor, rows) {
     }))),
   });
 }
+// Abandoned tasks are read-only (decisions §[docket] abandoned read-only, functionality F1/G3): every
+// single-task write refuses them except changeStatus, which is the Reactivate path.
+const abandonedRO = () => err('abandoned_read_only: reactivate the task first', 422);
+
 async function loadTask(id, env) {
   const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(id)}&select=*&limit=1`, env);
   return (r.ok && r.data?.[0]) || null;
@@ -1042,6 +1046,12 @@ async function createTaskCore(d, auth, env) {
   // deadline) is optional and enriched later — the task lands in "The Grid" until it
   // has both an owner and a deadline. (RULE-DOCKET-001, V2.)
   if (!d.title || !String(d.title).trim()) return err('title required', 400);
+  // Optional initial status (a status-group "+ Add task"), so it is one write + one history row.
+  if (d.status != null && d.status !== '' && !d.is_recurring) {
+    if (d.status === 'abandoned') return err('use abandonTask to abandon (reason required)', 422);
+    if (!['not_started', 'in_progress', 'done', 'blocked'].includes(d.status)) return err('invalid status', 400);
+  }
+  const initStatus = d.is_recurring ? 'in_progress' : (d.status || 'not_started');
 
   // Recurring (checklist) task: validate the rule, force top-level, default owner = caller.
   const isRecurring = !!d.is_recurring;
@@ -1062,6 +1072,7 @@ async function createTaskCore(d, auth, env) {
     const parent = await loadTask(parentId, env);
     if (!parent) return err('parent_not_found', 404);
     if (parent.parent_task_id) return err('one_level_only: parent is already a sub-task', 422);
+    if (parent.status === 'abandoned') return abandonedRO();
     spaceId = parent.space_id; // a sub-task always lives in its parent's space
     // A sub-task inherits owner / program / team from its parent unless the caller
     // explicitly set them (speed-create passes title only — these fill in from the parent).
@@ -1079,7 +1090,8 @@ async function createTaskCore(d, auth, env) {
     body: JSON.stringify([{
       task_no, title: String(d.title).trim(), description: d.description || null,
       department_id: d.department_id || null, owner_employee_id: d.owner_employee_id || null,
-      status: isRecurring ? 'in_progress' : 'not_started', priority: d.priority || 'P2',
+      status: initStatus, priority: d.priority || 'P2',
+      completed_at: initStatus === 'done' ? nowIso() : null,
       parent_task_id: parentId, created_by_user_id: auth.userId,
       deadline: d.deadline || null, custom_fields: d.custom_fields || {},
       space_id: spaceId, program_id: d.program_id || null,
@@ -1098,8 +1110,8 @@ async function createTaskCore(d, auth, env) {
       .map(x => ({ task_id: task.id, title: x.title || null, url: x.url.trim(), added_by: auth.userId }));
     if (rows.length) await sbDocket(`/rest/v1/task_documents`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows) });
   }
-  await logHistory(env, task.id, auth.userId, parentId ? 'created' : 'created',
-    { note: parentId ? 'sub-task' : null });
+  await logHistory(env, task.id, auth.userId, 'created',
+    { note: parentId ? 'sub-task' : null, ...(initStatus !== 'not_started' && !isRecurring ? { field: 'status', new: initStatus } : {}) });
   return ok({ id: task.id, task_no: task.task_no });
 }
 async function createTask(body, auth, env)    { return createTaskCore(body.data || body, auth, env); }
@@ -1122,6 +1134,7 @@ async function updateRecurrence(body, auth, env) {
   if (!task) return err('not_found', 404);
   if (!task.is_recurring) return err('not_a_recurring_task', 422);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
   const rec = normalizeRecurrence(d.recurrence);
   const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, {
     method: 'PATCH', prefer: 'return=minimal',
@@ -1139,6 +1152,7 @@ async function toggleChecklistOccurrence(body, auth, env) {
   if (!task) return err('not_found', 404);
   if (!task.is_recurring) return err('not_a_recurring_task', 422);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
   const date = d.date || istDateStr();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('invalid date', 400);
   const completed = d.completed === true || d.completed === 'true';
@@ -1358,6 +1372,7 @@ async function updateTask(body, auth, env) {
   const task = await loadTask(d.id, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
 
   const updates = {}; const changes = [];
   for (const f of EDITABLE) {
@@ -1407,6 +1422,7 @@ async function reviseDeadline(body, auth, env) {
   const task = await loadTask(d.id, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
   const prevEffective = task.revised_deadline || task.deadline;
   const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, {
     method: 'PATCH', body: JSON.stringify({ revised_deadline: d.new_deadline, updated_by: auth.userId, updated_at: nowIso() }),
@@ -1627,6 +1643,7 @@ async function abandonTask(body, auth, env) {
   const task = await loadTask(d.id, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
   const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, {
     method: 'PATCH', body: JSON.stringify({
       status: 'abandoned', abandoned_at: nowIso(), abandoned_by: auth.userId,
@@ -1644,12 +1661,14 @@ async function setParent(body, auth, env) {
   const task = await loadTask(d.id, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
   const newParent = d.parent_task_id || null;
   if (newParent) {
     if (newParent === task.id) return err('a task cannot be its own parent', 422);
     const parent = await loadTask(newParent, env);
     if (!parent) return err('parent_not_found', 404);
     if (parent.parent_task_id) return err('one_level_only: parent is already a sub-task', 422);
+    if (parent.status === 'abandoned') return abandonedRO();
     const kids = await sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(task.id)}&select=id&limit=1`, env);
     if (kids.ok && kids.data?.length) return err('one_level_only: this task already has sub-tasks', 422);
   }
@@ -1668,6 +1687,7 @@ async function moveTask(body, auth, env) {
   const task = await loadTask(d.id, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
   const target = await loadSpace(d.space_id, env);
   if (!target) return err('space_not_found', 404);
   if (!(await canAccessSpace(auth, target, env))) return err('forbidden_space', 403);
@@ -1687,6 +1707,7 @@ async function addCollaborator(body, auth, env) {
   const task = await loadTask(d.id, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
   const r = await sbDocket(`/rest/v1/task_collaborators?on_conflict=task_id,employee_id`, env, {
     method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates',
     body: JSON.stringify({ task_id: d.id, employee_id: d.employee_id, added_by: auth.userId }),
@@ -1701,6 +1722,7 @@ async function removeCollaborator(body, auth, env) {
   const task = await loadTask(d.id, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
   await sbDocket(`/rest/v1/task_collaborators?task_id=eq.${enc(d.id)}&employee_id=eq.${enc(d.employee_id)}`, env,
     { method: 'DELETE', prefer: 'return=minimal' });
   await logHistory(env, task.id, auth.userId, 'collaborator_removed', { field: 'collaborator', old: d.employee_id });
@@ -1714,6 +1736,7 @@ async function addDocument(body, auth, env) {
   const task = await loadTask(d.id, env);
   if (!task) return err('not_found', 404);
   if (!(await canSeeTask(auth, task, env))) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
   const r = await sbDocket(`/rest/v1/task_documents`, env, {
     method: 'POST',
     body: JSON.stringify([{ task_id: d.id, title: d.title || null, url: d.url.trim(), added_by: auth.userId }]),
@@ -1731,6 +1754,7 @@ async function removeDocument(body, auth, env) {
   const task = await loadTask(doc.task_id, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task) && doc.added_by !== auth.userId) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
   await sbDocket(`/rest/v1/task_documents?id=eq.${enc(d.document_id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
   await logHistory(env, task.id, auth.userId, 'document_removed', { field: 'document', old: doc.title || doc.url });
   return ok({ removed: d.document_id });
@@ -1742,6 +1766,7 @@ async function addComment(body, auth, env) {
   const task = await loadTask(d.id, env);
   if (!task) return err('not_found', 404);
   if (!(await canSeeTask(auth, task, env))) return err('forbidden', 403);
+  if (task.status === 'abandoned') return abandonedRO();
   const r = await sbDocket(`/rest/v1/task_comments`, env, {
     method: 'POST', body: JSON.stringify([{ task_id: d.id, author_user_id: auth.userId, body: String(d.body).trim() }]),
   });
@@ -1755,6 +1780,8 @@ async function editComment(body, auth, env) {
   const c = cRes.ok && cRes.data?.[0];
   if (!c) return err('not_found', 404);
   if (c.author_user_id !== auth.userId && !isAdmin(auth)) return err('forbidden', 403);
+  const ct = await loadTask(c.task_id, env);
+  if (ct?.status === 'abandoned') return abandonedRO();
   const r = await sbDocket(`/rest/v1/task_comments?id=eq.${enc(d.comment_id)}`, env, {
     method: 'PATCH', body: JSON.stringify({ body: String(d.body).trim(), edited_at: nowIso() }),
   });
@@ -1768,6 +1795,9 @@ async function deleteComment(body, auth, env) {
   const c = cRes.ok && cRes.data?.[0];
   if (!c) return err('not_found', 404);
   if (c.author_user_id !== auth.userId && !isAdmin(auth)) return err('forbidden', 403);
+  // Admins may still remove a comment on an abandoned task (no reactivate/re-abandon dance).
+  const ct = await loadTask(c.task_id, env);
+  if (ct?.status === 'abandoned' && !isAdmin(auth)) return abandonedRO();
   await sbDocket(`/rest/v1/task_comments?id=eq.${enc(d.comment_id)}`, env, {
     method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ deleted_at: nowIso() }),
   });

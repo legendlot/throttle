@@ -45,8 +45,8 @@ Found during the redesign and confirmed in `docketops-worker/src/index.js`:
   (not `abandoned`), log a single `created` row.
 - Single-task `updateTask` and `reviseDeadline` don't refuse **abandoned** tasks. The bulk paths do, and the UI
   is already read-only. Fix: return 422 `abandoned_read_only` server-side.
-- `list_my_tasks`: the owner/collaborator branches don't filter `archived_at`. Verify live, then fix in a
-  migration.
+- ~~`list_my_tasks`: the owner/collaborator branches don't filter `archived_at`.~~ Verified 2026-11-09: no-op.
+  `tasks.archived_at` is never written (0 rows), and `list_tasks` doesn't read it either. Nothing to fix.
 - Comment add/edit on an abandoned task: decide with the line above (§5 G3).
 
 ### F2 — Capture that lands complete (recommended · 1 session · frontend only)
@@ -97,7 +97,7 @@ the team asks.
 cheaper to keep accurate, but none of them brings people back. Whether the wider team uses Docket is set by
 whoever runs reviews from it. F4's manager view exists to make that review cheap.
 
-## 5. Decisions for Afshaan
+## 5. Decisions for Afshaan — ✅ SETTLED 2026-11-09: all recommendations accepted ("Yes, start F1")
 
 - **G1 — which packages?** Recommended: F1 + F2 + F3 + F4 + F5, in that order. F6 only on request.
 - **G2 — quick-add tokens (F2):** parse `@name`, `!p1` and dates out of the title? Recommended: yes.
