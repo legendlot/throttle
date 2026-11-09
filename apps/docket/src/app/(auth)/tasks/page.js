@@ -29,7 +29,9 @@ const PROGRAM_GRID_COLS = 'minmax(230px,1fr) 130px 150px 132px 76px 140px 46px';
 export default function TasksPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
-  const { setCount } = useChrome();
+  // shellModalOpen: a layout-owned modal (sidebar ⋯ SpaceSettings, shortcuts sheet) is
+  // up — page hotkeys must not fire behind it.
+  const { setCount, shellModalOpen } = useChrome();
   const router = useRouter();
   const search = useSearchParams();
 
@@ -126,7 +128,7 @@ export default function TasksPage() {
     if (!el) return;
     e.preventDefault();
     try { el.focus(); el.select?.(); } catch { /* ignore */ }
-  }, { enabled: !drawerId && !newSpaceOpen && !spaceSettingsOpen });
+  }, { enabled: !drawerId && !newSpaceOpen && !spaceSettingsOpen && !shellModalOpen });
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -152,10 +154,23 @@ export default function TasksPage() {
   }, [session, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, mine, showToast]);
   useEffect(() => { load(); }, [load]);
 
-  function refreshSpaces() {
+  // fetchSpaces only re-reads; refreshSpaces also tells the shell (sidebar) to re-read.
+  // The listener below calls fetchSpaces, never refreshSpaces, so a page-side change
+  // (dispatch → listener → fetch) can't re-dispatch and loop.
+  const fetchSpaces = useCallback(() => {
+    if (!session) return;
     docketopsGet('getSpaces', {}, session).then(s => setSpaces(s || [])).catch(() => {});
+  }, [session]);
+  function refreshSpaces() {
+    fetchSpaces();
     if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:spaces-changed'));
   }
+  // The shell's sidebar ⋯ (SpaceSettings in the layout) renames / archives / transfers
+  // spaces too — keep this page's own `spaces` (bulk Move list, ProgramCapture, is_owner) in step.
+  useEffect(() => {
+    window.addEventListener('docket:spaces-changed', fetchSpaces);
+    return () => window.removeEventListener('docket:spaces-changed', fetchSpaces);
+  }, [fetchSpaces]);
 
   const tokens = useMemo(() => q.trim().toLowerCase().split(/\s+/).filter(Boolean), [q]);
   const matchesQuery = useCallback((t) => {
@@ -368,7 +383,7 @@ export default function TasksPage() {
       const ae = document.activeElement;
       const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable);
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (drawerId) return;
+      if (drawerId || shellModalOpen) return;
       if (e.key === 'f') { e.preventDefault(); setFilterOpen(o => !o); }
       else if (e.key === 'g') { e.preventDefault(); setGroupMenu(m => !m); }
       else if ((e.key === 'ArrowDown' || e.key === 'j') && !ae?.classList?.contains('row')) { e.preventDefault(); focusRow(1); }
@@ -376,7 +391,7 @@ export default function TasksPage() {
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [drawerId]);
+  }, [drawerId, shellModalOpen]);
 
   const rowCtx = {
     saveField, abandonInline, reviseInline, addSubtask, addCollab, childrenByParent,

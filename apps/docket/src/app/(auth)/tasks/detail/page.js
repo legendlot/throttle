@@ -15,9 +15,11 @@ import { DatePicker } from '../../../../components/DatePicker.js';
 import { SETTABLE_STATUSES, PRIORITIES, effectiveDeadline, isOverdue } from '../../../../lib/tasks.js';
 import { fmtDate, fmtDateTime } from '../../../../lib/format.js';
 import { useHotkey } from '../../../../lib/hotkeys.js';
+import { useChrome } from '../../../../lib/chrome.js';
 
 function DetailInner() {
   const { session } = useAuth();
+  const { shellModalOpen } = useChrome();
   const { showToast } = useToast();
   const router = useRouter();
   const id = useSearchParams().get('id');
@@ -65,7 +67,7 @@ function DetailInner() {
     if (!(canEdit && task && !task.parent_task_id && task.status !== 'abandoned')) return;
     const el = document.querySelector('[data-subtask-add]');
     if (el) { el.focus(); el.scrollIntoView({ block: 'nearest' }); }
-  }, { enabled: !!task && !modal && !editing });
+  }, { enabled: !!task && !modal && !editing && !shellModalOpen });
 
   function startEdit() {
     setForm({

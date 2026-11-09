@@ -1,147 +1,176 @@
 'use client';
-// Docket-local sidebar. Replaces the shared @throttle/ui Sidebar for Docket ONLY
-// (the shared one stays byte-for-byte for Garage/Redline). New visual language:
-// 248/64px collapse, soft-pill active state, grouped nav, space colour-dots, a
-// primary "New task" button, and a user footer with sign-out.
+// Docket context sidebar (ClickUp redesign P1). Sits between the icon rail and the
+// page; holds the hierarchy only — Programs, then Spaces (General · My spaces · By
+// others) — or, on an Admin route, the three admin pages.
 //
-// Collapsible nav groups (S138): Programs / My spaces / By others fold from their
-// header (chevron). Per-group open state is persisted per person in localStorage
-// (`docket.nav.collapsed`); Programs defaults open, the two space groups default
-// closed. Override: a group always renders open when it contains the active item.
-import { useState, useEffect, useCallback } from 'react';
-import { LayoutDashboard, ListChecks, ListTodo, Plus, NotebookPen, BookOpen, Settings, ChevronLeft, ChevronDown, LogOut } from 'lucide-react';
-import { Avatar, personColor } from './primitives.js';
+// Collapsible sections (S138): per-section open state is persisted per person in
+// localStorage (`docket.nav.collapsed`); Programs + Spaces default open, the two
+// space sub-groups default closed. Override: a section always renders open when it
+// holds the active row. "Customize sidebar" hides whole sections
+// (`docket.nav.hidden`); a hidden section still shows while it holds the active row.
+//
+// ≤767px the same element becomes a slide-over (CSS: `.dks.mobile-open`).
+import { useRef, useState, useEffect, useCallback } from 'react';
+import { ChevronDown, Plus, Lock, MoreHorizontal, SlidersHorizontal, Check } from 'lucide-react';
+import { IconButton, Button, Menu, MenuItem, MenuLabel } from './ui/index.js';
+import { personColor } from './primitives.js';
+import { ADMIN_ITEMS } from '../lib/nav.js';
 
-const DEFAULT_COLLAPSED = { programs: false, mySpaces: true, otherSpaces: true };
+const DEFAULT_COLLAPSED = { programs: false, spaces: false, mySpaces: true, otherSpaces: true };
+const HIDEABLE = [
+  { key: 'programs',    label: 'Programs' },
+  { key: 'mySpaces',    label: 'My spaces' },
+  { key: 'otherSpaces', label: 'By others' },
+];
 
-function NavItem({ icon: Ic, label, active, collapsed, onClick, sub, dot, dashed, count }) {
+function useStoredObject(key) {
+  const [val, setVal] = useState({});
+  useEffect(() => {
+    try { setVal(JSON.parse(localStorage.getItem(key) || '{}') || {}); } catch { /* ignore */ }
+  }, [key]);
+  const update = useCallback((fn) => {
+    setVal(prev => {
+      const next = fn(prev);
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, [key]);
+  return [val, update];
+}
+
+function Row({ label, active, onClick, depth = 0, lead, count, actions }) {
   return (
-    <div className={'sb-item' + (active ? ' active' : '') + (sub ? ' sub' : '')}
-      role="button" tabIndex={0} title={collapsed ? label : undefined} onClick={onClick}
+    <div className={'dks-row' + (active ? ' active' : '')} style={{ paddingLeft: 8 + depth * 12 }}
+      role="link" tabIndex={0} aria-current={active ? 'page' : undefined} onClick={onClick}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}>
-      {sub
-        ? <span className="dot" style={dashed ? { background: 'transparent', border: '1px dashed var(--border-strong)' } : { background: dot }} />
-        : <Ic className="ic" size={17} strokeWidth={1.75} />}
-      <span className="label">{label}</span>
-      {count != null && <span className="count">{count}</span>}
+      {lead && <span className="dks-lead">{lead}</span>}
+      <span className="dks-label">{label}</span>
+      {actions && <span className="dks-actions" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>{actions}</span>}
+      {count ? <span className="dks-count">{count}</span> : null}
     </div>
   );
 }
 
-// A collapsible group header. In the icon-rail (collapsed) sidebar it degrades to a
-// plain centered label (no chevron, children always shown — there's no room to expand).
-function GroupLabel({ label, open, collapsed, onToggle }) {
-  if (collapsed) return <div className="sb-group-label">{label}</div>;
+function SectionHead({ label, open, onToggle, depth = 0, onAdd, addLabel }) {
   return (
-    <button type="button" className={'sb-group-label btn' + (open ? '' : ' closed')} onClick={onToggle}>
-      <span>{label}</span>
-      <ChevronDown className="chev" size={13} strokeWidth={2} />
-    </button>
+    <div className="dks-head" style={{ paddingLeft: 8 + depth * 12 }}>
+      <button type="button" className="dks-head-btn" aria-expanded={open} onClick={onToggle}>
+        <span>{label}</span>
+        <ChevronDown className={'dks-caret' + (open ? '' : ' closed')} size={12} strokeWidth={2} aria-hidden />
+      </button>
+      {onAdd && <IconButton className="dks-add" icon={Plus} size="sm" label={addLabel} onClick={onAdd} />}
+    </div>
   );
 }
 
+const dot = (color) => <span className="dks-dot" style={{ background: color }} />;
+
 export function DocketSidebar({
-  activeKey = '', spaces = [], programs = [], canViewDashboard = false, isAdmin = false,
-  collapsed, onToggle, onSelect, onNewTask, userLabel = '', userRole = '', onSignOut,
+  activeKey = '', path = '', spaces = [], programs = [], isAdmin = false,
+  collapsed = false, mobileOpen = false, onSelect, onNewSpace, onSpaceSettings,
 }) {
   const privates = (spaces || []).filter(s => s.is_private);
   const mySpaces = privates.filter(s => s.is_owner);
   const otherSpaces = privates.filter(s => !s.is_owner);
   // General is the non-private (default) space. It carries a badge like any other
   // (S309); the worker omits task_count entirely when a space has no open work, so
-  // `count` stays undefined and NavItem renders nothing rather than a "0".
+  // `count` stays undefined and Row renders nothing rather than a "0".
   const general = (spaces || []).find(s => !s.is_private);
   const go = (route) => () => onSelect(route);
-  const isAdminActive = activeKey.startsWith('/admin');
-  const startsWith = (p) => activeKey === p || activeKey.startsWith(p + '/');
 
-  // Persisted per-group collapse state.
-  const [navCollapsed, setNavCollapsed] = useState({});
-  useEffect(() => {
-    try { setNavCollapsed(JSON.parse(localStorage.getItem('docket.nav.collapsed') || '{}')); } catch { /* ignore */ }
-  }, []);
-  const isGroupCollapsed = (key) => (key in navCollapsed ? navCollapsed[key] : DEFAULT_COLLAPSED[key]);
-  const toggleGroup = useCallback((key) => {
-    setNavCollapsed(prev => {
-      const cur = (key in prev ? prev[key] : DEFAULT_COLLAPSED[key]);
-      const next = { ...prev, [key]: !cur };
-      try { localStorage.setItem('docket.nav.collapsed', JSON.stringify(next)); } catch { /* ignore */ }
-      return next;
-    });
-  }, []);
+  const [navCollapsed, setNavCollapsed] = useStoredObject('docket.nav.collapsed');
+  const [hidden, setHidden] = useStoredObject('docket.nav.hidden');
+  const isCollapsed = (key) => (key in navCollapsed ? navCollapsed[key] : DEFAULT_COLLAPSED[key]);
+  const toggle = (key) => setNavCollapsed(prev => ({ ...prev, [key]: !(key in prev ? prev[key] : DEFAULT_COLLAPSED[key]) }));
 
-  // A group renders open if it's (default/manually) open OR it holds the active item;
-  // in the icon-rail there's no expand affordance, so always show children.
   const programActive = activeKey.startsWith('/tasks?program=');
   const mySpaceActive = mySpaces.some(s => activeKey === '/tasks?space=' + s.id);
   const otherSpaceActive = otherSpaces.some(s => activeKey === '/tasks?space=' + s.id);
-  const groupOpen = (key, hasActive) => collapsed || !isGroupCollapsed(key) || hasActive;
+  const spacesActive = activeKey === '/tasks' || mySpaceActive || otherSpaceActive;
+  const open = (key, hasActive) => !isCollapsed(key) || hasActive;
+  const shown = (key, hasActive) => !hidden[key] || hasActive;
+
+  const custRef = useRef(null);
+  const [custOpen, setCustOpen] = useState(false);
+
+  const spaceRow = (s) => (
+    <Row key={s.id} depth={2} label={s.name} count={s.task_count}
+      lead={<Lock size={12} strokeWidth={2} style={{ color: personColor(s.id) }} aria-label="Private" />}
+      active={activeKey === '/tasks?space=' + s.id} onClick={go('/tasks?space=' + s.id)}
+      actions={s.is_owner && onSpaceSettings
+        ? <IconButton icon={MoreHorizontal} size="sm" label="Space settings" onClick={() => onSpaceSettings(s)} />
+        : null} />
+  );
+
+  const cls = 'dks' + (collapsed ? ' collapsed' : '') + (mobileOpen ? ' mobile-open' : '');
+  // Collapsed on desktop = width 0: take it out of the tab order + a11y tree too. The
+  // mobile slide-over ignores the desktop collapse, so it's only inert while closed.
+  const inert = collapsed && !mobileOpen ? '' : undefined;
+
+  if (path.startsWith('/admin')) {
+    return (
+      <aside className={cls} inert={inert} aria-label="Admin">
+        <div className="dks-title">Admin</div>
+        <div className="dks-scroll">
+          {isAdmin && ADMIN_ITEMS.map(a => (
+            <Row key={a.key} label={a.label} active={path === a.key || path.startsWith(a.key + '/')} onClick={go(a.key)} />
+          ))}
+        </div>
+      </aside>
+    );
+  }
 
   return (
-    <aside className={'sb' + (collapsed ? ' collapsed' : '')}>
-      <div className="sb-head">
-        <img className="sb-mark" src="/favicon.svg" alt="Docket"
-          title={collapsed ? 'Expand sidebar  ( [ )' : undefined}
-          onClick={collapsed ? onToggle : undefined} style={{ cursor: collapsed ? 'pointer' : 'default' }} />
-        <div className="sb-word"><b>DOCKET</b><small>Task OS</small></div>
-        <button className="sb-collapse" onClick={onToggle} title="Collapse sidebar  ( [ )" aria-label="Collapse sidebar"><ChevronLeft size={15} /></button>
-      </div>
-
-      <button className="sb-new" onClick={onNewTask} title={collapsed ? 'New task' : undefined}>
-        <Plus size={16} strokeWidth={2} /><span>New task</span>
-      </button>
-
-      <div className="sb-scroll">
-        <div className="sb-group-label">Work</div>
-        {canViewDashboard && <NavItem icon={LayoutDashboard} label="Dashboard" collapsed={collapsed} active={startsWith('/dashboard')} onClick={go('/dashboard')} />}
-        <NavItem icon={ListChecks} label="My tasks" collapsed={collapsed} active={activeKey === '/tasks?lens=mine'} onClick={go('/tasks?lens=mine')} />
-
+    <aside className={cls} inert={inert} aria-label="Tasks">
+      <div className="dks-title">Tasks</div>
+      <div className="dks-scroll">
         {/* Programs (S138): cross-space jump-to — every task tagged to the program, in any
             space you can access. Only programs you have visible tasks in are listed (counts). */}
-        {programs.length > 0 && <>
-          <GroupLabel label="Programs" collapsed={collapsed} open={groupOpen('programs', programActive)} onToggle={() => toggleGroup('programs')} />
-          {groupOpen('programs', programActive) && programs.map(p => (
-            <NavItem key={p.id} sub dot={p.color || personColor(p.id)} label={p.name} count={p.task_count} collapsed={collapsed}
+        {programs.length > 0 && shown('programs', programActive) && <div className="dks-section">
+          <SectionHead label="Programs" open={open('programs', programActive)} onToggle={() => toggle('programs')} />
+          {open('programs', programActive) && programs.map(p => (
+            <Row key={p.id} depth={1} lead={dot(p.color || personColor(p.id))} label={p.name} count={p.task_count}
               active={activeKey === '/tasks?program=' + p.id} onClick={go('/tasks?program=' + p.id)} />
           ))}
-        </>}
+        </div>}
 
-        {/* Spaces, grouped for clarity: Common (General = the org-wide all-tasks board,
-            returned by the worker when no space_id is set), then the caller's own private
-            spaces, then private spaces others added them to. */}
-        <div className="sb-group-label">Common</div>
-        <NavItem sub dot="var(--text-4)" label="General" count={general?.task_count} collapsed={collapsed} active={activeKey === '/tasks'} onClick={go('/tasks')} />
+        {/* Spaces: General (the org-wide board — the worker's default when no space_id is
+            set), then the caller's own private spaces, then private spaces others added them to. */}
+        <div className="dks-section">
+          <SectionHead label="Spaces" open={open('spaces', spacesActive)} onToggle={() => toggle('spaces')}
+            onAdd={onNewSpace} addLabel="New space" />
+          {open('spaces', spacesActive) && <>
+            <Row depth={1} lead={dot('var(--text-4)')} label="General" count={general?.task_count}
+              active={activeKey === '/tasks'} onClick={go('/tasks')} />
 
-        <GroupLabel label="My spaces" collapsed={collapsed} open={groupOpen('mySpaces', mySpaceActive)} onToggle={() => toggleGroup('mySpaces')} />
-        {groupOpen('mySpaces', mySpaceActive) && <>
-          {mySpaces.map(s => (
-            <NavItem key={s.id} sub dot={personColor(s.id)} label={s.name} count={s.task_count} collapsed={collapsed}
-              active={activeKey === '/tasks?space=' + s.id} onClick={go('/tasks?space=' + s.id)} />
-          ))}
-          <NavItem sub dashed label="New space" collapsed={collapsed} active={false} onClick={go('/tasks?space=new')} />
-        </>}
+            {shown('mySpaces', mySpaceActive) && <>
+              <SectionHead depth={1} label="My spaces" open={open('mySpaces', mySpaceActive)} onToggle={() => toggle('mySpaces')} />
+              {open('mySpaces', mySpaceActive) && (mySpaces.length
+                ? mySpaces.map(spaceRow)
+                : <button type="button" className="dks-empty" style={{ paddingLeft: 32 }} onClick={onNewSpace}>+ New space</button>)}
+            </>}
 
-        {otherSpaces.length > 0 && <>
-          <GroupLabel label="By others" collapsed={collapsed} open={groupOpen('otherSpaces', otherSpaceActive)} onToggle={() => toggleGroup('otherSpaces')} />
-          {groupOpen('otherSpaces', otherSpaceActive) && otherSpaces.map(s => (
-            <NavItem key={s.id} sub dot={personColor(s.id)} label={s.name} count={s.task_count} collapsed={collapsed}
-              active={activeKey === '/tasks?space=' + s.id} onClick={go('/tasks?space=' + s.id)} />
-          ))}
-        </>}
-
-        <div className="sb-group-label">Personal</div>
-        <NavItem icon={ListTodo} label="Checklist" collapsed={collapsed} active={startsWith('/checklist')} onClick={go('/checklist')} />
-        <NavItem icon={NotebookPen} label="Scratchpad" collapsed={collapsed} active={startsWith('/scratchpad')} onClick={go('/scratchpad')} />
-
-        <div className="sb-group-label">System</div>
-        <NavItem icon={BookOpen} label="Manual" collapsed={collapsed} active={startsWith('/manual')} onClick={go('/manual')} />
-        {isAdmin && <NavItem icon={Settings} label="Admin" collapsed={collapsed} active={isAdminActive} onClick={go('/admin/roles')} />}
+            {otherSpaces.length > 0 && shown('otherSpaces', otherSpaceActive) && <>
+              <SectionHead depth={1} label="By others" open={open('otherSpaces', otherSpaceActive)} onToggle={() => toggle('otherSpaces')} />
+              {open('otherSpaces', otherSpaceActive) && otherSpaces.map(spaceRow)}
+            </>}
+          </>}
+        </div>
       </div>
 
-      <div className="sb-foot">
-        <Avatar name={userLabel || '?'} size={32} />
-        <div className="who"><div className="nm">{userLabel}</div><div className="rl">{userRole}</div></div>
-        {onSignOut && <button className="signout" title="Sign out" onClick={onSignOut}><LogOut size={16} /></button>}
+      <div className="dks-foot">
+        <Button ref={custRef} variant="ghost" size="sm" icon={SlidersHorizontal} aria-haspopup="menu"
+          onClick={() => setCustOpen(o => !o)}>Customize sidebar</Button>
+        <Menu anchorRef={custRef} open={custOpen} onClose={() => setCustOpen(false)} width={200} label="Customize sidebar" className="dk-pop-top">
+          <MenuLabel>Show in sidebar</MenuLabel>
+          {HIDEABLE.map(h => (
+            <MenuItem key={h.key} keepOpen
+              icon={<Check size={14} style={{ opacity: hidden[h.key] ? 0 : 1 }} aria-hidden />}
+              onClick={() => setHidden(prev => ({ ...prev, [h.key]: !prev[h.key] }))}>
+              {h.label}
+            </MenuItem>
+          ))}
+        </Menu>
       </div>
     </aside>
   );

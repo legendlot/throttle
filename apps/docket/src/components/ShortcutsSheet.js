@@ -8,7 +8,7 @@ const BINDINGS = [
   ['c', 'Capture a task'],
   ['f', 'Filter'],
   ['g', 'Group by'],
-  ['[', 'Toggle sidebar'],
+  ['[ ⌘\\', 'Toggle sidebar'],
   ['↑↓ jk', 'Move between tasks'],
   ['Enter', 'Open task'],
   ['x', 'Toggle done'],
