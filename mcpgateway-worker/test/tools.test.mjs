@@ -13,7 +13,8 @@ test('every tool parse() returns { ok, value } on success (the shape the core pa
   const ok = { whoami: {}, odo_sales_summary: { from: '2026-11-01' }, odo_sales: { report: 'breakdown' }, odo_marketing: { report: 'spend' }, odo_dyno: { report: 'angles' },
     odo_funnel: { report: 'history' }, odo_amazon: { report: 'geo' }, odo_inventory: { report: 'thresholds' }, odo_pnl: { report: 'product_costs' }, odo_lookup: { report: 'channels' },
     docket_tasks: { report: 'my_tasks' }, docket_create_task: { title: 'x' }, docket_update_task: { id: U, priority: 'P1' }, docket_set_status: { id: U, status: 'done' },
-    docket_revise_deadline: { id: U, new_deadline: '2026-11-20', reason: 'r' }, docket_add_comment: { id: U, body: 'b' }, docket_abandon_task: { id: U, reason: 'r' } };
+    docket_revise_deadline: { id: U, new_deadline: '2026-11-20', reason: 'r' }, docket_add_comment: { id: U, body: 'b' }, docket_abandon_task: { id: U, reason: 'r' },
+    snorkel_procurement: { report: 'pos' }, snorkel_requests: { report: 'requests', mine: true }, snorkel_sales: { report: 'orders' }, snorkel_assets: { report: 'assets', category_id: 3 } };
   for (const t of TOOLS) {
     assert.ok(t.name in ok, `add ${t.name} to this test`);
     const p = t.parse(ok[t.name], NOW);
@@ -264,4 +265,89 @@ test('comment: a task you cannot open (private space) is refused before writing'
 test('Codex 2026-11-09: empty description clears; empty id means not given', async () => {
   assert.deepEqual(findTool('docket_update_task').parse({ id: U, description: '' }, NOW).value, { id: U, description: '' });
   assert.equal(findTool('docket_create_task').parse({ title: 'x', owner_employee_id: '' }, NOW).ok, true);
+});
+
+// ---- Snorkel (read-only), 2026-11-09. Role permission sets copied from live store.snorkel_roles.
+const SROLE = {
+  requester: { payment_request: true },
+  sales_rep: { sales_view: true, payment_request: true, sales_order_manage: true, sales_partner_manage: true },
+  store: { sales_view: true, payment_request: true, procurement_view: true },
+  approver: { asset_view: true, po_approve: true, payment_request: true, procurement_view: true },
+  jarvis_ro: { asset_view: true, sales_view: true, procurement_view: true },
+};
+const snk = perms => toolsFor({ systems: ['snorkel'], snorkel_perms: perms }).map(t => t.name).filter(n => n.startsWith('snorkel_')).sort();
+test('snorkel: each role sees exactly the areas its Snorkel role gates', () => {
+  assert.deepEqual(snk({}), []);
+  assert.deepEqual(snk(SROLE.requester), ['snorkel_requests']);
+  assert.deepEqual(snk(SROLE.sales_rep), ['snorkel_requests', 'snorkel_sales']);
+  assert.deepEqual(snk(SROLE.store), ['snorkel_procurement', 'snorkel_requests', 'snorkel_sales']);
+  assert.deepEqual(snk(SROLE.approver), ['snorkel_assets', 'snorkel_procurement', 'snorkel_requests']);
+  assert.deepEqual(snk(SROLE.jarvis_ro), ['snorkel_assets', 'snorkel_procurement', 'snorkel_requests', 'snorkel_sales']);
+  assert.deepEqual(toolsFor({ systems: ['odo'], snorkel_perms: SROLE.jarvis_ro, odo_perms: {} }).map(t => t.name), ['whoami']);
+  assert.equal(findTool('snorkel_procurement').deny({ snorkel_perms: SROLE.sales_rep }), 'snorkel denied');
+  assert.equal(findTool('snorkel_procurement').deny({ snorkel_perms: SROLE.store }), null);
+  assert.equal(findTool('snorkel_sales').deny({ snorkel_perms: SROLE.requester }), 'snorkel denied');
+  assert.equal(findTool('snorkel_assets').deny({ snorkel_perms: { asset_manage: true } }), null);
+});
+test('snorkel: no payment, bank, payee, export, diag, admin, address or download action is reachable', () => {
+  const acts = TOOLS.filter(t => t.system === 'snorkel').flatMap(t => Object.values(t.reports).map(r => r.action));
+  for (const a of acts) assert.doesNotMatch(a, /Payment|Bank|Payee|Finance|Export|diag|Download|DocUrl|SnorkelUsers|SnorkelRoles|Address|PrintPO|Invoice|Admin/i, a);
+  assert.ok(acts.length >= 30);
+});
+test('snorkel: contacts, addresses, bank and payment fields and user ids are dropped at any depth', async () => {
+  const data = { rows: [{ po_number: 'PO-1', vendor_name: 'V', raised_by_name: 'R', raised_by_user_id: 'uid', payment_status: 'paid', payment_note: 'utr 123', paid_by: 'x', payment_routed_to: 'y',
+    vendor: { vendor_code: 'V1', contact_name: 'N', contact_phone: '98', contact_email: 'a@b.co', address: 'addr', gstin: '27AAA', bank_account: '123', ifsc_code: 'X', udyam_number: 'U' },
+    sales_partners: { name: 'P', phone: '9', email: 'p@q.in', billing_address: 'b', shipping_address: 's', pincode: '400001', contact_person: 'c' }, notes: 'mail me at z@lot.com' }] };
+  const env = { SNORKELOPS: { fetch: async () => new Response(JSON.stringify({ ok: true, data }), { status: 200 }) } };
+  const t = findTool('snorkel_procurement');
+  const r = await t.run({ env, sbAccess: 'J', input: t.parse({ report: 'po', po_number: 'PO-1' }, NOW).value });
+  const row = r.data.result.rows[0];
+  assert.deepEqual(Object.keys(row).sort(), ['payment_status', 'po_number', 'raised_by_name', 'sales_partners', 'vendor', 'vendor_name']);
+  assert.deepEqual(row.vendor, { vendor_code: 'V1', gstin: '27AAA' });
+  assert.deepEqual(row.sales_partners, { name: 'P' });
+});
+test('snorkel: stock filters at the gateway; requests `mine` sends 1; asset ids are integers', async () => {
+  const seen = [];
+  const env = { SNORKELOPS: { fetch: async u => { seen.push(new URL(u)); return new Response(JSON.stringify({ ok: true, data: [{ product: 'VX', part_code: 'A' }, { product: 'MC', part_code: 'B' }, { product: 'vx', part_code: 'C' }] }), { status: 200 }); } } };
+  const t = findTool('snorkel_procurement');
+  const r = await t.run({ env, sbAccess: 'J', input: t.parse({ report: 'stock', product: 'VX' }, NOW).value });
+  assert.deepEqual(r.data.result, { rows: [{ product: 'VX', part_code: 'A' }, { product: 'vx', part_code: 'C' }], count: 2 });
+  const q = findTool('snorkel_requests').parse({ report: 'requests', mine: true }, NOW).value;
+  assert.equal(q.params.mine, '1');
+  assert.equal(findTool('snorkel_assets').parse({ report: 'assets', category_id: 'abc' }, NOW).ok, false);
+  assert.equal(findTool('snorkel_assets').parse({ report: 'assets', category_id: 4 }, NOW).value.params.category_id, '4');
+});
+
+test('snorkel reviews 2026-11-09: receipts, snapshots, free text and uuid *_by ids never leave; names stay', async () => {
+  const uid = '11111111-2222-4333-8444-555555555555';
+  const data = { id: U, status: 'confirmed', created_by: uid, created_by_name: 'Asha', confirmed_by: uid, cancel_reason: 'call 9820012345', raised_by: 'Ravi',
+    payments: [{ amount: '1000', reference: 'UTR123', note: 'acct 1234' }], revisions: [{ revision: 2, snapshot: '{"payment_note":"paid via HDFC 0012"}' }],
+    lines: [{ part_code: 'A', qty: '2', details: 'x', rejection_note: 'y' }], tracking_url: 'https://t/1' };
+  const env = { SNORKELOPS: { fetch: async () => new Response(JSON.stringify({ ok: true, data }), { status: 200 }) } };
+  const t = findTool('snorkel_sales');
+  const r = await t.run({ env, sbAccess: 'J', gate: { snorkel_perms: SROLE.sales_rep }, input: t.parse({ report: 'order', id: U }, NOW).value });
+  assert.deepEqual(r.data.result, { id: U, status: 'confirmed', created_by_name: 'Asha', raised_by: 'Ravi', revisions: [{ revision: 2 }], lines: [{ part_code: 'A', qty: '2' }] });
+});
+test('snorkel: per-screen gates (vendors, channels, credit notes, balances) refuse before calling the worker', async () => {
+  let calls = 0;
+  const env = { SNORKELOPS: { fetch: async () => { calls++; return new Response(JSON.stringify({ ok: true, data: [] }), { status: 200 }); } } };
+  const run = (tool, args, perms) => { const t = findTool(tool); return t.run({ env, sbAccess: 'J', gate: { snorkel_perms: perms }, input: t.parse(args, NOW).value }); };
+  assert.deepEqual(await run('snorkel_procurement', { report: 'vendors' }, SROLE.store), { ok: false, reason: 'snorkel denied' });
+  assert.deepEqual(await run('snorkel_procurement', { report: 'forwarders' }, SROLE.jarvis_ro), { ok: false, reason: 'snorkel denied' });
+  assert.deepEqual(await run('snorkel_sales', { report: 'channels' }, SROLE.store), { ok: false, reason: 'snorkel denied' });
+  assert.deepEqual(await run('snorkel_sales', { report: 'credit_notes' }, { sales_order_manage: true }), { ok: false, reason: 'snorkel denied' });
+  assert.deepEqual(await run('snorkel_sales', { report: 'party_balances' }, { sales_partner_manage: true }), { ok: false, reason: 'snorkel denied' });
+  assert.equal(calls, 0);
+  assert.equal((await run('snorkel_procurement', { report: 'vendors' }, { procurement_view: true, vendor_manage: true })).ok, true);
+  assert.equal((await run('snorkel_sales', { report: 'credit_notes' }, SROLE.sales_rep)).ok, true);
+});
+test('snorkel: removed reports are gone; catalogue reads need a filter; vendors_for_product needs po_category', async () => {
+  const acts = TOOLS.filter(t => t.system === 'snorkel').flatMap(t => Object.values(t.reports).map(r => r.action));
+  for (const a of ['getPendingInward', 'getPOLinesBulk', 'getSalesOrderLinesBulk', 'getSalesCollections']) assert.ok(!acts.includes(a), a);
+  const pr = findTool('snorkel_procurement');
+  assert.equal(pr.parse({ report: 'materials' }, NOW).ok, false);
+  assert.equal(pr.parse({ report: 'vendors_for_product', product: 'VX' }, NOW).ok, false);
+  const env = { SNORKELOPS: { fetch: async () => new Response(JSON.stringify({ ok: true, data: [{ part_code: 'LB-WD-PINE-3', part_name: 'Pine wood', part_category: 'Raw' }, { part_code: 'SC-1', part_name: 'Screw', part_category: 'Hardware' }] }), { status: 200 }) } };
+  const r = await pr.run({ env, sbAccess: 'J', gate: { snorkel_perms: SROLE.store }, input: pr.parse({ report: 'materials', q: 'pine' }, NOW).value });
+  assert.deepEqual(r.data.result, { rows: [{ part_code: 'LB-WD-PINE-3', part_name: 'Pine wood', part_category: 'Raw' }], count: 1 });
 });

@@ -22,6 +22,10 @@ service = "odoops"
 binding = "DOCKETOPS"
 service = "docketops"
 
+[[services]]
+binding = "SNORKELOPS"
+service = "snorkelops"
+
 [triggers]
 crons = ["30 21 * * *"]   # 03:00 IST daily: purge expired grants/tokens from KV
 

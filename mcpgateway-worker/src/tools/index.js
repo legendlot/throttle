@@ -6,8 +6,9 @@
 import core from './core.js';
 import odo from './odo.js';
 import docket from './docket.js';
+import snorkel from './snorkel.js';
 
-export const TOOLS = [...core, ...odo, ...docket];
+export const TOOLS = [...core, ...odo, ...docket, ...snorkel];
 
 const names = new Set();
 for (const t of TOOLS) {

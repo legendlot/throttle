@@ -73,10 +73,11 @@ export function capPayload(data, { maxBytes = 90_000 } = {}) {
 //    is a bearer credential to a private file (Codex 2026-11-09: Dyno boards carry 1h creative links);
 //  - email addresses, when `emails` (Odo: connector errors can carry a mailbox address).
 const SIGNED = /https?:\/\/[^\s"'<>]*(?:\/object\/sign\/|[?&](?:token|sig|signature|X-Amz-Signature|X-Goog-Signature|Signature)=)[^\s"'<>]*/gi;
+const UUIDV = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 // dropKeys: fields removed wherever they appear (raw third-party payloads: prompt-injection surface).
 export function scrub(v, opts = {}) {
-  const { emails = false, dropKeys = [] } = opts;
+  const { emails = false, dropKeys = [], dropMatch = null, dropIds = false } = opts;
   if (typeof v === 'string') {
     let t = v.replace(SIGNED, '[signed link removed]');
     if (emails) t = t.replace(EMAIL, '[email removed]');
@@ -85,7 +86,12 @@ export function scrub(v, opts = {}) {
   if (Array.isArray(v)) return v.map(x => scrub(x, opts));
   if (v && typeof v === 'object') {
     const o = {};
-    for (const [k, x] of Object.entries(v)) if (!dropKeys.includes(k)) o[k] = scrub(x, opts);
+    for (const [k, x] of Object.entries(v)) {
+      if (dropKeys.includes(k) || (dropMatch && dropMatch.test(k))) continue;
+      // dropIds: a `*_by` / `*_user_id` field holding a uuid is a LOT user id (the *_name beside it stays).
+      if (dropIds && /(_by|_user_id)$/i.test(k) && typeof x === 'string' && UUIDV.test(x)) continue;
+      o[k] = scrub(x, opts);
+    }
     return o;
   }
   return v;

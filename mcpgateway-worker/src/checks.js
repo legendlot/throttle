@@ -118,6 +118,8 @@ const REFUSALS = {
   'odo denied': 'Odo says your account does not have sales access (no Odo role, or it was removed). Ask Afshaan if you need it.',
   'odo pnl denied': 'Odo P&L and product costs are only for Odo super admins.',
   'no docket grant': 'Your LOT access in Claude does not include Docket. Ask Afshaan if you need it.',
+  'no snorkel grant': 'Your LOT access in Claude does not include Snorkel. Ask Afshaan if you need it.',
+  'snorkel denied': 'Your Snorkel role does not include this area (procurement, sales orders or assets). Ask Afshaan if you need it.',
   'docket denied': 'Docket does not let your account change this task: only its owner, creator, collaborators or their department can (Docket admins can change any). This is a rule on that one task, not your LOT access.',
   'worker denied': 'That LOT app says your account does not have permission for this. Ask Afshaan if you need it.',
   'session expired': 'LOT could not confirm your LOT login just now. Try once more in a minute; if it says this again, refresh the connection: in Claude, open Settings, then Connectors, then LOT, press Disconnect, then Connect again.',

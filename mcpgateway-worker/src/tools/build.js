@@ -87,11 +87,13 @@ export function reportTool(spec) {
     deny: spec.deny,
     reports: spec.reports,
     parse: (args, nowMs) => { const r = parseReportArgs(spec.reports, args, nowMs); return r.ok ? { ok: true, value: { report: r.report, params: r.params } } : r; },
-    run: async ({ env, sbAccess, input }) => {
+    run: async ({ env, sbAccess, gate, input }) => {
       const r = spec.reports[input.report];
+      // Per-report gate, for apps whose screens gate finer than the tool (Snorkel nav / page gates).
+      if (r.allow && !r.allow(gate)) return { ok: false, reason: spec.reportDenied || 'worker denied' };
       const res = await getAs(env[spec.binding], sbAccess, r.action, input.params);
       if (!res.ok) return res;
-      const { data, truncated } = capPayload(scrub(r.shape ? r.shape(res.data) : res.data, { emails: !!spec.scrubEmails, dropKeys: spec.dropKeys || [] }));
+      const { data, truncated } = capPayload(scrub(r.shape ? r.shape(res.data, input.params) : res.data, { emails: !!spec.scrubEmails, dropKeys: spec.dropKeys || [], dropMatch: spec.dropMatch || null, dropIds: !!spec.dropIds }));
       return { ok: true, data: { report: input.report, params: input.params, ...(truncated.length ? { truncated } : {}), result: data } };
     },
   };
