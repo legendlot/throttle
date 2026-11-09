@@ -359,11 +359,15 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
               onChange={e => setRow(i, { goodies_cost: e.target.value })} placeholder="Goodies ₹" aria-label="Goodies cost" style={inpMono} />
             {/* Reference only (S309). Shows what the product retails for so nobody has
                 to go and look it up, which is what Reann was doing by hand. "Use" is a
-                deliberate click, never automatic — see onProductPicked for why. */}
+                deliberate click, never automatic — see onProductPicked for why.
+                ⚠️ "use" shows ONLY on an uncosted line (no cogs_inr). Where COGS exists the
+                goodies cost IS COGS (decisions §S348), and this button was how 8 lines got
+                typed back to retail after COGS filled (Afshaan, S443, Reann ask 1791267663.241899).
+                The List ₹ figure itself stays as a reference on every line. */}
             {l.list_price_inr != null && (
               <div style={hint}>
                 List ₹{Number(l.list_price_inr).toLocaleString('en-IN')}
-                {Number(l.goodies_cost) !== Number(l.list_price_inr) && (
+                {l.cogs_inr == null && Number(l.goodies_cost) !== Number(l.list_price_inr) && (
                   <button type="button" style={hintBtn}
                     onClick={() => setRow(i, { goodies_cost: l.list_price_inr })}>use</button>
                 )}
