@@ -964,7 +964,8 @@ async function getEngagement(url, auth, env) {
   const approved_by_name = eng.approved_by ? (nameOf[eng.approved_by] || null) : null;
 
   const payments = pr.data || [];
-  const paid_total = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  // "₹X paid of ₹Y agreed" is the FEE: a commission payout (Reann #3) is outside it.
+  const paid_total = payments.filter(p => p.kind !== 'commission').reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
   // Multi-product lines (#4). Legacy single-product deals (no lines yet) get a
   // synthesized line from the engagement row so the UI always has ≥1 product.
@@ -1759,8 +1760,9 @@ async function addPayment(body, auth, env) {
   // payment beside it would pay the creator twice. Rejected/cancelled requests don't count. The same
   // rule is enforced under the engagement lock by the payments trigger (migration 0007); this read
   // only gives the common case its sentence without a round trip through the error.
+  // Commission requests are outside the fee, so they never block the hand log (0008's guard agrees).
   const live = await sb(`/rest/v1/deal_payment_requests?engagement_id=eq.${body.engagement_id}`
-    + `&state=not.in.(${DPR_DEAD.join(',')})&select=id&limit=1`, env);
+    + `&state=not.in.(${DPR_DEAD.join(',')})&kind=neq.commission&select=id&limit=1`, env);
   if (!live.ok) return err('db_error', 500);
   if (live.data?.[0]) return err(SNORKEL_OWNS_PAYMENTS, 409);
 
@@ -2837,12 +2839,34 @@ async function updateInfluencer(body, auth, env) {
   return ok(r.data?.[0]);
 }
 
+// Reann #3: an affiliate-type deal must carry its commission % (0 < pct ≤ 100) — the monthly
+// statement is computed from it. null = fine, else the sentence.
+const pctOk = v => v != null && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v)) && Number(v) > 0 && Number(v) <= 100;
+export const AFFILIATE_PCT_REQUIRED = 'An affiliate deal needs its commission % (more than 0, at most 100).';
+export function affiliatePctRefusal(dealType, pct) {
+  return AFFILIATE_DEAL_TYPES.includes(dealType) && !pctOk(pct) ? AFFILIATE_PCT_REQUIRED : null;
+}
+// On an edit, refused only when THIS patch makes it wrong: it moves the deal to an affiliate type, or
+// changes the % to an invalid one, on a deal left without a valid %. An unrelated patch (or the deal
+// card re-sending the same deal_type and %) on the one legacy affiliate deal with no % still saves.
+export function affiliatePctPatchRefusal(cur, patch) {
+  const typeChanged = 'deal_type' in patch && patch.deal_type !== cur.deal_type;
+  const samePct = (a, b) => (a == null || a === '' ? null : Number(a)) === (b == null || b === '' ? null : Number(b));
+  const pctChanged = 'affiliate_pct' in patch && !samePct(patch.affiliate_pct, cur.affiliate_pct);
+  if (!typeChanged && !pctChanged) return null;
+  const type = 'deal_type' in patch ? patch.deal_type : cur.deal_type;
+  const pct = 'affiliate_pct' in patch ? patch.affiliate_pct : cur.affiliate_pct;
+  return affiliatePctRefusal(type, pct);
+}
+
 async function createEngagement(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.influencer_id) return err('influencer_id required', 400);
   if (!body.engagement_type) return err('engagement_type required', 400);
   if (!body.deal_type) return err('deal_type required', 400);
   if (!body.poc_user_id) return err('Pick an owner for this deal', 400);   // Reann #11
+  const pctRefusal = affiliatePctRefusal(body.deal_type, body.affiliate_pct);
+  if (pctRefusal) return err(pctRefusal, 422);
 
   // Reann #5 — all new deals start at 'proposed' and need approval to move on.
   const startStage = STAGES.includes(body.stage) ? body.stage : 'proposed';
@@ -2942,6 +2966,12 @@ async function deleteEngagement(body, auth, env) {
   if (!body.engagement_id) return err('engagement_id required', 400);
   const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=id,engagement_no&limit=1`, env);
   if (!er.ok || !er.data?.[0]) return err('not_found', 404);
+  // Reann #3: commission_statements.engagement_id is ON DELETE RESTRICT. A verified month is D2C's
+  // record and refuses the delete; estimated ones are deleted below, BEFORE any child, or the FK
+  // would fire only after products/history are gone.
+  const csr = await sb(`/rest/v1/commission_statements?engagement_id=eq.${body.engagement_id}&select=id,state`, env);
+  if (!csr.ok) return err('db_error', 500);
+  if ((csr.data || []).some(x => x.state !== 'estimated')) return err('has_verified_commission_cannot_delete', 409);
   // Reann #2 S3: a Snorkel payment request is a money record, and its FK is ON DELETE RESTRICT —
   // refuse here, BEFORE any child delete, or the FK fires only after products/history are gone.
   const dpr = await sb(`/rest/v1/deal_payment_requests?engagement_id=eq.${body.engagement_id}&select=id&limit=1`, env);
@@ -2961,6 +2991,15 @@ async function deleteEngagement(body, auth, env) {
   ]);
   if (!cr.ok || !ir.ok) return err('db_error', 500);
   if (cr.data?.[0] || ir.data?.[0]) return err('has_accepted_contract_cannot_delete', 409);
+  if ((csr.data || []).length) {
+    const cd = await sb(`/rest/v1/commission_statements?engagement_id=eq.${body.engagement_id}&state=eq.estimated`, env, { method: 'DELETE', prefer: 'return=minimal' });
+    if (!cd.ok) return err('db_error', 500);
+  }
+  // Re-check right before the children go: a month verified (or a row the rebuild wrote) since the
+  // first read would make the final DELETE fail after products/history were gone (S2 reviews).
+  const csr2 = await sb(`/rest/v1/commission_statements?engagement_id=eq.${body.engagement_id}&select=id&limit=1`, env);
+  if (!csr2.ok) return err('db_error', 500);
+  if (csr2.data?.[0]) return err('has_verified_commission_cannot_delete', 409);
   // Detach discount codes (one-way utilized stays), then remove children + the deal.
   await sb(`/rest/v1/discount_codes?engagement_id=eq.${body.engagement_id}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ engagement_id: null }) }).catch(() => {});
   for (const child of ['engagement_products', 'engagement_attachments', 'engagement_notes', 'engagement_history']) {
@@ -3004,6 +3043,13 @@ export async function updateEngagement(body, auth, env) {
   if ('poc_user_id' in patch && !patch.poc_user_id) return err('A deal must have an owner', 400);
   // Reann #5: post_date mirrors onto video 1, so clearing it here must meet the same rule as the video form.
   const dateRefusal = await clearedPostDateRefusal(env, body.engagement_id, patch); if (dateRefusal) return dateRefusal;
+  if ('deal_type' in patch || 'affiliate_pct' in patch) {
+    const cr = await sb(`/rest/v1/engagements?id=eq.${encodeURIComponent(body.engagement_id)}&select=deal_type,affiliate_pct&limit=1`, env);
+    if (!cr.ok) return err('db_error', 500);
+    if (!cr.data?.[0]) return err('not_found', 404);
+    const pctRefusal = affiliatePctPatchRefusal(cr.data[0], patch);
+    if (pctRefusal) return err(pctRefusal, 422);
+  }
   // Refuse, never strip: a patch that names a locked field is rejected WHOLE and the error names
   // the fields. Silently dropping them would read as "saved" while nothing changed. A patch with
   // no locked field (Performance totals, logistics, POC…) skips the read entirely.
@@ -3179,7 +3225,7 @@ async function advanceStage(body, auth, env) {
   if (!body.to_stage) return err('to_stage required', 400);
 
   const cur = await sb(
-    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url,affiliate_active_from,post_date,approved_at,contract_required&limit=1`, env,
+    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url,affiliate_active_from,post_date,approved_at,contract_required,deal_type,affiliate_pct&limit=1`, env,
   );
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
   // COMPLETE-deal lock (S373): the stage move itself stays open, but this action also accepts
@@ -3304,6 +3350,8 @@ async function advanceStage(body, auth, env) {
   // Allow incidental field updates in the same call (e.g. video_link on go-live).
   const extra = pickPatch(body, ENGAGEMENT_FIELDS);
   delete extra.engagement_type;   // see updateEngagement: the lock above read the deal's real type
+  // Reann #3: the affiliate-% rule guards this door too (S2 reviews — updateEngagement was the only one).
+  const pctRefusal = affiliatePctPatchRefusal(cur.data[0], extra); if (pctRefusal) return err(pctRefusal, 422);
   Object.assign(patch, extra);
   const dateRefusal = await clearedPostDateRefusal(env, body.engagement_id, patch); if (dateRefusal) return dateRefusal;
 
@@ -3494,11 +3542,31 @@ async function shopifyDeactivateDiscount(env, gid) {
   return { ok: true };
 }
 
+// Reann #3 Decision 1: commission is on the order's PRODUCT value after discounts and refunds, excluding
+// GST and shipping. currentSubtotalPriceSet = line items after discounts (order-level ones included) and
+// after refunds/removals, never shipping; it carries the line-item tax only when the store prices
+// include tax (taxesIncluded), and that tax is currentTotalTax less the shipping tax (shippingLine is
+// Shopify's summary of every shipping line). Shipping taxLines are the original charge, so a partial
+// return that also refunds shipping under-counts by that shipping tax (clamped at 0). Pure, for tests.
+export function orderNetExGst(n) {
+  const amt = m => Number(m?.shopMoney?.amount || 0);
+  const sub = amt(n?.currentSubtotalPriceSet);
+  if (!n?.taxesIncluded) return money(Math.max(0, sub));
+  // Shipping taxLines are the ORIGINAL charge; a refunded shipping charge is gone from currentTotalTax,
+  // so scale it by what is left of shipping now (Codex S2 #2: otherwise net_ex_gst is overstated).
+  const shipOrig = amt(n.shippingLine?.originalPriceSet);
+  const shipNow = n.currentShippingPriceSet ? amt(n.currentShippingPriceSet) : shipOrig;
+  const share = shipOrig > 0 ? Math.min(1, Math.max(0, shipNow / shipOrig)) : 1;
+  const shipTax = share * (n.shippingLine?.taxLines || []).reduce((s, t) => s + amt(t?.priceSet), 0);
+  const lineTax = Math.max(0, amt(n.currentTotalTaxSet) - shipTax);
+  return money(Math.max(0, sub - lineTax));
+}
+
 // Orders that used a code (paginated, capped, NEWEST first — a capped read keeps the latest orders).
-// Returns [{order_id,name,date,gross,refunded}].
+// Returns [{order_id,name,date,gross,refunded,net_ex_gst}].
 async function shopifyOrdersForCode(env, code, sinceDate, maxPages = 3) {
   const q = `discount_code:${code}` + (sinceDate ? ` created_at:>=${sinceDate}` : '');
-  const query = `query($q:String!,$cursor:String){ orders(first:50, after:$cursor, query:$q, sortKey:CREATED_AT, reverse:true){ edges{ cursor node{ id name createdAt totalPriceSet{ shopMoney{ amount } } totalRefundedSet{ shopMoney{ amount } } } } pageInfo{ hasNextPage } } }`;
+  const query = `query($q:String!,$cursor:String){ orders(first:50, after:$cursor, query:$q, sortKey:CREATED_AT, reverse:true){ edges{ cursor node{ id name createdAt totalPriceSet{ shopMoney{ amount } } totalRefundedSet{ shopMoney{ amount } } taxesIncluded currentSubtotalPriceSet{ shopMoney{ amount } } currentTotalTaxSet{ shopMoney{ amount } } currentShippingPriceSet{ shopMoney{ amount } } shippingLine{ originalPriceSet{ shopMoney{ amount } } taxLines{ priceSet{ shopMoney{ amount } } } } } } pageInfo{ hasNextPage } } }`;
   const out = []; let cursor = null;
   for (let p = 0; p < maxPages; p++) {
     const r = await shopifyGraphql(env, query, { q, cursor });
@@ -3510,6 +3578,7 @@ async function shopifyOrdersForCode(env, code, sinceDate, maxPages = 3) {
         order_id: n.id, name: n.name, date: n.createdAt,
         gross: Number(n.totalPriceSet?.shopMoney?.amount || 0),
         refunded: Number(n.totalRefundedSet?.shopMoney?.amount || 0),
+        net_ex_gst: orderNetExGst(n),
       });
       cursor = e.cursor;
     }
@@ -3635,13 +3704,29 @@ async function retireCoupon(body, auth, env) {
   return ok({ retired: true, shopify_deactivated: deact.ok, shopify_note: deact.error || null });
 }
 
+// Reann #3: the affiliate commission rate is engagements.affiliate_pct, on affiliate-type deals only
+// (a tracking code on a barter/paid deal earns nothing). commission_rate is the UGC brief's, not this.
+export const AFFILIATE_DEAL_TYPES = ['affiliate', 'paid_plus_affiliate'];
+export function commissionRateOf(e) {
+  const pct = Number(e?.affiliate_pct);
+  return AFFILIATE_DEAL_TYPES.includes(e?.deal_type) && Number.isFinite(pct) && pct > 0 ? pct : 0;
+}
+// Per redemption: net ex-GST × rate, inside the commission window only.
+// Decision 2: commission exists from November 2026 (IST) only — an older eligible order earns ₹0, so the
+// code/deal rollups never back-date (Codex S2 #5).
+export function redemptionCommission(eligible, netExGst, rate, orderDate) {
+  if (!eligible) return 0;
+  if (orderDate && istMonthOf(orderDate) < COMMISSION_FIRST_MONTH) return 0;
+  return money((Number(netExGst) || 0) * (Number(rate) || 0) / 100);
+}
+
 // Reconcile one code's redemptions off Shopify; recompute its rollups (refund-aware).
 async function syncOneCoupon(env, coupon, maxPages) {
   let win = { from: null, to: null, rate: 0 };
   if (coupon.engagement_id) {
-    const e = await sb(`/rest/v1/engagements?id=eq.${coupon.engagement_id}&select=affiliate_active_from,affiliate_active_to,commission_rate&limit=1`, env);
+    const e = await sb(`/rest/v1/engagements?id=eq.${coupon.engagement_id}&select=affiliate_active_from,affiliate_active_to,deal_type,affiliate_pct&limit=1`, env);
     const row = e.data?.[0] || {};
-    win = { from: row.affiliate_active_from || null, to: row.affiliate_active_to || null, rate: Number(row.commission_rate) || 0 };
+    win = { from: row.affiliate_active_from || null, to: row.affiliate_active_to || null, rate: commissionRateOf(row) };
   }
   // Every sync re-reads ALL of the code's orders (newest first, capped at maxPages×50; the largest code had 43
   // on 2026-10-09 — one page). Reading only since the last sync left an order synced before its window opened,
@@ -3655,9 +3740,9 @@ async function syncOneCoupon(env, coupon, maxPages) {
     const eligible = coupon.kind === 'affiliate' && couponInWindow(o.date, win.from, win.to);
     return {
       coupon_code_id: coupon.id, shopify_order_id: o.order_id, shopify_order_name: o.name,
-      order_date: o.date, gross_value: o.gross, net_value: net,
+      order_date: o.date, gross_value: o.gross, net_value: net, net_ex_gst: o.net_ex_gst,
       refunded: o.gross > 0 && o.refunded >= o.gross,
-      commission_eligible: eligible, commission_amount: eligible ? net * (win.rate / 100) : 0,
+      commission_eligible: eligible, commission_amount: redemptionCommission(eligible, o.net_ex_gst, win.rate, o.date),
       synced_at: nowIso(),
     };
   });
@@ -3766,6 +3851,280 @@ async function syncCouponBatch(env, coupons, maxPages) {
   }));
   for (const eid of touched) await recomputeEngagementAttribution(env, eid).catch(e => console.error('[coupon-sync] rollup', eid, e));
   return { synced };
+}
+
+// ── Monthly affiliate commission statements (Reann #3 S2; plan 2026-11-09-ignition-monthly-commission.md) ──
+// One row per (affiliate-type deal, IST month) from November 2026: orders, net ex-GST sales, rate and
+// Ignition's estimate, recomputed until D2C verifies. Every money rule (Nov floor, no future month,
+// verify only after the month ends, verified = frozen, the reopen path, verify+raise atomic) is in the
+// DATABASE (migration 0008) — this only computes and writes estimates, and maps the RPCs' refusals.
+export const COMMISSION_FIRST_MONTH = '2026-11';
+const COMMISSION_UPSERT_BATCH = 500;
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+export const istMonth = (now = Date.now()) => istToday(now).slice(0, 7);
+export function nextMonth(m) {
+  const y = Number(m.slice(0, 4)), mo = Number(m.slice(5, 7));
+  return mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`;
+}
+export function prevMonth(m) {
+  const y = Number(m.slice(0, 4)), mo = Number(m.slice(5, 7));
+  return mo === 1 ? `${y - 1}-12` : `${y}-${String(mo - 1).padStart(2, '0')}`;
+}
+// The IST month of a Shopify createdAt (UTC) — the same IST placement couponInWindow uses.
+const istMonthOf = iso => { const t = Date.parse(String(iso || '')); return Number.isFinite(t) ? istMonth(t) : ''; };
+
+/**
+ * Pure: the statement rows to upsert. deals [{id, influencer_id, affiliate_pct}], codes [{id, engagement_id}],
+ * reds [{coupon_code_id, shopify_order_id, order_date, net_ex_gst}] (commission_eligible only),
+ * existing [{engagement_id, month, state}], months ['YYYY-MM'].
+ * Orders are DISTINCT orders with money left after refunds (two codes on one order is one order, as
+ * recomputeEngagementAttribution counts them); a fully refunded order is not an order. A verified
+ * (deal, month) is never in the batch: an ON CONFLICT reaching it fires the lock and aborts the batch.
+ * A row is created only for orders > 0; an existing ESTIMATED row is updated even when it falls to 0.
+ */
+export function commissionStatementRows({ deals, codes, reds, existing, months, now = nowIso() }) {
+  const dealOfCode = new Map(codes.map(c => [c.id, c.engagement_id]));
+  const want = new Set(months);
+  const byKey = new Map();   // `${eid}|${month}` → Map(order id → net)
+  const missing = new Set(); // deal-months with an eligible order whose ex-GST value is not synced yet
+  for (const r of reds) {
+    const eid = dealOfCode.get(r.coupon_code_id), m = istMonthOf(r.order_date);
+    if (eid && want.has(m) && r.net_ex_gst == null) missing.add(`${eid}|${m}`);
+    const net = Number(r.net_ex_gst) || 0;
+    if (!eid || !want.has(m) || !(net > 0)) continue;
+    const k = `${eid}|${m}`;
+    if (!byKey.has(k)) byKey.set(k, new Map());
+    byKey.get(k).set(r.shopify_order_id, net);
+  }
+  const state = new Map(existing.map(x => [`${x.engagement_id}|${x.month}`, x.state]));
+  const rows = [];
+  for (const d of deals) {
+    const rate = Number(d.affiliate_pct);
+    for (const m of months) {
+      const k = `${d.id}|${m}`, st = state.get(k);
+      if (st === 'verified') continue;
+      const orders = byKey.get(k);
+      const n = orders ? orders.size : 0;
+      if (!n && st !== 'estimated') continue;
+      const net_sales = money([...(orders?.values() || [])].reduce((s, v) => s + v, 0));
+      rows.push({
+        engagement_id: d.id, influencer_id: d.influencer_id, month: m, orders: n, net_sales, rate,
+        estimate: money(net_sales * rate / 100), last_computed_at: now, updated_at: now,
+      });
+    }
+  }
+  rows.missing = [...missing];
+  return rows;
+}
+
+// Every row of a read, 1000 at a time: Supabase caps a response at 1000 rows whatever `limit` says,
+// so a single big-limit read silently drops the rest. `path` must carry a stable `order=`.
+async function sbAllRows(path, env, page = 1000) {
+  const out = [];
+  for (let offset = 0; ; offset += page) {
+    const r = await sb(`${path}&limit=${page}&offset=${offset}`, env);
+    if (!r.ok) return { ok: false, status: r.status, data: out };
+    out.push(...(r.data || []));
+    if ((r.data || []).length < page) return { ok: true, data: out };
+  }
+}
+
+// Rebuild every not-verified statement of every affiliate deal, for `month` or each month from
+// November 2026 to the current IST month. Runs after the 08:40 IST code sync, and on demand (admin).
+export async function rebuildCommissionStatements(env, { month } = {}) {
+  const cur = istMonth();
+  let months = [];
+  if (month) {
+    if (!MONTH_RE.test(String(month)) || month < COMMISSION_FIRST_MONTH || month > cur) return { error: `month must be ${COMMISSION_FIRST_MONTH}..${cur}` };
+    months = [month];
+  } else {
+    for (let m = COMMISSION_FIRST_MONTH; m <= cur; m = nextMonth(m)) months.push(m);
+  }
+  if (!months.length) return { months: [], deals: 0, written: 0 };
+  const dr = await sbAllRows(`/rest/v1/engagements?deal_type=in.(${AFFILIATE_DEAL_TYPES.join(',')})&affiliate_pct=gt.0`
+    + `&affiliate_pct=lte.100&select=id,influencer_id,affiliate_pct&order=id.asc`, env);
+  if (!dr.ok) throw new Error(`could not read affiliate deals: ${dr.status}`);
+  const deals = (dr.data || []).filter(d => d.influencer_id);
+  const codes = [], reds = [], existing = [];
+  const from = encodeURIComponent(`${months[0]}-01T00:00:00+05:30`);
+  const to = encodeURIComponent(`${nextMonth(months[months.length - 1])}-01T00:00:00+05:30`);
+  for (const ids of chunk(deals.map(d => d.id), 100)) {
+    const [cr, sr] = await Promise.all([
+      sbAllRows(`/rest/v1/coupon_codes?engagement_id=in.(${ids.join(',')})&kind=eq.affiliate&select=id,engagement_id&order=id.asc`, env),
+      sbAllRows(`/rest/v1/commission_statements?engagement_id=in.(${ids.join(',')})&month=in.(${months.join(',')})&select=engagement_id,month,state&order=id.asc`, env),
+    ]);
+    if (!cr.ok || !sr.ok) throw new Error('could not read codes or statements');
+    codes.push(...(cr.data || []));
+    existing.push(...(sr.data || []));
+  }
+  for (const ids of chunk(codes.map(c => c.id), 100)) {
+    const rr = await sbAllRows(`/rest/v1/coupon_redemptions?coupon_code_id=in.(${ids.join(',')})&commission_eligible=is.true`
+      + `&order_date=gte.${from}&order_date=lt.${to}&select=coupon_code_id,shopify_order_id,order_date,net_ex_gst&order=id.asc`, env);
+    if (!rr.ok) throw new Error(`could not read redemptions: ${rr.status}`);
+    reds.push(...(rr.data || []));
+  }
+  const rows = commissionStatementRows({ deals, codes, reds, existing, months });
+  let written = 0, failed = 0;
+  for (const batch of chunk(rows, COMMISSION_UPSERT_BATCH)) {
+    const up = await sb(`/rest/v1/commission_statements?on_conflict=engagement_id,month`, env, {
+      method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify(batch),
+    });
+    // A row verified between the read and this write aborts its batch (the lock); the next run retries.
+    if (up.ok) written += batch.length; else { failed += batch.length; console.error('[commission] upsert failed', up.status, JSON.stringify(up.data)); }
+  }
+  // An ESTIMATED month left on a deal that is no longer an affiliate deal (type changed, % cleared)
+  // would sit on the Commission page forever: remove it. One with a past (cancelled/rejected)
+  // request keeps its row — the request's FK refuses the delete, which is fine.
+  let removed = 0;
+  const keep = new Set(deals.map(d => d.id));
+  // Only EMPTY ones (orders 0): a month that had sales stays for D2C to verify or close at ₹0, even if
+  // the deal was retyped afterwards — the sales were made (S2 hostile review #1). Deleted one by one
+  // so a row held by a past request's FK does not sink the others; failures are logged.
+  const er = await sbAllRows(`/rest/v1/commission_statements?state=eq.estimated&orders=eq.0&month=in.(${months.join(',')})&select=id,engagement_id&order=id.asc`, env);
+  if (!er.ok) console.error('[commission] stale read failed', er.status);
+  else {
+    for (const x of er.data.filter(r => !keep.has(r.engagement_id))) {
+      const dl = await sb(`/rest/v1/commission_statements?id=eq.${x.id}&state=eq.estimated&orders=eq.0`, env, { method: 'DELETE', prefer: 'return=minimal' });
+      if (dl.ok) removed++; else console.error('[commission] stale delete failed', x.id, dl.status);
+    }
+  }
+  if (rows.missing?.length) console.error('[commission] eligible orders with no ex-GST value yet', rows.missing.length, rows.missing.slice(0, 20).join(','));
+  return { months, deals: deals.length, written, failed, removed, missing_net: rows.missing?.length || 0, skipped_verified: existing.filter(x => x.state === 'verified').length };
+}
+
+async function postRebuildCommissionStatements(body, auth, env) {
+  const gate = requirePerm('ignition_admin', auth); if (gate) return gate;
+  const r = await rebuildCommissionStatements(env, { month: body.month || undefined });
+  if (r.error) return err(r.error, 400);
+  return r.failed ? json({ ok: false, error: 'Some statements could not be saved — run it again.', data: r }, 500) : ok(r);
+}
+
+// RPC refusals → plain sentences. verify/reopen return {ok:false,code,message}; the 0008 triggers raise
+// P0001 with a hint; the verified-complete CHECK (23514) fires when the amount differs with no reason.
+const COMMISSION_HINTS = new Set(['ignition_commission_month_open', 'ignition_commission_verified_locked',
+  'ignition_commission_raise_failed', 'ignition_commission_future_month']);
+export function commissionRpcResult(r) {
+  if (r.ok && r.data && typeof r.data === 'object') {
+    if (r.data.ok) return null;
+    return r.data.code === 'not_found' ? err('That statement no longer exists.', 404) : err(String(r.data.message || 'refused'), 409);
+  }
+  if (r.data?.code === 'P0001' && COMMISSION_HINTS.has(r.data?.hint)) return err(String(r.data.message || 'refused'), 409);
+  if (r.data?.code === '23514' && /verified_complete/.test(String(r.data?.message || ''))) {
+    return err("The verified amount is different from Ignition's estimate — add the reason for the difference.", 422);
+  }
+  console.error('[commission] rpc failed', r.status, JSON.stringify(r.data));
+  return err('db_error', 500);
+}
+
+const CS_SELECT = 'id,engagement_id,influencer_id,month,orders,net_sales,rate,estimate,state,verified_amount,difference_reason,'
+  + 'verified_by_name,verified_at,last_computed_at,'
+  + 'engagement:engagement_id(engagement_no,deal_type),influencer:influencer_id(person_name,channel_name,channel_link)';
+
+// GET ?month=YYYY-MM (default: last IST month) → that month's statements, for the D2C Commission page
+// (ignition_commission_verify or ignition_reports_view); ?engagement_id= → one deal's months, for the
+// deal page's Commission card (ignition_view). S3's deal card calls this rather than getEngagement
+// growing another read for the many deals that have no commission.
+async function getCommissionStatements(url, auth, env) {
+  const eid = url.searchParams.get('engagement_id');
+  const cur = istMonth();
+  let filter, month = null;
+  if (eid) {
+    const gate = requirePerm('ignition_view', auth); if (gate) return gate;
+    if (!UUID_RE.test(eid)) return err('engagement_id must be a uuid', 400);
+    filter = `engagement_id=eq.${eid}&order=month.desc`;
+  } else {
+    if (!auth?.permissions?.ignition_commission_verify && !auth?.permissions?.ignition_reports_view) {
+      return err('Forbidden — missing permission: ignition_commission_verify', 403);
+    }
+    month = url.searchParams.get('month') || prevMonth(cur);
+    if (!MONTH_RE.test(month)) return err('month must be YYYY-MM', 400);
+    filter = `month=eq.${month}&order=net_sales.desc`;
+  }
+  const r = await sbAllRows(`/rest/v1/commission_statements?${filter},id.asc&select=${CS_SELECT}`, env);
+  if (!r.ok) return err('db_error', 500);
+  const sts = r.data || [];
+  const latest = new Map();
+  for (const ids of chunk(sts.map(x => x.id), 100)) {
+    const rr = await sb(`/rest/v1/deal_payment_requests?statement_id=in.(${ids.join(',')})`
+      + `&select=id,statement_id,state,amount,snorkel_request_no,paid_amount,utr,raised_at&order=raised_at.desc`, env);
+    if (!rr.ok) return err('db_error', 500);
+    for (const q of rr.data || []) if (!latest.has(q.statement_id)) latest.set(q.statement_id, q);
+  }
+  const statements = sts.map(x => {
+    const q = latest.get(x.id) || null;
+    const handle = igHandleOf(x.influencer?.channel_link);
+    return {
+      id: x.id, engagement_id: x.engagement_id, engagement_no: x.engagement?.engagement_no || null,
+      deal_type: x.engagement?.deal_type || null,
+      creator: { handle: handle || null, name: x.influencer?.person_name || x.influencer?.channel_name || null },
+      month: x.month, orders: x.orders, net_sales: Number(x.net_sales), rate: Number(x.rate), estimate: Number(x.estimate),
+      state: x.state, verified_amount: x.verified_amount != null ? Number(x.verified_amount) : null,
+      difference_reason: x.difference_reason, verified_by_name: x.verified_by_name, verified_at: x.verified_at,
+      last_computed_at: x.last_computed_at,
+      request: q && { id: q.id, state: q.state, amount: Number(q.amount), snorkel_request_no: q.snorkel_request_no,
+        paid_amount: q.paid_amount != null ? Number(q.paid_amount) : null, utr: q.utr },
+      month_open: x.month >= cur,
+    };
+  });
+  return ok({ month, current_month: cur, statements });
+}
+
+// D2C's verify: ONE RPC verifies and (for a non-zero amount) raises the commission request, waiting
+// for the creator's invoice (Decision 4). Never a PATCH + a raise as two calls.
+async function verifyCommission(body, auth, env) {
+  const gate = requirePerm('ignition_commission_verify', auth); if (gate) return gate;
+  if (!UUID_RE.test(String(body.statement_id || ''))) return err('statement_id required', 400);
+  const raw = body.amount;
+  const amount = Number(raw);
+  const looksLikeAmount = (typeof raw === 'number' && Number.isFinite(raw))
+    || (typeof raw === 'string' && /^\s*\d+(\.\d{1,2})?\s*$/.test(raw));
+  if (!looksLikeAmount || !(amount >= 0)) return err('Enter the verified amount (₹0 or more).', 400);
+  // Never verify on an estimate built from orders whose ex-GST value has not synced (S2 reviews):
+  // the month's eligible orders on this deal's codes must all carry net_ex_gst.
+  const st = await sb(`/rest/v1/commission_statements?id=eq.${body.statement_id}&select=engagement_id,month&limit=1`, env);
+  if (!st.ok) return err('db_error', 500);
+  if (!st.data?.[0]) return err('That statement no longer exists.', 404);
+  const { engagement_id: seid, month: smonth } = st.data[0];
+  const cc = await sb(`/rest/v1/coupon_codes?engagement_id=eq.${seid}&kind=eq.affiliate&select=id`, env);
+  if (!cc.ok) return err('db_error', 500);
+  const cids = (cc.data || []).map(c => c.id);
+  if (cids.length) {
+    const from = encodeURIComponent(`${smonth}-01T00:00:00+05:30`), to = encodeURIComponent(`${nextMonth(smonth)}-01T00:00:00+05:30`);
+    const nr = await sb(`/rest/v1/coupon_redemptions?coupon_code_id=in.(${cids.join(',')})&commission_eligible=is.true&net_ex_gst=is.null`
+      + `&order_date=gte.${from}&order_date=lt.${to}&select=id&limit=1`, env);
+    if (!nr.ok) return err('db_error', 500);
+    if (nr.data?.[0]) return err("Some of this month's orders have not synced from Shopify yet. Sync the deal's code, then verify.", 409);
+  }
+  const r = await sb(`/rest/v1/rpc/verify_commission_statement`, env, { method: 'POST', body: JSON.stringify({
+    p_statement_id: body.statement_id, p_amount: money(amount),
+    p_reason: body.reason == null ? null : String(body.reason).slice(0, 1000),
+    p_verified_by: auth.userId, p_verified_by_name: auth.fullName || null,
+  }) });
+  const refused = commissionRpcResult(r); if (refused) return refused;
+  return ok({ statement: r.data.statement, request: r.data.request || null });
+}
+
+// Re-raise a verified month whose request was rejected or cancelled (verify raises the first one).
+// The RPC refuses a month that is not verified, ₹0, or already has a live or paid request.
+async function raiseCommissionPayment(body, auth, env) {
+  const gate = requirePerm('ignition_commission_verify', auth); if (gate) return gate;
+  if (!UUID_RE.test(String(body.statement_id || ''))) return err('statement_id required', 400);
+  const r = await sb(`/rest/v1/rpc/raise_commission_payment`, env, { method: 'POST', body: JSON.stringify({
+    p_statement_id: body.statement_id, p_raised_by: auth.userId, p_raised_by_name: auth.fullName || null,
+  }) });
+  const refused = commissionRpcResult(r); if (refused) return refused;
+  return ok({ request: r.data.row });
+}
+
+// The correction path for a mistyped verified amount (admins only): back to estimated while no
+// request on it is live or paid — the RPC and the lock trigger enforce that.
+async function reopenCommission(body, auth, env) {
+  const gate = requirePerm('ignition_admin', auth); if (gate) return gate;
+  if (!UUID_RE.test(String(body.statement_id || ''))) return err('statement_id required', 400);
+  const r = await sb(`/rest/v1/rpc/reopen_commission_statement`, env, { method: 'POST',
+    body: JSON.stringify({ p_statement_id: body.statement_id }) });
+  const refused = commissionRpcResult(r); if (refused) return refused;
+  return ok({ statement: r.data.statement });
 }
 
 // ── COGS lookup (Reann #2, S273) ─────────────────────────────────────────────────────────────
@@ -6394,7 +6753,8 @@ async function setIgnitionUserActive(body, auth, env) {
 
 const DPR_SELECT = 'id,engagement_id,influencer_id,kind,amount,invoice_id,invoice_no,invoice_date,invoice_total,state,'
   + 'snorkel_request_id,snorkel_request_no,held_reason,rejection_note,paid_at,paid_amount,utr,tds_amount,last_error,'
-  + 'last_synced_at,raised_by,raised_by_name,raised_at,updated_at';
+  + 'last_synced_at,raised_by,raised_by_name,raised_at,updated_at,statement_id';
+// The kinds a deal owner raises by hand. 'commission' (Reann #3) is raised only by verify_commission_statement.
 const DPR_KINDS = ['advance', 'balance', 'full'];
 const DPR_DEAD = ['rejected', 'cancelled'];               // not "live": a new one of the kind may be raised
 const DPR_SNORKEL_STATES = new Set(['submitted', 'pending_approval', 'approved', 'held', 'paid', 'rejected', 'cancelled']);
@@ -6523,15 +6883,21 @@ const RPC_STATUS = { not_found: 404, refused: 409, busy: 409, db_error: 500 };
 
 // Everything the Snorkel raise needs, read for the CLAIMED row. Returns { payload } or { error }.
 async function dealPaymentPayload(env, row, actor) {
-  const [er, ir, br, vr] = await Promise.all([
+  const [er, ir, br, vr, sr] = await Promise.all([
     sb(`/rest/v1/engagements?id=eq.${row.engagement_id}&select=engagement_no&limit=1`, env),
     sb(`/rest/v1/influencers?id=eq.${row.influencer_id}&select=id,person_name,channel_name,channel_link,email,contact_number&limit=1`, env),
     sb(`/rest/v1/influencer_bank_details?influencer_id=eq.${row.influencer_id}&select=account_name,account_number,ifsc,bank_name,upi_id,pan,gstin&limit=1`, env),
     sb(`/rest/v1/deal_invoices?id=eq.${row.invoice_id}&engagement_id=eq.${row.engagement_id}&select=path,file_name,mime&limit=1`, env),
+    // Reann #3: Finance sees which month a commission request pays.
+    row.kind === 'commission' && row.statement_id
+      ? sb(`/rest/v1/commission_statements?id=eq.${row.statement_id}&select=month&limit=1`, env)
+      : Promise.resolve({ ok: true, data: [] }),
   ]);
-  if (!er.ok || !ir.ok || !br.ok || !vr.ok) return { error: 'Could not read the deal to send it — retry.' };
+  if (!er.ok || !ir.ok || !br.ok || !vr.ok || !sr.ok) return { error: 'Could not read the deal to send it — retry.' };
   const deal = er.data?.[0], inf = ir.data?.[0], bank = br.data?.[0] || null, inv = vr.data?.[0];
   if (!deal || !inf) return { error: 'The deal or creator is missing.' };
+  const month = sr.data?.[0]?.month;
+  if (row.kind === 'commission' && !month) return { error: 'The commission statement for this request is missing.' };
   if (!inv) return { error: 'The invoice is no longer on this deal — attach it again.' };
   if (!UUID_RE.test(String(actor.userId || ''))) return { error: 'No requester on this request — raise it again.' };
   const handle = igHandleOf(inf.channel_link);
@@ -6551,7 +6917,7 @@ async function dealPaymentPayload(env, row, actor) {
     amount_to_pay: Number(row.amount),
     invoice_no: row.invoice_no, invoice_date: row.invoice_date || null, invoice_total: Number(row.invoice_total),
     invoice_file: { bucket: INVOICE_BUCKET, path: inv.path, file_name: inv.file_name || null, mime: inv.mime || null },
-    purpose: `${deal.engagement_no} · ${row.kind} · ${handle ? '@' + handle : (inf.channel_name || inf.person_name)}`,
+    purpose: `${deal.engagement_no} · ${row.kind === 'commission' ? `commission ${month}` : row.kind} · ${handle ? '@' + handle : (inf.channel_name || inf.person_name)}`,
     requested_by_user_id: actor.userId, requested_by_name: actor.fullName || null,
   } };
 }
@@ -6628,7 +6994,8 @@ export function snorkelPaymentRow(row, s) {
   const tds = s.tds_amount != null ? money(s.tds_amount) : null;
   return {
     snorkel_request_id: Number(s.request_id), engagement_id: row.engagement_id, influencer_id: row.influencer_id,
-    kind: row.kind === 'advance' ? 'advance' : 'final',
+    // Reann #3: a commission payout is its own kind — never 'final', which reads as the fee.
+    kind: row.kind === 'advance' ? 'advance' : row.kind === 'commission' ? 'commission' : 'final',
     amount: s.paid_amount != null ? money(Number(s.paid_amount) + (tds || 0)) : money(row.amount),
     paid_on: istDateOf(s.paid_at) || istToday(),
     utr: s.payment_ref || null, tds_amount: tds,
@@ -6787,7 +7154,7 @@ async function getDealPayments(url, auth, env) {
   const [er, rr, pr, ir, settings] = await Promise.all([
     sb(`/rest/v1/engagements?id=eq.${eid}&select=id,payment_amount,influencer_id&limit=1`, env),
     sb(`/rest/v1/deal_payment_requests?engagement_id=eq.${eid}&select=${DPR_SELECT}&order=raised_at.asc`, env),
-    sb(`/rest/v1/payments?engagement_id=eq.${eid}&select=amount,snorkel_request_id`, env),
+    sb(`/rest/v1/payments?engagement_id=eq.${eid}&select=amount,kind,snorkel_request_id`, env),
     sb(`/rest/v1/deal_invoices?engagement_id=eq.${eid}&select=id,file_name,mime,uploaded_at,contract_id&order=uploaded_at.desc&limit=${MAX_INVOICES_PER_DEAL}`, env),
     readContractSettings(env),
   ]);
@@ -6808,13 +7175,18 @@ async function getDealPayments(url, auth, env) {
   const committed = r => r.state === 'paid'
     ? Math.max(Number(r.amount) || 0, (Number(r.paid_amount) || 0) + (Number(r.tds_amount) || 0))
     : (Number(r.amount) || 0);
-  const raised = requests.filter(r => !DPR_DEAD.includes(r.state)).reduce((s, r) => s + committed(r), 0);
+  // Commission (Reann #3) is outside the fee: its requests and payouts are left out of every fee sum,
+  // as deal_payment_committed (0008) leaves them out of the cap.
+  const raised = requests.filter(r => !DPR_DEAD.includes(r.state) && r.kind !== 'commission').reduce((s, r) => s + committed(r), 0);
+  const fees = (pr.data || []).filter(p => p.kind !== 'commission');
   // paid_total = the same ignition.payments sum getEngagement shows ("₹X paid of ₹Y").
-  const paid = (pr.data || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const paid = fees.reduce((s, p) => s + (Number(p.amount) || 0), 0);
   // The hand log counts against the fee exactly as deal_payment_refusal counts it (no snorkel id).
-  const hand = (pr.data || []).filter(p => p.snorkel_request_id == null).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const hand = fees.filter(p => p.snorkel_request_id == null).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const commissionPaid = (pr.data || []).filter(p => p.kind === 'commission').reduce((s, p) => s + (Number(p.amount) || 0), 0);
   return ok({
     requests, agreed, raised_live_total: money(raised), paid_total: money(paid), hand_paid_total: money(hand),
+    commission_paid_total: money(commissionPaid),
     remaining: money(Math.max(0, agreed - raised - hand)),
     invoices: ir.data || [],
     // Decision 1: Snorkel payments are usable once the contract wording (which collects bank
@@ -6956,6 +7328,7 @@ const GET_ACTIONS = {
   getBrokenChannelLinks,
   getTrackingLinkStatus,
   getDealPayments,
+  getCommissionStatements,
 };
 
 const POST_ACTIONS = {
@@ -7026,6 +7399,10 @@ const POST_ACTIONS = {
   uploadDealInvoice,
   retryDealPayment,
   cancelDealPayment,
+  verifyCommission,
+  reopenCommission,
+  raiseCommissionPayment,
+  rebuildCommissionStatements: postRebuildCommissionStatements,
 };
 
 // Every partner JSON response passes through here (S419) — the last line of defence behind the
@@ -7183,9 +7560,14 @@ export default {
     // 08:40 IST daily — reconcile every active code's redemptions off Shopify (S214, Reann #9).
     // Refund-aware. No-op if Shopify is unconfigured.
     if (cron === '10 3 * * *') {
+      // Reann #3: the commission estimates are rebuilt off the freshly synced redemptions, even when
+      // the sync failed part-way (what was synced is still the best figure there is).
       ctx.waitUntil(syncAllActiveCoupons(env).then(
         res => console.log(`[coupon-sync] cron done, synced ${res.synced}, failed ${res.failed}`),
         e => console.error('[coupon-sync] cron error', e),
+      ).then(() => rebuildCommissionStatements(env)).then(
+        r => (r.failed || r.error ? console.error : console.log)('[commission] rebuild', JSON.stringify(r)),
+        e => console.error('[commission] rebuild error', e),
       ));
       return;
     }
