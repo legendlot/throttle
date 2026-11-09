@@ -26,7 +26,7 @@ import { NewTaskCapture } from '../../../components/tasks/GroupHeader.js';
 import { BulkBar } from '../../../components/tasks/BulkBar.js';
 import { ROW_SELECTOR } from '../../../components/tasks/TaskRow.js';
 import { useTaskViewState, visibleColumns, COLUMNS } from '../../../components/tasks/useTaskViewState.js';
-import { Button } from '../../../components/ui/index.js';
+import { Button, EmptyState } from '../../../components/ui/index.js';
 
 const GROUP_OPTS = [
   { value: 'none', label: 'No grouping' }, { value: 'person', label: 'Owner' },
@@ -35,6 +35,9 @@ const GROUP_OPTS = [
 // Group axis → the createTask field a group-foot capture prefills (status is set
 // with a follow-up changeStatus: createTask always starts a task as not_started).
 const GROUP_FIELD = { person: 'owner_employee_id', department: 'department_id', program: 'program_id', status: 'status' };
+
+// IST calendar date 'YYYY-MM-DD' (My tasks "Today & overdue" boundary).
+const istDateStr = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 
 export default function TasksPage() {
   const { session } = useAuth();
@@ -372,10 +375,33 @@ export default function TasksPage() {
     ? tasks.filter(t => t.parent_task_id && matchesQuery(t) && !(archiveDone && t.status === 'done')).sort(sortFn) : []),
   [separate, tasks, matchesQuery, archiveDone, sortFn]);
 
-  // My-tasks mode: flat list (incl. sub-tasks) split by relation. "Assigned to me" = owner;
-  // "Collaborating" = collaborator; "Raised by me" = creator (owned by someone else).
+  // My-tasks mode (P7 home): flat list (incl. sub-tasks) from list_my_tasks — ONE array,
+  // each row tagged `_relation` owner | collaborator | creator by the worker (owner wins,
+  // then collaborator). Regrouped here, each task in exactly one group, by precedence:
+  // "Today & overdue" (owned, open, effective deadline ≤ end of today IST — overdue first)
+  // → "Assigned to me" (the rest I own) → "Collaborating" → "Raised by me".
   const mineMatched = useMemo(() => (mineMode ? tasks.filter(matchesQuery) : []), [mineMode, tasks, matchesQuery]);
-  const mineOwner = useMemo(() => mineMatched.filter(t => t._relation === 'owner').sort(sortFn), [mineMatched, sortFn]);
+  // Keyed on the IST date string, re-read on focus / tab-visible: a tab left open past
+  // midnight IST regroups (yesterday's "today" tasks move to overdue-or-later correctly).
+  const [istDay, setIstDay] = useState(istDateStr);
+  useEffect(() => {
+    const sync = () => setIstDay(istDateStr());
+    const onVis = () => { if (document.visibilityState === 'visible') sync(); };
+    window.addEventListener('focus', sync);
+    document.addEventListener('visibilitychange', onVis);
+    return () => { window.removeEventListener('focus', sync); document.removeEventListener('visibilitychange', onVis); };
+  }, []);
+  useEffect(() => { setIstDay(istDateStr()); }, [tasks]);   // a reload also re-reads the day
+  const endOfTodayIST = useMemo(() => Date.parse(`${istDay}T23:59:59.999+05:30`), [istDay]);
+  const isDueByToday = useCallback((t) => {
+    if (t.status === 'done' || t.status === 'abandoned') return false;
+    const eff = effectiveDeadline(t);
+    return !!eff && Date.parse(eff) <= endOfTodayIST;
+  }, [endOfTodayIST]);
+  // Overdue first: by effective deadline unless the person picked a sort.
+  const byDeadline = useCallback((a, b) => Date.parse(effectiveDeadline(a)) - Date.parse(effectiveDeadline(b)), []);
+  const mineToday = useMemo(() => mineMatched.filter(t => t._relation === 'owner' && isDueByToday(t)).sort(sortKey ? sortFn : byDeadline), [mineMatched, isDueByToday, sortKey, sortFn, byDeadline]);
+  const mineOwner = useMemo(() => mineMatched.filter(t => t._relation === 'owner' && !isDueByToday(t)).sort(sortFn), [mineMatched, isDueByToday, sortFn]);
   // Match 'collaborator' EXACTLY, not !== 'owner' — the worker also returns 'creator'.
   const mineCollab = useMemo(() => mineMatched.filter(t => t._relation === 'collaborator').sort(sortFn), [mineMatched, sortFn]);
   const mineCreated = useMemo(() => mineMatched.filter(t => t._relation === 'creator').sort(sortFn), [mineMatched, sortFn]);
@@ -394,10 +420,13 @@ export default function TasksPage() {
     const knownPrograms = new Set(programs.map(p => p.id));
     if (mineMode) {
       return [
-        { key: 'mine:owner', label: 'Assigned to me', rows: mineOwner, capture: cap(), capturePlaceholder: "Add task — it's assigned to you", empty: 'Nothing here yet.' },
+        { key: 'mine:today', label: 'Today & overdue', rows: mineToday, color: 'var(--overdue)' },
+        { key: 'mine:owner', label: 'Assigned to me', rows: mineOwner, capture: cap(), capturePlaceholder: "Add task — it's assigned to you" },
         { key: 'mine:collab', label: 'Collaborating', rows: mineCollab },
         // Raised by me, owned by someone else. Only OPEN ones (the RPC excludes done/abandoned).
         { key: 'mine:creator', label: 'Raised by me', rows: mineCreated },
+      // Empty groups hidden — except one with a foot capture (Assigned to me), so "add a task
+      // assigned to you" survives an empty group. All empty → the page's empty state.
       ].filter(g => g.capture || g.rows.length);
     }
     const capPlaceholder = inProgramMode ? "Add task — it's tagged to this program" : 'Add task';
@@ -429,7 +458,7 @@ export default function TasksPage() {
     // Grouped but nothing on the board yet: still offer one capture.
     if (!out.length) out.push({ key: 'none', label: null, rows: [], capture: cap(), capturePlaceholder: capPlaceholder });
     return out;
-  }, [mineMode, mineOwner, mineCollab, mineCreated, groupBy, listRows, statusRank, inProgramMode, programs]);
+  }, [mineMode, mineToday, mineOwner, mineCollab, mineCreated, groupBy, listRows, statusRank, inProgramMode, programs]);
 
   const visibleCols = useMemo(() => visibleColumns(cols, { crossSpace }), [cols, crossSpace]);
   const columnKeys = useMemo(() => Object.keys(COLUMNS).filter(k => !COLUMNS[k].crossSpaceOnly || crossSpace)
@@ -438,9 +467,9 @@ export default function TasksPage() {
   /* ---------------- selection + bulk ---------------- */
   // Works in Grid + list + my-tasks; only editable, non-abandoned tasks are selectable.
   const selectableIds = useMemo(() => {
-    const pool = mineMode ? [...mineOwner, ...mineCollab, ...mineCreated] : [...gridRows, ...listRows];
+    const pool = mineMode ? [...mineToday, ...mineOwner, ...mineCollab, ...mineCreated] : [...gridRows, ...listRows];
     return pool.filter(t => t._can_edit && t.status !== 'abandoned').map(t => t.id);
-  }, [mineMode, mineOwner, mineCollab, mineCreated, gridRows, listRows]);
+  }, [mineMode, mineToday, mineOwner, mineCollab, mineCreated, gridRows, listRows]);
   const allSelected = selectableIds.length > 0 && selectableIds.every(id => selected.has(id));
   function clearSelection() { setSelected(new Set()); }
   function toggleSelectAll() {
@@ -487,7 +516,7 @@ export default function TasksPage() {
   }
 
   // Publish the visible count to the topbar; clear it when leaving the board.
-  const headerCount = mineMode ? (mineOwner.length + mineCollab.length + mineCreated.length) : activeTop.length;
+  const headerCount = mineMode ? (mineToday.length + mineOwner.length + mineCollab.length + mineCreated.length) : activeTop.length;
   useEffect(() => { setCount?.(headerCount); return () => setCount?.(null); }, [headerCount, setCount]);
 
   /* ---------------- keyboard: f/g popovers + arrow-into-first-row ---------------- */
@@ -581,7 +610,7 @@ export default function TasksPage() {
   ) : null;
   if (programSpacePicker) for (const g of groups) if (g.capture) g.captureExtra = programSpacePicker;
 
-  const isEmpty = mineMode ? (mineOwner.length + mineCollab.length + mineCreated.length) === 0 : topLevel.length === 0;
+  const isEmpty = mineMode ? (mineToday.length + mineOwner.length + mineCollab.length + mineCreated.length) === 0 : topLevel.length === 0;
   const anyQuery = !!(q || f.activeFilterCount);
 
   return (
@@ -622,12 +651,10 @@ export default function TasksPage() {
         </div>
       ) : isEmpty ? (
         <div className="tl-emptywrap">
-          <div className="empty-state">
-            <div className="ei"><ListChecks size={24} /></div>
-            <h3>{anyQuery ? 'No tasks match' : (mineMode ? 'Nothing assigned to you' : 'All clear')}</h3>
-            <p>{anyQuery ? 'Try a different search or widen the filters.' : (mineMode ? 'Tasks you own, collaborate on, or raised for someone else — across every space — show up here.' : 'Add a task above to get started.')}</p>
-            {f.activeFilterCount > 0 && <Button variant="neutral" size="sm" style={{ margin: '14px auto 0' }} onClick={f.clearFilters}>Clear filters</Button>}
-          </div>
+          <EmptyState icon={ListChecks}
+            title={anyQuery ? 'No tasks match' : (mineMode ? 'Nothing assigned to you' : 'All clear')}
+            body={anyQuery ? 'Try a different search or widen the filters.' : (mineMode ? 'Tasks you own, collaborate on, or raised for someone else — across every space — show up here.' : 'Add a task above to get started.')}
+            action={f.activeFilterCount > 0 ? <Button variant="neutral" size="sm" onClick={f.clearFilters}>Clear filters</Button> : null} />
         </div>
       ) : (
         <TaskListView

@@ -94,3 +94,36 @@ export function templateRecurrenceSummary(rec) {
   if (rec.freq === 'monthly') return `Monthly on the ${ordinal(Number(rec.day_of_month))}` + until;
   return '—';
 }
+
+// Client mirror of the worker's isDueOn / isExpired (docketops index.js) — used ONLY to
+// preview the rest of this week on the checklist; the worker stays the source of due_today.
+export function isDueOn(rec, dateStr) {
+  if (!rec || !rec.freq) return false;
+  if (rec.freq === 'daily') return true;
+  if (rec.freq === 'weekly') {
+    const wd = new Date(`${dateStr}T12:00:00Z`).getUTCDay();
+    return Array.isArray(rec.days_of_week) && rec.days_of_week.map(Number).includes(wd);
+  }
+  if (rec.freq === 'monthly') {
+    const y = +dateStr.slice(0, 4), m = +dateStr.slice(5, 7), day = +dateStr.slice(8, 10);
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const dom = Number(rec.day_of_month);
+    return day === dom || (day === lastDay && dom > lastDay);
+  }
+  return false;
+}
+export function isExpired(rec, dateStr) { return !!(rec && rec.until && rec.until < dateStr); }
+
+// The IST dates AFTER `dateStr` up to and including that week's Sunday (Mon-start week).
+// Empty on a Sunday.
+export function restOfWeek(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const base = new Date(Date.UTC(y, m - 1, d));
+  const left = (7 - base.getUTCDay()) % 7;          // Sun → 0, Mon → 6, … Sat → 1
+  const out = [];
+  for (let i = 1; i <= left; i++) {
+    const dt = new Date(base); dt.setUTCDate(dt.getUTCDate() + i);
+    out.push(dt.toISOString().slice(0, 10));
+  }
+  return out;
+}

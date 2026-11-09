@@ -19,7 +19,7 @@ export default function LoginPage() {
         <div className="login-word">DOCKET</div>
         <div className="login-sub">Org Task Manager</div>
         <div className="login-rule" />
-        <button className="login-btn" onClick={signInWithGoogle}>Sign in with Google</button>
+        <button type="button" className="login-btn" onClick={signInWithGoogle}>Sign in with Google</button>
         <div className="login-foot">@legendoftoys.com</div>
       </div>
     </div>

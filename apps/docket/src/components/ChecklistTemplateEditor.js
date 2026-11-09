@@ -5,9 +5,10 @@ import { useEffect, useState, useCallback } from 'react';
 import { Combobox, useToast } from '@throttle/ui';
 import { Plus, Trash2, ChevronUp, ChevronDown, Check, X } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../lib/docketopsFetch.js';
-import { RecurrenceEditor } from './RecurrenceEditor.js';
+import { RecurrencePopover } from './RecurrencePopover.js';
 import { CHECKLIST_TAGS } from './TagPill.js';
 import { isValidTemplateRecurrence } from '../lib/recurrence.js';
+import { Button, IconButton } from './ui/index.js';
 
 const blankItem = () => ({ id: null, title: '', help_text: '', tags: [] });
 const blankSection = () => ({ id: null, title: '', subtitle: '', due_time: '', items: [blankItem()] });
@@ -89,13 +90,13 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
         <textarea className="cl-textarea" value={draft.description} onChange={e => patch({ description: e.target.value })} /></label>
 
       <div className="cl-field"><span>Schedule</span>
-        <RecurrenceEditor value={draft.recurrence} hideTime onChange={r => patch({ recurrence: r })} /></div>
+        <RecurrencePopover value={draft.recurrence} hideTime onChange={r => patch({ recurrence: r })} /></div>
 
       <div className="cl-field"><span>Assigned to</span>
         <div className="cl-assignees">
           {assignees.map(a => (
-            <span className="chip" key={a.employee_id}>{a.full_name}
-              <button className="chip-x" onClick={() => removeAssignee(a.employee_id)}><X size={11} /></button></span>
+            <span className="cl-chip" key={a.employee_id}>{a.full_name}
+              <button className="chip-x" aria-label={`Remove ${a.full_name}`} onClick={() => removeAssignee(a.employee_id)}><X size={11} /></button></span>
           ))}
           <Combobox value="" allowClear={false} placeholder="+ Add person" style={{ width: 200 }}
             options={employees.filter(e => !assignees.some(a => a.employee_id === e.id)).map(e => ({ value: e.id, label: e.full_name }))}
@@ -109,9 +110,9 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
             <div className="cl-section-edit-head">
               <input className="cl-input" placeholder="Section title" value={s.title} onChange={e => setSection(si, { title: e.target.value })} />
               <input className="cl-time" type="time" value={s.due_time} onChange={e => setSection(si, { due_time: e.target.value })} title="Due by (optional)" />
-              <button className="dr-icon" onClick={() => moveSection(si, -1)}><ChevronUp size={14} /></button>
-              <button className="dr-icon" onClick={() => moveSection(si, 1)}><ChevronDown size={14} /></button>
-              <button className="dr-icon" onClick={() => setDraft(d => ({ ...d, sections: d.sections.filter((_, i) => i !== si) }))}><Trash2 size={14} /></button>
+              <IconButton icon={ChevronUp} size="sm" label="Move section up" onClick={() => moveSection(si, -1)} />
+              <IconButton icon={ChevronDown} size="sm" label="Move section down" onClick={() => moveSection(si, 1)} />
+              <IconButton icon={Trash2} size="sm" label="Remove section" onClick={() => setDraft(d => ({ ...d, sections: d.sections.filter((_, i) => i !== si) }))} />
             </div>
             <input className="cl-input cl-sub-input" placeholder="Section help line (optional)" value={s.subtitle} onChange={e => setSection(si, { subtitle: e.target.value })} />
             <ul className="cl-items-edit">
@@ -123,20 +124,20 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
                     {CHECKLIST_TAGS.map(t => (
                       <button key={t} className={'cl-tagbtn' + ((it.tags || []).includes(t) ? ' on' : '')} onClick={() => toggleTag(si, ii, t)}>{t}</button>
                     ))}
-                    <button className="dr-icon" onClick={() => setSection(si, { items: s.items.filter((_, j) => j !== ii) })}><Trash2 size={13} /></button>
+                    <IconButton icon={Trash2} size="sm" label="Remove item" onClick={() => setSection(si, { items: s.items.filter((_, j) => j !== ii) })} />
                   </div>
                 </li>
               ))}
             </ul>
-            <button className="btn btn-ghost btn-sm" onClick={() => setSection(si, { items: [...s.items, blankItem()] })}><Plus size={13} /> Add item</button>
+            <Button variant="ghost" size="sm" icon={Plus} className="cl-additem" onClick={() => setSection(si, { items: [...s.items, blankItem()] })}>Add item</Button>
           </div>
         ))}
-        <button className="btn btn-ghost" onClick={() => setDraft(d => ({ ...d, sections: [...d.sections, blankSection()] }))}><Plus size={14} /> Add section</button>
+        <Button variant="neutral" icon={Plus} className="cl-additem" onClick={() => setDraft(d => ({ ...d, sections: [...d.sections, blankSection()] }))}>Add section</Button>
       </div>
 
       <div className="cl-editor-actions">
-        <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
-        <button className="btn btn-primary" disabled={busy || !draft.name.trim()} onClick={save}><Check size={14} /> Save template</button>
+        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+        <Button variant="primary" icon={Check} loading={busy} disabled={!draft.name.trim()} onClick={save}>Save template</Button>
       </div>
     </div>
   );

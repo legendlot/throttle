@@ -4,15 +4,17 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { Plus, Check, Repeat, Pencil, Ban, Archive } from 'lucide-react';
+import { Plus, Check, Repeat, Pencil, Ban, Archive, ChevronLeft, ChevronRight, ListChecks, CalendarDays, Eye } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
-import { PriorityBadge } from '../../../components/PriorityBadge.js';
-import { RecurrenceEditor } from '../../../components/RecurrenceEditor.js';
+import { RecurrencePopover } from '../../../components/RecurrencePopover.js';
+import { GroupHeader } from '../../../components/tasks/GroupHeader.js';
+import { PriorityFlag } from '../../../components/tasks/TaskCells.js';
+import { SegmentedTabs, Button, IconButton, EmptyState } from '../../../components/ui/index.js';
 import { ChecklistRun } from '../../../components/ChecklistRun.js';
 import { ChecklistTemplateEditor } from '../../../components/ChecklistTemplateEditor.js';
 import { OversightPanel } from '../../../components/OversightPanel.js';
 import { TaskView } from '../../../components/task/TaskView.js';
-import { recurrenceSummary, templateRecurrenceSummary, fmtTime, fmtISTDate, isValidRecurrence } from '../../../lib/recurrence.js';
+import { recurrenceSummary, templateRecurrenceSummary, fmtTime, fmtISTDate, isValidRecurrence, isDueOn, isExpired, restOfWeek, WEEKDAYS } from '../../../lib/recurrence.js';
 import { fmtClockIST } from '../../../lib/checklist.js';
 import { PRIORITIES } from '../../../lib/tasks.js';
 
@@ -35,6 +37,8 @@ export default function ChecklistPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
   const [tab, setTab] = useState('day');           // 'day' | 'manage' | 'oversight'
+  const [collapsed, setCollapsed] = useState({});  // group key → true (P7 list-view groups)
+  const toggleGroup = (k) => setCollapsed(c => ({ ...c, [k]: !c[k] }));
   // '' = today. Any past date is viewable AND completable — the whole worker path is already
   // date-relative (getChecklist / toggleChecklistItem / toggleChecklistOccurrence all take a
   // date, and due_today/completed_today are computed from it), so this is purely the UI
@@ -51,8 +55,6 @@ export default function ChecklistPage() {
   // personal-recurring create/edit/stop (unchanged from S124)
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState(null);
-  const [editSchedId, setEditSchedId] = useState(null);
-  const [schedDraft, setSchedDraft] = useState(null);
   // templates (manage)
   const [templates, setTemplates] = useState([]);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -101,6 +103,16 @@ export default function ChecklistPage() {
   const dueToday = useMemo(() => recItems.filter(i => i.due_today).sort(byTime), [recItems]);
   const doneCount = dueToday.filter(i => i.completed_today).length;
   const allSorted = useMemo(() => recItems.slice().sort(byTime), [recItems]);
+  // "Recurring this week" (P7): the rest of the week AFTER the viewed day, previewed
+  // client-side from each recurrence with the worker's own isDueOn/isExpired rules. Personal
+  // recurring tasks only — template runs come from the worker per date, so they can't be
+  // previewed. Read-only (a future occurrence can't be ticked, see canGoNext); today only.
+  const weekAhead = useMemo(() => {
+    if (!data?.date) return [];
+    const days = restOfWeek(data.date);
+    return recItems.map(i => ({ item: i, days: days.filter(d => isDueOn(i.recurrence, d) && !isExpired(i.recurrence, d)) }))
+      .filter(x => x.days.length).sort((a, b) => a.days[0].localeCompare(b.days[0]) || byTime(a.item, b.item));
+  }, [recItems, data?.date]);
   const nowHM = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
   // `today` above is the date the worker ANSWERED for, which is the viewed date. Compare it to
   // real IST today to decide whether this is a back-fill view.
@@ -141,12 +153,12 @@ export default function ChecklistPage() {
       setShowCreate(false); setDraft(null); showToast('Recurring task added', 'success'); load(personId, viewDate);
     } catch (e) { showToast(e.message || 'Failed', 'error'); } finally { setBusy(false); }
   }
-  function openEditSched(item) { setEditSchedId(item.id); setSchedDraft(item.recurrence || { freq: 'daily', time: '09:00' }); }
-  async function saveSched() {
-    if (!isValidRecurrence(schedDraft)) { showToast('Pick a valid schedule', 'error'); return; }
+  // Edit schedule: the RecurrencePopover holds the draft; this is the same write as before.
+  async function saveSched(item, rec) {
+    if (!isValidRecurrence(rec)) { showToast('Pick a valid schedule', 'error'); return false; }
     setBusy(true);
-    try { await docketopsPost('updateRecurrence', { id: editSchedId, recurrence: schedDraft }, session); setEditSchedId(null); setSchedDraft(null); load(personId, viewDate); }
-    catch (e) { showToast(e.message || 'Failed', 'error'); } finally { setBusy(false); }
+    try { await docketopsPost('updateRecurrence', { id: item.id, recurrence: rec }, session); load(personId, viewDate); return true; }
+    catch (e) { showToast(e.message || 'Failed', 'error'); return false; } finally { setBusy(false); }
   }
   async function stopTask(item) {
     const reason = window.prompt('Stop this recurring task? It leaves the checklist (logged, not deleted). Reason:');
@@ -162,142 +174,173 @@ export default function ChecklistPage() {
   }
 
   if (!me) return <Spinner />;
-  if (!me.employee_id) return (<div className="screen"><div className="screen-head"><p>Your account isn’t linked to an employee profile yet, so you have no checklist. Ask an admin to link you in Podium.</p></div></div>);
+  if (!me.employee_id) return (<div className="screen"><EmptyState icon={ListChecks} title="No checklist yet" body="Your account isn’t linked to an employee profile yet, so you have no checklist. Ask an admin to link you in Podium." /></div>);
+
+  const dayLabel = (d) => WEEKDAYS[new Date(`${d}T12:00:00Z`).getUTCDay()]?.label;
+  const nothingToday = dueToday.length === 0 && runs.length === 0 && !(isToday && weekAhead.length);
 
   return (
     <div className="screen checklist">
-      <div className="cl-tabs">
-        <button className={'cl-tab' + (tab === 'day' ? ' on' : '')} onClick={() => setTab('day')}>My day</button>
-        <button className={'cl-tab' + (tab === 'manage' ? ' on' : '')} onClick={() => setTab('manage')}>Manage</button>
-        <button className={'cl-tab' + (tab === 'oversight' ? ' on' : '')} onClick={() => setTab('oversight')}>Oversight</button>
-      </div>
+      <SegmentedTabs className="cl-tabs" label="Checklist" value={tab} onChange={setTab}
+        tabs={[{ value: 'day', label: 'My day', icon: ListChecks }, { value: 'manage', label: 'Manage', icon: Repeat }, { value: 'oversight', label: 'Oversight', icon: Eye }]} />
 
       {tab === 'day' && (<>
-        <div className="screen-head cl-head">
-          <p>Recurring tasks{isOwn ? ' on your checklist' : ` on ${data?.owner?.full_name || 'this'}’s checklist`}. Check them off as you go.</p>
-          <div className="cl-datenav" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <button className="cl-tab" title="Previous day"
-              onClick={() => setViewDate(shiftISO(today || istToday, -1))}>‹</button>
-            <span style={{ fontSize: 12, minWidth: 116, textAlign: 'center', color: isToday ? 'var(--t2)' : 'var(--warn-fg, #fbbf24)' }}>
-              {isToday ? 'Today' : fmtISTDate(today)}
-            </span>
+        <div className="cl-head">
+          <p className="cl-lede">Recurring tasks{isOwn ? ' on your checklist' : ` on ${data?.owner?.full_name || 'this'}’s checklist`}. Check them off as you go.</p>
+          <div className="cl-datenav">
+            <IconButton icon={ChevronLeft} size="sm" variant="neutral" label="Previous day"
+              onClick={() => setViewDate(shiftISO(today || istToday, -1))} />
+            <span className={'cl-datelbl' + (isToday ? '' : ' past')}>{isToday ? 'Today' : fmtISTDate(today)}</span>
             {/* Forward is capped at today on purpose — see canGoNext. */}
-            <button className="cl-tab" title={canGoNext ? 'Next day' : 'Cannot tick a future checklist'}
-              disabled={!canGoNext} style={{ opacity: canGoNext ? 1 : 0.4, cursor: canGoNext ? 'pointer' : 'not-allowed' }}
-              onClick={() => canGoNext && setViewDate(shiftISO(today, 1))}>›</button>
-            {!isToday && <button className="cl-tab" onClick={() => setViewDate('')}>Today</button>}
+            <IconButton icon={ChevronRight} size="sm" variant="neutral" label={canGoNext ? 'Next day' : 'Cannot tick a future checklist'}
+              disabled={!canGoNext} onClick={() => canGoNext && setViewDate(shiftISO(today, 1))} />
+            {!isToday && <Button size="sm" onClick={() => setViewDate('')}>Today</Button>}
           </div>
           {viewablePeople.length > 1 && (
             <div className="cl-person">
-              <Combobox value={personId} allowClear={false} style={{ width: 260 }}
+              <Combobox value={personId} allowClear={false} style={{ width: 260, maxWidth: '100%' }}
                 options={viewablePeople.map(e => ({ value: e.id, label: e.id === me.employee_id ? `${e.full_name} (me)` : e.full_name }))}
                 onChange={(v) => { if (v) setPersonId(v); }} />
             </div>
           )}
         </div>
-        {loading ? <Spinner /> : (<>
-          <section className="cl-card">
-            <div className="cl-card-head">
-              <div><h3>{isToday ? 'Today' : 'Back-fill'}</h3><span className="cl-sub">{fmtISTDate(today)}</span></div>
-              {dueToday.length > 0 && (<div className="cl-progress"><span>{doneCount}/{dueToday.length} done</span><div className="cl-bar"><i style={{ width: `${dueToday.length ? (doneCount / dueToday.length * 100) : 0}%` }} /></div></div>)}
-            </div>
-            {dueToday.length === 0 ? <div className="cl-empty">Nothing personal scheduled for {isToday ? 'today' : fmtISTDate(today)}.</div> : (
-              <ul className="cl-today">
-                {dueToday.map(i => {
-                  // Only meaningful for today — on a past date every timed item is trivially
-                  // "past its time", so flagging them all red says nothing.
-                  const overdue = isToday && !i.completed_today && i.recurrence?.time && i.recurrence.time < nowHM;
-                  return (
-                    <li key={i.id} className={'cl-item' + (i.completed_today ? ' done' : '')}>
-                      <button className={'cl-check' + (i.completed_today ? ' on' : '')} disabled={!i._can_complete} title={i._can_complete ? '' : 'You can only complete your own checklist'} onClick={() => toggleRecurring(i)}>{i.completed_today && <Check size={14} />}</button>
-                      <div className="cl-item-main">
+        {loading ? <Spinner /> : nothingToday ? (
+          <EmptyState icon={ListChecks} title={`Nothing scheduled for ${isToday ? 'today' : fmtISTDate(today)}`}
+            body={isOwn ? 'Add a recurring task or a checklist template under Manage.' : 'Nothing on this checklist for the day.'} />
+        ) : (<>
+          {dueToday.length > 0 && (
+            <section className="cl-group">
+              <GroupHeader variant="cl-ghead" collapsed={!!collapsed.today} onToggle={() => toggleGroup('today')}
+                group={{ label: isToday ? 'Today' : `Back-fill · ${fmtISTDate(today)}`, rows: dueToday, color: isToday ? 'var(--accent)' : 'var(--state-warning)', hint: `${doneCount}/${dueToday.length} done` }} />
+              {!collapsed.today && (
+                <ul className="cl-rows">
+                  {dueToday.map(i => {
+                    // Only meaningful for today — on a past date every timed item is trivially
+                    // "past its time", so flagging them all red says nothing.
+                    const overdue = isToday && !i.completed_today && i.recurrence?.time && i.recurrence.time < nowHM;
+                    return (
+                      <li key={i.id} className={'cl-item' + (i.completed_today ? ' done' : '')}>
+                        <button className={'cl-check' + (i.completed_today ? ' on' : '')} disabled={!i._can_complete} aria-pressed={!!i.completed_today} aria-label={i.completed_today ? 'Mark not done' : 'Mark done'} title={i._can_complete ? '' : 'You can only complete your own checklist'} onClick={() => toggleRecurring(i)}>{i.completed_today && <Check size={12} strokeWidth={3} />}</button>
                         <button className="cl-item-title" onClick={() => setDrawerId(i.id)}>{i.title}</button>
-                        <div className="cl-item-meta">
-                          <span className={'cl-time' + (overdue ? ' over' : '')}>{fmtTime(i.recurrence?.time)}</span>
-                          <PriorityBadge priority={i.priority} />
-                          {i.department_name && <span className="chip soft">{i.department_name}</span>}
+                        <span className="cl-item-meta">
                           {i.completed_today && i.completed_at && (<span className={'cl-done-at' + (i.late ? ' late' : '')}>{i.late ? 'late · ' : ''}{fmtClockIST(i.completed_at)}{i.completed_by ? ` · ${i.completed_by}` : ''}</span>)}
-                        </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </section>
+                          {i.department_name && <span className="cl-team">{i.department_name}</span>}
+                          <PriorityFlag priority={i.priority} />
+                          <span className={'cl-at' + (overdue ? ' over' : '')}>{fmtTime(i.recurrence?.time)}</span>
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+          )}
           {runs.map(run => (
             <ChecklistRun key={run.template.id} run={run} canComplete={run._can_complete && isOwn}
+              collapsed={!!collapsed['run:' + run.template.id]} onToggle={() => toggleGroup('run:' + run.template.id)}
               onToggleItem={toggleItem} onSaveComment={saveComment} />
           ))}
+          {isToday && weekAhead.length > 0 && (
+            <section className="cl-group">
+              <GroupHeader variant="cl-ghead" collapsed={!!collapsed.week} onToggle={() => toggleGroup('week')}
+                group={{ label: 'Recurring this week', rows: weekAhead, icon: CalendarDays, hint: 'upcoming · tick on the day' }} />
+              {!collapsed.week && (
+                <ul className="cl-rows">
+                  {weekAhead.map(({ item: i, days }) => (
+                    <li key={i.id} className="cl-item ahead">
+                      <span className="cl-check ghost" aria-hidden />
+                      <button className="cl-item-title" onClick={() => setDrawerId(i.id)}>{i.title}</button>
+                      <span className="cl-item-meta">
+                        <span className="cl-days">{days.map(dayLabel).join(' · ')}</span>
+                        <PriorityFlag priority={i.priority} />
+                        <span className="cl-at">{fmtTime(i.recurrence?.time)}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
         </>)}
       </>)}
 
       {tab === 'manage' && (
         <div className="cl-manage-wrap">
-          {/* personal recurring (unchanged S124 UI) */}
-          <section className="cl-card">
-            <div className="cl-card-head">
-              <div><h3>My recurring tasks</h3><span className="cl-sub">{allSorted.length} total</span></div>
-              {!showCreate && <button className="btn btn-primary" onClick={openCreate}><Plus size={14} /> New</button>}
+          {/* personal recurring */}
+          <section className="cl-group">
+            <div className="cl-group-bar">
+              <GroupHeader variant="cl-ghead" collapsed={!!collapsed.mine} onToggle={() => toggleGroup('mine')}
+                group={{ label: 'My recurring tasks', rows: allSorted, icon: Repeat }} />
+              {!showCreate && <Button variant="primary" size="sm" icon={Plus} onClick={() => { openCreate(); setCollapsed(c => ({ ...c, mine: false })); }}>New</Button>}
             </div>
-            {showCreate && draft && (
-              <div className="cl-create">
-                <input className="cl-input" autoFocus placeholder="What needs doing, on a schedule?" value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} />
-                <RecurrenceEditor value={draft.recurrence} onChange={r => setDraft(d => ({ ...d, recurrence: r }))} />
-                <div className="cl-create-grid">
-                  <label className="cl-field"><span>Assign to</span><Combobox value={draft.owner_employee_id} allowClear={false} style={{ width: '100%' }} options={employees.map(e => ({ value: e.id, label: e.full_name }))} onChange={v => setDraft(d => ({ ...d, owner_employee_id: v }))} /></label>
-                  <label className="cl-field"><span>Priority</span><Combobox value={draft.priority} allowClear={false} style={{ width: '100%' }} options={PRIORITIES.map(p => ({ value: p.key, label: p.label }))} onChange={v => setDraft(d => ({ ...d, priority: v || 'P2' }))} /></label>
-                  <label className="cl-field"><span>Team</span><Combobox value={draft.department_id} allowClear style={{ width: '100%' }} options={[{ value: '', label: '— None —' }, ...departments.map(dp => ({ value: dp.id, label: dp.name }))]} onChange={v => setDraft(d => ({ ...d, department_id: v || '' }))} /></label>
+            {!collapsed.mine && (<>
+              {showCreate && draft && (
+                <div className="cl-create">
+                  <input className="cl-input" autoFocus placeholder="What needs doing, on a schedule?" value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} />
+                  <div className="cl-field"><span>Schedule</span>
+                    <RecurrencePopover value={draft.recurrence} onChange={r => setDraft(d => ({ ...d, recurrence: r }))} /></div>
+                  <div className="cl-create-grid">
+                    <label className="cl-field"><span>Assign to</span><Combobox value={draft.owner_employee_id} allowClear={false} style={{ width: '100%' }} options={employees.map(e => ({ value: e.id, label: e.full_name }))} onChange={v => setDraft(d => ({ ...d, owner_employee_id: v }))} /></label>
+                    <label className="cl-field"><span>Priority</span><Combobox value={draft.priority} allowClear={false} style={{ width: '100%' }} options={PRIORITIES.map(p => ({ value: p.key, label: p.label }))} onChange={v => setDraft(d => ({ ...d, priority: v || 'P2' }))} /></label>
+                    <label className="cl-field"><span>Team</span><Combobox value={draft.department_id} allowClear style={{ width: '100%' }} options={[{ value: '', label: '— None —' }, ...departments.map(dp => ({ value: dp.id, label: dp.name }))]} onChange={v => setDraft(d => ({ ...d, department_id: v || '' }))} /></label>
+                  </div>
+                  <textarea className="cl-textarea" placeholder="Description (optional)" value={draft.description} onChange={e => setDraft(d => ({ ...d, description: e.target.value }))} />
+                  <div className="cl-create-actions"><Button variant="ghost" onClick={() => { setShowCreate(false); setDraft(null); }}>Cancel</Button><Button variant="primary" icon={Check} disabled={busy || !draft.title.trim() || !isValidRecurrence(draft.recurrence)} onClick={submitCreate}>Add</Button></div>
                 </div>
-                <textarea className="cl-textarea" placeholder="Description (optional)" value={draft.description} onChange={e => setDraft(d => ({ ...d, description: e.target.value }))} />
-                <div className="cl-create-actions"><button className="btn btn-ghost" onClick={() => { setShowCreate(false); setDraft(null); }}>Cancel</button><button className="btn btn-primary" disabled={busy || !draft.title.trim() || !isValidRecurrence(draft.recurrence)} onClick={submitCreate}><Check size={13} /> Add</button></div>
-              </div>
-            )}
-            {allSorted.length === 0 ? <div className="cl-empty">No recurring tasks yet.</div> : (
-              <ul className="cl-manage">
-                {allSorted.map(i => (
-                  <li key={i.id} className="cl-mrow">
-                    <div className="cl-mrow-top">
-                      <div className="cl-mrow-main"><button className="cl-item-title" onClick={() => setDrawerId(i.id)}>{i.title}</button>
-                        <div className="cl-item-meta"><span className="cl-rec"><Repeat size={12} /> {recurrenceSummary(i.recurrence)}</span>{i.department_name && <span className="chip soft">{i.department_name}</span>}<PriorityBadge priority={i.priority} /></div></div>
-                      {i._can_complete && (<div className="cl-mrow-actions"><button className="dr-icon" title="Edit schedule" onClick={() => openEditSched(i)}><Pencil size={14} /></button><button className="dr-icon" title="Stop (abandon)" onClick={() => stopTask(i)}><Ban size={14} /></button></div>)}
-                    </div>
-                    {editSchedId === i.id && (<div className="cl-sched-edit"><RecurrenceEditor value={schedDraft} onChange={setSchedDraft} /><div className="cl-sched-actions"><button className="btn btn-ghost" onClick={() => { setEditSchedId(null); setSchedDraft(null); }}>Cancel</button><button className="btn btn-primary" disabled={busy} onClick={saveSched}><Check size={13} /> Save</button></div></div>)}
-                  </li>
-                ))}
-              </ul>
-            )}
+              )}
+              {allSorted.length === 0 ? <div className="cl-empty">No recurring tasks yet.</div> : (
+                <ul className="cl-rows">
+                  {allSorted.map(i => (
+                    <li key={i.id} className="cl-item">
+                      <Repeat className="cl-row-ic" size={14} aria-hidden />
+                      <button className="cl-item-title" onClick={() => setDrawerId(i.id)}>{i.title}</button>
+                      <span className="cl-item-meta">
+                        {i.department_name && <span className="cl-team">{i.department_name}</span>}
+                        <PriorityFlag priority={i.priority} />
+                        <span className="cl-rec">{recurrenceSummary(i.recurrence)}</span>
+                      </span>
+                      {i._can_complete && (
+                        <span className="cl-row-acts">
+                          <RecurrencePopover value={i.recurrence || { freq: 'daily', time: '09:00' }} align="right" label="Edit schedule" busy={busy}
+                            valid={isValidRecurrence} onSave={(rec) => saveSched(i, rec)}
+                            trigger={({ ref, onClick, open }) => <IconButton ref={ref} icon={Pencil} size="sm" label="Edit schedule" aria-expanded={open} onClick={onClick} />} />
+                          <IconButton icon={Ban} size="sm" label="Stop (abandon)" onClick={() => stopTask(i)} />
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>)}
           </section>
 
-          {/* checklist templates (new) */}
-          <section className="cl-card">
-            <div className="cl-card-head">
-              <div><h3>Checklist templates</h3><span className="cl-sub">{templates.length} total</span></div>
-              {!editorOpen && <button className="btn btn-primary" onClick={() => { setEditorTemplateId(null); setEditorOpen(true); }}><Plus size={14} /> New template</button>}
+          {/* checklist templates */}
+          <section className="cl-group">
+            <div className="cl-group-bar">
+              <GroupHeader variant="cl-ghead" collapsed={!!collapsed.tmpl} onToggle={() => toggleGroup('tmpl')}
+                group={{ label: 'Checklist templates', rows: templates, icon: ListChecks }} />
+              {!editorOpen && <Button variant="primary" size="sm" icon={Plus} onClick={() => { setEditorTemplateId(null); setEditorOpen(true); setCollapsed(c => ({ ...c, tmpl: false })); }}>New template</Button>}
             </div>
-            {editorOpen ? (
+            {!collapsed.tmpl && (editorOpen ? (
               <ChecklistTemplateEditor templateId={editorTemplateId} employees={employees} departments={departments} session={session}
                 onSaved={() => { setEditorOpen(false); setEditorTemplateId(null); loadTemplates(); }}
                 onCancel={() => { setEditorOpen(false); setEditorTemplateId(null); }} />
             ) : templates.length === 0 ? <div className="cl-empty">No templates yet. Create one to define a role’s daily checklist.</div> : (
-              <ul className="cl-manage">
+              <ul className="cl-rows">
                 {templates.map(t => (
-                  <li key={t.id} className="cl-mrow">
-                    <div className="cl-mrow-top">
-                      <div className="cl-mrow-main">
-                        <button className="cl-item-title" disabled={!t._can_edit} onClick={() => { if (t._can_edit) { setEditorTemplateId(t.id); setEditorOpen(true); } }}>{t.name}</button>
-                        <div className="cl-item-meta">
-                          {t.role_label && <span className="chip soft">{t.role_label}</span>}
-                          <span className="cl-rec"><Repeat size={12} /> {templateRecurrenceSummary(t.recurrence)}</span>
-                          <span className="cl-sub">{t.section_count} sections · {t.item_count} items · {t.assignee_count} assigned</span>
-                        </div>
-                      </div>
-                      {t._can_edit && <div className="cl-mrow-actions"><button className="dr-icon" title="Archive" onClick={() => archiveTemplate(t)}><Archive size={14} /></button></div>}
-                    </div>
+                  <li key={t.id} className="cl-item">
+                    <ListChecks className="cl-row-ic" size={14} aria-hidden />
+                    <button className="cl-item-title" disabled={!t._can_edit} onClick={() => { if (t._can_edit) { setEditorTemplateId(t.id); setEditorOpen(true); } }}>{t.name}</button>
+                    <span className="cl-item-meta">
+                      {t.role_label && <span className="cl-team">{t.role_label}</span>}
+                      <span className="cl-sub">{t.section_count} sections · {t.item_count} items · {t.assignee_count} assigned</span>
+                      <span className="cl-rec">{templateRecurrenceSummary(t.recurrence)}</span>
+                    </span>
+                    {t._can_edit && <span className="cl-row-acts"><IconButton icon={Archive} size="sm" label="Archive" onClick={() => archiveTemplate(t)} /></span>}
                   </li>
                 ))}
               </ul>
-            )}
+            ))}
           </section>
         </div>
       )}

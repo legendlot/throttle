@@ -21,7 +21,7 @@ export function GroupHeader({ group, collapsed, onToggle, onAdd, onCollapseAll, 
         {group.tone === 'status'
           ? <Pill tone="status" color={group.color} dot>{group.label}</Pill>
           : <Pill dot={!!group.color} color={group.color} icon={group.icon}>{group.label}</Pill>}
-        <span className="tl-gcount">{group.rows.length}</span>
+        <span className="tl-gcount">{group.count ?? group.rows.length}</span>
         {group.hint && <span className="tl-ghint">{group.hint}</span>}
       </button>
       {(onCollapseAll || onExpandAll) && <>

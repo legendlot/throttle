@@ -2,9 +2,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { Plus, ArrowLeft, ShieldCheck, LayoutDashboard, X, Globe } from 'lucide-react';
+import { Plus, ArrowLeft, ShieldCheck, LayoutDashboard, X, Globe, Lock } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../../lib/docketopsFetch.js';
-import { AdminTabs } from '../../../../components/AdminTabs.js';
+import { Button, IconButton, EmptyState } from '../../../../components/ui/index.js';
+import { AdminHead, Switch } from '../../../../components/AdminParts.js';
 
 // Docket permission matrix — 2 boolean keys. Define unlimited custom roles from
 // these toggles. docket_admin implies docket_view_all (enforced here + server-side).
@@ -75,91 +76,86 @@ export default function RolesPage() {
     catch (e) { showToast(e.message || 'Delete failed', 'error'); }
   }
 
-  if (perms && !perms.docket_admin) return <div style={{ color: 'var(--text-3)' }}>Requires docket_admin.</div>;
+  if (perms && !perms.docket_admin) return <div className="adm"><EmptyState icon={Lock} title="Admins only" body="Requires docket_admin." /></div>;
 
   return (
-    <div style={{ maxWidth: 900 }}>
-      <AdminTabs />
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
-        <p style={sub}>Docket-only permission roles. Assign people on the Users page. No role = baseline (own + collaborator + own-team tasks).</p>
-        {view === 'list'
-          ? <button style={btnPrimary} onClick={startNew}><Plus size={14} /> New Role</button>
-          : <button style={btnSecondary} onClick={() => setView('list')}><ArrowLeft size={14} /> Back to roles</button>}
-      </div>
+    <div className="adm">
+      <AdminHead title="Roles & permissions"
+        lede="Docket-only permission roles. Assign people on the Users page. No role = baseline (own + collaborator + own-team tasks)."
+        action={view === 'list'
+          ? <Button variant="primary" icon={Plus} onClick={startNew}>New role</Button>
+          : <Button variant="ghost" icon={ArrowLeft} onClick={() => setView('list')}>Back to roles</Button>} />
 
       {view === 'list' ? (
         <>
           <DashboardSharingCard session={session} />
-          <div style={{ ...lbl, marginBottom: 8 }}>Roles</div>
-          {loading ? <Spinner /> : (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            {roles.map((r) => (
-              <div key={r.role_key} style={card}>
-                <div style={cardHead}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{r.label}{r.is_system && <span style={badgeGray}>system</span>}</span>
-                  <span style={mono}>{r.role_key}</span>
-                </div>
-                <div style={{ padding: '12px 14px' }}>
-                  {r.description && <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>{r.description}</div>}
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 12 }}>
-                    {Object.entries(r.permissions || {}).filter(([, v]) => v).map(([k]) => <span key={k} style={badgeKey}>{k}</span>)}
-                    {Object.values(r.permissions || {}).filter(Boolean).length === 0 && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>Baseline (own + team tasks)</span>}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <button style={btnSecondary} onClick={() => startEdit(r)}>Edit</button>
-                    {!r.is_system && <button style={btnDanger} onClick={() => del(r)}>Delete</button>}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          )}
+          <section className="adm-card">
+            <div className="adm-card-h"><span>Roles</span><span className="adm-count">{roles.length}</span></div>
+            {loading ? <div className="adm-card-b"><Spinner /></div> : (
+              <ul className="adm-list">
+                {roles.map((r) => {
+                  const on = Object.entries(r.permissions || {}).filter(([, v]) => v).map(([k]) => k);
+                  return (
+                    <li key={r.role_key} className="adm-item">
+                      <div className="adm-item-main">
+                        <div className="adm-item-title">{r.label}{r.is_system && <span className="adm-badge">system</span>}<span className="adm-mono">{r.role_key}</span></div>
+                        {r.description && <div className="adm-item-sub">{r.description}</div>}
+                        <div className="adm-keys">
+                          {on.map((k) => <span key={k} className="adm-key">{k}</span>)}
+                          {on.length === 0 && <span className="adm-item-sub">Baseline (own + team tasks)</span>}
+                        </div>
+                      </div>
+                      <div className="adm-item-acts">
+                        <Button size="sm" onClick={() => startEdit(r)}>Edit</Button>
+                        {!r.is_system && <Button size="sm" variant="danger" onClick={() => del(r)}>Delete</Button>}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
         </>
       ) : (
-        <div style={card}>
-          <div style={cardHead}><span>{editKey ? `Edit ${editKey}` : 'New Role'}</span></div>
-          <div style={{ padding: '14px 16px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: editKey ? '1fr' : '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <section className="adm-card">
+          <div className="adm-card-h"><span>{editKey ? `Edit ${editKey}` : 'New role'}</span></div>
+          <div className="adm-card-b">
+            <div className={'adm-grid' + (editKey ? ' one' : '')}>
               {!editKey && (
-                <div>
-                  <span style={lbl}>Role Key *</span>
-                  <input value={roleKey} onChange={(e) => setRoleKey(e.target.value)} placeholder="e.g. team_lead" style={{ ...input, fontFamily: 'var(--font-mono)' }} disabled={saving} />
-                </div>
+                <label className="adm-field"><span className="adm-lbl">Role key *</span>
+                  <input className="adm-input mono" value={roleKey} onChange={(e) => setRoleKey(e.target.value)} placeholder="e.g. team_lead" disabled={saving} /></label>
               )}
-              <div><span style={lbl}>Label *</span><input value={label} onChange={(e) => setLabel(e.target.value)} style={input} disabled={saving} /></div>
+              <label className="adm-field"><span className="adm-lbl">Label *</span><input className="adm-input" value={label} onChange={(e) => setLabel(e.target.value)} disabled={saving} /></label>
             </div>
-            <div style={{ marginBottom: 16 }}><span style={lbl}>Description</span><input value={desc} onChange={(e) => setDesc(e.target.value)} style={input} disabled={saving} /></div>
+            <label className="adm-field"><span className="adm-lbl">Description</span><input className="adm-input" value={desc} onChange={(e) => setDesc(e.target.value)} disabled={saving} /></label>
 
-            {editIsSystem && <div style={noteBox}><ShieldCheck size={14} /> System role: permissions are fixed. Label &amp; description only.</div>}
+            {editIsSystem && <div className="adm-note"><ShieldCheck size={14} /> System role: permissions are fixed. Label &amp; description only.</div>}
 
             {PERM_DEFS.map((g) => (
-              <div key={g.group} style={{ marginBottom: 14 }}>
-                <div style={{ ...lbl, marginBottom: 6 }}>{g.group}</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {g.items.map((it) => {
-                    const forced = it.key === 'docket_view_all' && viewForced;
-                    const on = !!perm[it.key];
-                    const disabled = saving || editIsSystem || forced;
-                    return (
-                      <div key={it.key} style={permRow}>
-                        <span style={{ fontSize: 13 }}>
-                          {it.label} <span style={mono}>· {it.key}</span>
-                          {forced && <span style={{ fontSize: 11, color: 'var(--text-3)' }}> (required by admin)</span>}
-                        </span>
-                        <button type="button" style={toggleBtn(on)} onClick={() => toggle(it.key)} disabled={disabled}>{on ? 'On' : 'Off'}</button>
-                      </div>
-                    );
-                  })}
-                </div>
+              <div key={g.group} className="adm-field">
+                <span className="adm-lbl">{g.group}</span>
+                {g.items.map((it) => {
+                  const forced = it.key === 'docket_view_all' && viewForced;
+                  const on = !!perm[it.key];
+                  const disabled = saving || editIsSystem || forced;
+                  return (
+                    <div key={it.key} className="adm-row">
+                      <span className="adm-row-l">
+                        {it.label} <span className="adm-mono">· {it.key}</span>
+                        {forced && <span className="adm-row-hint"> (required by admin)</span>}
+                      </span>
+                      <Switch on={on} label={it.label} onClick={() => toggle(it.key)} disabled={disabled} />
+                    </div>
+                  );
+                })}
               </div>
             ))}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-              <button style={btnSecondary} onClick={() => setView('list')} disabled={saving}>Cancel</button>
-              <button style={{ ...btnPrimary, opacity: saving ? 0.6 : 1 }} onClick={save} disabled={saving}>{saving ? 'Saving…' : (editKey ? 'Save Role' : 'Create Role')}</button>
-            </div>
           </div>
-        </div>
+          <div className="adm-card-foot">
+            <Button variant="ghost" onClick={() => setView('list')} disabled={saving}>Cancel</Button>
+            <Button variant="primary" onClick={save} loading={saving}>{editKey ? 'Save role' : 'Create role'}</Button>
+          </div>
+        </section>
       )}
     </div>
   );
@@ -218,40 +214,38 @@ function DashboardSharingCard({ session }) {
   const pickOpts = employees.filter((e) => !grantedIds.has(e.auth_user_id)).map((e) => ({ value: e.auth_user_id, label: e.full_name }));
 
   return (
-    <div style={{ ...card, marginBottom: 22 }}>
-      <div style={cardHead}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><LayoutDashboard size={15} /> Dashboard sharing</span>
-      </div>
-      <div style={{ padding: '14px 16px' }}>
-        <p style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 14, lineHeight: 1.5, maxWidth: 620 }}>
+    <section className="adm-card">
+      <div className="adm-card-h"><span className="adm-card-t"><LayoutDashboard size={15} aria-hidden /> Dashboard sharing</span></div>
+      <div className="adm-card-b">
+        <p className="adm-lede">
           Who can open the founder review <b>Dashboard</b>. Independent of all-tasks visibility — granted people
           see the org-wide dashboard but still only their own/team/collaborator tasks when they click through.
         </p>
 
         {loading ? <Spinner /> : (
           <>
-            <div style={permRow}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                <Globe size={14} /> Visible to everyone
-                <span style={{ fontSize: 11, color: 'var(--text-3)' }}>· every current and future employee</span>
+            <div className="adm-row">
+              <span className="adm-row-l">
+                <Globe size={14} aria-hidden /> Visible to everyone
+                <span className="adm-row-hint">· every current and future employee</span>
               </span>
-              <button type="button" style={toggleBtn(pub)} onClick={togglePublic} disabled={busy}>{pub ? 'On' : 'Off'}</button>
+              <Switch on={pub} label="Visible to everyone" onClick={togglePublic} disabled={busy} />
             </div>
 
-            <div style={{ marginTop: 16, opacity: pub ? 0.5 : 1 }}>
-              <div style={{ ...lbl, marginBottom: 6 }}>Specific people</div>
-              {pub && <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>Everyone already has access; these grants are kept for when “Visible to everyone” is turned off.</div>}
-              <div style={{ maxWidth: 320, marginBottom: 10 }}>
-                <Combobox value={pick} options={pickOpts} placeholder="Add a person…" allowClear
-                  onChange={(v, opt) => { if (opt) addViewer(v); }} style={input} />
+            <div className={'adm-field' + (pub ? ' dim' : '')}>
+              <span className="adm-lbl">Specific people</span>
+              {pub && <div className="adm-row-hint">Everyone already has access; these grants are kept for when “Visible to everyone” is turned off.</div>}
+              <div className="adm-pick">
+                <Combobox value={pick} options={pickOpts} placeholder="Add a person…" allowClear portal
+                  onChange={(v, opt) => { if (opt) addViewer(v); }} style={{ width: '100%' }} />
               </div>
               {viewers.length === 0
-                ? <div style={{ fontSize: 12, color: 'var(--text-3)' }}>No individual grants. {pub ? '' : 'Only roles with “See all org tasks + the review dashboard” can see it.'}</div>
-                : <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                ? <div className="adm-item-sub">No individual grants. {pub ? '' : 'Only roles with “See all org tasks + the review dashboard” can see it.'}</div>
+                : <div className="adm-chips">
                     {viewers.map((v) => (
-                      <span key={v.user_id} style={viewerChip}>
+                      <span key={v.user_id} className="adm-chip">
                         {v.full_name || v.user_id}
-                        <button type="button" onClick={() => removeViewer(v.user_id)} disabled={busy} style={chipX} title="Remove"><X size={12} /></button>
+                        <IconButton icon={X} size="sm" label={`Remove ${v.full_name || 'viewer'}`} tooltip={false} onClick={() => removeViewer(v.user_id)} disabled={busy} />
                       </span>
                     ))}
                   </div>}
@@ -259,25 +253,6 @@ function DashboardSharingCard({ session }) {
           </>
         )}
       </div>
-    </div>
+    </section>
   );
 }
-const viewerChip = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '4px 6px 4px 10px', fontSize: 12, color: 'var(--text-1)' };
-const chipX = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 0 };
-
-const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' };
-const sub = { fontSize: 13, color: 'var(--text-3)', marginTop: 4, maxWidth: 620, lineHeight: 1.5 };
-const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' };
-const cardHead = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 13, fontWeight: 700, color: 'var(--text-1)' };
-const mono = { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)' };
-const lbl = { display: 'block', fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4, fontWeight: 700 };
-const input = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 10px', fontSize: 13, outline: 'none' };
-const permRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px' };
-const noteBox = { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--accent-bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', fontSize: 12, color: 'var(--text-2)', marginBottom: 14 };
-const badgeGray = { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '1px 6px', textTransform: 'uppercase' };
-const badgeKey = { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--state-info-fg)', background: 'var(--state-info-bg)', borderRadius: 'var(--radius-sm)', padding: '2px 7px' };
-function toggleBtn(on) { return { background: on ? 'var(--docket-accent)' : 'var(--surface-3)', color: on ? 'var(--accent-fg)' : 'var(--text-3)', border: `1px solid ${on ? 'var(--docket-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '4px 14px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' }; }
-const btnBase = { display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 'var(--radius-sm)', padding: '7px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
-const btnPrimary = { ...btnBase, background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: '1px solid var(--docket-accent)' };
-const btnSecondary = { ...btnBase, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)' };
-const btnDanger = { ...btnBase, background: 'transparent', color: 'var(--state-error-fg)', border: '1px solid var(--state-error)' };

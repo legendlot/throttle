@@ -3,7 +3,8 @@
 // manages or has assigned to. Drill into a person → their read-only run for the date.
 import { useEffect, useState, useCallback } from 'react';
 import { Spinner, useToast } from '@throttle/ui';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Check, Eye } from 'lucide-react';
+import { EmptyState } from './ui/index.js';
 import { docketopsGet } from '../lib/docketopsFetch.js';
 import { ChecklistRun } from './ChecklistRun.js';
 import { todayIST, fmtISTDate } from '../lib/recurrence.js';
@@ -35,20 +36,20 @@ export function OversightPanel({ session }) {
   const people = data?.people || [];
   return (
     <div className="cl-oversight">
-      <div className="screen-head cl-head">
-        <p>Checklist adherence for people you manage or have assigned to.</p>
-        <input className="cl-date" type="date" value={date} onChange={e => { setDate(e.target.value || todayIST()); setOpenId(null); setPersonData(null); }} />
+      <div className="cl-head">
+        <p className="cl-lede">Checklist adherence for people you manage or have assigned to.</p>
+        <input className="cl-date" type="date" aria-label="Date" value={date} onChange={e => { setDate(e.target.value || todayIST()); setOpenId(null); setPersonData(null); }} />
       </div>
       {loading ? <Spinner /> : people.length === 0 ? (
-        <div className="cl-empty">Nothing to monitor for {fmtISTDate(date)}.</div>
+        <EmptyState icon={Eye} title={`Nothing to monitor for ${fmtISTDate(date)}`} body="People you manage, or have assigned a checklist to, show up here." />
       ) : (
         <ul className="cl-ovr-list">
           {people.map(p => (
             <li key={p.employee_id} className="cl-ovr-row">
-              <button className="cl-ovr-head" onClick={() => openPerson(p.employee_id)}>
+              <button className="cl-ovr-head" aria-expanded={openId === p.employee_id} onClick={() => openPerson(p.employee_id)}>
                 <ChevronRight size={14} className={'cl-ovr-chev' + (openId === p.employee_id ? ' open' : '')} />
                 <span className="cl-ovr-name">{p.full_name}</span>
-                {p.department_name && <span className="chip soft">{p.department_name}</span>}
+                {p.department_name && <span className="cl-team">{p.department_name}</span>}
                 <span className="cl-ovr-stats">
                   {p.recurring.total > 0 && <span className={'cl-ovr-stat' + (p.recurring.done >= p.recurring.total ? ' ok' : '')}>tasks {p.recurring.done}/{p.recurring.total}</span>}
                   {p.templates.map(t => (
@@ -64,12 +65,12 @@ export function OversightPanel({ session }) {
                     <>
                       {(personData.recurring_items || []).filter(i => i.due_today).length > 0 && (
                         <div className="cl-ovr-recurring">
-                          <h5>Recurring tasks</h5>
-                          <ul className="cl-today">
+                          <div className="cl-section-head"><span className="cl-section-title">Recurring tasks</span></div>
+                          <ul className="cl-rows">
                             {(personData.recurring_items || []).filter(i => i.due_today).map(i => (
                               <li key={i.id} className={'cl-item' + (i.completed_today ? ' done' : '')}>
-                                <span className={'cl-check' + (i.completed_today ? ' on' : '')} />
-                                <div className="cl-item-main"><div className="cl-item-title">{i.title}</div></div>
+                                <span className={'cl-check' + (i.completed_today ? ' on' : '')} aria-label={i.completed_today ? 'Done' : 'Not done'}>{i.completed_today && <Check size={12} strokeWidth={3} />}</span>
+                                <span className="cl-item-title">{i.title}</span>
                               </li>
                             ))}
                           </ul>

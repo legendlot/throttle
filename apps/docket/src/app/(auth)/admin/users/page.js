@@ -3,7 +3,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { docketopsGet, docketopsPost } from '../../../../lib/docketopsFetch.js';
-import { AdminTabs } from '../../../../components/AdminTabs.js';
+import { Lock, Search } from 'lucide-react';
+import { EmptyState } from '../../../../components/ui/index.js';
+import { AdminHead } from '../../../../components/AdminParts.js';
 import { Avatar } from '../../../../components/primitives.js';
 
 export default function UsersPage() {
@@ -39,50 +41,48 @@ export default function UsersPage() {
     finally { setSavingId(null); }
   }
 
-  if (perms && !perms.docket_admin) return <div style={{ color: 'var(--text-3)' }}>Requires docket_admin.</div>;
+  if (perms && !perms.docket_admin) return <div className="adm"><EmptyState icon={Lock} title="Admins only" body="Requires docket_admin." /></div>;
 
   const filtered = q.trim()
     ? users.filter((u) => `${u.full_name} ${u.email} ${u.docket_role || ''}`.toLowerCase().includes(q.toLowerCase()))
     : users;
 
   return (
-    <div className="screen">
-      <AdminTabs />
-      <div className="screen-head"><p>Assign a Docket role to each LOT user. Accounts are created in Garage; this only sets task-manager access. No role = baseline (own + collaborator + own-team tasks).</p></div>
+    <div className="adm wide">
+      <AdminHead title="Users"
+        lede="Assign a Docket role to each LOT user. Accounts are created in Garage; this only sets task-manager access. No role = baseline (own + collaborator + own-team tasks)." />
 
-      <div className="panel" style={{ padding: 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '12px 18px', borderBottom: '1px solid var(--border)' }}>
-          <span style={{ fontFamily: 'var(--f-display)', fontWeight: 600, fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-3)' }}>
-            LOT Users {users.length > 0 && <span style={{ color: 'var(--text-4)' }}>· {users.length}</span>}
-          </span>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name / email…" className="date-input" style={{ width: 240 }} />
+      <section className="adm-card">
+        <div className="adm-card-h">
+          <span>LOT users <span className="adm-count">{users.length || ''}</span></span>
+          <span className="adm-search"><Search size={14} aria-hidden />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name / email…" aria-label="Search users" /></span>
         </div>
-        <div style={{ padding: '8px 18px 14px' }}>
-          {loading ? <div style={{ padding: 24 }}><Spinner /></div> : (
+        {loading ? <div className="adm-card-b"><Spinner /></div> : (
+          <div className="dtable-wrap">
             <table className="dtable">
-              <thead><tr><th>Person</th><th>Email</th><th>Role</th><th className="ctr">Status</th><th style={{ width: 210 }}>Assign</th></tr></thead>
+              <thead><tr><th>Person</th><th className="dt-email">Email</th><th>Role</th><th className="ctr dt-status">Status</th><th className="dt-assign">Assign</th></tr></thead>
               <tbody>
                 {filtered.map((u) => (
-                  <tr key={u.id} style={{ opacity: u.active === false ? 0.5 : 1 }}>
-                    <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: 'var(--text-1)' }}><Avatar name={u.full_name} size={24} />{u.full_name || '—'}</span></td>
-                    <td style={{ fontFamily: 'var(--f-mono)', fontSize: 12, color: 'var(--text-3)' }}>{u.email || '—'}</td>
-                    <td>{u.docket_role ? <span style={badgeKey}>{u.docket_role}</span> : <span style={{ fontSize: 11, color: 'var(--text-3)' }}>baseline</span>}</td>
-                    <td className="ctr"><span className="pill-on">Active</span></td>
-                    <td>
-                      <select value={u.docket_role || ''} disabled={savingId === u.id} onChange={(e) => assign(u.id, e.target.value)} className="date-input" style={{ cursor: 'pointer' }}>
+                  <tr key={u.id} className={u.active === false ? 'inactive' : ''}>
+                    <td><span className="dtable-name"><Avatar name={u.full_name} size={22} />{u.full_name || '—'}</span></td>
+                    <td className="dt-email mono">{u.email || '—'}</td>
+                    <td>{u.docket_role ? <span className="adm-key">{u.docket_role}</span> : <span className="adm-item-sub">baseline</span>}</td>
+                    <td className="ctr dt-status"><span className="pill-on">Active</span></td>
+                    <td className="dt-assign">
+                      <select value={u.docket_role || ''} disabled={savingId === u.id} onChange={(e) => assign(u.id, e.target.value)} className="adm-select" aria-label={`Docket role for ${u.full_name || 'user'}`}>
                         <option value="">— none (baseline) —</option>
                         {roles.map((r) => <option key={r.role_key} value={r.role_key}>{r.label}</option>)}
                       </select>
                     </td>
                   </tr>
                 ))}
+                {filtered.length === 0 && <tr><td colSpan={5} className="dtable-none">{q.trim() ? 'No users match.' : 'No users.'}</td></tr>}
               </tbody>
             </table>
-          )}
-        </div>
-      </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
-
-const badgeKey = { fontFamily: 'var(--f-mono)', fontSize: 10, color: 'var(--st-progress)', background: 'var(--st-progress-bg)', borderRadius: 'var(--r-sm)', padding: '2px 7px' };

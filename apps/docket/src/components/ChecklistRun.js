@@ -1,8 +1,11 @@
 'use client';
 // Renders ONE assigned template run (shape from getChecklist.template_runs[i]):
 // sections → items with check-off, per-item completion time + late pill, per-section comment.
+// P7: a run is a List-view group (GroupHeader + 36px rows); `collapsed`/`onToggle` are the
+// page's when given (My day), local otherwise (Oversight drill-in).
 import { useState, useRef, useCallback } from 'react';
-import { Check } from 'lucide-react';
+import { Check, ClipboardList } from 'lucide-react';
+import { GroupHeader } from './tasks/GroupHeader.js';
 import { TagPill } from './TagPill.js';
 import { runProgress, fmtClockIST } from '../lib/checklist.js';
 import { fmtTime } from '../lib/recurrence.js';
@@ -22,53 +25,49 @@ function SectionComment({ section, canComplete, onSaveComment }) {
   );
 }
 
-export function ChecklistRun({ run, canComplete, onToggleItem, onSaveComment }) {
+export function ChecklistRun({ run, canComplete, onToggleItem, onSaveComment, collapsed, onToggle }) {
   const { done, total } = runProgress(run);
+  const [localCollapsed, setLocalCollapsed] = useState(false);
+  const isCollapsed = onToggle ? !!collapsed : localCollapsed;
+  const tags = [run.template.role_label, run.template.department_name].filter(Boolean).join(' · ');
   return (
-    <section className="cl-run">
-      <div className="cl-run-head">
-        <div className="cl-run-title">
-          <h4>{run.template.name}</h4>
-          {run.template.role_label && <span className="chip soft">{run.template.role_label}</span>}
-          {run.template.department_name && <span className="chip soft">{run.template.department_name}</span>}
-        </div>
-        <span className="cl-run-prog">{done}/{total}</span>
-      </div>
-      {(run.sections || []).map(s => {
+    <section className="cl-group cl-run">
+      <GroupHeader variant="cl-ghead" collapsed={isCollapsed} onToggle={onToggle || (() => setLocalCollapsed(c => !c))}
+        group={{ label: run.template.name, rows: [], count: `${done}/${total}`, icon: ClipboardList, hint: tags || null }} />
+      {!isCollapsed && (run.sections || []).map(s => {
         const sd = (s.items || []).filter(i => i.completed).length;
         return (
           <div className="cl-section" key={s.id}>
             <div className="cl-section-head">
-              <div>
-                <h5>{s.title}</h5>
-                {s.subtitle && <span className="cl-section-sub">{s.subtitle}</span>}
-              </div>
-              <div className="cl-section-meta">
+              <span className="cl-section-title">{s.title}</span>
+              {s.subtitle && <span className="cl-section-sub">{s.subtitle}</span>}
+              <span className="cl-section-meta">
                 {s.due_time && <span className="cl-due">by {fmtTime(s.due_time)}</span>}
                 <span className="cl-section-prog">{sd}/{(s.items || []).length}</span>
-              </div>
+              </span>
             </div>
-            <ul className="cl-items">
+            <ul className="cl-rows">
               {(s.items || []).map(it => (
-                <li key={it.id} className={'cl-item' + (it.completed ? ' done' : '')}>
+                <li key={it.id} className={'cl-item' + (it.completed ? ' done' : '') + (it.help_text ? ' has-help' : '')}>
                   <button className={'cl-check' + (it.completed ? ' on' : '')} disabled={!canComplete}
+                    aria-pressed={!!it.completed} aria-label={it.completed ? 'Mark not done' : 'Mark done'}
                     title={canComplete ? '' : 'You can only complete your own checklist'}
                     onClick={() => onToggleItem(it.id, !it.completed)}>
-                    {it.completed && <Check size={14} />}
+                    {it.completed && <Check size={12} strokeWidth={3} />}
                   </button>
-                  <div className="cl-item-main">
-                    <div className="cl-item-title">{it.title}</div>
-                    {it.help_text && <div className="cl-item-help">{it.help_text}</div>}
-                    <div className="cl-item-meta">
-                      {(it.tags || []).map(t => <TagPill key={t} tag={t} />)}
-                      {it.completed && it.completed_at && (
-                        <span className={'cl-done-at' + (it.late ? ' late' : '')}>
-                          {it.late ? 'late · ' : ''}{fmtClockIST(it.completed_at)}
-                          {it.completed_by ? ` · ${it.completed_by}` : ''}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  <span className="cl-item-text">
+                    <span className="cl-item-title">{it.title}</span>
+                    {it.help_text && <span className="cl-item-help">{it.help_text}</span>}
+                  </span>
+                  <span className="cl-item-meta">
+                    {it.completed && it.completed_at && (
+                      <span className={'cl-done-at' + (it.late ? ' late' : '')}>
+                        {it.late ? 'late · ' : ''}{fmtClockIST(it.completed_at)}
+                        {it.completed_by ? ` · ${it.completed_by}` : ''}
+                      </span>
+                    )}
+                    {(it.tags || []).map(t => <TagPill key={t} tag={t} />)}
+                  </span>
                 </li>
               ))}
             </ul>

@@ -3,7 +3,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { AlertTriangle, Clock, List, Check, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Clock, List, Check, RefreshCw, Lock } from 'lucide-react';
+import { EmptyState } from '../../../components/ui/index.js';
 import { docketopsGet } from '../../../lib/docketopsFetch.js';
 import { STATUSES } from '../../../lib/tasks.js';
 import { Avatar, personColor } from '../../../components/primitives.js';
@@ -35,82 +36,96 @@ export default function DashboardPage() {
     docketopsGet('getSpaces', {}, session).then(s => setSpaceName((s || []).find(x => x.id === spaceId)?.name || '')).catch(() => {});
   }, [session, spaceId]);
 
-  if (denied) return <div style={{ color: 'var(--text-3)' }}>You don’t have access to this dashboard.</div>;
+  if (denied) return <div className="screen"><EmptyState icon={Lock} title="No access" body="You don’t have access to this dashboard." /></div>;
   if (loading) return <Spinner />;
   if (!stats) return null;
   const linkSuffix = spaceId ? `&space=${spaceId}` : '';
+  const go = (href) => () => router.push(href);
+  const rowKeys = (href) => (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); router.push(href); } };
 
   const byStatus = STATUSES.map(s => ({ key: s.key, label: s.label, color: s.color, n: Number(stats.by_status?.[s.key] || 0) }));
-  const maxStatus = Math.max(1, ...byStatus.map(s => s.n));
+  const statusTotal = byStatus.reduce((a, b) => a + b.n, 0);
   const openTotal = byStatus.filter(s => s.key !== 'done' && s.key !== 'abandoned').reduce((a, b) => a + b.n, 0);
   const byTeam = (stats.by_department || []).map(r => ({ name: r.dept_name, id: r.dept_id, open: Number(r.open || 0), done: Number(r.done || 0), overdue: Number(r.overdue || 0) }));
   const byPerson = (stats.by_person || []).map(r => ({ name: r.emp_name, id: r.emp_id, open: Number(r.open || 0), done: Number(r.done || 0), overdue: Number(r.overdue || 0), last_seen: r.last_seen || null }));
 
   return (
-    <div className="screen">
-      <div className="screen-head"><p>{spaceName ? `${spaceName} · space task review.` : 'Org-wide task review. General space.'}</p></div>
+    <div className="screen dash">
+      <p className="dash-lede">{spaceName ? `${spaceName} · space task review.` : 'Org-wide task review. General space.'}</p>
 
       <div className="kpi-row">
-        <Kpi icon={AlertTriangle} label="Overdue" value={stats.overdue} accent="var(--overdue)" onClick={() => router.push(`/tasks?overdue=1${linkSuffix}`)} />
+        <Kpi icon={AlertTriangle} label="Overdue" value={stats.overdue} accent="var(--overdue)" onClick={go(`/tasks?overdue=1${linkSuffix}`)} />
         <Kpi icon={Clock} label="Due ≤ 7 days" value={stats.due_soon} accent="var(--st-blocked)" />
         <Kpi icon={List} label="Open" value={openTotal} />
         <Kpi icon={Check} label="Done (30d)" value={stats.completed_30d} accent="var(--st-done)" />
-        <Kpi icon={RefreshCw} label="Revised" value={stats.revised} accent="var(--st-blocked)" onClick={() => router.push(`/tasks?revised=1${linkSuffix}`)} />
+        <Kpi icon={RefreshCw} label="Revised" value={stats.revised} accent="var(--st-blocked)" onClick={go(`/tasks?revised=1${linkSuffix}`)} />
       </div>
 
-      <div className="dash-grid">
-        <section className="panel">
-          <div className="panel-h">Status distribution</div>
-          <div className="bars">
-            {byStatus.map(s => (
-              <div key={s.key} className="bar-row">
-                <span className="bar-label">{s.label}</span>
-                <div className="bar-track"><div className="bar-fill" style={{ width: (s.n / maxStatus * 100) + '%', background: s.color }} /></div>
-                <span className="bar-n">{s.n}</span>
-              </div>
-            ))}
-          </div>
-        </section>
+      <section className="dash-card">
+        <div className="dash-card-h">Status distribution <span className="dash-card-n">{statusTotal}</span></div>
+        <div className="stbar" role="img" aria-label={byStatus.map(s => `${s.label} ${s.n}`).join(', ')}>
+          {statusTotal === 0 ? <i className="stbar-empty" /> : byStatus.filter(s => s.n > 0).map(s => (
+            <i key={s.key} title={`${s.label} · ${s.n}`} style={{ flexGrow: s.n, background: s.color }} />
+          ))}
+        </div>
+        <ul className="stlegend">
+          {byStatus.map(s => (
+            <li key={s.key} className={s.n ? '' : 'zero'}>
+              <span className="dot" style={{ background: s.color }} />
+              <span className="stlegend-l">{s.label}</span>
+              <span className="stlegend-n">{s.n}</span>
+              <span className="stlegend-p">{statusTotal ? Math.round(s.n / statusTotal * 100) : 0}%</span>
+            </li>
+          ))}
+        </ul>
+      </section>
 
-        <section className="panel">
-          <div className="panel-h">By team</div>
+      <section className="dash-card">
+        <div className="dash-card-h">By team <span className="dash-card-n">{byTeam.length}</span></div>
+        <div className="dtable-wrap">
           <table className="dtable">
             <thead><tr><th>Team</th><th className="num">Open</th><th className="num">Done</th><th className="num">Overdue</th></tr></thead>
             <tbody>
-              {byTeam.length === 0 && <tr><td colSpan={4} style={{ color: 'var(--text-3)' }}>No tasks yet.</td></tr>}
-              {byTeam.map(r => (
-                <tr key={r.id || r.name} className="clickable" onClick={() => router.push(`/tasks?department_id=${r.id}${linkSuffix}`)}>
-                  <td><span className="chip soft"><span className="dot" style={{ background: personColor(r.id || r.name) }} />{r.name || '—'}</span></td>
-                  <td className="num">{r.open}</td><td className="num">{r.done}</td>
-                  <td className="num" style={{ color: r.overdue ? 'var(--overdue)' : 'var(--text-2)', fontWeight: r.overdue ? 600 : 400 }}>{r.overdue}</td>
-                </tr>
-              ))}
+              {byTeam.length === 0 && <tr><td colSpan={4} className="dtable-none">No tasks yet.</td></tr>}
+              {byTeam.map(r => {
+                const href = `/tasks?department_id=${r.id}${linkSuffix}`;
+                return (
+                  <tr key={r.id || r.name} className="clickable" tabIndex={0} onClick={go(href)} onKeyDown={rowKeys(href)}>
+                    <td><span className="dtable-name"><span className="dot" style={{ background: personColor(r.id || r.name) }} />{r.name || '—'}</span></td>
+                    <td className="num">{r.open}</td><td className="num">{r.done}</td>
+                    <td className={'num' + (r.overdue ? ' over' : '')}>{r.overdue}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-        </section>
-      </div>
+        </div>
+      </section>
 
-      <section className="panel" style={{ marginTop: 14 }}>
-        <div className="panel-h">By person · owner workload</div>
-        <table className="dtable">
-          <thead><tr><th>Person</th><th className="num">Open</th><th className="num">Done</th><th className="num">Overdue</th><th>Last seen</th><th style={{ width: '28%' }}>Load</th></tr></thead>
-          <tbody>
-            {byPerson.length === 0 && <tr><td colSpan={6} style={{ color: 'var(--text-3)' }}>No tasks yet.</td></tr>}
-            {byPerson.map(r => {
-              const total = Math.max(1, r.open + r.done);
-              const ls = lastSeen(r.last_seen);
-              return (
-                <tr key={r.id || r.name} className="clickable" onClick={() => router.push(`/tasks?employee_id=${r.id}${linkSuffix}`)}>
-                  <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}><Avatar name={r.name} size={24} />{r.name || '—'}</span></td>
-                  <td className="num">{r.open}</td><td className="num">{r.done}</td>
-                  <td className="num" style={{ color: r.overdue ? 'var(--overdue)' : 'var(--text-2)', fontWeight: r.overdue ? 600 : 400 }}>{r.overdue}</td>
-                  <td title={r.last_seen ? new Date(r.last_seen).toLocaleString('en-IN') : 'No activity recorded'} style={{ fontSize: 12.5, color: ls.color }}>{ls.label}</td>
-                  <td><div className="load"><div className="load-done" style={{ width: (r.done / total * 100) + '%' }} /><div className="load-open" style={{ width: (r.open / total * 100) + '%' }} /></div></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <section className="dash-card">
+        <div className="dash-card-h">By person · owner workload <span className="dash-card-n">{byPerson.length}</span></div>
+        <div className="dtable-wrap">
+          <table className="dtable">
+            <thead><tr><th>Person</th><th className="num">Open</th><th className="num">Done</th><th className="num">Overdue</th><th className="dt-seen">Last seen</th><th className="dt-load">Load</th></tr></thead>
+            <tbody>
+              {byPerson.length === 0 && <tr><td colSpan={6} className="dtable-none">No tasks yet.</td></tr>}
+              {byPerson.map(r => {
+                const total = Math.max(1, r.open + r.done);
+                const ls = lastSeen(r.last_seen);
+                const href = `/tasks?employee_id=${r.id}${linkSuffix}`;
+                return (
+                  <tr key={r.id || r.name} className="clickable" tabIndex={0} onClick={go(href)} onKeyDown={rowKeys(href)}>
+                    <td><span className="dtable-name"><Avatar name={r.name} size={22} />{r.name || '—'}</span></td>
+                    <td className="num">{r.open}</td><td className="num">{r.done}</td>
+                    <td className={'num' + (r.overdue ? ' over' : '')}>{r.overdue}</td>
+                    <td className="dt-seen" title={r.last_seen ? new Date(r.last_seen).toLocaleString('en-IN') : 'No activity recorded'} style={{ color: ls.color }}>{ls.label}</td>
+                    <td className="dt-load"><div className="load"><div className="load-done" style={{ width: (r.done / total * 100) + '%' }} /><div className="load-open" style={{ width: (r.open / total * 100) + '%' }} /></div></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
   );
@@ -129,11 +144,13 @@ function lastSeen(iso) {
   return { label: `${days}d ago`, color: days <= 7 ? 'var(--text-2)' : 'var(--text-4)' };
 }
 
+// A stat tile: a card on the elevation system; a <button> when it links to a filtered list.
 function Kpi({ icon: Ic, label, value, accent, onClick }) {
-  return (
-    <div className={'kpi' + (onClick ? ' clickable' : '')} onClick={onClick}>
-      <div className="kpi-top"><Ic className="ic" />{label}</div>
-      <div className="kpi-val" style={{ color: accent || 'var(--text-1)' }}>{Number(value || 0)}</div>
-    </div>
-  );
+  const inner = (<>
+    <span className="kpi-top"><Ic size={13} aria-hidden />{label}</span>
+    <span className="kpi-val" style={{ color: accent || 'var(--text-1)' }}>{Number(value || 0)}</span>
+  </>);
+  return onClick
+    ? <button type="button" className="kpi clickable" onClick={onClick}>{inner}</button>
+    : <div className="kpi">{inner}</div>;
 }
