@@ -49,7 +49,7 @@ export function SpaceSettings({ space, session, employees, showToast, onClose, o
   }
 
   return (
-    <div style={backdrop} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div style={backdrop} data-modal onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={card}>
         <div style={head}>
           <span style={title}><Lock size={14} style={{ color: 'var(--docket-accent)' }} /> Space settings</span>

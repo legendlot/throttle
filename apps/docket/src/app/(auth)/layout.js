@@ -16,6 +16,8 @@ import { DocketTabBar } from '../../components/DocketTabBar.js';
 import { ShortcutsSheet } from '../../components/ShortcutsSheet.js';
 import { SpaceSettings } from '../../components/SpaceSettings.js';
 import { NewProgramModal } from '../../components/NewProgramModal.js';
+import { CommandBar } from '../../components/CommandBar.js';
+import { modPressed } from '../../lib/platform.js';
 
 export default function AuthLayout({ children }) {
   return (
@@ -41,6 +43,7 @@ function AuthLayoutInner({ children }) {
   const [settingsSpace, setSettingsSpace] = useState(null);   // sidebar ⋯ → SpaceSettings
   const [employees, setEmployees] = useState(null);           // lazy, only for SpaceSettings
   const [programModal, setProgramModal] = useState(false);     // + New → New program
+  const [cmdOpen, setCmdOpen] = useState(false);               // ⌘K command bar (P6)
   // Programs created this session: getMe lists only programs with visible tasks, so a
   // brand-new one would otherwise breadcrumb as "Program". Breadcrumb lookup only.
   const [createdPrograms, setCreatedPrograms] = useState([]);
@@ -106,12 +109,13 @@ function AuthLayoutInner({ children }) {
   }, [router, route.spaceId, onTasksBoard, search]);
   const newSpace = useCallback(() => router.push('/tasks?space=new'), [router]);
   const newProgram = useCallback(() => { setMobileNavOpen(false); setProgramModal(true); }, []);
-  // Search trigger: on a board, focus its search (same as `/`); elsewhere go to /tasks first.
-  const openSearch = useCallback(() => {
-    if (onTasksBoard) { focusWhenReady('[data-search-primary]', { select: true }); return; }
-    router.push('/tasks');
-    focusWhenReady('[data-search-primary]', { route: '/tasks', select: true });
-  }, [router, onTasksBoard]);
+  // ⌘K command bar (P6): the top-bar search trigger, ⌘K / Ctrl+K anywhere, and `/` on a
+  // page without its own search. Not over another shell modal, a page modal (.backdrop)
+  // or an open picker / menu (.ui-pop, .pop) — Esc order stays one layer at a time. It
+  // may open over TaskView (no picker open); TaskView's keys are off while it's up.
+  const canOpenCmd = useCallback(() => !(settingsSpace || programModal || helpOpen)
+    && !document.querySelector('.ui-pop, .pop, .backdrop, [data-modal]'), [settingsSpace, programModal, helpOpen]);
+  const openSearch = useCallback(() => { if (canOpenCmd()) { setMobileNavOpen(false); setCmdOpen(true); } }, [canOpenCmd]);
 
   const openSpaceSettings = useCallback((s) => {
     setMobileNavOpen(false);
@@ -127,6 +131,15 @@ function AuthLayoutInner({ children }) {
   // useHotkey); ⌘\ works anywhere.
   useEffect(() => {
     function onKey(e) {
+      // ⌘K (Apple) / Ctrl+K (elsewhere): works from inside a field too (the convention
+      // for a command bar). Ctrl+K on a Mac stays the text fields' kill-line.
+      if (modPressed(e) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        if (!cmdOpen) openSearch();
+        return;
+      }
+      // The bar owns the keyboard while it's open (it handles its own Esc).
+      if (cmdOpen) return;
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === '\\') { e.preventDefault(); toggleSidebar(); return; }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const ae = document.activeElement;
@@ -140,7 +153,8 @@ function AuthLayoutInner({ children }) {
       if (helpOpen) return;
       if (e.key === '[') { e.preventDefault(); toggleSidebar(); }
       else if (e.key === '/') {
-        // Was @throttle/ui useSearchShortcut (no modal guard); same behaviour on a board.
+        // `/` = the page's own search where it has one (the /tasks toolbar, P2/P3);
+        // the command bar everywhere else.
         e.preventDefault();
         const t = document.querySelector('[data-search-primary]');
         if (t) { try { t.focus(); t.select?.(); } catch { /* ignore */ } } else openSearch();
@@ -148,14 +162,14 @@ function AuthLayoutInner({ children }) {
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [helpOpen, mobileNavOpen, settingsSpace, programModal, toggleSidebar, openSearch]);
+  }, [helpOpen, mobileNavOpen, settingsSpace, programModal, toggleSidebar, openSearch, cmdOpen]);
 
   if (loading && !user) return <Spinner />;
 
   const displayName = user?.full_name || user?.email || '';
   const isAdmin = !!perms?.docket_admin;
   // shellModalOpen: a layout-owned modal is up; pages fold it into their hotkey guards.
-  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, shellModalOpen: !!settingsSpace || helpOpen || programModal };
+  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
 
   return (
     <ChromeContext.Provider value={ctxValue}>
@@ -214,6 +228,12 @@ function AuthLayoutInner({ children }) {
           onShortcuts={() => setHelpOpen(true)}
           onSignOut={signOut}
         />
+        {/* Mounted per open: fresh state, sources read synchronously (no stale frame). */}
+        {cmdOpen && <CommandBar userId={user?.id} onClose={() => setCmdOpen(false)} router={router}
+          spaces={spaces} programs={[...programs, ...createdPrograms.filter(c => !programs.some(p => p.id === c.id))]}
+          canViewDashboard={canViewDashboard} isAdmin={isAdmin}
+          onNewTask={newTask} onNewSpace={newSpace} onNewProgram={newProgram}
+          onToggleSidebar={toggleSidebar} onHelp={() => setHelpOpen(true)} />}
         {helpOpen && <ShortcutsSheet onClose={() => setHelpOpen(false)} />}
         {programModal && (
           <NewProgramModal session={session} onClose={() => setProgramModal(false)}

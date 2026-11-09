@@ -2,9 +2,11 @@
 // Centered keyboard-shortcuts sheet. Opened from the topbar "?" button or the
 // global "?" key; closes on backdrop click or Esc (handled by the layout).
 import { ListChecks, X } from 'lucide-react';
+import { useModLabel } from '../lib/platform.js';
 
 const BINDINGS = [
-  ['/', 'Search'],
+  ['MOD K', 'Command bar'],
+  ['/', 'Search (Tasks) · else command bar'],
   ['c', 'Capture a task'],
   ['f', 'Filter'],
   ['g', 'Group by'],
@@ -28,6 +30,7 @@ const TASK_BINDINGS = [
 ];
 
 export function ShortcutsSheet({ onClose }) {
+  const mod = useModLabel();   // ⌘ on Apple platforms, Ctrl elsewhere
   return (
     <div className="backdrop" style={{ justifyContent: 'center', alignItems: 'center' }} onMouseDown={onClose}>
       <div className="help-card" onMouseDown={e => e.stopPropagation()}>
@@ -38,7 +41,7 @@ export function ShortcutsSheet({ onClose }) {
         <div className="help-grid">
           {BINDINGS.map(([k, d]) => (
             <div key={d} className="help-row">
-              <span className="help-keys">{k.split(' ').map((kk, i) => <span key={i} className="kbd">{kk}</span>)}</span>
+              <span className="help-keys">{k.split(' ').map((kk, i) => <span key={i} className="kbd">{kk === 'MOD' ? mod : kk}</span>)}</span>
               <span className="help-desc">{d}</span>
             </div>
           ))}

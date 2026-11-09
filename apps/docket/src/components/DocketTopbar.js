@@ -1,10 +1,11 @@
 'use client';
 // Docket top bar (ClickUp redesign P1): 40px, full width above the rail + sidebar.
 // Left: sidebar toggle ( [ / ⌘\ ) + the route breadcrumb + the board count pill.
-// Centre: the search trigger (focuses the page's [data-search-primary]; ⌘K is P6).
+// Centre: the search trigger — opens the ⌘K command bar (P6).
 // Right: + New split (task / space / program), "?" shortcuts, Live dot, AppLauncher.
-// ≤767px: menu button (slide-over sidebar) · last crumb · + (new task) · AppLauncher.
+// ≤767px: menu button (slide-over sidebar) · last crumb · search · + (new task) · AppLauncher.
 import { Fragment, useRef, useState } from 'react';
+import { useModLabel } from '../lib/platform.js';
 import { PanelLeft, Menu as MenuIcon, Lock, Search, Plus, FolderPlus, SquarePen, Flag } from 'lucide-react';
 import { AppLauncher } from '@throttle/ui';
 import { IconButton, SplitButton, Menu, MenuItem, Kbd } from './ui/index.js';
@@ -12,6 +13,7 @@ import { IconButton, SplitButton, Menu, MenuItem, Kbd } from './ui/index.js';
 export function DocketTopbar({ crumbs = [], count, onCrumb, onToggleSidebar, onOpenMobileNav, onSearch, onNewTask, onNewSpace, onNewProgram, onHelp }) {
   const newRef = useRef(null);
   const [newOpen, setNewOpen] = useState(false);
+  const mod = useModLabel();   // ⌘ on Apple platforms, Ctrl elsewhere
   const last = crumbs[crumbs.length - 1];
   return (
     <header className="dkt">
@@ -42,10 +44,10 @@ export function DocketTopbar({ crumbs = [], count, onCrumb, onToggleSidebar, onO
         {count != null && <span className="dkt-count">{count}</span>}
       </div>
 
-      <button type="button" className="dkt-search" onClick={onSearch} aria-label="Search tasks">
+      <button type="button" className="dkt-search" onClick={onSearch} aria-label="Search and commands" aria-haspopup="dialog">
         <Search size={14} strokeWidth={2} aria-hidden />
         <span className="dkt-search-ph">Search tasks…</span>
-        <Kbd>/</Kbd>
+        <Kbd>{mod === '⌘' ? '⌘K' : 'Ctrl K'}</Kbd>
       </button>
 
       <div className="dkt-right">
@@ -55,6 +57,7 @@ export function DocketTopbar({ crumbs = [], count, onCrumb, onToggleSidebar, onO
           <IconButton icon={<span className="dkt-q">?</span>} label="Keyboard shortcuts" shortcut="?" onClick={onHelp} />
           <span className="dkt-live"><span className="pulse" />Live</span>
         </span>
+        <span className="dkt-mob"><IconButton icon={Search} label="Search and commands" onClick={onSearch} /></span>
         <span className="dkt-mob"><IconButton icon={Plus} variant="primary" label="New task" onClick={onNewTask} /></span>
         <Menu anchorRef={newRef} open={newOpen} onClose={() => setNewOpen(false)} align="right" width={180} label="Create">
           <MenuItem icon={SquarePen} shortcut="c" onClick={onNewTask}>New task</MenuItem>

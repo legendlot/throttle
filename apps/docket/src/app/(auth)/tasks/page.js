@@ -12,6 +12,7 @@ import { Lock, ListChecks } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { TaskView } from '../../../components/task/TaskView.js';
 import { domTaskOrder } from '../../../components/task/taskViewMode.js';
+import { useCommandSource } from '../../../lib/commandSources.js';
 import { SpaceSettings } from '../../../components/SpaceSettings.js';
 import { personColor } from '../../../components/primitives.js';
 import { KanbanBoard } from '../../../components/KanbanBoard.js';
@@ -293,7 +294,7 @@ export default function TasksPage() {
 
   /* ---------------- stable actions for memoised rows ---------------- */
   const live = useRef({});
-  live.current = { saveField, abandonInline, reviseInline, addSubtask, addCollab, copyTaskLink, createInGroup, viewOpen: drawerId != null };
+  live.current = { saveField, abandonInline, reviseInline, addSubtask, addCollab, copyTaskLink, createInGroup, viewOpen: drawerId != null, closeTask };
   const toggleSelect = useCallback((id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }), []);
   const actions = useMemo(() => ({
     saveField: (...a) => live.current.saveField(...a),
@@ -312,6 +313,16 @@ export default function TasksPage() {
     clearSubRequest: () => setSubRequest(null),
     focusedRowRef,
   }), [toggleSelect]);
+
+  // ⌘K bar (P6): this page's loaded rows (any task here opens in place) + its view
+  // switches. isViewOpen / closeTask let a nav / command pick close TaskView first.
+  const cmdTasks = useMemo(() => ({
+    rows: tasks, open: (id) => setDrawerId(id),
+    isViewOpen: () => !!live.current.viewOpen, closeTask: () => live.current.closeTask?.(),
+  }), [tasks]);
+  useCommandSource('tasks', cmdTasks);
+  const cmdView = useMemo(() => ({ viewMode: viewMode === 'board' && !mineMode ? 'board' : 'list', chooseView, density, chooseDensity, canBoard: !mineMode }), [viewMode, chooseView, density, chooseDensity, mineMode]);
+  useCommandSource('tasksView', cmdView);
 
   /* ---------------- derived rows ---------------- */
   // Children grouped by parent (off the full set), so a parent can expand inline.

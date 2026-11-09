@@ -346,11 +346,13 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
     const back = () => rootRef.current?.focus({ preventScroll: true });
     function onIn(e) {
       const r = rootRef.current;
-      if (!r || r.contains(e.target) || e.target.closest?.('.ui-pop, .pop, .ui-tip, [role="listbox"]')) return;
+      // A shell modal over the view (⌘K bar, shortcuts sheet) owns focus while it's up.
+      if (live.current.shellModalOpen) return;
+      if (!r || r.contains(e.target) || e.target.closest?.('.ui-pop, .pop, .ui-tip, [role="listbox"], .cmdk')) return;
       back();
     }
     function onOut(e) {
-      if (e.relatedTarget) return;
+      if (e.relatedTarget || live.current.shellModalOpen) return;
       setTimeout(() => { if (document.activeElement === document.body || document.activeElement == null) back(); }, 0);
     }
     document.addEventListener('focusin', onIn);
