@@ -9,7 +9,7 @@ import { useRef, useState } from 'react';
 import { Check, Ban, AlertTriangle, Flag, CalendarPlus } from 'lucide-react';
 import { StatusBadge } from '../StatusBadge.js';
 import { DatePicker } from '../DatePicker.js';
-import { AnchoredPopover, OptionList, deadlineState, relDeadline } from '../primitives.js';
+import { AnchoredPopover, OptionList, deadlineState, relDeadline, fmtShortDate } from '../primitives.js';
 import { Popover, GhostCell, Button } from '../ui/index.js';
 import { SETTABLE_STATUSES, STATUS_MAP, PRIORITY_MAP, effectiveDeadline } from '../../lib/tasks.js';
 
@@ -121,7 +121,9 @@ export function DeadlineCell({ task, editable, onFirstSet, onRevise }) {
     else { await onFirstSet(draft); }
     setOpen(false);
   }
-  const label = eff ? relDeadline(eff) : '';
+  // A closed task's deadline is history, not a countdown: show the date, not "153d overdue".
+  const closed = task.status === 'done' || task.status === 'abandoned';
+  const label = eff ? (closed ? fmtShortDate(eff) : relDeadline(eff)) : '';
   const body = eff ? (
     <span className={'tl-dl ' + st}>
       {st === 'over' && <AlertTriangle size={12} strokeWidth={2} aria-label="Overdue" />}

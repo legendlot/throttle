@@ -593,7 +593,7 @@ body.tl-resizing { cursor: col-resize; user-select: none; }
   .tl-title { flex: 1 0 100%; height: auto; padding-left: 0; }
   .tl-row > .tl-cell:not(.tl-title) { height: auto; padding: 0 0 0 24px; flex: 0 0 auto; max-width: 50%; }
   .tl-row > .tl-cell:not(.tl-title) + .tl-cell:not(.tl-title) { padding-left: 10px; }
-  .tl-row > .tl-c-meta, .tl-row > .tl-c-collabs:not(:has(.ui-avstack)) { display: none; }
+  .tl-row > .tl-c-meta, .tl-row > .tl-c-team, .tl-row > .tl-c-program, .tl-row > .tl-c-collabs:not(:has(.ui-avstack)) { display: none; } /* team/program live in the drawer on a phone: keeps the meta to one line */
   .tl-ghost { display: none !important; }
   .tl-sel { position: static; transform: none; order: -1; margin-right: 6px; display: none; }
   .tl-row.selecting .tl-sel { display: grid; }
