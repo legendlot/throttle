@@ -1,6 +1,6 @@
 # Ignition monthly affiliate commission (Reann #3) — plan
 
-> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 3. Status: **APPROVED 2026-11-09 — Afshaan took every recommendation (§Decisions). S1 SHIPPED (0008 live); S2 next.**
+> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 3. Status: **APPROVED 2026-11-09 — Afshaan took every recommendation (§Decisions). S1 SHIPPED (0008 live); S2 SHIPPED (worker `b299acdb`); S3 next.**
 > Builds on #2 (`2026-11-09-ignition-snorkel-payment-requests.md`): commission is paid through the same
 > Ignition → Snorkel request path, contract-collected bank details and invoice rule.
 
@@ -102,3 +102,30 @@ Not a question, a flag: Snorkel needs a creator invoice for every request (#2's 
 - `dealPaymentPayload` purpose carries the month (`… · commission 2026-11 · @handle`).
 - `PaymentsCard.js:185`: "Raise full" hidden only by a live FEE request, not a commission one.
 - S4 live proof needs a month that has ENDED → the first real verify is possible from 1 Dec 2026.
+
+## S2 — as built (2026-11-09, throttle `b299acdb`, ignitionops version 16fb11b1)
+
+- **Sync:** `coupon_redemptions.net_ex_gst` = `currentSubtotalPriceSet` less line GST when `taxesIncluded`
+  (line GST = `currentTotalTaxSet` − shipping tax, shipping tax scaled by current/original shipping so a
+  refunded shipping charge takes its tax with it). Fields checked live against the store. Per-order
+  `commission_amount` = net_ex_gst × `affiliate_pct`, affiliate deal types only, **orders from Nov 2026
+  IST only** (no back-dated rollups). `commission_rate` stays for UGC.
+- **Rebuild** (`rebuildCommissionStatements`): after the 08:40 IST sync + admin POST. Skips verified
+  months; creates a row only for a deal-month with orders; zeroes an existing estimate; removes only
+  EMPTY estimates of deals no longer affiliate (a month with sales stays for D2C); paged reads; logs
+  deal-months whose orders have no ex-GST value yet (`missing_net`).
+- **Actions:** `getCommissionStatements` (?month= → verify or reports perm; ?engagement_id= → view;
+  S3's deal card uses this), `verifyCommission` (one RPC; refused while any of the month's eligible
+  orders lacks net_ex_gst; strict amount), `reopenCommission` (admin), `raiseCommissionPayment`
+  (re-raise after reject/cancel), `rebuildCommissionStatements` (admin).
+- `affiliate_pct` (0–100] required on affiliate deal types at create, update and advanceStage; a patch
+  that does not change type/% saves (IGN-2026-00903 has none — list it for the team in S3).
+- S1 checklist landed: deleteEngagement (statements first + re-check), hand-log pre-check, fee totals,
+  payout kind `commission`, purpose with the month. Snorkel needed no change (it never receives kind).
+- Reviews: hostile (7) + Codex gpt-6-astra (6), all fixed. Tests 279 + snorkelops 287.
+- Live proof: synced HARIZPOPZEINLOT (barter) — 76/76 orders got net_ex_gst (ex/incl ratio 0.842),
+  commission ₹0; rebuild → 81 affiliate deals, 0 written (no affiliate-type deal has a November order
+  yet), 0 missing; list for 2026-11 → []; verify on a missing id → 404.
+- Known limits: the sync re-reads the newest 150 orders of ACTIVE codes only, so a late refund on an old
+  order or a retired code is not re-read — D2C's verification is the check. `commission_earned` /
+  `commission_accrued` are all-time running figures, not "owed" (S3 copy must say so).
