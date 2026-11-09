@@ -22,14 +22,22 @@ service = "csops"
 binding = "COMMSOPS"
 service = "commsops"
 
+# Service binding to snorkelops — Ignition creator payment requests (Reann #2 S3): POST
+# /internal/ignition (ignitionRaisePayment / ignitionGetPaymentStatus), bearer
+# IGNITION_INTERNAL_TOKEN. Same 1042 reason as above.
+[[services]]
+binding = "SNORKELOPS"
+service = "snorkelops"
+
 # Cron triggers (handler branches on event.cron — each tick is its own subrequest budget):
 #   20 2 * * *  (07:50 IST daily) — UGC Meta ad-metrics pull (Batch C2, S177). Per-ad-id
 #               only (scoped to meta_ad_id on UGC deals), never an account sweep (that's Odo).
 #   10 3 * * *  (08:40 IST daily) — coupon-redemption reconcile off Shopify (S214). Drains
 #               COUPON_SYNC_MAX active codes/pass, oldest-synced first; refund-aware.
 #   30 3 * * 1  (09:00 IST Mondays) — Shopify variant-price cache refresh (goodies auto-fill).
+#   */15 * * * * (every 15 min) — Snorkel payment-request reconcile + stuck-send re-send (Reann #2 S3).
 [triggers]
-crons = ["20 2 * * *", "10 3 * * *", "30 3 * * 1"]
+crons = ["20 2 * * *", "10 3 * * *", "30 3 * * 1", "*/15 * * * *"]
 
 # Secrets set via `wrangler secret put` — never stored in this file:
 # SUPABASE_ANON_KEY

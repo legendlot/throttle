@@ -1771,7 +1771,11 @@ async function deletePayment(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.id) return err('id required', 400);
   // Clean up the proof object too, if any.
-  const pr = await sb(`/rest/v1/payments?id=eq.${body.id}&select=proof_path,engagement_id&limit=1`, env);
+  const pr = await sb(`/rest/v1/payments?id=eq.${body.id}&select=proof_path,engagement_id,snorkel_request_id&limit=1`, env);
+  if (!pr.ok) return err('db_error', 500);
+  // Reann #2 S3: a Snorkel payout's row is Snorkel's record, not the hand log — it would only come
+  // back on the next status read. Corrections go through Finance in Snorkel.
+  if (pr.data?.[0]?.snorkel_request_id != null) return err('snorkel_payment_cannot_delete', 409);
   const proofPath = pr.data?.[0]?.proof_path;
   const r = await sb(`/rest/v1/payments?id=eq.${body.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
@@ -2919,6 +2923,11 @@ async function deleteEngagement(body, auth, env) {
   if (!body.engagement_id) return err('engagement_id required', 400);
   const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=id,engagement_no&limit=1`, env);
   if (!er.ok || !er.data?.[0]) return err('not_found', 404);
+  // Reann #2 S3: a Snorkel payment request is a money record, and its FK is ON DELETE RESTRICT —
+  // refuse here, BEFORE any child delete, or the FK fires only after products/history are gone.
+  const dpr = await sb(`/rest/v1/deal_payment_requests?engagement_id=eq.${body.engagement_id}&select=id&limit=1`, env);
+  if (!dpr.ok) return err('db_error', 500);
+  if (dpr.data?.[0]) return err('has_payment_requests_cannot_delete', 409);
   const pr = await sb(`/rest/v1/payments?engagement_id=eq.${body.engagement_id}&select=id&limit=1`, env);
   if (pr.ok && pr.data?.[0]) return err('has_payments_cannot_delete', 409);
   // S373: ad payments are money records too, and ad_payments.engagement_id is ON DELETE CASCADE —
@@ -6268,6 +6277,482 @@ async function setIgnitionUserActive(body, auth, env) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// CREATOR PAYMENTS VIA SNORKEL (Reann #2 S3, S443 — plan
+// docs/superpowers/plans/2026-11-09-ignition-snorkel-payment-requests.md)
+// ────────────────────────────────────────────────────────────────────────────
+// A deal owner raises a creator payment here; it is sent to snorkelops over the SNORKELOPS
+// binding (POST /internal/ignition, bearer IGNITION_INTERNAL_TOKEN) and from then on the row's
+// `state` mirrors the Snorkel status. Snorkel's push (POST /internal/snorkel-status) is only a
+// doorbell: the status applied is always re-read from Snorkel, so a stale or out-of-order push can
+// never overwrite. The */15 reconcile cron is the safety net. Approval and payment stay in Snorkel.
+// The money guard (stage, kinds, sum vs the fee incl. the hand log) is in the DATABASE, under the
+// engagement row lock: ignition.raise_deal_payment + ignition.claim_deal_payment_send (migration 0006).
+// ⛔ Bank numbers and PAN travel to Snorkel only; they are never returned, stored on the request
+// row or logged.
+
+const DPR_SELECT = 'id,engagement_id,influencer_id,kind,amount,invoice_id,invoice_no,invoice_date,invoice_total,state,'
+  + 'snorkel_request_id,snorkel_request_no,held_reason,rejection_note,paid_at,paid_amount,utr,tds_amount,last_error,'
+  + 'last_synced_at,raised_by,raised_by_name,raised_at,updated_at';
+const DPR_KINDS = ['advance', 'balance', 'full'];
+const DPR_DEAD = ['rejected', 'cancelled'];               // not "live": a new one of the kind may be raised
+const DPR_SNORKEL_STATES = new Set(['submitted', 'pending_approval', 'approved', 'held', 'paid', 'rejected', 'cancelled']);
+const DPR_TERMINAL = new Set(['paid', 'rejected', 'cancelled']);
+const SNORKEL_STATUS_BATCH = 200;                        // ignitionGetPaymentStatus takes ≤200 refs
+const DPR_RECONCILE_MAX = 1000;                          // rows per tick (5 status calls)
+const DPR_RESEND_MAX = 20;                               // stuck sends re-sent per tick
+const DPR_STUCK_SENDING_MS = 10 * 60 * 1000;
+const DPR_PAID_HEAL_MS = 14 * 24 * 3600 * 1000;          // paid rows re-read this long (UTR edits heal)
+const SNORKEL_INTERNAL_URL = 'https://snorkelops/internal/ignition';
+
+const money = v => Math.round(Number(v) * 100) / 100;
+const inr = v => `₹${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+const isoDateOk = v => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v))) return false;
+  const t = new Date(`${v}T00:00:00Z`);
+  return !isNaN(t.getTime()) && t.toISOString().slice(0, 10) === String(v);
+};
+
+// Constant-time compare (same as snorkelops): the time taken says nothing about how many leading
+// characters matched. Fails CLOSED on an unset secret.
+function timingSafeEqualStr(a, b) {
+  a = String(a); b = String(b);
+  const n = Math.max(a.length, b.length);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < n; i++) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return diff === 0;
+}
+function internalBearerOk(request, want) {
+  const a = request.headers.get('Authorization') || '';
+  const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+  return !!want && timingSafeEqualStr(bearer, want);
+}
+
+/**
+ * 'move' | 'refresh' (same status, maybe newer fields — e.g. a UTR edit) | 'ignore'.
+ * The status given is always Snorkel's CURRENT one (pull-on-push), so it is applied as-is —
+ * held↔approved in either direction — except that paid/rejected/cancelled stay terminal here.
+ */
+export function snorkelStatusMove(cur, next) {
+  if (!DPR_SNORKEL_STATES.has(next)) return 'ignore';
+  if (DPR_TERMINAL.has(cur)) return cur === 'paid' && next === 'paid' ? 'refresh' : 'ignore';
+  return next === cur ? 'refresh' : 'move';
+}
+
+/** A Snorkel error → one plain sentence for the deal page. Never echoes bank fields. */
+export function snorkelErrorSentence(status, body) {
+  const code = String(body?.error || '');
+  const cands = Array.isArray(body?.candidates) && body.candidates.length ? ` (${body.candidates.join(', ')})` : '';
+  const no = body?.request_no ? ` (${body.request_no})` : '';
+  if (code === 'no_bank_details') return 'No bank details on file — send the contract so the creator can add them.';
+  if (code === 'bank_incomplete') return 'The bank details on file are incomplete (an account number with IFSC, or a UPI id, is needed) — ask the creator to correct them through the contract link.';
+  if (code === 'payee_inactive') return `This creator's Snorkel payee${cands} is inactive — ask Finance to reactivate it, then retry.`;
+  if (code === 'payee_ambiguous') return `More than one Snorkel payee matches this creator${cands} — ask Finance which one is theirs, then retry.`;
+  if (code === 'payee_link_conflict') return `This creator's Snorkel payee${cands} was linked by another send at the same moment — retry.`;
+  if (code === 'source_ref_conflict') return `Snorkel already has this request${no} with a different amount or invoice number — ask Finance.`;
+  if (code === 'invoice_copy_failed') return 'The invoice file could not be copied into Snorkel — retry; if it keeps failing, have the creator re-upload it.';
+  if (status === 401) return 'Ignition is not authorised to reach Snorkel — tell the tech team.';
+  if (!status || status >= 500) return `Snorkel could not be reached${status ? ` (error ${status})` : ''} — retry in a few minutes.`;
+  return `Snorkel refused the request: ${code.slice(0, 300) || `error ${status}`}.`;
+}
+
+// One call to snorkelops. Never logs the payload (it carries bank details).
+async function snorkelCall(env, action, input) {
+  try {
+    const res = await env.SNORKELOPS.fetch(SNORKEL_INTERNAL_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.IGNITION_INTERNAL_TOKEN || ''}` },
+      body: JSON.stringify({ action, ...input }),
+    });
+    const body = await res.json().catch(() => null);
+    return { ok: res.ok && body?.ok === true, status: res.status, data: body?.data, body };
+  } catch (e) {
+    console.error('[snorkel-pay] call failed:', action, e?.message);
+    return { ok: false, status: 0, body: null };
+  }
+}
+// Snorkel's current status for these request ids → Map(source_ref → status fields), or null.
+async function snorkelStatusOf(env, ids) {
+  const r = await snorkelCall(env, 'ignitionGetPaymentStatus', { source_refs: ids });
+  if (!r.ok) return null;
+  return new Map((r.data?.requests || []).map(q => [q.source_ref, q]));
+}
+
+// S5 fills this (Decision 4: Slack DM to the deal owner, poc_user_id). Called once per move INTO
+// held or rejected — never on a refresh, so a re-read does not flag the owner twice.
+async function notifyOwnerOfPaymentProblem(row) {   // eslint-disable-line no-unused-vars
+  return null;
+}
+
+// Invoice fields on a raise/attach — shape only; that the invoice is THIS deal's is checked by the
+// RPC under the lock. Returns { fields } or { error, status }.
+function dealInvoiceFields(body, amount) {
+  const id = String(body.invoice_id ?? '').trim();
+  const no = String(body.invoice_no ?? '').trim();
+  const total = Number(body.invoice_total);
+  const date = body.invoice_date == null || body.invoice_date === '' ? null : String(body.invoice_date);
+  if (!UUID_RE.test(id)) return { error: 'invoice_id must be a creator invoice on this deal', status: 400 };
+  if (!no || no.length > 100) return { error: 'Add the invoice number (100 characters at most).', status: 400 };
+  if (typeof body.invoice_total === 'boolean' || !Number.isFinite(total) || !(total > 0)) return { error: 'Add the invoice total.', status: 400 };
+  if (date && !isoDateOk(date)) return { error: 'invoice_date must be YYYY-MM-DD', status: 400 };
+  if (money(amount) > money(total)) return { error: `The amount (${inr(amount)}) is more than the invoice total (${inr(total)}).`, status: 422 };
+  return { fields: { invoice_id: id, invoice_no: no, invoice_date: date, invoice_total: money(total) } };
+}
+
+// An ignition RPC returning {ok,row}|{ok:false,code,message}. → { row } or { code, message }.
+async function dealPaymentRpc(env, fn, args) {
+  const r = await sb(`/rest/v1/rpc/${fn}`, env, { method: 'POST', body: JSON.stringify(args) });
+  if (!r.ok || !r.data || typeof r.data !== 'object') {
+    console.error('[snorkel-pay] rpc failed', fn, r.status);
+    return { code: 'db_error', message: 'db_error' };
+  }
+  return r.data.ok ? { row: r.data.row } : { code: r.data.code || 'refused', message: r.data.message || 'refused' };
+}
+const RPC_STATUS = { not_found: 404, refused: 409, busy: 409, db_error: 500 };
+
+// Everything the Snorkel raise needs, read for the CLAIMED row. Returns { payload } or { error }.
+async function dealPaymentPayload(env, row, actor) {
+  const [er, ir, br, vr] = await Promise.all([
+    sb(`/rest/v1/engagements?id=eq.${row.engagement_id}&select=engagement_no&limit=1`, env),
+    sb(`/rest/v1/influencers?id=eq.${row.influencer_id}&select=id,person_name,channel_name,channel_link,email,contact_number&limit=1`, env),
+    sb(`/rest/v1/influencer_bank_details?influencer_id=eq.${row.influencer_id}&select=account_name,account_number,ifsc,bank_name,upi_id,pan,gstin&limit=1`, env),
+    sb(`/rest/v1/deal_invoices?id=eq.${row.invoice_id}&engagement_id=eq.${row.engagement_id}&select=path,file_name,mime&limit=1`, env),
+  ]);
+  if (!er.ok || !ir.ok || !br.ok || !vr.ok) return { error: 'Could not read the deal to send it — retry.' };
+  const deal = er.data?.[0], inf = ir.data?.[0], bank = br.data?.[0] || null, inv = vr.data?.[0];
+  if (!deal || !inf) return { error: 'The deal or creator is missing.' };
+  if (!inv) return { error: 'The invoice is no longer on this deal — attach it again.' };
+  if (!UUID_RE.test(String(actor.userId || ''))) return { error: 'No requester on this request — raise it again.' };
+  const handle = igHandleOf(inf.channel_link);
+  // Bank row with no account/IFSC/UPI at all = none: Snorkel then needs an existing payee with a
+  // bank (Decision 3) instead of refusing the half-empty object as bank_incomplete.
+  const hasBank = bank && (bank.account_number || bank.ifsc || bank.upi_id);
+  return { payload: {
+    source_ref: row.id,
+    influencer: {
+      id: inf.id, name: inf.person_name || inf.channel_name, channel_name: inf.channel_name,
+      pan: bank?.pan || null, gstin: bank?.gstin || null, email: inf.email || null, phone: inf.contact_number || null,
+    },
+    bank: hasBank ? {
+      account_name: bank.account_name || null, account_number: bank.account_number || null, ifsc: bank.ifsc || null,
+      bank_name: bank.bank_name || null, upi_id: bank.upi_id || null,
+    } : null,
+    amount_to_pay: Number(row.amount),
+    invoice_no: row.invoice_no, invoice_date: row.invoice_date || null, invoice_total: Number(row.invoice_total),
+    invoice_file: { bucket: INVOICE_BUCKET, path: inv.path, file_name: inv.file_name || null, mime: inv.mime || null },
+    purpose: `${deal.engagement_no} · ${row.kind} · ${handle ? '@' + handle : (inf.channel_name || inf.person_name)}`,
+    requested_by_user_id: actor.userId, requested_by_name: actor.fullName || null,
+  } };
+}
+
+async function markSendFailed(env, id, why) {
+  const f = await sb(`/rest/v1/deal_payment_requests?id=eq.${id}&state=eq.sending&select=${DPR_SELECT}`, env, {
+    method: 'PATCH', body: JSON.stringify({ state: 'send_failed', last_error: why, updated_at: nowIso() }),
+  });
+  return f.data?.[0] || null;
+}
+
+/**
+ * The one send path (raise with invoice, attach, retry, cron re-send). The row is claimed into
+ * `sending` by ignition.claim_deal_payment_send, which re-checks the whole money guard under the
+ * engagement lock (the fee may have been cut, or the deal cancelled, since raising) and moves it
+ * only from waiting_for_invoice/send_failed — or, for the cron (`staleBefore`), from a `sending`
+ * older than that. Two clicks cannot both send; Snorkel is idempotent on source_ref anyway.
+ * Returns { row } (sent-ish, or send_failed with last_error) or { error, status } when the claim
+ * was refused (a user's row is then untouched; a cron re-send is marked send_failed instead).
+ */
+async function sendDealPayment(env, row, actor, { invoice = null, staleBefore = null } = {}) {
+  const c = await dealPaymentRpc(env, 'claim_deal_payment_send', {
+    p_id: row.id, p_stale_before: staleBefore,
+    p_invoice_id: invoice?.invoice_id ?? null, p_invoice_no: invoice?.invoice_no ?? null,
+    p_invoice_date: invoice?.invoice_date ?? null, p_invoice_total: invoice?.invoice_total ?? null,
+  });
+  if (!c.row) {
+    // A stuck send the guard now refuses (deal cancelled, fee cut) must not sit in `sending`.
+    if (staleBefore && c.code === 'refused') {
+      const f = await markSendFailed(env, row.id, c.message);
+      return f ? { row: f } : { error: c.message, status: 409 };
+    }
+    return { error: c.message, status: RPC_STATUS[c.code] || 409 };
+  }
+  const claimed = c.row;
+
+  const pl = await dealPaymentPayload(env, claimed, actor);
+  if (pl.error) return { row: (await markSendFailed(env, row.id, pl.error)) || { ...claimed, state: 'send_failed', last_error: pl.error } };
+
+  const r = await snorkelCall(env, 'ignitionRaisePayment', pl.payload);
+  if (!r.ok) {
+    const why = snorkelErrorSentence(r.status, r.body);
+    console.error('[snorkel-pay] send failed:', row.id, r.status, r.body?.error || '');
+    return { row: (await markSendFailed(env, row.id, why)) || { ...claimed, state: 'send_failed', last_error: why } };
+  }
+  const d = r.data || {};
+  // A fresh request lands submitted/pending_approval/approved. Anything further along (a re-send
+  // that finds Finance already acted) is stored as submitted and then walked forward by the status
+  // read, so held/paid get their fields and the paid → payments write.
+  const direct = ['submitted', 'pending_approval', 'approved'].includes(d.status);
+  const s = await sb(`/rest/v1/deal_payment_requests?id=eq.${row.id}&state=eq.sending&select=${DPR_SELECT}`, env, {
+    method: 'PATCH', body: JSON.stringify({
+      state: direct ? d.status : 'submitted', snorkel_request_id: d.request_id, snorkel_request_no: d.request_no || null,
+      last_error: null, last_synced_at: nowIso(), updated_at: nowIso(),
+    }),
+  });
+  if (!s.ok) console.error('[snorkel-pay] sent but row not marked', row.id, d.request_no);
+  let out = s.data?.[0] || { ...claimed, state: direct ? d.status : 'submitted', snorkel_request_id: d.request_id, snorkel_request_no: d.request_no };
+  if (!direct && s.data?.[0]) {
+    const hit = (await snorkelStatusOf(env, [row.id]))?.get(row.id);
+    if (hit) {
+      const a = await applySnorkelStatus(env, out, hit);
+      if (a.row) out = a.row;
+    }
+  }
+  return { row: out };
+}
+
+// Write (or refresh) the hand-log row for a paid Snorkel request. Keyed on snorkel_request_id (a
+// FULL unique index, so a valid on_conflict target), so a re-read or a UTR edit updates one row.
+// Snorkel's paid_amount is NET of TDS; ignition.payments.amount is the GROSS the deal paid
+// (paid_amount + tds_amount), so "₹X paid of ₹Y" compares like with like. TDS stays separate.
+export function snorkelPaymentRow(row, s) {
+  const tds = s.tds_amount != null ? money(s.tds_amount) : null;
+  return {
+    snorkel_request_id: Number(s.request_id), engagement_id: row.engagement_id, influencer_id: row.influencer_id,
+    kind: row.kind === 'advance' ? 'advance' : 'final',
+    amount: s.paid_amount != null ? money(Number(s.paid_amount) + (tds || 0)) : money(row.amount),
+    paid_on: istDateOf(s.paid_at) || istToday(),
+    utr: s.payment_ref || null, tds_amount: tds,
+    note: `Paid via Snorkel ${s.request_no || ''}`.trim(), created_by: row.raised_by || null,
+  };
+}
+async function upsertSnorkelPayment(env, row, s) {
+  return sb(`/rest/v1/payments?on_conflict=snorkel_request_id`, env, {
+    method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+    body: JSON.stringify([snorkelPaymentRow(row, s)]),
+  });
+}
+
+/**
+ * The one status updater (receiver, reconcile, send, cancel). `s` is Snorkel's CURRENT status
+ * (always re-read, never a push payload). The PATCH is guarded on the state it read, so a racing
+ * update is re-read and re-decided, never overwritten. On paid the payments row is written FIRST:
+ * if that fails the request stays open and the next reconcile retries, instead of showing Paid
+ * with no payment behind "₹X paid". A row without a Snorkel id (send_failed whose reply was lost)
+ * adopts Snorkel's request id + no.
+ */
+async function applySnorkelStatus(env, row, s) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const move = snorkelStatusMove(row.state, s.status);
+    if (move === 'ignore') return { applied: false, reason: 'terminal', row };
+    if (s.status === 'paid') {
+      if (s.paid_amount != null && !(Number(s.paid_amount) > 0)) {
+        console.error('[snorkel-pay] paid with a non-positive amount — not recorded', row.id);
+        return { error: 'bad_paid_amount' };
+      }
+      const p = await upsertSnorkelPayment(env, row, s);
+      if (!p.ok) { console.error('[snorkel-pay] payments write failed', row.id, p.status); return { error: 'payments_write_failed' }; }
+    }
+    const now = nowIso();
+    const patch = {
+      state: s.status, snorkel_request_no: s.request_no || row.snorkel_request_no || null,
+      held_reason: s.held_reason ?? null, rejection_note: s.rejection_note ?? null,
+      paid_at: s.paid_at ?? null, paid_amount: s.paid_amount != null ? money(s.paid_amount) : null,
+      utr: s.payment_ref ?? null, tds_amount: s.tds_amount != null ? money(s.tds_amount) : null,
+      last_error: null, last_synced_at: now, updated_at: now,
+    };
+    if (row.snorkel_request_id == null) patch.snorkel_request_id = Number(s.request_id);
+    const r = await sb(`/rest/v1/deal_payment_requests?id=eq.${row.id}&state=eq.${row.state}&select=${DPR_SELECT}`, env, {
+      method: 'PATCH', body: JSON.stringify(patch),
+    });
+    if (!r.ok) return { error: 'db_error' };
+    if (r.data?.[0]) {
+      if (move === 'move' && (s.status === 'held' || s.status === 'rejected')) await notifyOwnerOfPaymentProblem(r.data[0]);
+      return { applied: true, move, row: r.data[0] };
+    }
+    const rr = await sb(`/rest/v1/deal_payment_requests?id=eq.${row.id}&select=${DPR_SELECT}&limit=1`, env);
+    if (!rr.ok || !rr.data?.[0]) return { error: 'db_error' };
+    row = rr.data[0];
+  }
+  return { applied: false, reason: 'busy', row };
+}
+
+const sameNum = (a, b) => (a == null && b == null) || (a != null && b != null && Math.abs(Number(a) - Number(b)) < 0.005);
+function sameSnorkelStatus(row, s) {
+  return row.state === s.status && (row.held_reason ?? null) === (s.held_reason ?? null)
+    && (row.rejection_note ?? null) === (s.rejection_note ?? null) && (row.utr ?? null) === (s.payment_ref ?? null)
+    && sameNum(row.paid_amount, s.paid_amount) && sameNum(row.tds_amount, s.tds_amount);
+}
+
+// POST /internal/snorkel-status — snorkelops' push, treated as a DOORBELL. Scope-limited to a row
+// Snorkel already owns (id = source_ref AND snorkel_request_id = request_id); the payload's status
+// is never applied — the current one is re-read from Snorkel and applied instead.
+export async function receiveSnorkelStatus(body, env) {
+  if (body?.action !== 'snorkelStatusChanged') return err('unknown_action', 400);
+  const ref = String(body.source_ref ?? ''), rid = Number(body.request_id);
+  if (!UUID_RE.test(ref) || !Number.isSafeInteger(rid) || rid <= 0) return err('bad_ref', 400);
+  const rr = await sb(`/rest/v1/deal_payment_requests?id=eq.${ref}&snorkel_request_id=eq.${rid}&select=${DPR_SELECT}&limit=1`, env);
+  if (!rr.ok) return err('db_error', 500);
+  if (!rr.data?.[0]) return err('not_found', 404);
+  const truth = await snorkelStatusOf(env, [ref]);
+  if (!truth) return err('snorkel_unreachable', 502);   // the reconcile picks it up
+  const s = truth.get(ref);
+  if (!s || Number(s.request_id) !== rid) return err('not_in_snorkel', 404);
+  const out = await applySnorkelStatus(env, rr.data[0], s);
+  if (out.error) return err(out.error, 500);
+  return ok({ applied: out.applied, state: out.row?.state });
+}
+
+// The every-15-minutes cron: re-send stuck sends, then read Snorkel's status for every open
+// request (plus paid ones from the last 14 days, so UTR edits heal, and send_failed ones, which
+// may have reached Snorkel with the reply lost — those are adopted) in batches of 200.
+export async function reconcileDealPayments(env) {
+  const out = { resent: 0, checked: 0, applied: 0, adopted: 0, missing: 0, failed: 0 };
+  const cutoff = new Date(Date.now() - DPR_STUCK_SENDING_MS).toISOString();
+  const st = await sb(`/rest/v1/deal_payment_requests?state=eq.sending&updated_at=lt.${encodeURIComponent(cutoff)}`
+    + `&select=${DPR_SELECT}&order=updated_at.asc&limit=${DPR_RESEND_MAX}`, env);
+  if (!st.ok) out.failed++;
+  for (const row of (st.ok ? st.data || [] : [])) {
+    const r = await sendDealPayment(env, row, { userId: row.raised_by, fullName: row.raised_by_name }, { staleBefore: cutoff });
+    if (r.row && r.row.state !== 'send_failed') out.resent++; else out.failed++;
+  }
+
+  const healFrom = new Date(Date.now() - DPR_PAID_HEAL_MS).toISOString();
+  const op = await sb(`/rest/v1/deal_payment_requests?or=(and(state.in.(submitted,pending_approval,approved,held),snorkel_request_id.not.is.null),`
+    + `and(state.eq.paid,paid_at.gt.${encodeURIComponent(healFrom)}),state.eq.send_failed)`
+    + `&select=${DPR_SELECT}&order=last_synced_at.asc.nullsfirst&limit=${DPR_RECONCILE_MAX}`, env);
+  if (!op.ok) { out.failed++; return out; }
+  for (const batch of chunk(op.data || [], SNORKEL_STATUS_BATCH)) {
+    const byRef = await snorkelStatusOf(env, batch.map(x => x.id));
+    if (!byRef) { out.failed += batch.length; continue; }
+    const unchanged = [];
+    for (const row of batch) {
+      out.checked++;
+      const s = byRef.get(row.id);
+      if (row.snorkel_request_id == null) {                  // send_failed: in Snorkel after all?
+        if (!s) { unchanged.push(row.id); continue; }
+        const a = await applySnorkelStatus(env, row, s);
+        if (a.error) out.failed++; else if (a.applied) out.adopted++;
+        continue;
+      }
+      if (!s || Number(s.request_id) !== Number(row.snorkel_request_id)) { out.missing++; continue; }
+      if (sameSnorkelStatus(row, s)) { unchanged.push(row.id); continue; }
+      const a = await applySnorkelStatus(env, row, s);
+      if (a.error) out.failed++; else if (a.applied) out.applied++;
+    }
+    // One write per batch, so the oldest-synced-first order rotates through every open row.
+    if (unchanged.length) {
+      await sb(`/rest/v1/deal_payment_requests?id=in.(${unchanged.join(',')})`, env, {
+        method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ last_synced_at: nowIso() }),
+      });
+    }
+  }
+  return out;
+}
+
+async function loadDealPaymentRequest(env, id) {
+  if (!UUID_RE.test(String(id || ''))) return { error: err('request_id required', 400) };
+  const r = await sb(`/rest/v1/deal_payment_requests?id=eq.${id}&select=${DPR_SELECT}&limit=1`, env);
+  if (!r.ok) return { error: err('db_error', 500) };
+  if (!r.data?.[0]) return { error: err('not_found', 404) };
+  return { row: r.data[0] };
+}
+const writeGate = (auth) => requirePerm('ignition_manage', auth) || (isPartner(auth) ? err('partner_read_only', 403) : null);
+const actorOf = auth => ({ userId: auth.userId, fullName: auth.fullName || null });
+
+async function getDealPayments(url, auth, env) {
+  const gate = requirePerm('ignition_view', auth); if (gate) return gate;
+  const eid = url.searchParams.get('engagement_id');
+  if (!UUID_RE.test(String(eid || ''))) return err('engagement_id required', 400);
+  const [er, rr, pr] = await Promise.all([
+    sb(`/rest/v1/engagements?id=eq.${eid}&select=id,payment_amount&limit=1`, env),
+    sb(`/rest/v1/deal_payment_requests?engagement_id=eq.${eid}&select=${DPR_SELECT}&order=raised_at.asc`, env),
+    sb(`/rest/v1/payments?engagement_id=eq.${eid}&select=amount`, env),
+  ]);
+  if (!er.ok || !rr.ok || !pr.ok) return err('db_error', 500);
+  if (!er.data?.[0]) return err('not_found', 404);
+  const requests = rr.data || [];
+  const raised = requests.filter(r => !DPR_DEAD.includes(r.state)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  // paid_total = the same ignition.payments sum getEngagement shows ("₹X paid of ₹Y").
+  const paid = (pr.data || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  return ok({ requests, agreed: Number(er.data[0].payment_amount) || 0, raised_live_total: money(raised), paid_total: money(paid) });
+}
+
+async function raiseDealPayment(body, auth, env) {
+  const gate = writeGate(auth); if (gate) return gate;
+  const eid = String(body.engagement_id || '');
+  if (!UUID_RE.test(eid)) return err('engagement_id required', 400);
+  if (!DPR_KINDS.includes(body.kind)) return err('kind must be advance, balance or full', 400);
+  const amount = Number(body.amount);
+  if (typeof body.amount === 'boolean' || !Number.isFinite(amount) || !(money(amount) > 0)) return err('Enter an amount above zero.', 400);
+  const amt = money(amount);
+  let inv = null;
+  if (body.invoice_id != null && body.invoice_id !== '') {
+    const f = dealInvoiceFields(body, amt);
+    if (f.error) return err(f.error, f.status);
+    inv = f.fields;
+  }
+  // Every money rule is checked and the row inserted atomically, under the engagement lock.
+  const r = await dealPaymentRpc(env, 'raise_deal_payment', {
+    p_engagement_id: eid, p_kind: body.kind, p_amount: amt, p_raised_by: auth.userId, p_raised_by_name: auth.fullName || null,
+    p_invoice_id: inv?.invoice_id ?? null, p_invoice_no: inv?.invoice_no ?? null,
+    p_invoice_date: inv?.invoice_date ?? null, p_invoice_total: inv?.invoice_total ?? null,
+  });
+  if (!r.row) return err(r.message, RPC_STATUS[r.code] || 409);
+  if (!inv) return ok({ request: r.row });
+  const s = await sendDealPayment(env, r.row, actorOf(auth));
+  // Not claimed (another click is sending, or the guard changed in between): the row stays waiting.
+  return s.row ? ok({ request: s.row }) : ok({ request: r.row, error: s.error });
+}
+
+async function attachDealPaymentInvoice(body, auth, env) {
+  const gate = writeGate(auth); if (gate) return gate;
+  const l = await loadDealPaymentRequest(env, body.request_id); if (l.error) return l.error;
+  const row = l.row;
+  if (!['waiting_for_invoice', 'send_failed'].includes(row.state)) return err('This request already has its invoice in Snorkel.', 409);
+  const f = dealInvoiceFields(body, Number(row.amount));
+  if (f.error) return err(f.error, f.status);
+  const s = await sendDealPayment(env, row, actorOf(auth), { invoice: f.fields });
+  return s.row ? ok({ request: s.row }) : err(s.error, s.status);
+}
+
+async function retryDealPayment(body, auth, env) {
+  const gate = writeGate(auth); if (gate) return gate;
+  const l = await loadDealPaymentRequest(env, body.request_id); if (l.error) return l.error;
+  if (l.row.state !== 'send_failed') return err('Only a request that failed to send can be retried.', 409);
+  const s = await sendDealPayment(env, l.row, actorOf(auth));
+  return s.row ? ok({ request: s.row }) : err(s.error, s.status);
+}
+
+async function cancelDealPayment(body, auth, env) {
+  const gate = writeGate(auth); if (gate) return gate;
+  const l = await loadDealPaymentRequest(env, body.request_id); if (l.error) return l.error;
+  const row = l.row;
+  const inSnorkel = no => `This request is already in Snorkel${no ? ` (${no})` : ''} — ask Finance to cancel it in Snorkel.`;
+  if (row.state === 'cancelled') return ok({ request: row });
+  if (row.state === 'paid') return err(`This request was already paid by Finance${row.snorkel_request_no ? ` (${row.snorkel_request_no})` : ''}.`, 409);
+  if (DPR_SNORKEL_STATES.has(row.state)) return err(inSnorkel(row.snorkel_request_no), 409);
+  if (row.state === 'sending') return err('This request is being sent right now — check again in a minute.', 409);
+  // A failed send may still have reached Snorkel (the reply was lost). Always ask Snorkel first
+  // and adopt what it has, or Snorkel would keep a request the deal no longer shows.
+  if (row.state === 'send_failed') {
+    const truth = await snorkelStatusOf(env, [row.id]);
+    if (!truth) return err('Could not check Snorkel before cancelling — retry.', 502);
+    const hit = truth.get(row.id);
+    if (hit) {
+      const a = await applySnorkelStatus(env, row, hit);
+      if (DPR_DEAD.includes(hit.status)) return ok({ request: a.row || row });
+      if (hit.status === 'paid') return err(`This request was already paid by Finance (${hit.request_no}).`, 409);
+      return err(inSnorkel(hit.request_no), 409);
+    }
+  }
+  // Guarded on the EXACT state read, so a send that started meanwhile is never cancelled under it.
+  const r = await sb(`/rest/v1/deal_payment_requests?id=eq.${row.id}&state=eq.${row.state}&select=${DPR_SELECT}`, env, {
+    method: 'PATCH', body: JSON.stringify({ state: 'cancelled', updated_at: nowIso() }),
+  });
+  if (!r.ok) return err('db_error', 500);
+  if (!r.data?.[0]) return err('The request changed while you were cancelling it — reload.', 409);
+  return ok({ request: r.data[0] });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // DISPATCH
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -6317,6 +6802,7 @@ const GET_ACTIONS = {
   getPostReminderDue,
   getBrokenChannelLinks,
   getTrackingLinkStatus,
+  getDealPayments,
 };
 
 const POST_ACTIONS = {
@@ -6381,6 +6867,10 @@ const POST_ACTIONS = {
   setIgnitionUserActive,
   invitePartner,
   setIgnitionRolePermission,
+  raiseDealPayment,
+  attachDealPaymentInvoice,
+  retryDealPayment,
+  cancelDealPayment,
 };
 
 // Every partner JSON response passes through here (S419) — the last line of defence behind the
@@ -6487,6 +6977,18 @@ export default {
       return refreshProductPrices({}, { userId: 'maint', permissions: { ignition_manage: true } }, env);
     }
 
+    // Snorkel's status push for Ignition payment requests (Reann #2 S3). Worker-to-worker over
+    // snorkelops' IGNITIONOPS binding, NO user JWT, so it sits ahead of the JWT gate. Bearer
+    // IGNITION_INTERNAL_TOKEN (constant-time, 401 when unset or wrong). ⛔ Scope-limited to the one
+    // action, on rows Snorkel already owns (receiveSnorkelStatus). Do not grow it into a proxy.
+    if (url.pathname === '/internal/snorkel-status' && request.method === 'POST') {
+      if (!internalBearerOk(request, env.IGNITION_INTERNAL_TOKEN)) return err('unauthorised', 401);
+      let body;
+      try { body = await request.json(); } catch { return err('bad_json', 400); }
+      try { return await receiveSnorkelStatus(body, env); }
+      catch (e) { console.error('[snorkel-status]', e?.message); return err('server_error', 500); }
+    }
+
     // The creator's accept link: no login, the token is the credential. Before the JWT gate.
     if (url.pathname.startsWith('/public/contract')) {
       try { return await handlePublicContract(request, url, env); }
@@ -6540,6 +7042,16 @@ export default {
         // one scheduled caller logs "done" over a failed sweep (how this hid for weeks).
         r => (r?.status >= 400 ? console.error : console.log)(`[price-refresh] cron ${r?.status >= 400 ? 'FAILED' : 'done'} (${r?.status})`),
         e => console.error('[price-refresh] cron error', e),
+      ));
+      return;
+    }
+
+    // Every 15 min — Snorkel payment-request reconcile (Reann #2 S3): the safety net for a missed
+    // status push, and the re-send of any request stuck in `sending` for over 10 minutes.
+    if (cron === '*/15 * * * *') {
+      ctx.waitUntil(reconcileDealPayments(env).then(
+        r => (r.failed ? console.error : console.log)('[snorkel-pay] reconcile', JSON.stringify(r)),
+        e => console.error('[snorkel-pay] reconcile error', e),
       ));
       return;
     }
