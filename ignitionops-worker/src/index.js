@@ -4507,6 +4507,82 @@ export async function allowBankUpdate(body, auth, env) {
   return ok({ editable_until: until });
 }
 
+// The invoice upload, shared by the creator's link and the deal page (Reann #2 S4): one bucket, one
+// folder per deal, one mime list, one cap. Refusals come back as a code for each caller to word; a
+// failed read or sign throws (the creator path's 500, the staff path's server_error).
+async function mintInvoiceUpload(env, engagementId, fileName, mime) {
+  if (!INVOICE_MIMES.includes(mime)) return { refusal: 'mime' };
+  const names = await invoiceObjectNames(env, engagementId);
+  if (!names) throw new Error('invoice list failed');
+  if (names.length >= MAX_INVOICES_PER_DEAL) return { refusal: 'cap' };
+  const path = `${engagementId}/${Date.now()}_${safeSeg(fileName)}`;
+  const sr = await storageFetch(`/object/upload/sign/${INVOICE_BUCKET}/${path}`, env, { method: 'POST' });
+  if (!sr.ok || !sr.data?.url) throw new Error(`sign failed: ${sr.status}`);
+  const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
+  return { upload: { storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null, bucket: INVOICE_BUCKET } };
+}
+
+// Recorded only once the object is really in the bucket. `contractId` null = uploaded by the team.
+// Returns { id } (the deal_invoices row, new or already recorded) or { refusal }.
+async function recordInvoiceUpload(env, engagementId, contractId, { path, file_name, mime }) {
+  if (!invoicePathOk(path, engagementId)) return { refusal: 'path' };
+  const objectName = String(path).slice(String(engagementId).length + 1);
+  const names = await invoiceObjectNames(env, engagementId, objectName);
+  if (!names) throw new Error('invoice list failed');
+  if (!names.includes(objectName)) return { refusal: 'missing' };
+  const recorded = await sb(`/rest/v1/deal_invoices?engagement_id=eq.${engagementId}&select=id,path&limit=${MAX_INVOICES_PER_DEAL}`, env);
+  if (!recorded.ok) throw new Error('invoice read failed');
+  const already = (recorded.data || []).find(i => i.path === path);
+  if (already) return { id: already.id, existed: true };
+  if ((recorded.data || []).length >= MAX_INVOICES_PER_DEAL) return { refusal: 'cap' };
+  const r = await sb(`/rest/v1/deal_invoices?on_conflict=path`, env, {
+    method: 'POST', prefer: 'resolution=ignore-duplicates,return=representation',
+    body: JSON.stringify([{
+      engagement_id: engagementId, contract_id: contractId, path,
+      file_name: String(file_name || 'invoice').slice(0, 200),
+      mime: INVOICE_MIMES.includes(mime) ? mime : null,
+    }]),
+  });
+  if (!r.ok) throw new Error(`invoice write failed: ${r.status}`);
+  return { id: r.data?.[0]?.id || null };
+}
+
+// The team uploads an invoice the creator sent some other way (mail, WhatsApp), so a Snorkel request
+// can be raised against it. Same two steps as the creator's link: mint, the browser PUTs, then record.
+// ⚠️ Known, left as is: the mint's cap counts OBJECTS in the folder, so an upload that was PUT but
+// never recorded (tab closed between the steps) still uses one of the 20 slots, on both paths.
+async function staffInvoiceDeal(env, engagementId) {
+  if (!UUID_RE.test(String(engagementId || ''))) return { error: err('engagement_id required', 400) };
+  const r = await sb(`/rest/v1/engagements?id=eq.${engagementId}&select=id&limit=1`, env);
+  if (!r.ok) return { error: err('db_error', 500) };
+  if (!r.data?.[0]) return { error: err('not_found', 404) };
+  return {};
+}
+const STAFF_INVOICE_CAP = `This deal already has ${MAX_INVOICES_PER_DEAL} invoices, the most it can hold.`;
+
+async function createDealInvoiceUploadUrl(body, auth, env) {
+  const gate = writeGate(auth); if (gate) return gate;
+  const d = await staffInvoiceDeal(env, body.engagement_id); if (d.error) return d.error;
+  if (!body.file_name) return err('file_name required', 400);
+  const m = await mintInvoiceUpload(env, body.engagement_id, body.file_name, body.mime);
+  if (m.refusal === 'mime') return err('The invoice must be a PDF, JPG or PNG.', 422);
+  if (m.refusal === 'cap') return err(STAFF_INVOICE_CAP, 409);
+  return ok(m.upload);
+}
+
+async function uploadDealInvoice(body, auth, env) {
+  const gate = writeGate(auth); if (gate) return gate;
+  const d = await staffInvoiceDeal(env, body.engagement_id); if (d.error) return d.error;
+  const rec = await recordInvoiceUpload(env, body.engagement_id, null, body);
+  if (rec.refusal === 'path') return err('That upload does not belong to this deal.', 403);
+  if (rec.refusal === 'missing') return err('The upload did not arrive — try again.', 422);
+  if (rec.refusal === 'cap') return err(STAFF_INVOICE_CAP, 409);
+  const name = String(body.file_name || '').slice(0, 200);
+  // A repeat of the same upload is not a second invoice: no second history row.
+  if (!rec.existed) await writeHistory(env, body.engagement_id, 'invoice_received', null, null, `Uploaded by the team${name ? `: ${name}` : ''}`, auth.userId);
+  return ok({ invoice_id: rec.id });
+}
+
 /** Short-lived signed URL for reading a creator's invoice. The bucket is private. */
 async function getDealInvoiceUrl(url, auth, env) {
   const gate = requirePerm('ignition_view', auth); if (gate) return gate;
@@ -4635,37 +4711,17 @@ async function handlePublicContract(request, url, env) {
 
   if (sub === '/public/contract/invoice-url') {
     if (!body.file_name) return err('file_name required', 400);
-    if (!INVOICE_MIMES.includes(body.mime)) return err('Please upload a PDF, JPG or PNG.', 422);
-    const names = await invoiceObjectNames(env, c.engagement_id);
-    if (!names) throw new Error('invoice list failed');
-    if (names.length >= MAX_INVOICES_PER_DEAL) return err('That is the most invoices we can take here. Please reply to our email.', 409);
-    const path = `${c.engagement_id}/${Date.now()}_${safeSeg(body.file_name)}`;
-    const sr = await storageFetch(`/object/upload/sign/${INVOICE_BUCKET}/${path}`, env, { method: 'POST' });
-    if (!sr.ok || !sr.data?.url) throw new Error(`sign failed: ${sr.status}`);
-    const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
-    return ok({ storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null, bucket: INVOICE_BUCKET });
+    const m = await mintInvoiceUpload(env, c.engagement_id, body.file_name, body.mime);
+    if (m.refusal === 'mime') return err('Please upload a PDF, JPG or PNG.', 422);
+    if (m.refusal === 'cap') return err('That is the most invoices we can take here. Please reply to our email.', 409);
+    return ok(m.upload);
   }
 
   if (sub === '/public/contract/invoice-done') {
-    if (!invoicePathOk(body.path, c.engagement_id)) return err('That upload does not belong to this deal.', 403);
-    const objectName = String(body.path).slice(String(c.engagement_id).length + 1);
-    const names = await invoiceObjectNames(env, c.engagement_id, objectName);
-    if (!names) throw new Error('invoice list failed');
-    if (!names.includes(objectName)) return err('We could not find that upload. Please try again.', 422);
-    const recorded = await sb(`/rest/v1/deal_invoices?engagement_id=eq.${c.engagement_id}&select=path&limit=${MAX_INVOICES_PER_DEAL}`, env);
-    if (!recorded.ok) throw new Error('invoice read failed');
-    if ((recorded.data || []).length >= MAX_INVOICES_PER_DEAL && !recorded.data.some(i => i.path === body.path)) {
-      return err('That is the most invoices we can take here. Please reply to our email.', 409);
-    }
-    const r = await sb(`/rest/v1/deal_invoices?on_conflict=path`, env, {
-      method: 'POST', prefer: 'resolution=ignore-duplicates,return=minimal',
-      body: JSON.stringify([{
-        engagement_id: c.engagement_id, contract_id: c.id, path: body.path,
-        file_name: String(body.file_name || 'invoice').slice(0, 200),
-        mime: INVOICE_MIMES.includes(body.mime) ? body.mime : null,
-      }]),
-    });
-    if (!r.ok) throw new Error(`invoice write failed: ${r.status}`);
+    const rec = await recordInvoiceUpload(env, c.engagement_id, c.id, body);
+    if (rec.refusal === 'path') return err('That upload does not belong to this deal.', 403);
+    if (rec.refusal === 'missing') return err('We could not find that upload. Please try again.', 422);
+    if (rec.refusal === 'cap') return err('That is the most invoices we can take here. Please reply to our email.', 409);
     await writeHistory(env, c.engagement_id, 'invoice_received', null, null, String(body.file_name || '').slice(0, 200) || null, null);
     return publicContractView(env, c);
   }
@@ -6661,18 +6717,40 @@ async function getDealPayments(url, auth, env) {
   const gate = requirePerm('ignition_view', auth); if (gate) return gate;
   const eid = url.searchParams.get('engagement_id');
   if (!UUID_RE.test(String(eid || ''))) return err('engagement_id required', 400);
-  const [er, rr, pr] = await Promise.all([
-    sb(`/rest/v1/engagements?id=eq.${eid}&select=id,payment_amount&limit=1`, env),
+  const [er, rr, pr, ir, settings] = await Promise.all([
+    sb(`/rest/v1/engagements?id=eq.${eid}&select=id,payment_amount,influencer_id&limit=1`, env),
     sb(`/rest/v1/deal_payment_requests?engagement_id=eq.${eid}&select=${DPR_SELECT}&order=raised_at.asc`, env),
-    sb(`/rest/v1/payments?engagement_id=eq.${eid}&select=amount`, env),
+    sb(`/rest/v1/payments?engagement_id=eq.${eid}&select=amount,snorkel_request_id`, env),
+    sb(`/rest/v1/deal_invoices?engagement_id=eq.${eid}&select=id,file_name,mime,uploaded_at,contract_id&order=uploaded_at.desc&limit=${MAX_INVOICES_PER_DEAL}`, env),
+    readContractSettings(env),
   ]);
-  if (!er.ok || !rr.ok || !pr.ok) return err('db_error', 500);
+  if (!er.ok || !rr.ok || !pr.ok || !ir.ok || settings === undefined) return err('db_error', 500);
   if (!er.data?.[0]) return err('not_found', 404);
+  // Whether #1 has bank details for this creator — a boolean only; the values never leave here.
+  const infId = er.data[0].influencer_id;
+  const br = infId
+    ? await sb(`/rest/v1/influencer_bank_details?influencer_id=eq.${infId}&select=account_number,ifsc,upi_id&limit=1`, env)
+    : { ok: true, data: [] };
+  if (!br.ok) return err('db_error', 500);
+  const bank = br.data?.[0];
+  const bankOnFile = !!bank && ((!!bank.account_number && !!bank.ifsc) || !!bank.upi_id);
   const requests = rr.data || [];
+  const agreed = Number(er.data[0].payment_amount) || 0;
   const raised = requests.filter(r => !DPR_DEAD.includes(r.state)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
   // paid_total = the same ignition.payments sum getEngagement shows ("₹X paid of ₹Y").
   const paid = (pr.data || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  return ok({ requests, agreed: Number(er.data[0].payment_amount) || 0, raised_live_total: money(raised), paid_total: money(paid) });
+  // The hand log counts against the fee exactly as deal_payment_refusal counts it (no snorkel id).
+  const hand = (pr.data || []).filter(p => p.snorkel_request_id == null).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  return ok({
+    requests, agreed, raised_live_total: money(raised), paid_total: money(paid), hand_paid_total: money(hand),
+    remaining: money(Math.max(0, agreed - raised - hand)),
+    invoices: ir.data || [],
+    // Decision 1: Snorkel payments are usable once the contract wording (which collects bank
+    // details) is published; until then the deal page keeps the hand log's "Add payment".
+    snorkel_ready: !!settings?.published_at,
+    // The hand log's "+ Add" stays on a deal until Snorkel can actually pay this creator.
+    bank_on_file: bankOnFile,
+  });
 }
 
 async function raiseDealPayment(body, auth, env) {
@@ -6869,6 +6947,8 @@ const POST_ACTIONS = {
   setIgnitionRolePermission,
   raiseDealPayment,
   attachDealPaymentInvoice,
+  createDealInvoiceUploadUrl,
+  uploadDealInvoice,
   retryDealPayment,
   cancelDealPayment,
 };

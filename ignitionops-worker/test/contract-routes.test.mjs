@@ -211,7 +211,7 @@ test('a by-hand record with no link is not treated as an acceptance to clear', a
 
 test('invoice-done looks for the one file and caps on what is recorded', async () => {
   const many = Array.from({ length: 20 }, (_, i) => ({ path: `${EID}/${i}.pdf` }));
-  const calls = db([tokenRoute(row()), ['POST', /object\/list/, 200, [{ name: 'new.pdf' }]], ['GET', /deal_invoices\?engagement_id=[^&]+&select=path/, 200, many]]);
+  const calls = db([tokenRoute(row()), ['POST', /object\/list/, 200, [{ name: 'new.pdf' }]], ['GET', /deal_invoices\?engagement_id=[^&]+&select=id,path/, 200, many]]);
   const res = await post('/public/contract/invoice-done', { path: `${EID}/new.pdf`, file_name: 'new.pdf', mime: 'application/pdf' });
   assert.equal(res.status, 409);
   assert.equal(calls.find(c => /object\/list/.test(c.at)).body.search, 'new.pdf');

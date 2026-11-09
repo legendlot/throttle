@@ -3,6 +3,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@throttle/db';
 import { contractPublic } from '../../lib/ignitionopsFetch.js';
+import { INVOICE_TYPES, INVOICE_ACCEPT, MAX_INVOICE_BYTES as MAX_BYTES } from '../../lib/invoiceFile.js';
 
 // The creator's accept link. Outside (auth) on purpose: the only auth guard is RequireAuth in
 // (auth)/layout.js, and AuthProvider in the root layout redirects nobody (no session, no redirect).
@@ -31,8 +32,6 @@ const input = {
   width: '100%', boxSizing: 'border-box', minHeight: 46, padding: '0 12px', background: 'var(--input)', color: 'var(--text-1)',
   border: '1px solid var(--border-3)', borderRadius: 10, fontFamily: 'var(--font-ui)', fontSize: 16,
 };
-const INVOICE_TYPES = { 'application/pdf': 1, 'image/jpeg': 1, 'image/png': 1 };
-const MAX_BYTES = 10 * 1024 * 1024;
 
 export default function DealContractPage() {
   return (
@@ -200,7 +199,7 @@ function InvoiceStep({ t, data, onDone }) {
       {error && <p role="alert" style={{ margin: '0 0 10px', fontSize: 14, color: 'var(--state-error-fg)' }}>{error}</p>}
       <label style={{ ...btn(busy), display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box' }}>
         {busy ? 'Uploading…' : invoices.length ? 'Upload another' : 'Upload invoice'}
-        <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" disabled={busy} style={{ display: 'none' }}
+        <input type="file" accept={INVOICE_ACCEPT} disabled={busy} style={{ display: 'none' }}
           onChange={e => { upload(e.target.files?.[0]); e.target.value = ''; }} />
       </label>
     </div>

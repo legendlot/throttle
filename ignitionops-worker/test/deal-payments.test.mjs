@@ -432,3 +432,111 @@ test('getDealPayments: totals, and no bank field anywhere in the reply', async (
   assert.equal(d.paid_total, 4000);
   assert.doesNotMatch(JSON.stringify(d), /account_number|pan|ifsc/i);
 });
+
+test('getDealPayments: snorkel_ready follows contract_settings.published_at; invoices + remaining ride along', async () => {
+  const get = () => worker.fetch(new Request(`https://w.test/?action=getDealPayments&engagement_id=${EID}`, { headers: { Authorization: 'Bearer jwt' } }), env());
+  const base = [...authRoutes, dealRoute(),
+    ['GET', /deal_payment_requests\?engagement_id/, 200, [dpr({ amount: 4000, state: 'approved' })]],
+    ['GET', /payments\?engagement_id/, 200, [{ amount: 1000, snorkel_request_id: null }]],
+    ['GET', /deal_invoices\?engagement_id/, 200, [{ id: INV, file_name: 'inv.pdf', mime: 'application/pdf', uploaded_at: '2026-11-09T00:00:00Z', contract_id: null }]]];
+  db([...base, ['GET', /contract_settings/, 200, [{ published_at: null }]]]);
+  let d = (await (await get()).json()).data;
+  assert.equal(d.snorkel_ready, false);
+  assert.equal(d.hand_paid_total, 1000);
+  assert.equal(d.remaining, 5000);   // 10000 − 4000 raised − 1000 by hand
+  assert.equal(d.invoices[0].id, INV);
+  db([...base, ['GET', /contract_settings/, 200, [{ published_at: '2026-11-10T00:00:00Z' }]]]);
+  d = (await (await get()).json()).data;
+  assert.equal(d.snorkel_ready, true);
+  // A failed settings read is an error, never a silent "not ready".
+  db([...base, ['GET', /contract_settings/, 500, { message: 'x' }]]);
+  assert.equal((await get()).status, 500);
+});
+
+// ── staff invoice upload (S4): the creator path's helpers, contract_id null ──
+const listRoute = names => ['POST', /object\/list\/ignition-creator-invoices/, 200, names.map(name => ({ name }))];
+test('staff invoice: mints into ignition-creator-invoices/<deal>/, same mime list and cap as the creator link', async () => {
+  let calls = db([...authRoutes, dealRoute(), listRoute([]),
+    ['POST', /object\/upload\/sign\/ignition-creator-invoices\//, 200, { url: '/object/upload/sign/x?token=tk%3D' }]]);
+  let res = await post(env(), { action: 'createDealInvoiceUploadUrl', engagement_id: EID, file_name: 'Inv 1.pdf', mime: 'application/pdf' });
+  assert.equal(res.status, 200);
+  const d = (await res.json()).data;
+  assert.equal(d.bucket, 'ignition-creator-invoices');
+  assert.match(d.storage_path, new RegExp(`^${EID}/\\d+_Inv_1\\.pdf$`));
+  assert.equal(d.token, 'tk=');
+  calls = db([...authRoutes, dealRoute(), listRoute([])]);
+  res = await post(env(), { action: 'createDealInvoiceUploadUrl', engagement_id: EID, file_name: 'x.docx', mime: 'application/msword' });
+  assert.equal(res.status, 422);
+  assert.equal(calls.filter(c => /upload\/sign/.test(c.at)).length, 0);
+  db([...authRoutes, dealRoute(), listRoute(Array.from({ length: 20 }, (_, i) => `${i}.pdf`))]);
+  res = await post(env(), { action: 'createDealInvoiceUploadUrl', engagement_id: EID, file_name: 'x.pdf', mime: 'application/pdf' });
+  assert.equal(res.status, 409);
+});
+
+test('staff invoice: recorded with contract_id null only once the object is in the bucket; returns the row id', async () => {
+  const NEW = '77777777-7777-7777-7777-777777777777';
+  const calls = db([...authRoutes, dealRoute(), listRoute(['real.pdf']),
+    ['POST', /deal_invoices\?on_conflict=path/, 201, [{ id: NEW }]]]);
+  const res = await post(env(), { action: 'uploadDealInvoice', engagement_id: EID, path: `${EID}/real.pdf`, file_name: 'real.pdf', mime: 'application/pdf' });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).data.invoice_id, NEW);
+  const [w] = writes(calls, /deal_invoices/);
+  assert.equal(w.body[0].contract_id, null);
+  assert.equal(w.body[0].engagement_id, EID);
+  assert.equal(writes(calls, /engagement_history/)[0].body[0].actor, UID);
+});
+
+test("staff invoice: another deal's path, a missing object, or the cap writes nothing", async () => {
+  const OTHER = '99999999-9999-9999-9999-999999999999';
+  let calls = db([...authRoutes, dealRoute(), listRoute(['real.pdf'])]);
+  assert.equal((await post(env(), { action: 'uploadDealInvoice', engagement_id: EID, path: `${OTHER}/real.pdf`, file_name: 'real.pdf' })).status, 403);
+  assert.equal((await post(env(), { action: 'uploadDealInvoice', engagement_id: EID, path: `${EID}/../x/real.pdf`, file_name: 'real.pdf' })).status, 403);
+  assert.equal((await post(env(), { action: 'uploadDealInvoice', engagement_id: EID, path: `${EID}/fake.pdf`, file_name: 'fake.pdf' })).status, 422);
+  assert.equal(writes(calls, /deal_invoices|engagement_history/).length, 0);
+  calls = db([...authRoutes, dealRoute(), listRoute(['new.pdf']),
+    ['GET', /deal_invoices\?engagement_id/, 200, Array.from({ length: 20 }, (_, i) => ({ id: `id${i}`, path: `${EID}/${i}.pdf` }))]]);
+  assert.equal((await post(env(), { action: 'uploadDealInvoice', engagement_id: EID, path: `${EID}/new.pdf`, file_name: 'new.pdf' })).status, 409);
+  assert.equal(writes(calls, /deal_invoices|engagement_history/).length, 0);
+});
+
+test('staff invoice: view-only users and a missing deal are refused before any storage call', async () => {
+  let calls = db([['GET', /users_profile/, 200, [{ role: 'staff', full_name: 'V', active: true }]],
+    ['GET', /ignition_user_roles/, 200, [{ role_key: 'viewer' }]],
+    ['GET', /ignition_roles/, 200, [{ permissions: { ignition_view: true } }]]]);
+  for (const action of ['createDealInvoiceUploadUrl', 'uploadDealInvoice']) {
+    assert.equal((await post(env(), { action, engagement_id: EID, file_name: 'x.pdf', mime: 'application/pdf', path: `${EID}/x.pdf` })).status, 403);
+  }
+  assert.equal(calls.filter(c => /storage\/v1/.test(c.at)).length, 0);
+  calls = db([...authRoutes, ['GET', /engagements\?id/, 200, []]]);
+  assert.equal((await post(env(), { action: 'createDealInvoiceUploadUrl', engagement_id: EID, file_name: 'x.pdf', mime: 'application/pdf' })).status, 404);
+  assert.equal(calls.filter(c => /storage\/v1/.test(c.at)).length, 0);
+});
+
+test('getDealPayments: bank_on_file is per deal (account+IFSC or UPI) and only a boolean leaves', async () => {
+  const get = () => worker.fetch(new Request(`https://w.test/?action=getDealPayments&engagement_id=${EID}`, { headers: { Authorization: 'Bearer jwt' } }), env());
+  const base = [...authRoutes, dealRoute(), ['GET', /contract_settings/, 200, [{ published_at: '2026-11-10T00:00:00Z' }]]];
+  const cases = [
+    [[{ account_number: '123456789', ifsc: 'HDFC0001234', upi_id: null }], true],
+    [[{ account_number: null, ifsc: null, upi_id: 'asha@upi' }], true],
+    [[{ account_number: '123456789', ifsc: null, upi_id: null }], false],
+    [[], false],
+  ];
+  for (const [rows, want] of cases) {
+    const calls = db([...base, ['GET', new RegExp(`influencer_bank_details\\?influencer_id=eq\\.${IID}`), 200, rows]]);
+    const body = await (await get()).text();
+    assert.equal(JSON.parse(body).data.bank_on_file, want);
+    assert.doesNotMatch(body, /123456789|HDFC0001234|asha@upi/);
+    assert.ok(calls.some(c => /influencer_bank_details/.test(c.at)));
+  }
+  db([...base, ['GET', /influencer_bank_details/, 500, { message: 'x' }]]);
+  assert.equal((await get()).status, 500);
+});
+
+test('staff invoice: a repeat of an already-recorded path returns its id, with no insert and no history row', async () => {
+  const calls = db([...authRoutes, dealRoute(), listRoute(['real.pdf']),
+    ['GET', /deal_invoices\?engagement_id/, 200, [{ id: INV, path: `${EID}/real.pdf` }]]]);
+  const res = await post(env(), { action: 'uploadDealInvoice', engagement_id: EID, path: `${EID}/real.pdf`, file_name: 'real.pdf', mime: 'application/pdf' });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).data.invoice_id, INV);
+  assert.equal(writes(calls, /deal_invoices|engagement_history/).length, 0);
+});
