@@ -70,6 +70,8 @@ test('google claims: each bad field is refused', () => {
   assert.equal(checkGoogleClaims({ ...good, email: 'a@legendoftoys.com.evil.com' }, opts).ok, false);
   assert.equal(checkGoogleClaims({ ...good, email: 'a@b@legendoftoys.com' }, opts).ok, false);
   assert.equal(checkGoogleClaims(good, { ...opts, nonce: '' }).ok, false);
+  assert.equal(checkGoogleClaims({ ...good, aud: undefined }, { ...opts, clientId: undefined }).reason, 'gateway not configured');
+  assert.equal(checkGoogleClaims({ ...good, aud: 'PENDING' }, { ...opts, clientId: 'PENDING' }).ok, false);
   assert.equal(checkGoogleClaims({ ...good, aud: ['cid', 'x'], azp: 'x' }, opts).ok, false);
 });
 test('jwt payload decode', () => {

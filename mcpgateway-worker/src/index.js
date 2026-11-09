@@ -11,7 +11,7 @@
 //   5. /mcp, /token and /register only from Anthropic's published outbound IPs (extra layer only).
 // Redirects are an exact allowlist (Claude's hosted callback). No write path exists in this worker.
 
-import { OAuthProvider } from '@cloudflare/workers-oauth-provider';
+import { OAuthProvider, OAuthError } from '@cloudflare/workers-oauth-provider';
 import {
   parseCidrs, ipAllowed, parseList, redirectAllowed, registrationAllowed,
   decodeJwtPayload, checkGoogleClaims, gateDecision, originAllowed, hmacHex, timingSafeEqualHex, esc,
@@ -45,8 +45,9 @@ async function audit(env, row) {
       },
       body: JSON.stringify(row),
     });
-    if (!res.ok) console.error('[audit] insert failed', res.status);
-  } catch (e) { console.error('[audit] threw', e.message); }
+    if (!res.ok) { console.error('[audit] insert failed', res.status); return false; }
+    return true;
+  } catch (e) { console.error('[audit] threw', e.message); return false; }
 }
 
 // ---------------------------------------------------------------- Slack (best effort, never blocks)
@@ -81,12 +82,24 @@ async function countDenied(env, ctx, kind, ip) {
   }
 }
 
+// Every secret/var the sign-in path needs. Missing any → refuse BEFORE a grant exists (fail closed).
+function configMissing(env) {
+  const miss = [];
+  if (!env.GOOGLE_CLIENT_ID || env.GOOGLE_CLIENT_ID === 'PENDING') miss.push('GOOGLE_CLIENT_ID');
+  if (!env.GOOGLE_CLIENT_SECRET) miss.push('GOOGLE_CLIENT_SECRET');
+  if (!env.SUPABASE_SERVICE_KEY) miss.push('SUPABASE_SERVICE_KEY');
+  if (!env.SLACK_BOT_TOKEN) miss.push('SLACK_BOT_TOKEN');
+  if (!env.REVOKE_SECRET || env.REVOKE_SECRET.length < 32) miss.push('REVOKE_SECRET');
+  if (!/^U[A-Z0-9]{6,15}$/.test(env.ADMIN_SLACK_ID || '')) miss.push('ADMIN_SLACK_ID');
+  return miss;
+}
+
 // ---------------------------------------------------------------- HTML
 function page(title, body, status = 200, headers = new Headers()) {
   headers.set('Content-Type', 'text/html; charset=utf-8');
   headers.set('Cache-Control', 'no-store');
   headers.set('X-Frame-Options', 'DENY');
-  headers.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'");
+  headers.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://accounts.google.com https://claude.ai https://claude.com; frame-ancestors 'none'");
   headers.set('Referrer-Policy', 'no-referrer');
   return new Response(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title><style>
@@ -107,10 +120,15 @@ async function authorize(request, env) {
   const helpers = env.OAUTH_PROVIDER;
   const allowedRedirects = parseList(env.ALLOWED_REDIRECTS);
 
+  const miss = configMissing(env);
+  if (miss.length) { console.error('[config] missing', miss.join(',')); return refusePage('The LOT data connector is not switched on yet.', 503); }
+
   if (request.method === 'GET') {
     let authReq;
     try { authReq = await helpers.parseAuthRequest(request); }
     catch (e) { return refusePage('This sign-in link is not valid.', 400); }
+    // PKCE S256 for EVERY client: the library only requires it for public clients.
+    if (!authReq.codeChallenge || authReq.codeChallengeMethod !== 'S256') return refusePage('This sign-in link is not valid.', 400);
     if (!redirectAllowed(authReq.redirectUri, allowedRedirects)) {
       return refusePage('This sign-in link does not come from Claude.', 400);
     }
@@ -147,6 +165,7 @@ If someone sent you this link, press Cancel. Whoever started it would get your a
     catch { return refusePage('This sign-in expired or was already used. Start again from Claude.', 400); }
     // Defence in depth: re-check the redirect after consent too.
     if (!redirectAllowed(approved.request.redirectUri, allowedRedirects)) return refusePage('This sign-in link does not come from Claude.', 400);
+    if (!approved.request.codeChallenge || approved.request.codeChallengeMethod !== 'S256') return refusePage('This sign-in link is not valid.', 400);
 
     const nonce = crypto.randomUUID();
     const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
@@ -156,7 +175,7 @@ If someone sent you this link, press Cancel. Whoever started it would get your a
     g.search = new URLSearchParams({
       client_id: env.GOOGLE_CLIENT_ID, redirect_uri: `${env.PUBLIC_URL}/callback`, response_type: 'code',
       scope: 'openid email profile', state: up.state, nonce, hd: 'legendoftoys.com',
-      prompt: 'select_account', code_challenge: challenge, code_challenge_method: 'S256',
+      prompt: 'select_account consent', code_challenge: challenge, code_challenge_method: 'S256',
     }).toString();
     const h = new Headers(up.headers);
     h.set('Location', g.toString());
@@ -172,6 +191,7 @@ function b64url(bytes) {
 async function callback(request, env, ctx) {
   const helpers = env.OAUTH_PROVIDER;
   const ip = request.headers.get('CF-Connecting-IP') || '';
+  if (configMissing(env).length) return refusePage('The LOT data connector is not switched on yet.', 503);
   let resumed;
   try { resumed = await helpers.finishUpstream(request); }
   catch { return refusePage('This sign-in expired or was already used. Start again from Claude.', 400); }
@@ -206,6 +226,22 @@ async function callback(request, env, ctx) {
   if (!gate) return deny('no LOT app account for this email', c.email);
   const d = gateDecision(gate);
   if (!d.ok) return deny(d.reason, c.email, gate.user_id);
+  if (!gate.slack_user_id) return deny('your grant has no Slack ID, so you could not be told about this connection', c.email, gate.user_id);
+
+  // The consent-hijack defence: the person AND Afshaan are told BEFORE the grant exists.
+  // If the person's DM cannot be delivered, no connection is created.
+  const revoke = await revokeUrl(env, gate.user_id);
+  const when = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+  const told = await slackDm(env, gate.slack_user_id, `🔐 A Claude account is being connected to LOT data as *${c.email}* (${when} IST).\n` +
+    `If this was not you, open this link and press Revoke: ${revoke}`);
+  if (!told) return deny('could not send your Slack confirmation', c.email, gate.user_id);
+  if (gate.slack_user_id !== env.ADMIN_SLACK_ID) {
+    const ok = await slackDm(env, env.ADMIN_SLACK_ID, `🔐 New LOT MCP connection: ${c.email} at ${when} IST. Revoke all of their connections: ${revoke}`);
+    if (!ok) console.error('[slack] admin DM failed for', c.email);
+  }
+  if (!(await audit(env, { event: 'connect', email: c.email, user_id: gate.user_id, ip, status: 200, detail: `client ${resumed.request.clientId}` }))) {
+    return refusePage('LOT systems are not reachable right now. Try again shortly.', 503);
+  }
 
   const { redirectTo } = await helpers.completeAuthorization({
     request: resumed.request,
@@ -215,16 +251,6 @@ async function callback(request, env, ctx) {
     props: { userId: gate.user_id, email: c.email },
   });
 
-  const revoke = await revokeUrl(env, gate.user_id);
-  const when = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-  const msg = `🔐 A Claude account was just connected to LOT data as *${c.email}* (${when} IST).\n` +
-    `If this was not you, open this link and press Revoke: ${revoke}`;
-  ctx.waitUntil(audit(env, { event: 'connect', email: c.email, user_id: gate.user_id, ip, status: 200, detail: `client ${resumed.request.clientId}` }));
-  const personDm = gate.slack_user_id ? slackDm(env, gate.slack_user_id, msg) : Promise.resolve(false);
-  if (gate.slack_user_id !== env.ADMIN_SLACK_ID) {
-    ctx.waitUntil(slackDm(env, env.ADMIN_SLACK_ID, `🔐 New LOT MCP connection: ${c.email} at ${when} IST${gate.slack_user_id ? '' : ' (⚠️ no Slack ID on their grant, so THEY were not told)'}. Revoke all of their connections: ${revoke}`));
-  }
-  ctx.waitUntil(personDm);
   const h = new Headers(resumed.headers);
   h.set('Location', redirectTo);
   return new Response(null, { status: 302, headers: h });
@@ -245,10 +271,21 @@ async function revoke(request, env, ctx) {
   // GET never acts: Slack and mail scanners prefetch links.
   if (request.method !== 'POST') {
     return page('Revoke Claude connections', `<h2>Revoke Claude connections</h2>
-<p>This disconnects <b>every</b> Claude account currently connected to LOT data as this person. They can reconnect later if allowed.</p>
+<p>This disconnects <b>every</b> Claude account currently connected to LOT data as this person and switches off their access. Afshaan has to grant it again before they can reconnect.</p>
 <form method="post" action="/revoke"><input type="hidden" name="u" value="${esc(u)}"><input type="hidden" name="e" value="${esc(e)}"><input type="hidden" name="s" value="${esc(s)}">
 <button>Revoke</button></form>`);
   }
+  // 1) DB first: the per-call gate refuses from this moment, whatever happens in KV (refresh races).
+  const off = await fetch(`${env.SUPABASE_URL}/rest/v1/mcp_access?user_id=eq.${encodeURIComponent(u)}&active=eq.true`, {
+    method: 'PATCH',
+    headers: {
+      apikey: env.SUPABASE_SERVICE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+      'Content-Type': 'application/json', 'Content-Profile': 'store', Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({ active: false, revoked_at: new Date().toISOString(), note: 'revoked via Slack revoke link' }),
+  }).catch(() => null);
+  if (!off || !off.ok) return refusePage('Revoke failed. Tell Afshaan now, so it is done by hand.', 503);
+  // 2) Then the OAuth connections.
   let n = 0, cursor;
   do {
     const list = await env.OAUTH_PROVIDER.listUserGrants(u, { cursor });
@@ -257,7 +294,7 @@ async function revoke(request, env, ctx) {
   } while (cursor);
   ctx.waitUntil(audit(env, { event: 'revoke', user_id: u, ip: request.headers.get('CF-Connecting-IP') || '', status: 200, detail: `${n} grant(s) revoked via link` }));
   ctx.waitUntil(slackDm(env, env.ADMIN_SLACK_ID, `🔒 LOT MCP: ${n} connection(s) revoked via the revoke link for user ${u}.`));
-  return page('Revoked', `<h2>Revoked</h2><p>${n} connection(s) removed. Any Claude that was connected as this person can no longer reach LOT data.</p>`);
+  return page('Revoked', `<h2>Revoked</h2><p>Access switched off and ${n} connection(s) removed. Any Claude that was connected as this person can no longer reach LOT data.</p>`);
 }
 
 // ---------------------------------------------------------------- /mcp (JSON-RPC over Streamable HTTP, stateless)
@@ -325,7 +362,10 @@ const mcpHandler = {
           ctx.waitUntil(alertOnce(env, `rate:${userId}`, `⚠️ LOT MCP: ${gate.email} hit the ${gate.calls_per_hour}/hour call limit.`));
           return rpcResult(id, { isError: true, content: [{ type: 'text', text: `Hourly limit of ${gate.calls_per_hour} calls reached. Try again later.` }] }, 429);
         }
-        ctx.waitUntil(audit(env, { event: 'call', user_id: userId, email: gate.email, tool: name, params: (msg.params && msg.params.arguments) || {}, row_count: 1, ip, status: 200 }));
+        // The audit row IS the rate-limit counter: no row, no call (fail closed).
+        if (!(await audit(env, { event: 'call', user_id: userId, email: gate.email, tool: name, params: (msg.params && msg.params.arguments) || {}, row_count: 1, ip, status: 200 }))) {
+          return rpcError(id, -32002, 'LOT systems unreachable', 503);
+        }
         const out = { connected_as: gate.email, name: gate.full_name, systems_granted: gate.systems, note: 'Phase 0: no data tools yet.' };
         return rpcResult(id, { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }], structuredContent: out });
       }
@@ -361,6 +401,18 @@ function buildProvider(env) {
     scopesSupported: SCOPES,
     requiredScopes: SCOPES,
     clientIdMetadataDocumentEnabled: true,
+    // Every code exchange and refresh re-runs the live gate. Throwing invalid_grant makes the library
+    // revoke the grant and its tokens (dist callTokenExchangeCallback); transient errors fail closed as 503.
+    tokenExchangeCallback: async ({ userId, env: e }) => {
+      let g;
+      try { g = await rpc(e, 'mcp_gate', { p_user: userId }); }
+      catch { throw new OAuthError('temporarily_unavailable', { description: 'try again later', statusCode: 503 }); }
+      const dd = gateDecision(g);
+      if (!dd.ok) {
+        await audit(e, { event: 'call_denied', user_id: userId, email: g && g.email, tool: 'token', status: 400, detail: `token refused: ${dd.reason}` });
+        throw new OAuthError('invalid_grant', { description: 'access no longer allowed' });
+      }
+    },
     clientRegistrationCallback: ({ clientMetadata }) => {
       if (!registrationAllowed(clientMetadata, allowed)) {
         return { code: 'invalid_redirect_uri', description: 'Only Claude can register with this server.', status: 400 };
@@ -382,14 +434,14 @@ export default {
     const { pathname } = new URL(request.url);
     const ip = request.headers.get('CF-Connecting-IP') || '';
 
-    // Plain prefix match, the same rule the OAuth library uses for apiRoute ('/mcpx' is API too).
+    // Plain case-insensitive prefix: a strict superset of the library's apiRoute match (/mcp, /mcp/…).
     if (IP_GATED_PREFIXES.some(p => pathname.toLowerCase().startsWith(p)) && !ipAllowed(ip, cidrs)) {
       ctx.waitUntil(audit(env, { event: 'ip_blocked', ip, status: 403, detail: `${request.method} ${pathname}` }));
       ctx.waitUntil(countDenied(env, ctx, 'ip', ip));
       return Response.json({ error: 'forbidden' }, { status: 403 });
     }
     const res = await provider.fetch(request, env, ctx);
-    if (pathname === '/mcp' && res.status === 401 && request.headers.get('Authorization')) {
+    if (pathname.startsWith('/mcp') && res.status === 401 && request.headers.get('Authorization')) {
       ctx.waitUntil(audit(env, { event: 'bad_token', ip, status: 401 }));
       ctx.waitUntil(countDenied(env, ctx, 'token', ip));
     }

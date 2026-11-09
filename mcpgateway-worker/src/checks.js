@@ -56,6 +56,7 @@ export function decodeJwtPayload(jwt) {
 // THIS is the domain check (plus the Internal consent screen at Google).
 export function checkGoogleClaims(c, { clientId, nonce, nowSec }) {
   if (!c || typeof c !== 'object') return { ok: false, reason: 'no claims' };
+  if (!clientId || clientId === 'PENDING') return { ok: false, reason: 'gateway not configured' };
   if (c.iss !== 'https://accounts.google.com' && c.iss !== 'accounts.google.com') return { ok: false, reason: 'wrong issuer' };
   const aud = Array.isArray(c.aud) ? c.aud : [c.aud];
   if (!aud.includes(clientId)) return { ok: false, reason: 'wrong audience' };
