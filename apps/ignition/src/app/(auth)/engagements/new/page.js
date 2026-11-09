@@ -140,9 +140,9 @@ export default function NewEngagementPage() {
           <DealField label="Payment amount (₹)" off={!isPaid}>
             <input type="number" min="0" value={form.payment_amount} onChange={e => setField('payment_amount', e.target.value)} placeholder="e.g. 5000" style={ctlMono} />
           </DealField>
-          <DealField label="Affiliate % agreed" off={!isAffiliate}>
+          <DealField label="Affiliate % agreed *" off={!isAffiliate}>
             <input type="number" min="0" max="100" step="0.1" value={form.affiliate_pct}
-              onChange={e => setField('affiliate_pct', e.target.value)} placeholder="e.g. 10" style={ctlMono} />
+              onChange={e => setField('affiliate_pct', e.target.value)} placeholder="e.g. 10" required={isAffiliate} style={ctlMono} />
           </DealField>
           <DealField label="Expected post date">
             <input type="date" value={form.expected_post_date} onChange={e => setField('expected_post_date', e.target.value)} style={ctl} />

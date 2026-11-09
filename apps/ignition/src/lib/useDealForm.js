@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { ignitionopsGet, ignitionopsPost } from './ignitionopsFetch.js';
 import { emptyLine, linesToPayload, linesAreValid } from '../components/ProductLinesEditor.js';
-import { initialDealForm, dealPayload, isPaidDeal, isAffiliateDeal } from './dealPayload.js';
+import { initialDealForm, dealPayload, isPaidDeal, isAffiliateDeal, affiliatePctProblem } from './dealPayload.js';
 
 // New-deal form state for BOTH surfaces — the /engagements/new page and NewDealModal (P0.3, S412).
 // State, campaign list and the create call live here; each surface keeps only its
@@ -38,6 +38,9 @@ export function useDealForm({ session, active = true, presetInfluencer = null, i
   function problem() {
     if (!selected) return 'Pick an influencer first';
     if (!form.poc_user_id) return 'Pick an owner for this deal';
+    // Reann #3: the worker refuses (422) an affiliate deal without its %; say so before the call.
+    const pct = affiliatePctProblem(form.deal_type, form.affiliate_pct);
+    if (pct) return pct;
     // Every product line must resolve to a real catalogue product (2026-09-04). The button is
     // disabled too — this is the guard that holds if a blur lands in the same tick as the click.
     if (!productsValid || !linesAreValid(lines)) return 'Pick a product from the list for every line';

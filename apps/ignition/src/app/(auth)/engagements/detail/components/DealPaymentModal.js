@@ -22,12 +22,19 @@ export function DealPaymentModal({ mode, kind, request, engagement, dp, session,
   const invoices = dp.invoices || [];
   // Full and balance default to what is left of the fee; an advance is a judgement, so it starts blank.
   const [amount, setAmount] = useState(attach ? String(request.amount) : kind === 'advance' ? '' : String(dp.remaining || ''));
-  const [pick, setPick] = useState(attach ? (request.invoice_id || invoices[0]?.id || UPLOAD) : (invoices[0]?.id || ''));
+  // A commission request with no invoice starts on Upload: invoices[0] is the fee invoice or an earlier
+  // month's commission invoice, never this month's (Reann #3).
+  const [pick, setPick] = useState(attach
+    ? (request.invoice_id || (request.kind === 'commission' ? UPLOAD : invoices[0]?.id || UPLOAD))
+    : (invoices[0]?.id || ''));
   const [file, setFile] = useState(null);
   const [invNo, setInvNo] = useState(attach ? (request.invoice_no || '') : '');
   const [invDate, setInvDate] = useState(attach ? (request.invoice_date || istToday()) : istToday());
   // Design 6: an advance is raised against the full-fee invoice, so the total defaults to the fee.
-  const [invTotal, setInvTotal] = useState(attach ? String(request.invoice_total ?? dp.agreed ?? '') : String(dp.agreed || ''));
+  // A commission request (Reann #3) is invoiced on its own, for its verified amount — not the fee.
+  const [invTotal, setInvTotal] = useState(attach
+    ? String(request.invoice_total ?? (request.kind === 'commission' ? request.amount : dp.agreed) ?? '')
+    : String(dp.agreed || ''));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 

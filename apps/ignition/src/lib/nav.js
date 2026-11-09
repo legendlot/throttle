@@ -1,7 +1,7 @@
 import {
   Inbox, Users, Flame, Star, ListChecks, BarChart3, Plus,
   Settings, Layers, FileSpreadsheet, CircleUser, CalendarDays, Wallet, Target,
-  BookOpen, Gauge, Megaphone, FileText,
+  BookOpen, Gauge, Megaphone, FileText, Percent,
 } from 'lucide-react';
 import { isPartnerPerms, partnerRouteAllowed } from './partner.js';
 
@@ -35,6 +35,8 @@ export const NAV_GROUPS = [
     id: 'analyze', label: 'ANALYZE', icon: BarChart3,
     items: [
       { id: 'reports', label: 'Reports', route: '/reports', icon: BarChart3, requires: 'ignition_reports_view' },
+      // Reann #3: monthly affiliate commission — D2C verifies it. An array = any one of these.
+      { id: 'commission', label: 'Commission', route: '/commission', icon: Percent, requires: ['ignition_commission_verify', 'ignition_reports_view'] },
       { id: 'targets', label: 'Targets', route: '/targets', icon: Target },
     ],
   },
@@ -63,7 +65,8 @@ export function filterNavByPerms(groups, perms) {
   return groups
     .map(g => g.flat ? g : ({
       ...g,
-      items: (g.items || []).filter(it => !it.requires || perms?.[it.requires]),
+      items: (g.items || []).filter(it => !it.requires
+        || (Array.isArray(it.requires) ? it.requires.some(k => perms?.[k]) : perms?.[it.requires])),
     }))
     .filter(g => g.flat || (g.items && g.items.length > 0));
 }

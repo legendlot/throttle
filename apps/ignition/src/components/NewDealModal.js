@@ -83,9 +83,9 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
               <option value="n_a">N/A</option>
             </select>
           </DealField>
-          <DealField label="Affiliate % agreed" off={!isAffiliate}>
+          <DealField label="Affiliate % agreed *" off={!isAffiliate}>
             <input type="number" min="0" max="100" step="0.1" value={form.affiliate_pct}
-              onChange={e => setField('affiliate_pct', e.target.value)} placeholder="e.g. 10" style={ctlMono} />
+              onChange={e => setField('affiliate_pct', e.target.value)} placeholder="e.g. 10" required={isAffiliate} style={ctlMono} />
           </DealField>
           <DealField label="Owner *">
             <PocSelect

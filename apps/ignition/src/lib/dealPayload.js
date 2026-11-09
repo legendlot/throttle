@@ -9,6 +9,24 @@ export const AFFILIATE_DEALS = ['affiliate', 'paid_plus_affiliate'];
 export const isPaidDeal = (dealType) => PAID_DEALS.includes(dealType);
 export const isAffiliateDeal = (dealType) => AFFILIATE_DEALS.includes(dealType);
 
+// Reann #3: an affiliate-type deal must carry its commission % (0 < pct ≤ 100) — the monthly
+// commission is worked out from it. Same rule and sentence as the worker's affiliatePctRefusal (422).
+export const AFFILIATE_PCT_REQUIRED = 'An affiliate deal needs its commission % (more than 0, at most 100).';
+const pctOk = v => v != null && v !== '' && Number.isFinite(Number(v)) && Number(v) > 0 && Number(v) <= 100;
+export function affiliatePctProblem(dealType, pct) {
+  return isAffiliateDeal(dealType) && !pctOk(pct) ? AFFILIATE_PCT_REQUIRED : null;
+}
+// On an edit, as the worker's affiliatePctPatchRefusal: only when THIS edit makes it wrong (the deal
+// type moves to affiliate, or the % changes). The one legacy affiliate deal with no % (IGN-2026-00903)
+// can still save an unrelated change.
+export function affiliatePctEditProblem(cur, next) {
+  const norm = v => (v == null || v === '' ? null : Number(v));
+  const typeChanged = next.deal_type !== cur.deal_type;
+  const pctChanged = norm(next.affiliate_pct) !== norm(cur.affiliate_pct);
+  if (!typeChanged && !pctChanged) return null;
+  return affiliatePctProblem(next.deal_type, next.affiliate_pct);
+}
+
 export function initialDealForm(extra = {}) {
   return {
     engagement_type: 'video_tracking', deal_type: 'paid',

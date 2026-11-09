@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../../lib/ignitionopsFetch.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS, PAYMENT_TERMS, PAYMENT_TERMS_LABELS } from '../../../../../lib/dealTypes.js';
+import { affiliatePctEditProblem, isAffiliateDeal } from '../../../../../lib/dealPayload.js';
 import { Card, LockedNote, KV } from './shared.js';
 import { CostEdit } from './CostsCard.js';
 
@@ -65,6 +66,9 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
     setEditing(true);
   }
   async function save() {
+    // Reann #3: an affiliate deal needs its % — refused here as the worker refuses it (422).
+    const pctProblem = affiliatePctEditProblem(e, f);
+    if (pctProblem) { toast(pctProblem, 'error'); return; }
     setBusy(true);
     try {
       const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
@@ -124,7 +128,7 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
           <SelectEdit label="Payment terms" value={f.payment_terms} onChange={v => setF(x => ({ ...x, payment_terms: v }))}
             options={[{ value: '', label: '— Not set —' }, ...PAYMENT_TERMS.map(v => ({ value: v, label: PAYMENT_TERMS_LABELS[v] }))]} />
           <CostEdit label="Payment ₹" value={f.payment_amount} onChange={v => setF(x => ({ ...x, payment_amount: v }))} />
-          <CostEdit label="Affiliate %" value={f.affiliate_pct} onChange={v => setF(x => ({ ...x, affiliate_pct: v }))} />
+          <CostEdit label={isAffiliateDeal(f.deal_type) ? 'Affiliate % *' : 'Affiliate %'} value={f.affiliate_pct} onChange={v => setF(x => ({ ...x, affiliate_pct: v }))} />
           <CostEdit label="Commission ₹" value={f.commission_amount} onChange={v => setF(x => ({ ...x, commission_amount: v }))} />
           <SelectEdit label="Campaign" value={f.campaign_id} onChange={v => setF(x => ({ ...x, campaign_id: v }))}
             options={[{ value: '', label: '— No campaign —' }, ...campaigns.map(c => ({ value: c.id, label: c.name }))]} />

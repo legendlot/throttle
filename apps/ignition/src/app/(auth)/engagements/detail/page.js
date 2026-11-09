@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
@@ -20,6 +20,8 @@ import { PerformanceCard } from './components/PerformanceCard.js';
 import { CodesCard } from './components/CodesCard.js';
 import { ComplianceCard } from './components/ComplianceCard.js';
 import { PaymentsCard } from './components/PaymentsCard.js';
+import { CommissionCard } from './components/CommissionCard.js';
+import { isAffiliateDeal } from '../../../../lib/dealPayload.js';
 import { InfluencerCard } from './components/InfluencerCard.js';
 import { LogisticsCard } from './components/LogisticsCard.js';
 import { NotesCard } from './components/NotesCard.js';
@@ -56,6 +58,13 @@ function EngagementDetailPageBody() {
   const partner = !!perms?.ignition_external;
   const seeMoney = !partner || !!perms?.partner_money;
   const seeContacts = !partner || !!perms?.partner_contacts;
+  // Reann #3 S3: the deal's commission months — read only for affiliate deal types, shared by the
+  // Commission card and the Payments card (its "Commission · <month>" label).
+  const [commission, setCommission] = useState(null);
+  const commissionSeq = useRef(0);
+  // Set by the Payments card from getDealPayments: a deal retyped away from affiliate keeps its
+  // commission history on the page.
+  const [hasCommissionRequest, setHasCommissionRequest] = useState(false);
 
   function reload() {
     if (!session || (!id && !eno)) return;
@@ -63,6 +72,19 @@ function EngagementDetailPageBody() {
     ignitionopsGet('getEngagement', params, session).then(setData).catch(e => setErr(e.message));
   }
   useEffect(reload, [id, eno, session]);
+  const engId = data?.engagement?.id;
+  const showCommission = !partner && (isAffiliateDeal(data?.engagement?.deal_type) || hasCommissionRequest
+    || (data?.payments || []).some(p => p.kind === 'commission'));
+  function loadCommission() {
+    const n = ++commissionSeq.current;   // bumped on every path, so an older in-flight read never lands
+    if (!session || !engId || !showCommission) { setCommission(null); return; }
+    ignitionopsGet('getCommissionStatements', { engagement_id: engId }, session)
+      .then(d => { if (n === commissionSeq.current) setCommission({ statements: d?.statements || [] }); })
+      .catch(e => { if (n === commissionSeq.current) setCommission({ error: e.message }); });
+  }
+  // `data` is a fresh object on every reload, so a payment change anywhere on the page re-reads it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(loadCommission, [data, session, showCommission]);
   // Catalogs drive the metric-gap reason picklist. Served by the worker so the reason vocabulary
   // has one definition; a failure here must not blank the page, so it degrades to no picker.
   useEffect(() => {
@@ -209,7 +231,11 @@ function EngagementDetailPageBody() {
           canEdit={canManage}
           session={session}
           onSaved={reload}
+          commissionMonths={commissionMonthMap(commission)}
+          onCommissionRequests={setHasCommissionRequest}
         />}
+
+        {showCommission && <CommissionCard commission={commission} rate={e.affiliate_pct} onRetry={loadCommission} />}
 
         {!partner && <OwnerCard e={e} canEdit={canManage} session={session} onSaved={reload} />}
 
@@ -281,4 +307,11 @@ function EngagementDetailPageBody() {
       )}
     </div>
   );
+}
+
+// statement id → month, for the Payments card's commission request labels.
+function commissionMonthMap(commission) {
+  const m = {};
+  for (const s of commission?.statements || []) m[s.id] = s.month;
+  return m;
 }

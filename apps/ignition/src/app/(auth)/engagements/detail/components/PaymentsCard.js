@@ -4,12 +4,15 @@ import { useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../../lib/ignitionopsFetch.js';
 import { NewPaymentModal } from '../../../../../components/NewPaymentModal.js';
 import { paymentKindLabel } from '../../../../../lib/paymentKinds.js';
+import { commissionRequestLabel } from '../../../../../lib/commission.js';
 import { Card, KV, miniBtn } from './shared.js';
 import { DealPaymentModal } from './DealPaymentModal.js';
 
 // Snorkel payment requests on this deal (Reann #2 S4). The worker sends no bank number or PAN, and
 // every refusal is a sentence written for the team, so errors are shown exactly as they come back.
-const KIND_WORDS = { advance: 'Advance', balance: 'Balance', full: 'Full payment' };
+// 'commission' (Reann #3) is raised by D2C's verify on the Commission page, never from this card; it
+// sits outside the fee, so it never blocks a fee raise and is in none of the Agreed/Raised/Paid figures.
+const KIND_WORDS = { advance: 'Advance', balance: 'Balance', full: 'Full payment', commission: 'Commission' };
 const STATE = {
   waiting_for_invoice: ['Waiting for invoice', 'warning'],
   sending: ['Sending', 'info'],
@@ -42,7 +45,7 @@ function StateBadge({ state }) {
 }
 
 /** Payments for THIS deal: Snorkel requests, then the hand log as history (Reann #7, 2026-08-27). */
-export function PaymentsCard({ payments, paidTotal, agreed, engagement, influencer, canEdit, session, onSaved }) {
+export function PaymentsCard({ payments, paidTotal, agreed, engagement, influencer, canEdit, session, onSaved, commissionMonths = {}, onCommissionRequests }) {
   const { showToast: toast } = useToast();
   const [open, setOpen] = useState(false);
   const [dp, setDp] = useState(null);
@@ -57,7 +60,11 @@ export function PaymentsCard({ payments, paidTotal, agreed, engagement, influenc
     if (!session) return;
     const n = ++seq.current;
     ignitionopsGet('getDealPayments', { engagement_id: engagement.id }, session)
-      .then(d => { if (n === seq.current) { setDp(d); setDpErr(''); } })
+      .then(d => {
+        if (n !== seq.current) return;
+        setDp(d); setDpErr('');
+        onCommissionRequests?.((d?.requests || []).some(r => r.kind === 'commission'));
+      })
       .catch(e => { if (n === seq.current) { setDp(null); setDpErr(e.message); } });
   }
   // `payments` is a fresh array on every page reload, so a save anywhere on the page refreshes this too.
@@ -80,8 +87,9 @@ export function PaymentsCard({ payments, paidTotal, agreed, engagement, influenc
       if (r?.url) window.open(r.url, '_blank', 'noopener');
     } catch (e) { toast(e.message, 'error'); }
   }
+  const kindWords = r => (r.kind === 'commission' ? commissionRequestLabel(commissionMonths[r.statement_id]) : KIND_WORDS[r.kind] || r.kind);
   async function act(action, r) {
-    if (action === 'cancelDealPayment' && !window.confirm(`Cancel this ${KIND_WORDS[r.kind] || r.kind} request for ${inr(r.amount)}?`)) return;
+    if (action === 'cancelDealPayment' && !window.confirm(`Cancel this ${kindWords(r)} request for ${inr(r.amount)}?`)) return;
     setBusyId(r.id);
     try {
       const res = await ignitionopsPost(action, { request_id: r.id }, session);
@@ -105,6 +113,9 @@ export function PaymentsCard({ payments, paidTotal, agreed, engagement, influenc
   const requests = dp?.requests || [];
   const live = requests.filter(r => !DEAD.includes(r.state));
   const hasLive = k => live.some(r => r.kind === k);
+  // Only a live FEE request (advance/balance/full) holds back "Raise full" — a commission one does not.
+  const liveFees = live.filter(r => r.kind !== 'commission');
+  const commissionPaid = Number(dp?.commission_paid_total || 0);
   const paid = Number(dp ? dp.paid_total : paidTotal || 0);
   const owed = Number(dp ? dp.agreed : agreed || 0);
   const cleared = owed > 0 && paid >= owed;
@@ -146,7 +157,7 @@ export function PaymentsCard({ payments, paidTotal, agreed, engagement, influenc
           <div key={r.id} style={{ padding: '8px 0', borderTop: '1px solid var(--row-divider)', fontSize: 14 }}>
             <div style={rowLine}>
               <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
-                <span style={{ color: 'var(--text-1)' }}>{KIND_WORDS[r.kind] || r.kind}</span>
+                <span style={{ color: 'var(--text-1)' }}>{kindWords(r)}</span>
                 <StateBadge state={r.state} />
                 {r.snorkel_request_no && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-3)' }}>{r.snorkel_request_no}</span>}
               </span>
@@ -183,7 +194,7 @@ export function PaymentsCard({ payments, paidTotal, agreed, engagement, influenc
       {canRaise && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '8px 0', borderTop: requests.length ? '1px solid var(--row-divider)' : 'none' }}>
           {!hasLive('advance') && !hasLive('full') && <button type="button" onClick={() => setModal({ mode: 'raise', kind: 'advance' })} className="ig-ghost-btn" style={miniBtn}>Raise advance</button>}
-          {live.length === 0 && <button type="button" onClick={() => setModal({ mode: 'raise', kind: 'full' })} className="ig-ghost-btn" style={miniBtn}>Raise full</button>}
+          {liveFees.length === 0 && <button type="button" onClick={() => setModal({ mode: 'raise', kind: 'full' })} className="ig-ghost-btn" style={miniBtn}>Raise full</button>}
           {engagement.stage === 'live' && !hasLive('balance') && !hasLive('full') && <button type="button" onClick={() => setModal({ mode: 'raise', kind: 'balance' })} className="ig-ghost-btn" style={miniBtn}>Raise balance</button>}
         </div>
       )}
@@ -221,6 +232,8 @@ export function PaymentsCard({ payments, paidTotal, agreed, engagement, influenc
           ₹{paid.toLocaleString('en-IN')} of ₹{owed.toLocaleString('en-IN')}{cleared ? ' ✓ cleared' : ''}
         </span>
       } />
+      {/* Commission payouts, apart from the fee above (the worker leaves them out of every fee sum). */}
+      {commissionPaid > 0 && <KV label="Commission paid" value={<span style={{ fontFamily: 'var(--font-mono)' }}>{inr(commissionPaid)}</span>} />}
 
       {canHandLog && <NewPaymentModal
         open={open}
