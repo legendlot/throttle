@@ -1,6 +1,6 @@
 # Ignition → Snorkel payment requests (Reann #2) — plan
 
-> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **APPROVED 2026-11-09 (Afshaan took every recommendation, §Decisions). S1 SHIPPED 2026-11-09 (migration 0005 + 0005b). S2 SHIPPED + DEPLOYED 2026-11-09 (throttle `0458c058`, snorkelops `afc8ee21`). S3 SHIPPED + DEPLOYED 2026-11-09 (throttle `4c97f899`, migration 0006, ignitionops `63cd1403`). Next: S4 (deal-page Payments card).**
+> S443, 2026-11-09. Source: `#bugs` `1793690997.941679` item 2. Status: **APPROVED 2026-11-09 (Afshaan took every recommendation, §Decisions). S1 SHIPPED 2026-11-09 (migration 0005 + 0005b). S2 SHIPPED + DEPLOYED 2026-11-09 (throttle `0458c058`, snorkelops `afc8ee21`). S3 SHIPPED + DEPLOYED 2026-11-09 (throttle `4c97f899`, migration 0006, ignitionops `63cd1403`). S4 SHIPPED + DEPLOYED 2026-11-09 (throttle `f27053e6`, ignitionops `aff1eb95`, app `68470d17`). Next: S5 (owner Slack DM), S6 (manual + ₹1 proof).**
 > Builds on #1 (`2026-11-05-ignition-deal-contract-send.md`), which collects bank details + the invoice.
 
 ## Goal
@@ -76,6 +76,12 @@ or hold shows on the deal and flags the owner. No bank details are typed by hand
 - Push is a doorbell: `/internal/snorkel-status` re-reads Snorkel and applies that. Reconcile `*/15` covers open states, `send_failed` (adopts by source_ref) and paid rows ≤ 14 days (UTR edits). Paid → `ignition.payments` row, amount GROSS (net + TDS), `utr`, `tds_amount`, `snorkel_request_id`; `deletePayment` refuses those; `deleteEngagement` refuses any deal with requests.
 - `notifyOwnerOfPaymentProblem(row)` is the S5 hook (no-op today), called on a move into held/rejected.
 - S4 must also hide "Add payment" once Snorkel requests are live (Decision 1).
+
+## S4 as built
+
+- Deal page Payments card (`PaymentsCard.js` + `DealPaymentModal.js`): Agreed · Raised · Paid, one row per request with its state, hand-log rows as "Paid by hand". Raise advance / full; balance only at Live; none on dead stages or ₹0 fee.
+- Staff invoice upload: `createDealInvoiceUploadUrl` → browser upload → `uploadDealInvoice` (same helpers, bucket, cap and mime rules as the creator's contract page).
+- **Decision 1 as applied (lane call, S4 review):** "+ Add" (hand log) hides PER DEAL only when the wording is published AND that creator's bank details are on file (`bank_on_file`). On 2026-11-09 that hid it on 0–1 deals; 129 fee-owing deals had no bank details. `/payments` "Record payment" was left as it is.
 
 ## Open questions (as asked)
 
