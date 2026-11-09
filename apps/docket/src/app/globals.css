@@ -409,6 +409,7 @@ button { cursor: pointer; background: none; border: none; }
 .tl-hbtn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .tl-hlbl { overflow: hidden; text-overflow: ellipsis; }
 .tl-resize { position: absolute; top: 6px; bottom: 6px; right: -3px; width: 7px; cursor: col-resize; z-index: 1; }
+.tl-hcell:last-child .tl-resize { right: 0; } /* the last handle would overhang the list by 3px and add a sideways scroll */
 .tl-resize::after { content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 1px; background: transparent; transition: background var(--fast); }
 .tl-hcell:hover .tl-resize::after, body.tl-resizing .tl-resize::after { background: var(--border-strong); }
 body.tl-resizing { cursor: col-resize; user-select: none; }
