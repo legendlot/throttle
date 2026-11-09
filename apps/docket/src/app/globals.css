@@ -1,13 +1,14 @@
 /* ============================================================
    DOCKET — redesign (Session 113)
    Visual DNA: Legend of Toys dark. Tomorrow (display/labels),
-   Rubik (readable titles/body), JetBrains Mono (data/ids).
+   system UI stack (body — P0 of the ClickUp redesign, D1),
+   JetBrains Mono (data/ids).
    Tokens + component classes ported from the design handoff
    (prototype/styles.css is authoritative). Legacy --* names are
    kept (aliased) so untouched surfaces (tasks/detail, tasks/new,
    TaskForm, shared Manual) keep rendering.
    ============================================================ */
-@import url('https://fonts.googleapis.com/css2?family=Tomorrow:wght@400;500;600;700;900&family=Rubik:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Tomorrow:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -15,20 +16,28 @@
   /* ---- surfaces (layered, calmer than the old flat charcoal) ---- */
   --bg:           #181818;
   --bg-sunken:    #131313;
-  --surface:      #1f1f1f;
+  --surface:      #1e1e1e;
   --surface-2:    #262626;
   --surface-3:    #2f2f2f;
   --surface-hi:   #383838;
-  --border:       #2c2c2c;
-  --border-2:     #383838;
+  --border:       #2a2a2a;
+  --border-2:     #3a3a3a;
   --border-strong:#4a4a4a;
+  --border-hover: #4a4a4a;
+  --border-input: #5a5a5a;
+
+  /* ---- layer / state (ClickUp redesign P0) ---- */
+  --hover:    rgba(255,255,255,0.05);
+  --pressed:  rgba(255,255,255,0.09);
+  --selected: #262626;
+  --overlay:  rgba(0,0,0,0.56);
 
   /* ---- text ---- */
-  --text-1:  #f4f4f3;
-  --text-2:  #aeaeac;
-  --text-3:  #7c7c7a;
-  --text-4:  #595957;
-  --text-placeholder: #6f6f6d;
+  --text-1:  #eeeeee;
+  --text-2:  #b4b4b4;
+  --text-3:  #7b7b7b;
+  --text-4:  #5f5f5f;
+  --text-placeholder: #6e6e6e;
 
   /* ---- brand ---- */
   --accent:       #F2CD1A;
@@ -36,6 +45,8 @@
   --accent-ink:   #1a1a1a;
   --accent-soft:  rgba(242,205,26,0.12);
   --accent-line:  rgba(242,205,26,0.30);
+  --accent-hover: #f5d84a;
+  --focus-ring:   0 0 0 2px rgba(242,205,26,0.45);
   --blue-bright:  #5b78ff;
   --blue-deep:    #213CE2;
 
@@ -53,17 +64,22 @@
   --p2: #b3b3b1;
   --p3: #8d8d8b;
 
-  /* ---- type — three roles ---- */
+  /* ---- type — three roles (body/UI on the system stack, D1) ---- */
+  --f-ui:      -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --f-brand:   'Tomorrow', system-ui, sans-serif;
   --f-display: 'Tomorrow', system-ui, sans-serif;
-  --f-body:    'Rubik', system-ui, sans-serif;
+  --f-body:    var(--f-ui);
   --f-mono:    'JetBrains Mono', ui-monospace, Menlo, monospace;
 
   /* ---- radii ---- */
-  --r-sm: 5px;
+  --r-sm: 6px;
   --r-md: 8px;
-  --r-lg: 12px;
+  --r-lg: 10px;
   --r-xl: 16px;
   --r-full: 999px;
+  --r-ctl:  6px;
+  --r-pop:  8px;
+  --r-card: 10px;
 
   /* ---- density (driven by [data-density]) ---- */
   --row-h:     52px;
@@ -71,13 +87,33 @@
   --row-pad:   14px;
   --gap:       20px;
 
+  /* ---- row / chrome sizes for the redesign (unused until P1/P3, D4) ---- */
+  --row-list:         36px;
+  --row-list-compact: 32px;
+  --row-list-roomy:   44px;
+  --group-h:     36px;
+  --sidebar-row: 28px;
+  --topbar-h:    40px;
+  --rail-w:      64px;
+  --sidebar-w:   240px;
+
   /* ---- motion ---- */
   --fast: 110ms;
   --base: 180ms;
   --slow: 280ms;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 
-  --shadow-pop:    0 14px 40px -8px rgba(0,0,0,0.6), 0 0 0 1px var(--border-2);
+  /* ---- elevation: ClickUp's 1px white ring + soft drop (drops a touch
+     darker than ClickUp's because our base is lighter, D6) ---- */
+  --ring:        0 0 1px 0 rgba(255,255,255,0.33);
+  --ring-strong: 0 0 1px 0 rgba(255,255,255,0.45);
+  --elev-1: var(--ring), 0 1px 2px rgba(0,0,0,.25);
+  --elev-2: var(--ring), 0 1px 3px rgba(0,0,0,.3), 0 1px 2px -1px rgba(0,0,0,.3);
+  --elev-3: var(--ring), 0 4px 6px -1px rgba(0,0,0,.35), 0 2px 4px -2px rgba(0,0,0,.35);
+  --elev-4: var(--ring), 0 10px 15px -3px rgba(0,0,0,.4), 0 4px 6px -4px rgba(0,0,0,.4);
+  --elev-5: var(--ring), 0 20px 25px -5px rgba(0,0,0,.45), 0 8px 10px -6px rgba(0,0,0,.45);
+
+  --shadow-pop:    var(--elev-4);
   --shadow-drawer: -24px 0 60px -12px rgba(0,0,0,0.65);
 
   /* ============================================================
@@ -170,9 +206,9 @@ button { cursor: pointer; background: none; border: none; }
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #333; border-radius: 6px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 6px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: #444; }
-* { scrollbar-width: thin; scrollbar-color: #333 transparent; }
+* { scrollbar-width: thin; scrollbar-color: #3a3a3a transparent; }
 
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1px; border-radius: 3px; }
@@ -474,7 +510,7 @@ button { cursor: pointer; background: none; border: none; }
 /* ============================================================
    POPOVERS / MENUS
    ============================================================ */
-.pop { position: absolute; z-index: 60; min-width: 180px; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-md); padding: 5px; box-shadow: var(--shadow-pop); animation: pop-in 130ms var(--ease); }
+.pop { position: absolute; z-index: 60; min-width: 180px; background: var(--surface-2); border: 1px solid transparent; border-radius: var(--r-pop); padding: 5px; box-shadow: var(--elev-4); animation: pop-in 130ms var(--ease); }
 @keyframes pop-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
 .menu-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-sm); font-size: 13px; color: var(--text-2); width: 100%; text-align: left; transition: background var(--fast), color var(--fast); }
 .menu-item:hover { background: var(--surface-3); color: var(--text-1); }
@@ -1042,3 +1078,84 @@ textarea.tk-input { resize: vertical; line-height: 1.55; }
    replaced an inline `1fr 1fr`, which was the only thing making it stack. */
 .tk-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
 @media (max-width: 767px) { .tk-form-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* === UI kit (P0) === ClickUp-style primitives — components/ui/*. Prefixed
+   .ui- so nothing here touches an existing surface until a phase adopts it. */
+.ui-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; white-space: nowrap; font-family: var(--f-ui); font-weight: 500; line-height: 1; border: 1px solid transparent; border-radius: var(--r-ctl); transition: background var(--fast), border-color var(--fast), color var(--fast); user-select: none; }
+.ui-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.ui-btn:disabled { opacity: .45; cursor: not-allowed; }
+.ui-btn-sm { height: 24px; padding: 0 8px;  font-size: 12px; }
+.ui-btn-md { height: 28px; padding: 0 10px; font-size: 13px; }
+.ui-btn-lg { height: 32px; padding: 0 12px; font-size: 13px; }
+.ui-btn-icon-only.ui-btn-sm, .ui-iconbtn.ui-btn-sm { width: 24px; padding: 0; }
+.ui-btn-icon-only.ui-btn-md, .ui-iconbtn.ui-btn-md { width: 28px; padding: 0; }
+.ui-btn-icon-only.ui-btn-lg, .ui-iconbtn.ui-btn-lg { width: 32px; padding: 0; }
+.ui-btn-primary { background: var(--accent); color: var(--accent-ink); }
+.ui-btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.ui-btn-primary:active:not(:disabled) { background: var(--accent-deep); }
+.ui-btn-neutral { background: var(--surface-2); border-color: var(--border-2); color: var(--text-1); }
+.ui-btn-neutral:hover:not(:disabled) { background: var(--surface-3); border-color: var(--border-hover); }
+.ui-btn-neutral:active:not(:disabled) { background: var(--surface-hi); }
+.ui-btn-ghost { background: transparent; color: var(--text-2); }
+.ui-btn-ghost:hover:not(:disabled) { background: var(--hover); color: var(--text-1); }
+.ui-btn-ghost:active:not(:disabled), .ui-btn-ghost.is-active { background: var(--pressed); color: var(--text-1); }
+.ui-btn-danger { background: var(--st-abandon-bg); border-color: rgba(255,107,107,0.30); color: var(--overdue); }
+.ui-btn-danger:hover:not(:disabled) { background: rgba(255,107,107,0.22); border-color: rgba(255,107,107,0.45); }
+.ui-spin { animation: ui-spin 0.8s linear infinite; }
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+
+.ui-split { display: inline-flex; align-items: stretch; }
+.ui-split .ui-split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ui-split .ui-split-menu { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: 1px; width: auto; padding: 0 6px; }
+.ui-split .ui-btn-neutral.ui-split-menu { margin-left: -1px; }
+
+.ui-pill { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 2px 6px 2px 4px; border-radius: 6px; font-size: 12px; font-weight: 500; line-height: 1; white-space: nowrap; max-width: 100%; }
+.ui-pill.no-lead { padding-left: 6px; }
+.ui-pill-neutral { background: rgba(255,255,255,.07); color: var(--text-2); }
+.ui-pill-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+.ui-kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 4px; background: rgba(255,255,255,.12); color: var(--text-2); font-family: var(--f-mono); font-size: 11px; line-height: 1; }
+
+.ui-tip-host { display: inline-flex; }
+.ui-tip { position: fixed; z-index: 200; transform: translate(-50%, -100%); display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; max-width: 260px; background: var(--surface-3); color: var(--text-1); border-radius: var(--r-ctl); box-shadow: var(--elev-3); font-family: var(--f-ui); font-size: 12px; line-height: 1.35; pointer-events: none; animation: ui-fade 100ms var(--ease); }
+.ui-tip.below { transform: translate(-50%, 0); }
+.ui-tip-keys { display: inline-flex; gap: 2px; }
+@keyframes ui-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.ui-pop { position: fixed; z-index: 120; background: var(--surface); border-radius: var(--r-pop); box-shadow: var(--elev-4); padding: 4px; animation: pop-in 130ms var(--ease); }
+.ui-menu { min-width: 160px; }
+.ui-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px; border-radius: 6px; font-family: var(--f-ui); font-size: 13px; color: var(--text-1); text-align: left; }
+.ui-menu-item:hover:not(:disabled), .ui-menu-item:focus-visible { background: var(--hover); outline: none; box-shadow: none; }
+.ui-menu-item.is-selected { background: var(--selected); }
+.ui-menu-item:disabled { opacity: .45; cursor: not-allowed; }
+.ui-menu-item.is-danger { color: var(--overdue); }
+.ui-menu-ic { display: inline-flex; color: var(--text-3); flex-shrink: 0; }
+.ui-menu-item.is-danger .ui-menu-ic { color: inherit; }
+.ui-menu-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-menu-kbd { margin-left: auto; }
+.ui-menu-sep { height: 1px; background: var(--border); margin: 4px -4px; }
+.ui-menu-label { padding: 6px 8px 4px; font-size: 11px; font-weight: 600; color: var(--text-3); }
+
+.ui-avstack { display: inline-flex; align-items: center; }
+.ui-avstack-item { position: relative; display: inline-flex; }
+.ui-avstack-more { position: relative; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-hi); color: var(--text-2); font-weight: 600; box-shadow: 0 0 0 2px var(--bg); }
+
+.ui-ghost { display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 100%; min-height: 24px; color: var(--text-4); opacity: .6; border-radius: var(--r-ctl); transition: opacity var(--fast), color var(--fast), background var(--fast); }
+.row:hover .ui-ghost, .ui-ghost-host:hover .ui-ghost, .ui-ghost:hover, .ui-ghost:focus-visible { opacity: 1; }
+.ui-ghost:hover { color: var(--text-2); background: var(--hover); }
+.ui-ghost:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.ui-tabs { display: flex; align-items: stretch; gap: 4px; height: 32px; }
+.ui-tab { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; font-family: var(--f-ui); font-size: 12px; font-weight: 600; color: var(--text-3); transition: color var(--fast); }
+.ui-tab:hover:not(:disabled) { color: var(--text-1); }
+.ui-tab.is-active { color: var(--text-1); }
+.ui-tab.is-active::after { content: ''; position: absolute; left: 4px; right: 4px; bottom: 0; height: 2px; border-radius: 2px 2px 0 0; background: var(--accent); }
+.ui-tab:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--r-ctl); }
+.ui-tab:disabled { opacity: .45; cursor: not-allowed; }
+.ui-tab-count { font-weight: 500; color: var(--text-4); }
+
+.ui-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 32px 16px; }
+.ui-empty-ic { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; margin-bottom: 4px; border-radius: var(--r-card); background: var(--surface-2); color: var(--text-3); }
+.ui-empty-title { font-size: 14px; font-weight: 600; color: var(--text-1); }
+.ui-empty-body { max-width: 360px; font-size: 13px; line-height: 1.45; color: var(--text-2); }
+.ui-empty-action { margin-top: 8px; }
