@@ -27,8 +27,9 @@ ALLOWED_CLIENT_DOMAINS = "claude.ai,claude.com"
 ALLOWED_ORIGINS = "https://claude.ai,https://claude.com"
 ADMIN_SLACK_ID = "U090FJP8NTX"   # Afshaan
 DENIED_ALERT_AT = "20"
-# Set by Afshaan once the Internal Google OAuth client exists (Google Cloud console):
-GOOGLE_CLIENT_ID = "PENDING"
+# Internal Google OAuth client "lotmcp gateway", GCP project lot-mcp-gateway (legendoftoys.com org),
+# redirect https://lotmcp.afshaan.workers.dev/callback. Created 2026-11-09. Not a secret.
+GOOGLE_CLIENT_ID = "150982089263-p64j4hb4d0bea4kqg7gs4lm72t26tpql.apps.googleusercontent.com"
 
 # Secrets (wrangler secret put), never in this file:
 #   SUPABASE_SERVICE_KEY  — a DEDICATED Supabase secret key named mcp-gateway (revocable on its own)
