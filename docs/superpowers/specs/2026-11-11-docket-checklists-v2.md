@@ -177,10 +177,10 @@ used**. Better screens won't fix that on their own. What would:
 4. **The 22 dead recurring tasks.** Ask each owner to keep or stop theirs (or stop them all, as with the
    stale-task cleanup) **before** the pilot, so the register doesn't open on a wall of red.
    **Breakdown (2026-11-11):**
-   - **3 tasks owned by people who have left** (Ankit DKT-411, Anusha DKT-241, Jyothi DKT-398): ✅ **stopped 2026-11-11** (abandoned, reason logged; 19 live left).
-   - **5 of Tanya's weekly sales reviews** (DKT-332..336): the one real success. 64, 64, 37, 36 and 11 ticks
-     from June to 9 Oct, then nothing. Ask her whether to keep them; they are evidence that a weekly
-     review-shaped checklist works.
+   - **3 tasks owned by people who have left** (Ankit DKT-411, Anusha DKT-241, Jyothi DKT-398): ✅ **stopped 2026-11-11** (abandoned, reason logged).
+   - **5 of Tanya's weekly sales reviews** (DKT-332..336): the one real success (64/64/37/36/11 ticks, June →
+     9 Oct). ✅ **stopped 2026-11-11 — Tanya has left** (Afshaan). Podium still shows her `active` with no
+     exit date at that time. Lesson kept: a weekly review-shaped checklist with one owner got used.
    - **11 production-floor routines** (Karthik, Kishan, Mrudula, Padam, Sagar: line flush, calibration,
      material verification, manpower setup…): 0–2 ticks ever. These are the natural **routine pilot**. They
      should be rebuilt as one shared floor register (C1, C7) rather than 11 solo items.
