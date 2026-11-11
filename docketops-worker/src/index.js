@@ -236,6 +236,40 @@ async function loadTask(id, env) {
   const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(id)}&select=*&limit=1`, env);
   return (r.ok && r.data?.[0]) || null;
 }
+// A task the CALLER may act on by id: null (→ 404, no existence leak) when it lives in a private space
+// they are not the owner or a member of. RULE-DOCKET-003: the space gate beats docket_admin — before
+// 2026-11-11 every write handler took any id, so an admin (or anyone) holding a private task's id (it is
+// in every Docket link pasted to Slack) could edit, move, comment on or re-parent it. General-space
+// rules (canSeeTask / canEditTask) still apply on top, in each handler.
+const TASK_SPACE = new WeakMap();   // task row (from loadTaskFor) → its space row
+async function loadTaskFor(id, auth, env) {
+  const task = await loadTask(id, env);
+  if (!task) return null;
+  const space = await loadSpace(task.space_id, env);
+  if (!space || !(await canAccessSpace(auth, space, env))) return null;
+  TASK_SPACE.set(task, space);
+  return task;
+}
+// "Can see" for a task that came through loadTaskFor: General = the V1 baseline (canSeeTask); a private
+// space is FLAT — every member sees every task (RULE-DOCKET-003), and loadTaskFor already proved access.
+async function seesTask(auth, task, env) {
+  const space = TASK_SPACE.get(task);
+  return space && !space.is_default ? true : canSeeTask(auth, task, env);
+}
+// Bulk equivalent: drop rows in private spaces the caller doesn't own or belong to (counted "skipped").
+// Archived spaces included, matching loadTaskFor (canAccessSpace ignores archived_at).
+async function keepAccessible(auth, tasks, env) {
+  if (!tasks.length) return tasks;
+  const spaceIds = uniq(tasks.map(t => t.space_id));
+  const [sr, mr] = await Promise.all([
+    sbDocket(`/rest/v1/spaces?id=in.${inList(spaceIds)}&select=id,is_default,owner_user_id`, env),
+    sbDocket(`/rest/v1/space_members?space_id=in.${inList(spaceIds)}&user_id=eq.${enc(auth.userId)}&select=space_id`, env),
+  ]);
+  if (!sr.ok || !mr.ok) return [];   // fail closed
+  const member = new Set((mr.data || []).map(m => m.space_id));
+  const ok = new Set((sr.data || []).filter(sp => sp.is_default || sp.owner_user_id === auth.userId || member.has(sp.id)).map(sp => sp.id));
+  return tasks.filter(t => ok.has(t.space_id));
+}
 function isHttpUrl(u) { return typeof u === 'string' && /^https?:\/\//i.test(u.trim()); }
 
 // ── Presence: stamp last_seen_at (app load via getMe + every mutation). ───────
@@ -864,7 +898,7 @@ async function searchTasks(url, auth, env) {
 async function getTask(url, auth, env) {
   const id = url.searchParams.get('id');
   if (!id) return err('id required', 400);
-  const task = await loadTask(id, env);
+  const task = await loadTaskFor(id, auth, env);
   if (!task) return err('not_found', 404);
   // Space gate: General falls back to the V1 baseline (own/collab/dept/view-all);
   // a private space requires membership (admins included — RULE-DOCKET-003).
@@ -875,9 +909,9 @@ async function getTask(url, auth, env) {
 
   const [parentRes, childRes, collabRes, docRes, commRes, histRes] = await Promise.all([
     task.parent_task_id
-      ? sbDocket(`/rest/v1/tasks?id=eq.${enc(task.parent_task_id)}&select=id,task_no,title,status&limit=1`, env)
+      ? sbDocket(`/rest/v1/tasks?id=eq.${enc(task.parent_task_id)}&space_id=eq.${enc(task.space_id)}&select=id,task_no,title,status&limit=1`, env)
       : { data: [] },
-    sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(id)}&select=id,task_no,title,status,priority,owner_employee_id,deadline,revised_deadline&order=created_at.asc`, env),
+    sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(id)}&space_id=eq.${enc(task.space_id)}&select=id,task_no,title,status,priority,owner_employee_id,deadline,revised_deadline&order=created_at.asc`, env),
     sbDocket(`/rest/v1/task_collaborators?task_id=eq.${enc(id)}&select=employee_id,added_at`, env),
     sbDocket(`/rest/v1/task_documents?task_id=eq.${enc(id)}&select=*&order=added_at.asc`, env),
     sbDocket(`/rest/v1/task_comments?task_id=eq.${enc(id)}&deleted_at=is.null&select=*&order=created_at.asc`, env),
@@ -945,7 +979,7 @@ async function getTask(url, auth, env) {
 async function getTaskLinks(url, auth, env) {
   const id = url.searchParams.get('id');
   if (!id) return err('id required', 400);
-  const task = await loadTask(id, env);
+  const task = await loadTaskFor(id, auth, env);
   if (!task) return err('not_found', 404);
   const space = await loadSpace(task.space_id, env);
   if (!space) return err('space_not_found', 404);
@@ -963,7 +997,7 @@ async function addTaskLink(body, auth, env) {
   if (!['waiting_on', 'blocks', 'relates'].includes(d.kind)) return err('bad_kind', 400);
   if (!UUID_RE.test(String(d.id)) || !UUID_RE.test(String(d.other_id))) return err('invalid id', 400);
   if (d.id === d.other_id) return err('self_link', 422);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   const cards = await taskCards([d.id, d.other_id], auth, env);
   if (!canEditTask(auth, task) || !cards[d.id]?.visible) return err('forbidden', 403);
@@ -1486,8 +1520,8 @@ async function createTaskCore(d, auth, env) {
   let parentId = d.parent_task_id || null;
   let spaceId = d.space_id || null;
   if (parentId) {
-    const parent = await loadTask(parentId, env);
-    if (!parent) return err('parent_not_found', 404);
+    const parent = await loadTaskFor(parentId, auth, env);
+    if (!parent || !(await seesTask(auth, parent, env))) return err('parent_not_found', 404);
     if (parent.parent_task_id) return err('one_level_only: parent is already a sub-task', 422);
     if (parent.status === 'abandoned') return abandonedRO();
     spaceId = parent.space_id; // a sub-task always lives in its parent's space
@@ -1550,7 +1584,7 @@ async function updateRecurrence(body, auth, env) {
   const d = body.data || body;
   if (!d.id) return err('id required', 400);
   const e = validateRecurrence(d.recurrence); if (e) return err(e, 400);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!task.is_recurring) return err('not_a_recurring_task', 422);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
@@ -1568,7 +1602,7 @@ async function updateRecurrence(body, auth, env) {
 async function toggleChecklistOccurrence(body, auth, env) {
   const d = body.data || body;
   if (!d.id) return err('id required', 400);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!task.is_recurring) return err('not_a_recurring_task', 422);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
@@ -1828,7 +1862,7 @@ const EDITABLE  = ['title','description','department_id','owner_employee_id','pr
 async function updateTask(body, auth, env) {
   const d = body.data || body;
   if (!d.id) return err('id required', 400);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
@@ -1859,7 +1893,7 @@ async function changeStatus(body, auth, env) {
   if (!d.id || !d.status) return err('id and status required', 400);
   if (!STATUSES.includes(d.status)) return err('invalid status', 400);
   if (d.status === 'abandoned') return err('use abandonTask to abandon (reason required)', 422);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === d.status) return ok({ id: task.id, unchanged: true });
@@ -1891,7 +1925,7 @@ async function reviseDeadline(body, auth, env) {
   const d = body.data || body;
   if (!d.id || !d.new_deadline) return err('id and new_deadline required', 400);
   if (!d.reason || !String(d.reason).trim()) return err('reason required', 400);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
@@ -1918,7 +1952,7 @@ async function bulkUpdateTasks(body, auth, env) {
 
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
   if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
-  const all = tr.data || [];
+  const all = await keepAccessible(auth, tr.data || [], env);   // private spaces: members only
   const editable = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
   const skipped = ids.length - editable.length;
   if (!editable.length) return ok({ updated: 0, skipped, field });
@@ -2007,7 +2041,7 @@ async function bulkSetCollaborator(body, auth, env) {
 
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
   if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
-  const all = tr.data || [];
+  const all = await keepAccessible(auth, tr.data || [], env);   // private spaces: members only
   const editable = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
   const skipped = ids.length - editable.length;
   if (!editable.length) return ok({ updated: 0, skipped, mode });
@@ -2061,10 +2095,14 @@ async function bulkMoveTasks(body, auth, env) {
 
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
   if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
-  const all = tr.data || [];
+  const all = await keepAccessible(auth, tr.data || [], env);   // private spaces: members only
   const editable = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
-  const skipped = ids.length - editable.length;
-  const targets = editable.filter(t => t.space_id !== d.space_id);
+  // Sub-tasks never move alone (they follow their parent): one whose parent isn't in this batch is skipped.
+  const movable = editable.filter(t => !t.parent_task_id);
+  const movableIds = new Set(movable.map(t => t.id));
+  const orphanSubs = editable.filter(t => t.parent_task_id && !movableIds.has(t.parent_task_id)).length;
+  const skipped = ids.length - editable.length + orphanSubs;
+  const targets = movable.filter(t => t.space_id !== d.space_id);
   if (!targets.length) return ok({ updated: 0, skipped, space_id: d.space_id });
   const targetIds = targets.map(t => t.id);
 
@@ -2099,7 +2137,7 @@ async function bulkAbandonTasks(body, auth, env) {
 
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
   if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
-  const all = tr.data || [];
+  const all = await keepAccessible(auth, tr.data || [], env);   // private spaces: members only
   const targets = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
   const skipped = ids.length - targets.length;
   if (!targets.length) return ok({ updated: 0, skipped });
@@ -2122,7 +2160,7 @@ async function abandonTask(body, auth, env) {
   const d = body.data || body;
   if (!d.id) return err('id required', 400);
   if (!d.reason || !String(d.reason).trim()) return err('reason required', 400);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
@@ -2141,15 +2179,18 @@ async function abandonTask(body, auth, env) {
 async function setParent(body, auth, env) {
   const d = body.data || body;
   if (!d.id) return err('id required', 400);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
   const newParent = d.parent_task_id || null;
   if (newParent) {
     if (newParent === task.id) return err('a task cannot be its own parent', 422);
-    const parent = await loadTask(newParent, env);
-    if (!parent) return err('parent_not_found', 404);
+    const parent = await loadTaskFor(newParent, auth, env);
+    if (!parent || !(await seesTask(auth, parent, env))) return err('parent_not_found', 404);
+    // A sub-task lives in its parent's space (createTaskCore, moveTask) — never across a space wall,
+    // or getTask's parent hydration would read a private parent's title to a non-member.
+    if (parent.space_id !== task.space_id) return err('parent_in_another_space: move the task into that space first', 422);
     if (parent.parent_task_id) return err('one_level_only: parent is already a sub-task', 422);
     if (parent.status === 'abandoned') return abandonedRO();
     const kids = await sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(task.id)}&select=id&limit=1`, env);
@@ -2167,7 +2208,7 @@ async function setParent(body, auth, env) {
 async function moveTask(body, auth, env) {
   const d = body.data || body;
   if (!d.id || !d.space_id) return err('id and space_id required', 400);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
@@ -2175,6 +2216,9 @@ async function moveTask(body, auth, env) {
   if (!target) return err('space_not_found', 404);
   if (!(await canAccessSpace(auth, target, env))) return err('forbidden_space', 403);
   if (task.space_id === d.space_id) return ok({ id: task.id, unchanged: true });
+  // A sub-task lives in its parent's space; moving one alone would put parent and child on two sides of
+  // a space wall, and getTask's parent/children hydration would then read titles across it.
+  if (task.parent_task_id) return err('subtask_moves_with_parent: move its parent task instead', 422);
   await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
     body: JSON.stringify({ space_id: d.space_id, updated_by: auth.userId, updated_at: nowIso() }) });
   // sub-tasks travel with their parent (one level)
@@ -2187,7 +2231,7 @@ async function moveTask(body, auth, env) {
 async function addCollaborator(body, auth, env) {
   const d = body.data || body;
   if (!d.id || !d.employee_id) return err('id and employee_id required', 400);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
@@ -2202,7 +2246,7 @@ async function addCollaborator(body, auth, env) {
 async function removeCollaborator(body, auth, env) {
   const d = body.data || body;
   if (!d.id || !d.employee_id) return err('id and employee_id required', 400);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
@@ -2216,9 +2260,9 @@ async function addDocument(body, auth, env) {
   const d = body.data || body;
   if (!d.id || !d.url) return err('id and url required', 400);
   if (!isHttpUrl(d.url)) return err('url must start with http:// or https://', 400);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
-  if (!(await canSeeTask(auth, task, env))) return err('forbidden', 403);
+  if (!(await seesTask(auth, task, env))) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
   const r = await sbDocket(`/rest/v1/task_documents`, env, {
     method: 'POST',
@@ -2234,7 +2278,7 @@ async function removeDocument(body, auth, env) {
   const docRes = await sbDocket(`/rest/v1/task_documents?id=eq.${enc(d.document_id)}&select=*&limit=1`, env);
   const doc = docRes.ok && docRes.data?.[0];
   if (!doc) return err('not_found', 404);
-  const task = await loadTask(doc.task_id, env);
+  const task = await loadTaskFor(doc.task_id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task) && doc.added_by !== auth.userId) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
@@ -2246,9 +2290,9 @@ async function removeDocument(body, auth, env) {
 async function addComment(body, auth, env) {
   const d = body.data || body;
   if (!d.id || !d.body || !String(d.body).trim()) return err('id and body required', 400);
-  const task = await loadTask(d.id, env);
+  const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
-  if (!(await canSeeTask(auth, task, env))) return err('forbidden', 403);
+  if (!(await seesTask(auth, task, env))) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
   const r = await sbDocket(`/rest/v1/task_comments`, env, {
     method: 'POST', body: JSON.stringify([{ task_id: d.id, author_user_id: auth.userId, body: String(d.body).trim() }]),
@@ -2263,8 +2307,9 @@ async function editComment(body, auth, env) {
   const c = cRes.ok && cRes.data?.[0];
   if (!c) return err('not_found', 404);
   if (c.author_user_id !== auth.userId && !isAdmin(auth)) return err('forbidden', 403);
-  const ct = await loadTask(c.task_id, env);
-  if (ct?.status === 'abandoned') return abandonedRO();
+  const ct = await loadTaskFor(c.task_id, auth, env);
+  if (!ct) return err('not_found', 404);   // a task in a private space the caller isn't in
+  if (ct.status === 'abandoned') return abandonedRO();
   const r = await sbDocket(`/rest/v1/task_comments?id=eq.${enc(d.comment_id)}`, env, {
     method: 'PATCH', body: JSON.stringify({ body: String(d.body).trim(), edited_at: nowIso() }),
   });
@@ -2279,8 +2324,9 @@ async function deleteComment(body, auth, env) {
   if (!c) return err('not_found', 404);
   if (c.author_user_id !== auth.userId && !isAdmin(auth)) return err('forbidden', 403);
   // Admins may still remove a comment on an abandoned task (no reactivate/re-abandon dance).
-  const ct = await loadTask(c.task_id, env);
-  if (ct?.status === 'abandoned' && !isAdmin(auth)) return abandonedRO();
+  const ct = await loadTaskFor(c.task_id, auth, env);
+  if (!ct) return err('not_found', 404);   // a task in a private space the caller isn't in
+  if (ct.status === 'abandoned' && !isAdmin(auth)) return abandonedRO();
   await sbDocket(`/rest/v1/task_comments?id=eq.${enc(d.comment_id)}`, env, {
     method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ deleted_at: nowIso() }),
   });
@@ -2408,11 +2454,13 @@ async function createSpace(body, auth, env) {
   await logSpace(env, space.id, auth.userId, 'created', space.name);
   return ok({ id: space.id, name: space.name });
 }
-// Owner of a private space, or a docket_admin (break-glass), may manage it. General is system.
+// Only the OWNER of a private space manages it. General is system. A docket_admin has no path in here —
+// RULE-DOCKET-003 "the gate beats admin"; until 2026-11-11 this also let any admin add themselves as a
+// member. The one admin route is recoverSpace, for a space whose owner has left.
 async function requireSpaceOwner(auth, space) {
   if (!space) return err('space_not_found', 404);
   if (space.is_default) return err('general_is_system', 422);
-  if (!isSpaceOwner(auth, space) && !isAdmin(auth)) return err('forbidden_space_owner', 403);
+  if (!isSpaceOwner(auth, space)) return err('forbidden_space_owner', 403);
   return null;
 }
 async function renameSpace(body, auth, env) {
@@ -2450,18 +2498,38 @@ async function transferSpaceOwnership(body, auth, env) {
   const space = await loadSpace(d.space_id, env);
   if (!space) return err('space_not_found', 404);
   if (space.is_default) return err('general_is_system', 422);
-  if (!isSpaceOwner(auth, space) && !isAdmin(auth)) return err('forbidden_space_owner', 403);
+  if (!isSpaceOwner(auth, space)) return err('forbidden_space_owner', 403);
   if (!(await isSpaceMember(d.space_id, d.new_owner_user_id, env))) return err('new owner must be a member first', 422);
   await sbDocket(`/rest/v1/spaces?id=eq.${enc(d.space_id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ owner_user_id: d.new_owner_user_id }) });
   await logSpace(env, d.space_id, auth.userId, 'ownership_transferred', d.new_owner_user_id);
   return ok({ space_id: d.space_id, owner_user_id: d.new_owner_user_id });
 }
-// Break-glass: a docket_admin recovers an orphaned/locked private space. Audited.
+// Break-glass: a docket_admin recovers an ORPHANED private space — no owner, or an owner whose login is
+// inactive or whose Podium record is `exited` (on_leave / notice still own it). Audited. Until 2026-11-11
+// it worked on any space, i.e. any admin could take over a live private space.
+// A space whose owner is still here can only be UN-ARCHIVED by an admin (the stale-cleanup rollback path,
+// systems/docket.md) — archived_at cleared, owner and members untouched, so the admin gains no access.
+async function spaceOwnerGone(ownerUserId, env) {
+  if (!ownerUserId) return true;
+  const [up, em] = await Promise.all([
+    sbStore(`/rest/v1/users_profile?id=eq.${enc(ownerUserId)}&select=active&limit=1`, env),
+    sbPodium(`/rest/v1/employees?auth_user_id=eq.${enc(ownerUserId)}&select=status&limit=1`, env),
+  ]);
+  if (!up.ok || !em.ok) return false;   // can't tell → not recoverable (fail closed)
+  const profile = up.data?.[0], emp = em.data?.[0];
+  return !profile || profile.active === false || (!!emp && emp.status === 'exited');
+}
 async function recoverSpace(body, auth, env) {
   const gate = requireAdmin(auth); if (gate) return gate;
   const d = body.data || body; if (!d.space_id) return err('space_id required', 400);
   const space = await loadSpace(d.space_id, env);
   if (!space || space.is_default) return err('not_recoverable', 422);
+  if (!(await spaceOwnerGone(space.owner_user_id, env))) {
+    if (!space.archived_at) return err('owner_still_active: only a space whose owner has left can be recovered — ask the owner to add you or transfer it', 409);
+    await sbDocket(`/rest/v1/spaces?id=eq.${enc(d.space_id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ archived_at: null }) });
+    await logSpace(env, d.space_id, auth.userId, 'unarchived', 'admin restore; owner unchanged');
+    return ok({ space_id: d.space_id, owner_user_id: space.owner_user_id, unarchived: true });
+  }
   const newOwner = d.new_owner_user_id || auth.userId;
   await sbDocket(`/rest/v1/space_members?on_conflict=space_id,user_id`, env, { method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates',
     body: JSON.stringify({ space_id: d.space_id, user_id: newOwner, added_by_user_id: auth.userId }) });

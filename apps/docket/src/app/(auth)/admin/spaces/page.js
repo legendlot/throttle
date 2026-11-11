@@ -32,9 +32,13 @@ export default function AdminSpacesPage() {
   useEffect(() => { load(); }, [load]);
 
   async function recover(s) {
-    if (!window.confirm(`Break-glass recover "${s.name}"?\nYou'll become its owner + member. This is logged in the space's audit trail.`)) return;
+    if (!window.confirm(`Break-glass recover "${s.name}"?\nIf its owner has left, you become its owner + member. If the owner is still here, an archived space is only restored to them (you don't get access) and an active one can't be recovered. Logged in the space's audit trail.`)) return;
     setBusyId(s.id);
-    try { await docketopsPost('recoverSpace', { space_id: s.id }, session); showToast('Space recovered', 'success'); router.push('/tasks?space=' + s.id); }
+    try {
+      const res = await docketopsPost('recoverSpace', { space_id: s.id }, session);
+      // Owner still here → the space is only un-archived back to them; you don't become a member.
+      if (res?.unarchived) { showToast('Space restored to its owner', 'success'); load(); return; }
+      showToast('Space recovered', 'success'); router.push('/tasks?space=' + s.id); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
     finally { setBusyId(null); }
   }
