@@ -13,6 +13,8 @@
 > **v4 (2026-11-11, later): C1+C2 and C3 are LIVE. The lifecycle extends past hiring — J1 (Podium creates the
 > Workspace account + employee; replaces the Directory-pairing hand-off), J2 (onboarding for joiners and a
 > one-time profile completion for existing staff), X1 (exits + no-dues). See "Employee lifecycle" below.**
+> **v4.1 (2026-11-11): L1, L3–L8 decided; J1b one-way Podium → Google sync added; Google suspension is a
+> post-exit HR prompt; F&F deferred; a separate write service account. L2 open with a default.**
 
 ## Goal
 
@@ -435,14 +437,17 @@ Measured 2026-11-11:
   **3 have dates derived from the final payslip**, not HR-confirmed.
 - **Onboarding:** none. The register gaps (DOB 19 · PAN 15 · DOJ 8 · job_title 8 blank of 62, 2026-09-21) are
   deferred by decision: **"the fix is a JOINER CHECKLIST"** (`reference/decisions.md`, S396). J2 is that.
-- **No-dues checklist:** not found in Drive, Gmail or Slack (searched 2026-11-11). Afshaan to share it, or X1
-  ships the draft below.
+- **No-dues checklist:** none exists (searched Drive, Gmail and Slack; Afshaan confirmed 2026-11-11). X1 ships the
+  draft below, built from scratch. Its lines are admin data, so it can change without code.
 
 ### J1 — Podium creates the work account + the employee (replaces the Directory pairing)
 
 - **Trigger:** an application with an `accepted` offer → HR clicks **"Create work account"**.
-- **Address:** Podium proposes it per the naming convention (decision L1) and checks availability with
-  `users.get`. HR can edit it. Collisions get a suffix suggestion, never an automatic one.
+- **Address (L1):** Podium proposes `firstname@legendoftoys.com`. If that is taken, it proposes
+  `firstname.<first letter of last name>@`. Availability is checked live with `users.get`, which also covers aliases and
+  suspended users. A **Custom** option lets HR type any local part; the domain is fixed to `legendoftoys.com`.
+  - The local part is lowercased, ASCII letters/digits/`.` only, with no leading/trailing/double dot.
+  - If both proposals are taken, Podium shows that and asks for a custom one. It never adds a number by itself.
 - **One action, in this order:**
   1. Admin SDK `users.insert`: name, primary email, org unit (from the department, decision L2), random temp
      password with `changePasswordAtNextLogin`.
@@ -457,15 +462,40 @@ Measured 2026-11-11:
   **"created outside Podium"** for HR to adopt or ignore. That is the RULE-PODIUM-007 preview, repurposed.
 - **Identity rule kept:** an employee row only ever exists with a real Workspace login (memory "never
   auto-create employees" → intent preserved: the row is born with the account, by an explicit human action).
-- **Gate (Afshaan, Admin console — a security setting, his to do):** add
-  `https://www.googleapis.com/auth/admin.directory.user` (write) to the existing service account's
-  domain-wide delegation. That scope can create **and suspend** any user, so:
-  - only HR + founders get the button (decision L3);
-  - every call is logged (actor, action, target email, result) in a `podium.google_admin_log`;
-  - the worker uses the write scope only in these handlers. Reads keep the readonly token.
+- **Gate (Afshaan, Admin console — a security setting, his to do):** a **separate** service account,
+  `podium-admin-write`, with domain-wide delegation for `admin.directory.user` (write) and `admin.datatransfer`.
+  Its key lives only on `podiumops`, as `GOOGLE_ADMIN_SA_JSON`. Why separate: the shared `podium-directory-sync`
+  key sits on odoops, csops and podiumops, and a write scope on it would let any of those three create or
+  suspend any LOT account. Reads keep the shared readonly token. This scope can create **and suspend** any user, so:
+  - only a new permission `podium_google_admin` gets the buttons (L3). It is held by Afshaan, Vinay and Mohit.
+    It is **not** implied by the Podium `admin` role, which Priya Bhadulkar also holds (checked 2026-11-11);
+  - every call is logged (actor, action, target email, request fields, result) in a `podium.google_admin_log`;
+  - the worker uses the write token only in these handlers.
+- **Org unit (L2, not answered):** default to the OU the person's department maps to today (`mapOuToDept`,
+  reversed), else the root OU. HR can pick another OU from the live list.
 - **Amends RULE-PODIUM-007** (sync was read-only by rule) — record the amendment in `decisions.md` when built.
 - **Also lands here:** "no accepted Podium offer → blocked" (decision 10). A Google account can't be created
   for anyone without one. An HR override needs a written reason and is logged.
+
+### J1b — Podium → Google sync (Podium is the source of truth; Afshaan 2026-11-11)
+
+Afshaan: Google should replicate whatever Podium has. **Done in the backend, not by hand.** Mirroring by hand
+drifts the first time someone forgets.
+- **Direction is one way, Podium → Google.** Google is never read back into Podium fields. The only exception is
+  reconciliation, which only reports.
+- **Fields pushed** (Directory `users.update`): name, job title + department (`organizations[0]`), manager
+  (`relations` type manager, = the manager's work email), work phone, employee code (`externalIds` type
+  organization), and the org unit.
+- **When:** on every Podium save that touches one of those fields, the same request queues a push. A failed push
+  is retried and shows on the employee page as "Google not updated — retry". The Podium save never fails because
+  Google failed.
+- **First alignment (one-time):** the Directory screen gets a **"Google vs Podium"** diff, per person per field.
+  HR reviews it and pushes Podium's values in bulk, after a preview. Afshaan doesn't edit anything in the Admin
+  console by hand.
+- **Afterwards:** the nightly reconciliation lists any field changed in Google outside Podium. HR can push Podium's
+  value back, or fix Podium if Google was right.
+- **Never pushed:** passwords, suspension (that is the X1 HR prompt), deletion (never), and group membership (out
+  of scope).
 
 ### J2 — Onboarding (joiners) + profile completion (everyone, once)
 
@@ -476,7 +506,9 @@ Measured 2026-11-11:
     XPayroll onboarding sheet's fields** (Drive "XPayroll-Onboarding-v1-2"), so payroll setup is one export.
   - **Documents:** ID proof, PAN, address proof, education, previous relieving letter, photo. Candidate documents
     (CV, signed offer) carry over from hiring. Bank / ID / PAN are HR-only visibility, as candidate docs today.
-  - **Acknowledgements:** policies the employee reads and accepts (list = decision L4), timestamped.
+  - **Acknowledgements:** policies the employee reads and accepts, timestamped against a policy **version**.
+  The list is admin data (title, version, PDF, applies-to). It ships empty: no policies exist yet (L4), and they
+  are written outside the build, so it doesn't block J2. Starter set proposed below.
 - **Owner tasks** (each a checklist line with an owner and a due date relative to the start date):
   - IT: laptop issued as a **Snorkel asset assignment** (custodian = the employee — so X1 can check it back);
     app access (LOT apps: Podium role / users_profile).
@@ -510,17 +542,35 @@ The employee status becomes `notice` (a new status; still active for everything 
 
 | Line | Owner | Source / check |
 |---|---|---|
-| Assets returned | Store / IT | **Live from Snorkel** — every asset with `custodian_user_id` = the employee's auth user. The line can't be cleared while any remain assigned. |
-| Google account | automatic | Suspended on LWD (decision L5); Drive ownership transferred to the manager (Data Transfer API — needs the `admin.datatransfer` scope; optional, decision L6) |
-| LOT app access | automatic | `users_profile` / Podium roles revoked on LWD |
-| Other tools (Slack, Shopify, Amazon/Flipkart seller, bank portals …) | IT | manual ticks; list = decision L4 |
-| Advances / reimbursements / imprest | Finance | open items listed from Snorkel payment requests where the requester is the employee |
-| Handover | Manager | free text + link; reports reassigned (RULE-PODIUM-010) |
-| Full & final | Finance / HR | recorded: amount, date, payslip/F&F statement upload. Computed in RazorpayX, not Podium (decision L7) |
-| Relieving + experience letters | HR | generated from versioned templates, using the offer-letter engine (pdf-lib, hash stored) and issued after F&F |
-| Exit interview | HR | optional, short form |
+Draft from scratch (L8 — none exists). Lines are admin data per employment type. "Req" = required to close.
 
-**3. Close.** The exit closes only when every required line is cleared. Then:
+| Line | Owner | Req | Source / check |
+|---|---|---|---|
+| Notice served, or waiver/buyout recorded | HR | ✓ | the LWD vs notice period; any shortfall needs a reason |
+| Assets returned | Store / IT | ✓ | **Live from Snorkel** — every asset with `custodian_user_id` = the employee's auth user. Can't be cleared while any remain assigned. |
+| ID card, access card, keys | Admin | ✓ | manual tick (not Snorkel assets) |
+| Company SIM / number | IT | if issued | returned, or ported to a successor |
+| LOT app access | automatic | ✓ | `users_profile` deactivated + Podium/app roles revoked on LWD |
+| Other tools | IT | per tool | one tick per tool the person had; the tool list is admin data (L4) |
+| Open work handed over | Manager | ✓ | open Docket tasks + Snorkel requests owned by the person listed live → reassigned; reports reassigned (RULE-PODIUM-010); handover note + link |
+| Advances / reimbursements / imprest | Finance | ✓ | open Snorkel payment requests where the requester is the employee |
+| Leave balance confirmed | HR | ✓ | the number F&F will use later |
+| Full & final | Finance / HR | — | **Placeholder only (L7, later phase).** Nullable amount, date and statement upload exist in the schema; the UI shows "F&F — later phase". Not calculated, not required to close. |
+| Relieving + experience letters | HR | ✓ | versioned templates on the offer-letter engine (pdf-lib, hash stored). Not gated on F&F this phase. |
+| Exit interview | HR | — | optional short form |
+
+**Google account — an HR prompt, NOT a close gate (L5, L6).** Suspension is never automatic, because sometimes the
+data must be kept. At close, Podium opens a **pending HR item** for the person's Google account, which stays open after
+they are `exited` until HR acts. It shows on the HR home as "N exited people still have an active Google account",
+with how long each has been open. HR picks one of:
+- **transfer Drive to the manager, then suspend** — the default (L6, Data Transfer API);
+- **suspend now**;
+- **keep active until a date**, with a reason (e.g. mailbox handover). The item reopens on that date.
+
+Every outcome is logged in `google_admin_log`. An active account after exit can still sign in and still costs a
+Workspace seat, so the prompt says so.
+
+**3. Close.** The exit closes only when every required line is cleared (the Google prompt is not one). Then:
 - status `exited`, `date_exited` = LWD, reason required (the DB enforces it);
 - comp access ends;
 - the employee's documents follow retention rules.
@@ -534,16 +584,26 @@ a red alert: "an exit was started outside Podium — start the exit here". It ne
 **5. Backfill.** The 4 exits with no reason and the 3 payslip-derived dates get a one-time HR review screen. No
 guessing.
 
-### Decisions needed (Afshaan)
+### Decisions (Afshaan, 2026-11-11)
 
-- **L1** Email format: `firstname@` or `firstname.lastname@` (collision rule).
-- **L2** Org unit per department, or a flat OU.
-- **L3** Who can create accounts (HR + founders proposed).
-- **L4** The policy acknowledgement list and the "other tools" exit list.
-- **L5** Google suspension: automatic at the end of LWD, or an HR click on the day.
-- **L6** Drive transfer to the manager: yes/no. This needs the extra `admin.datatransfer` scope.
-- **L7** F&F: record only (proposed; RazorpayX computes) or compute in Podium.
-- **L8** The no-dues checklist: share the current one, or adopt the draft above.
+- **L1** `firstname@` → if taken `firstname.<last initial>@` → else Custom (any local part @legendoftoys.com).
+- **L2** *Not answered* — default: the department's current OU, else root; HR can override (J1).
+- **L3** Account creation + Google actions: super admins + HR only = Afshaan, Vinay, Mohit (`podium_google_admin`).
+- **L4** No policy list and no tools list exist. Both are admin data, co-created with Afshaan; neither blocks the build.
+  Starter sets proposed below.
+- **L5** Never auto-suspend. A persistent HR prompt that survives the exit.
+- **L6** Drive → manager: yes (`admin.datatransfer` on the new SA).
+- **L7** F&F not calculated in Podium; a placeholder now, built in a later phase.
+- **L8** No existing checklist; the from-scratch draft above is the starting point.
+- **Sync:** one-way Podium → Google, in the backend (J1b).
+
+**Starter sets to react to (L4)** — Afshaan edits, cuts or adds; they go in as admin rows:
+- *Policies:* code of conduct · leave & attendance · IT acceptable use + confidentiality of company and customer data ·
+  expense & reimbursement · prevention of sexual harassment (POSH). POSH is a legal requirement for employers with
+  10+ people — it needs an Internal Committee, not just a document.
+- *Other tools for exits*, from what LOT runs today: Slack · Shopify admin · Amazon Seller Central · Flipkart Seller
+  Hub · Meta Business / WhatsApp Business · Uniware · Delhivery · Cashfree / Razorpay dashboards · RazorpayX ·
+  bank portals · Tally/accounts · GitHub · Cloudflare · Supabase · shared logins in a password manager.
 
 ### Lifecycle — hard to change later
 
@@ -552,6 +612,8 @@ guessing.
 - `notice` as a real status.
 - Asset custody keyed on the auth user that Snorkel uses.
 - The write-scope audit log from day one.
+- Sync direction Podium → Google, and a separate write service account whose key lives on podiumops only.
+- The Google account as a post-exit HR item, decoupled from the exit close.
 
 ## Hard to change later — settle in the build plan, before the first migration
 
