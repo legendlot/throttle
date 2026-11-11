@@ -503,6 +503,14 @@ drifts the first time someone forgets.
 
 ### J2 — Onboarding (joiners) + profile completion (everyone, once)
 
+> **As built (J2 live 2026-11-12, migration `podium_onboarding_v1`, plan `plans/2026-11-12-podium-j2-onboarding.md`):**
+> sensitive fields in a separate `podium.employee_private` (bank/UAN/ESIC/address → self + HR with bank masked;
+> past-employer salary/TDS → self + `canComp`, logged); PAN/bank changes after first fill are change requests
+> (rev-pinned; bank account + IFSC + name decided as ONE group; withdrawable); self uploads (`/self/` paths) hidden
+> from the manager chain and verified in storage before they count; XPayroll export = `.xlsx`, headers copied verbatim
+> from the Drive sheet, digit columns as text, comp-gated and fail-closed on its audit log; IT kit line allows N/A
+> (staff who get no laptop); onboarding auto-starts on Confirm joining (never fails the joining, never restarts after
+> a cancel). Policies table ships empty (L4). No `photo` doc type (the documents CHECK has none).
 - **Joiner self-serve** (`/onboarding`, opened by the new Google login, no Podium role needed — self-scoped like
   My Performance):
   - **Profile:** DOB, gender, blood group, PAN, address, personal email/phone, emergency contact, bank account +
