@@ -11,6 +11,7 @@ import { DatePicker } from '../DatePicker.js';
 import { PriorityFlag, contain } from './TaskCells.js';
 import { TaskRow } from './TaskRow.js';
 import { GroupHeader, FootCapture } from './GroupHeader.js';
+import { DepsBadge } from '../task/Dependencies.js';
 import { COLUMNS, gridTemplate, gridMinWidth } from './useTaskViewState.js';
 
 export function TaskListView({
@@ -168,7 +169,7 @@ function GridGroup({ rows, ctx, collapsed, onToggle, onTriage }) {
 }
 
 function GridCard({ task, ctx }) {
-  const { saveField, openDrawer, ownerCellOpts, selectMode, selected, toggleSelect, enterSelect } = ctx;
+  const { saveField, openDrawer, ownerCellOpts, selectMode, selected, toggleSelect, enterSelect, getSession, depsChanged } = ctx;
   const ed = !!task._can_edit && task.status !== 'abandoned';
   const done = task.status === 'done';
   const isSel = !!selected?.has(task.id);
@@ -184,6 +185,7 @@ function GridCard({ task, ctx }) {
         <span className="t">{task.title}</span>
         <span className="id">{task.task_no}</span>
       </button>
+      <DepsBadge task={task} getSession={getSession} editable={ed} onOpen={openDrawer} onChanged={depsChanged} />
       <PriorityFlag priority={task.priority} />
       <span className="gsetup">
         <NeedChip task={task} kind="owner" ed={ed} ownerOpts={ownerCellOpts} saveField={saveField} />
