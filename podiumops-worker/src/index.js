@@ -198,14 +198,14 @@ function pemToPkcs8(pem) {
 }
 function googleConfigured(env) { return !!(env.GOOGLE_SA_JSON && env.GOOGLE_ADMIN_IMPERSONATE_EMAIL); }
 
-async function googleAccessToken(env) {
-  const sa = JSON.parse(env.GOOGLE_SA_JSON);
+async function googleAccessToken(env, opts = {}) {
+  const sa = JSON.parse(opts.saJson || env.GOOGLE_SA_JSON);
   const now = Math.floor(Date.now() / 1000);
   const header = b64urlStr(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const claim = b64urlStr(JSON.stringify({
     iss: sa.client_email,
     sub: env.GOOGLE_ADMIN_IMPERSONATE_EMAIL,
-    scope: 'https://www.googleapis.com/auth/admin.directory.user.readonly',
+    scope: opts.scope || 'https://www.googleapis.com/auth/admin.directory.user.readonly',
     aud: 'https://oauth2.googleapis.com/token',
     iat: now, exp: now + 3600,
   }));
@@ -241,6 +241,52 @@ async function fetchGoogleUsers(env) {
     pageToken = d.nextPageToken || '';
   } while (pageToken && ++pages < 10);
   return out;
+}
+
+// ── Google WRITE service account (spec v4.1 J1 gate) ─────────────────────────
+// A SEPARATE SA (`podium-admin-write`) whose key lives on podiumops only, so the
+// shared readonly key on odoops/csops can never create or suspend accounts.
+// Only J1/J1b/X1 handlers may mint these tokens.
+const GOOGLE_WRITE_SCOPES = {
+  directory: 'https://www.googleapis.com/auth/admin.directory.user',
+  datatransfer: 'https://www.googleapis.com/auth/admin.datatransfer',
+};
+function googleWriteConfigured(env) { return !!(env.GOOGLE_ADMIN_SA_JSON && env.GOOGLE_ADMIN_IMPERSONATE_EMAIL); }
+async function googleWriteToken(env, which) {
+  // Never fall back to the shared key or the readonly scope (googleAccessToken's defaults).
+  if (!env.GOOGLE_ADMIN_SA_JSON) throw new Error('google_write_not_configured');
+  const scope = GOOGLE_WRITE_SCOPES[which];
+  if (!scope) throw new Error('google_write_unknown_scope: ' + which);
+  return googleAccessToken(env, { saJson: env.GOOGLE_ADMIN_SA_JSON, scope });
+}
+
+// Read-only proof that the write SA's delegation works: one token per scope
+// (a JWT naming an unauthorised scope fails as a whole, so separate mints say
+// WHICH scope is missing), then one GET per scope. Creates/changes nothing.
+async function getGoogleWriteCheck(url, auth, env) {
+  const gate = requireSuperAdmin(auth); if (gate) return gate;
+  if (!googleWriteConfigured(env)) return err('google_write_not_configured', 400);
+  let sa;
+  try { sa = JSON.parse(env.GOOGLE_ADMIN_SA_JSON); } catch { return err('google_write_sa_json_invalid', 500); }
+  let sharedEmail = null;
+  try { sharedEmail = JSON.parse(env.GOOGLE_SA_JSON || '{}').client_email || null; } catch { /* ignore */ }
+  const out = { client_email: sa.client_email || null, separate_from_shared_sa: !!sa.client_email && sa.client_email !== sharedEmail };
+  const probe = async (which, reqUrl, summarise) => {
+    let token;
+    try { token = await googleWriteToken(env, which); }
+    catch (e) { return { token: false, error: String(e?.message || e).slice(0, 300) }; }
+    const r = await fetch(reqUrl, { headers: { Authorization: `Bearer ${token}` } });
+    const d = await r.json().catch(() => ({}));
+    return r.ok ? { token: true, call: true, ...summarise(d) } : { token: true, call: false, status: r.status, error: d?.error?.message || null };
+  };
+  out.directory = await probe('directory',
+    `https://admin.googleapis.com/admin/directory/v1/users/${encodeURIComponent(env.GOOGLE_ADMIN_IMPERSONATE_EMAIL)}?projection=basic`,
+    d => ({ read_user_is_admin: !!d.isAdmin }));
+  out.datatransfer = await probe('datatransfer',
+    'https://admin.googleapis.com/admin/datatransfer/v1/applications',
+    d => ({ applications: (d.applications || []).map(a => a.name) }));
+  out.all_good = !!(out.separate_from_shared_sa && out.directory.call && out.datatransfer.call);
+  return ok(out);
 }
 
 // ── RazorpayX Payroll (Opfin) ────────────────────────────────────────────────
@@ -5190,6 +5236,7 @@ const GET_ACTIONS = {
   getCompAccess, getCompAccessLog,
   // Google Directory sync
   getDirectorySyncPreview,
+  getGoogleWriteCheck,
   // Appraisal engine
   getAppraisalConfig, getMyAppraisals, getAppraisal, getTeamAppraisals,
   getAppraisals, getCycleOverview, getAppraisalCycles, getAppraisalCycle, getEnrollmentPreview,
