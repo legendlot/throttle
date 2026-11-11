@@ -538,6 +538,14 @@ drifts the first time someone forgets.
 
 The employee status becomes `notice` (a new status; still active for everything else).
 
+> **As built (X1 live 2026-11-12, migration `podium_exits_v1`, plan `plans/2026-11-11-podium-x1-exits.md`):**
+> (1) **no `notice` status** — the person stays `active` while serving notice; "on notice" = an open
+> `podium.employee_exits` row (payroll RPCs, SG&A exclusion, analytics, OKRs, both auth-link triggers and 10
+> worker queries all key on `'active'`, so a new status would have dropped notice-servers from payroll);
+> (2) relieving / experience letters are a manual line (HR uploads) — the generator is **X1b**;
+> (3) F&F = nullable columns only (L7). Close (`podium.exit_close`) is the ONLY path to `exited`: the edit form and
+> the Directory-sync import both refuse it.
+
 **2. No-dues checklist**, auto-built. Each line has an owner who signs it off, with a note and optional evidence:
 
 | Line | Owner | Source / check |
