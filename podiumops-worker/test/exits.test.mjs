@@ -513,7 +513,7 @@ test('fix 11: transfer_pending until checked; never a second transfer', () => {
   assert.equal(transferOutcome({ overallTransferStatusCode: 'inProgress' }), 'pending');
   assert.equal(transferOutcome({}), 'pending');
   const g = fnBody('actGoogleExitItem');
-  assert.match(g, /d\.action === 'transfer_and_suspend' && !item\.transfer_id/);
+  assert.match(g, /op === 'transfer_and_suspend' && !item\.transfer_id/);
   assert.match(g, /status: item\.transfer_id \? 'transfer_pending' : 'suspended'/);
   assert.match(g, /if \(outcome === 'completed'\) return await finish\(\{ status: 'transferred_suspended'/);
   assert.match(g, /status: 'open', transfer_id: null/);
@@ -551,4 +551,10 @@ test('fix 13: backfill shows what exited people can still reach; revoke is a sep
   assert.match(og, /if exists \(select 1 from podium\.google_exit_items where employee_id = v_e\.id\) then/, 'never re-opens an actioned account');
   assert.match(ge, /can_open_google_item: !!e\.work_email && gir\.ok && !hasItem\.has\(e\.id\)/);
   assert.match(SQL, /before update or delete on podium\.exit_events/);
+});
+
+test('actGoogleExitItem reads the Google op from `op` — body.action is always the route name (prod smoke 2026-11-12)', () => {
+  const g = fnBody('actGoogleExitItem');
+  assert.ok(g.includes('const op = d.op'), 'op read from d.op');
+  assert.ok(!g.includes('d.action'), 'never d.action');
 });

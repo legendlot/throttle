@@ -6193,13 +6193,15 @@ async function actGoogleExitItem(body, auth, env) {
   const gate = await requireGoogleAdmin(auth, env); if (gate) return gate;
   const d = body.data || body;
   if (!isUuid(d.item_id)) return err('item_id required', 400);
+  // `op`, not `action`: every POST body's `action` is the route name (podiumopsPost sends {action, ...body}).
+  const op = d.op;
   const item = (await sb(`/rest/v1/google_exit_items?id=eq.${d.item_id}&select=*,employee:employee_id(id,status,manager_id)&limit=1`, env)).data?.[0];
   if (!item) return err('not_found', 404);
   if (item.employee?.status !== 'exited') return x1Err('not_exited');
   const today = istToday();
-  const ce = checkGoogleAction(item, d, today);
+  const ce = checkGoogleAction(item, { ...d, action: op }, today);
   if (ce) return x1Err(ce, ce === 'bad_google_action' ? 400 : 409);
-  if (d.action !== 'keep' && !googleWriteConfigured(env)) return err('google_write_not_configured', 400);
+  if (op !== 'keep' && !googleWriteConfigured(env)) return err('google_write_not_configured', 400);
 
   // Claim (J1 attempt pattern). Losers get in_progress.
   const actingId = crypto.randomUUID();
@@ -6224,13 +6226,13 @@ async function actGoogleExitItem(body, auth, env) {
   const logBase = { target_email: item.work_email, request: { google_exit_item_id: item.id } };
 
   try {
-    if (d.action === 'keep') {
+    if (op === 'keep') {
       await googleAdminLog(env, auth, { ...logBase, action: 'keep_active', google_user_id: item.google_user_id,
         request: { ...logBase.request, keep_until: d.keep_until }, ok: true });
       return await finish({ status: 'kept', keep_until: d.keep_until, keep_reason: String(d.keep_reason).trim().slice(0, 500), last_error: null });
     }
 
-    if (d.action === 'check_transfer') {
+    if (op === 'check_transfer') {
       let dtToken;
       try { dtToken = await googleWriteToken(env, 'datatransfer'); }
       catch (e) { return await fail(err('google_write_not_configured: ' + (e?.message || e), 502)); }
@@ -6265,7 +6267,7 @@ async function actGoogleExitItem(body, auth, env) {
     const gid = String(v.guser.id);
     const patch = { google_user_id: gid };
 
-    if (d.action === 'transfer_and_suspend' && !item.transfer_id) {
+    if (op === 'transfer_and_suspend' && !item.transfer_id) {
       const mgr = item.employee?.manager_id && isUuid(item.employee.manager_id)
         ? (await sb(`/rest/v1/employees?id=eq.${item.employee.manager_id}&select=id,status,work_email,google_user_id&limit=1`, env)).data?.[0]
         : null;

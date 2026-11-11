@@ -79,7 +79,7 @@ function GoogleItems({ d, session, onChanged }) {
     if (verb && !window.confirm(verb)) return;
     setBusy(item.id);
     try {
-      const r = await podiumopsPost('actGoogleExitItem', { item_id: item.id, action, ...extra }, session);
+      const r = await podiumopsPost('actGoogleExitItem', { item_id: item.id, op: action, ...extra }, session);
       showToast(r?.still_running ? 'Transfer still running — check again later' : r?.status === 'gone' ? 'Google has no such account — closed' : 'Done', 'success');
       setKeep(null); onChanged();
     }
