@@ -1,7 +1,7 @@
 import {
   Users, Network, Briefcase, Building2, BarChart3, Settings, UserPlus,
   Star, Activity, ShieldCheck, UserCog, ClipboardCheck, BookOpen, Factory, Wallet,
-  TrendingUp, Target, ClipboardList, FileSignature,
+  TrendingUp, Target, ClipboardList, FileSignature, LogOut, ListChecks,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -13,6 +13,8 @@ export const NAV_GROUPS = [
       { id: 'people',      label: 'Directory',   route: '/people',      icon: Users,     requires: 'podium_view' },
       { id: 'org',         label: 'Org Chart',   route: '/org',         icon: Network,   requires: 'podium_view' },
       { id: 'new',         label: 'New Person',  route: '/people/new',  icon: UserPlus, accent: 'orange', requires: 'podium_hr' },
+      // X1 — open exits, Google accounts to action, the backfill review (HR; the worker gates getExits).
+      { id: 'exits',       label: 'Exits',       route: '/exits',       icon: LogOut,    requires: 'podium_hr' },
     ],
   },
   {
@@ -60,6 +62,8 @@ export const NAV_GROUPS = [
       // Hiring C3 — offer templates + signatories. podium_offer_templates is getMe's display flag
       // (salary allow-list OR podium_admin, = the worker's canAdminOfferTemplates).
       { id: 'offer-templates', label: 'Offer Templates', route: '/admin/offer-templates', icon: FileSignature, requires: 'podium_offer_templates' },
+      // X1 — the no-dues template + tools list (HR / admin; the worker gates with isHr).
+      { id: 'exit-checklist', label: 'Exit Checklist', route: '/admin/exit-checklist', icon: ListChecks, requires: 'podium_hr' },
     ],
   },
 ];

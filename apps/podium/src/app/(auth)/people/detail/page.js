@@ -10,6 +10,7 @@ import DocumentUploader from '../../../../components/DocumentUploader.js';
 import StatusBadge from '../../../../components/StatusBadge.js';
 import { ObservationsPanel, WinsPanel, OneOnOnesPanel } from '../../../../components/PerformancePanels.js';
 import PayoutsPanel from '../../../../components/PayoutsPanel.js';
+import { ExitPanel } from '../../../../components/ExitBits.js';
 import { fmtDate, fmtMoney, tenure, labelOf, EMPLOYMENT_TYPES, DOC_TYPES, GENDER_LABELS } from '../../../../lib/format.js';
 
 const TABS = [
@@ -48,7 +49,7 @@ export default function PersonDetailPage() {
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 24, fontWeight: 700, letterSpacing: '0.03em' }}>{e.full_name}</h1>
-            <StatusBadge status={e.status} />
+            <StatusBadge status={e.status} onNotice={e.on_notice} />
           </div>
           <div style={{ color: 'var(--text-2)', fontSize: 13 }}>
             <span style={{ color: 'var(--podium-accent)', fontWeight: 600 }}>{e.employee_code}</span>
@@ -118,6 +119,8 @@ export default function PersonDetailPage() {
           {full && <DocumentsCard employeeId={e.id} session={session} canManage={canEdit} />}
           {data.can_see_comp && <CompCard employeeId={e.id} session={session} canManage={!!(perms?.podium_comp || perms?.podium_admin)} />}
           {data.can_see_comp && <PayoutsPanel employeeId={e.id} session={session} />}
+          {/* X1: self (Resign), the manager chain and HR — the worker scopes it; renders nothing otherwise. */}
+          {full && <ExitPanel employeeId={e.id} session={session} onChanged={load} />}
         </div>
         )
       ) : tab === 'observations' ? (

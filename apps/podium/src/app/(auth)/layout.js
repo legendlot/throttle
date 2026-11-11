@@ -44,6 +44,7 @@ const META = {
   '/people/detail':     { crumb: 'People',      title: 'Profile' },
   '/people/new':        { crumb: 'People',      title: 'New Person' },
   '/org':               { crumb: 'People',      title: 'Org Chart' },
+  '/exits':             { crumb: 'People',      title: 'Exits' },
   '/me':                { crumb: 'Performance', title: 'My Performance' },
   '/team':              { crumb: 'Performance', title: 'Team' },
   '/reviews':           { crumb: 'Performance', title: 'Reviews' },
@@ -67,6 +68,7 @@ const META = {
   '/admin/users':       { crumb: 'Admin',       title: 'Users' },
   '/admin/settings':    { crumb: 'Admin',       title: 'Settings' },
   '/admin/offer-templates': { crumb: 'Admin',    title: 'Offer Templates' },
+  '/admin/exit-checklist':  { crumb: 'Admin',    title: 'Exit Checklist' },
 };
 function chromeFor(pathname) {
   const clean = (pathname || '').replace(/\/$/, '') || '/';

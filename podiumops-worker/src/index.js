@@ -47,6 +47,14 @@ import {
   NOT_COPIED_ON_JOINING,
 } from './workaccount.js';   // J1 work accounts + confirm joining (test/workaccount.test.mjs)
 import {
+  EXIT_REASON_CODES, ASSET_CLOSED_STATUSES, DOCKET_OPEN_STATUSES, PR_OPEN_STATUSES, CHECKLIST_OWNERS, AUTO_SOURCES,
+  exitRole, canSeeExit, canManageExit, canTickItem, buildStartExit, resolveLwd, snapshotItems, checkItemUpdate,
+  closeBlockers, itemProgress, daysLeft, googleItemDue, googleItemDaysOpen, checkGoogleAction, googleUserMatches,
+  driveTransferBody, projectExit, projectPaymentRequest, employeeWriteTouchesExit, exitDbErrorCode,
+  GOOGLE_LIVE_STATUSES, GOOGLE_LEASE_MS, googleClaimFilter, googleClaimGuard, transferOutcome, assetsVerifiable,
+  buildExitPatch, accessLeft,
+} from './exits.js';   // X1 exits + no-dues (test/exits.test.mjs)
+import {
   renderOfferText, renderOfferPdf, sha256Hex, validateTemplateBody, SAMPLE_OFFER, SAMPLE_SIGNATORY, OFFER_FIELDS,
 } from './offer-render.js';   // C3 letter + PDF renderer (test/offer-render.test.mjs)
 
@@ -451,7 +459,7 @@ async function getMe(url, auth, env) {
   const edges = await loadOrgEdges(env);
   const me = callerEmployee(edges, auth.userId);
   const [sr, hiringOn, canCreateOpening, googleAdmin] = await Promise.all([
-    sb(`/rest/v1/settings?id=eq.1&select=comp_vault_enabled,min_tenure_days&limit=1`, env),
+    sb(`/rest/v1/settings?id=eq.1&select=comp_vault_enabled,min_tenure_days,exit_notice_days&limit=1`, env),
     hiringAccess(auth, me, env),
     hasPerm(auth, 'podium_hiring') ? Promise.resolve(true) : hasActiveReports(me, env),
     isGoogleAdmin(auth, env),
@@ -469,7 +477,7 @@ async function getMe(url, auth, env) {
     permissions: { ...(auth.permissions || {}), podium_super_admin: !!auth.isSuperAdmin, podium_hiring_access: hiringOn,
       podium_offer_templates: canComp(auth) || isAdmin(auth), podium_google_admin: googleAdmin },
     employee_id: me?.id || null,
-    settings: sr.data?.[0] || { comp_vault_enabled: false, min_tenure_days: 90 },
+    settings: sr.data?.[0] || { comp_vault_enabled: false, min_tenure_days: 90, exit_notice_days: 30 },
     tier: { admin: isAdmin(auth), hr: isHr(auth), comp: canComp(auth), super_admin: !!auth.isSuperAdmin },
     hiring: { access: hiringOn, can_create: !!canCreateOpening },
   });
@@ -490,8 +498,11 @@ async function getEmployees(url, auth, env) {
   const limit = intParam(url, 'limit', 500, { min: 1, max: 2000 });
   const offset = intParam(url, 'offset', 0);
 
+  // X1: "on notice" is an OPEN exit, not a status (0010 deviation 1) — ?status=notice lists those people.
+  const onNotice = await openExitEmployeeIds(env);
   const filters = [];
-  if (status && status !== 'all') filters.push(`status=eq.${encodeURIComponent(status)}`);
+  if (status === 'notice') filters.push(onNotice.size ? `id=in.(${[...onNotice].join(',')})` : 'id=is.null');
+  else if (status && status !== 'all') filters.push(`status=eq.${encodeURIComponent(status)}`);
   else if (!status) filters.push('status=neq.exited');
   if (department) filters.push(`department_id=eq.${department}`);
   if (search) {
@@ -504,8 +515,16 @@ async function getEmployees(url, auth, env) {
     loadOrgEdges(env),
   ]);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  const rows = (r.data || []).map(e => (canSeeFull(auth, edges, e.id) ? stripPan(e, auth, edges) : projectPublic(e)));
+  const rows = (r.data || []).map(e => ({
+    ...(canSeeFull(auth, edges, e.id) ? stripPan(e, auth, edges) : projectPublic(e)), on_notice: onNotice.has(e.id),
+  }));
   return ok({ employees: rows, offset, limit });
+}
+
+// Employees with an OPEN exit (= on notice). Best-effort: the directory must not fail on it.
+async function openExitEmployeeIds(env) {
+  const r = await sb(`/rest/v1/employee_exits?status=eq.open&select=employee_id&limit=1000`, env);
+  return new Set(r.ok && Array.isArray(r.data) ? r.data.map(x => x.employee_id).filter(id => UUID_RE.test(id)) : []);
 }
 
 async function getEmployee(url, auth, env) {
@@ -525,7 +544,8 @@ async function getEmployee(url, auth, env) {
   const reports = (r2 => (r2 || []))((await sb(
     `/rest/v1/employees?manager_id=eq.${emp.id}&status=neq.exited&select=id,employee_code,full_name,job_title,photo_url,status&order=full_name.asc`, env,
   )).data);
-  return ok({ employee: full ? stripPan(emp, auth, edges) : projectPublic(emp), can_see_full: full, can_see_comp: canComp(auth), reports });
+  const onNotice = (await openExitEmployeeIds(env)).has(emp.id);
+  return ok({ employee: { ...(full ? stripPan(emp, auth, edges) : projectPublic(emp)), on_notice: onNotice }, can_see_full: full, can_see_comp: canComp(auth), reports });
 }
 
 async function getOrgChart(url, auth, env) {
@@ -798,14 +818,11 @@ async function workEmailAwaitingJoining(env, email) {
 async function createEmployee(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!body.full_name) return err('full_name required', 400);
-  // The New Person form offers "Exited" in its Status select and sends every field, so this path
-  // could mint a row that is exited with no last working day — reproducing both defects S363 shipped
-  // to close. A future joining date is legitimate here (onboarded before they start); a future last
-  // working day is not.
+  // X1: nobody is CREATED exited (or on notice) — an exit only happens through the exit flow, which
+  // records its reason, checklist and LWD (exit_close). S363's "no exit without a real date" holds by
+  // construction now. A future joining date is legitimate here (onboarded before they start).
   if (body.date_joined) { const e = badDate(body.date_joined, 'Joining date', { allowFuture: true }); if (e) return err(e, 400); }
-  if (body.status === 'exited') {
-    const e = badDate(body.date_exited, 'Last working day', {}); if (e) return err(e, 400);
-  }
+  if (employeeWriteTouchesExit(body, null)) return x1Err('use_exit_flow', 400);
   if (body.work_email) { const held = await workEmailAwaitingJoining(env, body.work_email); if (held) return held; }
   let code = String(body.employee_code || '').trim();
   if (!code) { code = await mintEmployeeCode(env); if (!code) return err('failed_to_mint_employee_code', 500); }
@@ -926,42 +943,21 @@ async function updateEmployee(body, auth, env) {
   // A person can't be their own (solid or dotted) manager.
   if (patch.secondary_manager_id === body.employee_id) patch.secondary_manager_id = null;
   if (patch.manager_id === body.employee_id) patch.manager_id = null;
-  // ⭐ Exiting someone REQUIRES a real last working day (Afshaan, 2026-09-09, S363) — the same rule
-  // the directory sync now enforces. Closing it there and leaving it open here would just move the
-  // hole: this is the OTHER path that can set status='exited', and the form's date field was
-  // optional. `date_exited` feeds the live SG&A run, so a missing one is not a cosmetic blank.
-  // ⛔ The first version of this guard fell back to the STORED date when the patch omitted one —
-  // which approved the exact request that removes it (S363 hostile review). `clean(f)` in
-  // EmployeeForm always sends `date_exited`, mapping an emptied box to `null`, so blanking the field
-  // and saving passed the check on the stored value and then PATCHed `date_exited: null` anyway.
-  // Decide on the RESULTING row, and treat "explicitly cleared" as its own rejection.
-  if (patch.status === 'exited' || 'date_exited' in patch) {
-    const cur = (await sb(`/rest/v1/employees?id=eq.${body.employee_id}&select=status,date_exited`, env)).data?.[0] || {};
-    const resultingStatus = 'status' in patch ? patch.status : cur.status;
-    const clearing = 'date_exited' in patch && !patch.date_exited;
-    if (resultingStatus === 'exited') {
-      if (clearing) return err('cannot clear the last working day of an exited employee', 400);
-      // Only demand a date when this edit INTRODUCES the exit, or supplies one. An already-exited
-      // row with a null date is pre-existing bad data (EMP-056) tracked in the open [podium] ask —
-      // blocking every unrelated edit to it, down to a phone number, would be a worse bug than the
-      // gap. Validate whatever date IS being written, always.
-      if ('date_exited' in patch && patch.date_exited) {
-        const e = badDate(patch.date_exited, 'Last working day', {}); if (e) return err(e, 400);
-      } else if (cur.status !== 'exited') {
-        return err('last working day required to exit someone (YYYY-MM-DD)', 400);
-      }
-    }
+  // ⭐ X1: the exit flow is the ONLY path to `exited` (plan 2026-11-11-podium-x1-exits). This edit may not
+  // set status exited / notice, nor change date_exited or exit_reason — exit_close writes all three from the
+  // exit record. Decided on the STORED row because EmployeeForm sends every field on every save: an unchanged
+  // date on an already-exited person is not a change. (The S363 date rules this replaces now live in the exit
+  // flow: the LWD is required there and the close cannot run before it.)
+  if ('status' in patch || 'date_exited' in patch || 'exit_reason' in patch) {
+    const cr = await sb(`/rest/v1/employees?id=eq.${body.employee_id}&select=status,date_exited,exit_reason`, env);
+    if (!cr.ok || !Array.isArray(cr.data)) return err('db_error: employee lookup failed', 500);
+    if (employeeWriteTouchesExit(patch, cr.data[0] || {})) return x1Err('use_exit_flow', 400);
   }
   if (patch.work_email) { const held = await workEmailAwaitingJoining(env, patch.work_email); if (held) return held; }
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
   const r = await sb(`/rest/v1/employees?id=eq.${body.employee_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  // Exiting someone must never leave their reports pointing at an exited row.
-  if (patch.status === 'exited') {
-    const reassigned = await reassignReportsOnExit(body.employee_id, auth, env);
-    return ok({ ...(r.data?.[0] || {}), reassigned });
-  }
   return ok(r.data?.[0]);
 }
 
@@ -1137,6 +1133,8 @@ async function updateSettings(body, auth, env) {
   const patch = {};
   if (typeof body.comp_vault_enabled === 'boolean') patch.comp_vault_enabled = body.comp_vault_enabled;
   if (body.min_tenure_days != null) patch.min_tenure_days = Math.round(Number(body.min_tenure_days));
+  // X1: the default notice period (LWD = notice date + this). 0010 CHECKs 0–365.
+  if (body.exit_notice_days != null) patch.exit_notice_days = Math.round(Number(body.exit_notice_days));
   if (Object.keys(patch).length === 0) return err('no_patch', 400);
   patch.updated_at = nowIso();
   const r = await sb(`/rest/v1/settings?id=eq.1`, env, { method: 'PATCH', body: JSON.stringify(patch) });
@@ -1785,13 +1783,18 @@ async function getDirectorySyncPreview(url, auth, env) {
     });
   }
   // Departures: active LOT-domain employees whose Google account is gone or suspended.
+  // ⭐ X1: these are ALERTS, never exits — "an exit was started outside Podium; start the exit here". The sync
+  // cannot record an exit (no reason, no checklist, no LWD); importDirectoryCandidates refuses the exit list.
+  // exit_open = Podium already has the open exit, so the alert is expected (the person is serving notice).
+  const openExits = await openExitEmployeeIds(env);
   const departed = emps.filter(e => {
     if (e.status !== 'active' || !e.work_email) return false;
     const em = e.work_email.toLowerCase();
     if (!em.endsWith('@legendoftoys.com')) return false; // only judge accounts we expect in Google
     return !gEmails.has(em) || gSuspended.has(em);
   }).map(e => ({
-    id: e.id, full_name: e.full_name, work_email: e.work_email,
+    id: e.id, full_name: e.full_name, work_email: e.work_email, alert: 'exit_started_outside_podium',
+    exit_open: openExits.has(e.id),
     reason: gSuspended.has(e.work_email.toLowerCase()) ? 'suspended in Google' : 'no Google account',
   }));
 
@@ -1821,7 +1824,7 @@ async function importDirectoryCandidates(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!googleConfigured(env)) return err('google_not_configured', 400);
   const d = body.data || body;
-  // ⭐ `date_joined` IS REQUIRED on every import (S363) — the mirror of the exit-date rule below.
+  // ⭐ `date_joined` IS REQUIRED on every import (S363) — the mirror of the (former) exit-date rule.
   // This path created people with NO joining date at all, and a NULL `date_joined` is not neutral:
   // `sales.f_podium_salary_run` and `_coverage` both gate on `(e.date_joined IS NULL OR
   // e.date_joined <= m_end)`, so an undated person is "employed" in EVERY month ever — including
@@ -1836,16 +1839,11 @@ async function importDirectoryCandidates(body, auth, env) {
   // they start (a 2 Sep start recorded in August is exactly how `eligible` moved 65→64). So this
   // validates the format only and deliberately does NOT cap at today.
   const create = Array.isArray(d.create) ? d.create : []; // [{email, date_joined, department_id, manager_id, job_title}]
-  // ⭐ `exit` is [{work_email, date_exited}] — the DATE IS REQUIRED (Afshaan, 2026-09-09, S363).
-  // It used to be a bare [email,...] and this handler stamped `date_exited: nowIso()`, i.e. the day
-  // someone happened to run the sync. That produced batch clusters — 6 people sharing 2026-08-24,
-  // 4 sharing 2026-06-24, 10 of 12 dated exits on just two days — and because the Podium→Odo SG&A
-  // feed charges a full month to anyone employed any part of it, it put ~₹3.36L of phantom cost
-  // into a LIVE P&L. The sync knows *that* someone left and *when it noticed*; it never knew their
-  // last working day. So it no longer guesses: whoever marks the exit types the real date.
-  // ⛔ The old bare-string shape is REJECTED, not silently accepted — tolerating it would leave the
-  // hole open for any caller that had not been updated, which is the whole defect.
-  const exit = Array.isArray(d.exit) ? d.exit : [];        // [{work_email, date_exited}, ...]
+  // ⭐ X1: the sync no longer exits anyone. Exits are recorded in Podium (reason, checklist, LWD — the exit
+  // flow), and the S363 history of this list (sync-day dates, ~₹3.36L of phantom SG&A) is why: Google knows
+  // THAT an account went, never why or when the person last worked. A non-empty `exit` is refused outright —
+  // silently ignoring it would let an old client believe it had exited people.
+  if (Array.isArray(d.exit) && d.exit.length) return x1Err('exits_are_recorded_in_podium', 400);
   const ignore = Array.isArray(d.ignore) ? d.ignore : [];  // [email,...]
   // S306 move-review. `update` = HR-confirmed department/manager changes for people ALREADY
   // in Podium; `dismiss` = "Podium is right, stop reporting this" — writes no org data, only
@@ -1857,7 +1855,7 @@ async function importDirectoryCandidates(body, auth, env) {
   // Bookkeeping only — the OU observed for people with nothing to review (see below).
   const baselineIn = Array.isArray(d.baseline) ? d.baseline : []; // [{id, org_unit}]
   if (create.length > 20) return err('import at most 20 people per sync (subrequest limit) — run again for the rest', 400);
-  // Validate every import BEFORE writing any of them, same as the exit list below: a half-applied
+  // Validate every import BEFORE writing any of them: a half-applied
   // batch would leave some people created and others not, with no way to tell which from here.
   for (const c of create) {
     if (!c || !c.email) return err('each import needs an email', 400);
@@ -1867,7 +1865,7 @@ async function importDirectoryCandidates(body, auth, env) {
   }
   if (update.length + dismiss.length > 60) return err('resolve at most 60 changes per sync — run again for the rest', 400);
   if (baselineIn.length > 2000) return err('baseline list too large', 400);
-  const result = { created: [], exited: [], ignored: [], updated: [], dismissed: [], baselined: 0, reassigned: [], reassign_needs_attention: [], errors: [] };
+  const result = { created: [], ignored: [], updated: [], dismissed: [], baselined: 0, errors: [] };
 
   for (const u of update) {
     if (!u || !u.id) { result.errors.push('update: missing employee id'); continue; }
@@ -1937,37 +1935,6 @@ async function importDirectoryCandidates(body, auth, env) {
     await sb(`/rest/v1/directory_ignored?on_conflict=email`, env,
       { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(rows) });
     result.ignored = ignore;
-  }
-
-  // Validate EVERY exit before writing ANY of them — a half-applied batch would leave some people
-  // exited and others not, with no way to tell which from the response.
-  for (const x of exit) {
-    if (typeof x === 'string')
-      return err(`exit now requires a last working day: send {work_email, date_exited}, not a bare email (got "${x}")`, 400);
-    if (!x || !x.work_email) return err('each exit needs a work_email', 400);
-    // No allowFuture: this field is what the SG&A feed reads to STOP charging someone, so a future
-    // date keeps billing them — it is a typo, never a notice period.
-    const e = badDate(x.date_exited, `Last working day for ${x.work_email}`, {});
-    if (e) return err(`${e} — the sync no longer stamps today's date`, 400);
-  }
-
-  for (const x of exit) {
-    const em = x.work_email;
-    const r = await sb(`/rest/v1/employees?work_email=eq.${encodeURIComponent(em)}&status=eq.active`, env,
-      { method: 'PATCH', body: JSON.stringify({ status: 'exited', date_exited: x.date_exited, updated_at: nowIso() }) });
-    if (r.ok) {
-      result.exited.push(em);
-      // Same guarantee as the manual exit path — reports must not be left dangling.
-      // `status=eq.active` above means data[] is empty when the person was already exited,
-      // so this only fires on a real transition.
-      const who = r.data?.[0]?.id;
-      if (who) {
-        const re = await reassignReportsOnExit(who, auth, env);
-        if (re.escalated.length) result.reassigned.push({ email: em, to: re.to_manager?.full_name, people: re.escalated.map(x => x.full_name) });
-        if (re.unassigned.length) result.reassign_needs_attention.push({ email: em, people: re.unassigned });
-        result.errors.push(...re.errors);
-      }
-    } else result.errors.push(`exit ${em}: ${JSON.stringify(r.data)}`);
   }
 
   if (create.length) {
@@ -5770,6 +5737,628 @@ async function suspendWorkAccount(body, auth, env) {
   return ok({ id: wa.id, status: 'suspended' });
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// X1 — EXITS + NO-DUES (plan docs/superpowers/plans/2026-11-11-podium-x1-exits.md, spec "X1" + L4–L8).
+// The exit flow is the ONLY path to `exited`: startExit (exit + checklist snapshot, exit_start) → owners tick
+// lines (updateExitItem → exit_update_item, under the exit lock) → HR closes (exit_close: live asset / Docket
+// checks, exited, access revoked, the Google prompt opened) → reports reassigned (RULE-PODIUM-010).
+// createEmployee / updateEmployee / the Directory sync all refuse exit writes. "On notice" = an open exit (no
+// `notice` status — 0010 deviation 1).
+// Gates: HR = isHr · manager = the manager chain · self = the employee row's auth_user_id IS the caller (self
+// wins over HR — nobody runs their own exit) · Google admin = isGoogleAdmin (J1). Pure rules: src/exits.js.
+// Reach: 60 of 64 employees and 14 of 18 managers hold no podium_view (2026-11-11), so getExit, getMyTeamExits,
+// startExit and updateExitItem are self-serve; each self-scopes through exitCtx.
+// ────────────────────────────────────────────────────────────────────────────
+
+const X1_COPY = {
+  use_exit_flow: 'Exits are recorded through the Exit panel on the person’s page, not by editing status or dates',
+  exits_are_recorded_in_podium: 'The sync no longer exits anyone — start the exit on the person’s page',
+  forbidden: 'You cannot act on this exit',
+  forbidden_item: 'Only HR — or the manager, for manager lines — can set this line',
+  set_by_close: 'LOT app access is revoked by closing the exit',
+  bad_reason_code: 'Pick a reason',
+  reason_note_required: 'Say what the reason is',
+  bad_notice_date: 'Pick the date notice was given',
+  notice_date_in_future: 'The notice date cannot be in the future',
+  notice_date_too_old: 'The notice date can be at most 7 days back — HR can record an older one',
+  notice_before_joining: 'The notice date is before the person joined',
+  bad_lwd: 'Pick the last working day',
+  lwd_before_notice: 'The last working day is before the notice date',
+  lwd_before_joining: 'The last working day is before the person joined',
+  lwd_override_hr_only: 'Only HR can change the last working day from the notice period',
+  lwd_closed_month_hr_only: 'A last working day in an earlier month changes a closed SG&A month — only HR can set it, with a reason',
+  lwd_override_reason_required: 'Say why the last working day differs from the notice period (at least 5 characters)',
+  bad_rehire: 'Rehire must be yes, no or not recorded',
+  already_exited: 'This person has already exited',
+  exit_already_open: 'An exit is already open for this person',
+  employee_not_found: 'Employee not found',
+  item_not_found: 'Checklist line not found',
+  exit_not_found: 'Exit not found',
+  exit_not_open: 'This exit is not open',
+  before_lwd: 'The exit can close on or after the last working day',
+  checklist_incomplete: 'Required checklist lines are still open',
+  assets_outstanding: 'Assets are still assigned to this person in Snorkel',
+  assets_unverifiable: 'Snorkel cannot verify this person’s assets automatically — HR marks this line with a note',
+  open_work: 'This person still owns or is assigned open Docket tasks',
+  exit_blocked: 'The exit cannot close yet — clear the blockers listed',
+  live_check_failed: 'Could not check Snorkel / Docket right now — try again',
+  org_check_failed: 'Could not check the reporting line right now — try again',
+  bad_item_status: 'Pick Done, N/A or Open',
+  na_not_allowed: 'This line cannot be marked N/A',
+  na_note_required: 'Say why this line does not apply',
+  bad_document: 'That document is not on this person’s record',
+  cancel_reason_required: 'Say why the exit is cancelled (at least 5 characters)',
+  not_exited: 'Only an exited person can be handled here',
+  already_backfilled: 'This exit already has a record',
+  no_work_email: 'This person has no work email',
+  bad_google_action: 'Pick an action',
+  google_item_closed: 'This Google account has already been actioned',
+  transfer_in_progress: 'The Drive transfer is under way — use Check transfer',
+  no_transfer_to_check: 'There is no transfer to check',
+  in_progress: 'Someone else is acting on this account right now — wait a moment and reload',
+  keep_until_future: 'Pick a future date to keep the account until',
+  keep_reason_required: 'Say why the account stays active (at least 5 characters)',
+  google_account_mismatch: 'The Google account no longer matches this address — not touched',
+  manager_has_no_google_account: 'The manager has no Google account to receive the Drive — suspend only, or fix the manager',
+  drive_app_not_found: 'Google did not list the Drive and Docs transfer app',
+  google_error: 'Google refused the request',
+  google_item_exists: 'This person already has an open Google item',
+  bad_line: 'Check the line: key, title and owner are required',
+  bad_tool: 'A tool needs a name',
+  conflict: 'This conflicts with an existing record — reload and retry',
+  check_failed: 'The record failed a consistency check',
+};
+// J1's errCode shape ({ ok:false, error:<code>, message }) + optional extras (blockers, detail).
+const x1Err = (code, status = 409, extra = {}) =>
+  json({ ok: false, error: code, message: X1_COPY[code] || code.replace(/_/g, ' '), ...extra }, status);
+function x1DbError(r) {
+  const m = exitDbErrorCode(r?.data);
+  if (m) return x1Err(m.code, m.status, m.detail ? { detail: m.detail } : {});
+  const d = r?.data && typeof r.data === 'object' ? r.data : {};
+  return err(`db_error: ${[d.code, d.message].filter(Boolean).join(' ') || r?.status}`, 400);
+}
+
+// PostgREST read in another exposed schema (docket); service-role, like sb/sbStore.
+async function sbSchema(schema, path, env) {
+  const res = await fetch(`${env.SUPABASE_URL}${path}`, { headers: {
+    'apikey': env.SUPABASE_SERVICE_ROLE_KEY, 'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'Accept-Profile': schema,
+  } });
+  const text = await res.text();
+  let data;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  return { ok: res.ok, status: res.status, data };
+}
+
+// loadOrgEdges returns [] on a DB error, which reads as "no chain" — fine for display, wrong for a gate.
+async function loadOrgEdgesStrict(env) {
+  const r = await sb(`/rest/v1/employees?select=id,manager_id,auth_user_id&limit=5000`, env);
+  return r.ok && Array.isArray(r.data) ? r.data : null;
+}
+
+const EXIT_EMP_SELECT = 'id,employee_code,full_name,status,employment_type,auth_user_id,work_email,google_user_id,manager_id,date_joined';
+
+// The employee + the caller's role on THIS person's exit. → { emp, me, role } | { res }
+// Self comes from the loaded row (emp.auth_user_id === caller), never from the org graph: an edges failure
+// must not turn an HR person's own exit into an HR exit. The chain is only consulted when it decides the role,
+// and then a failed read fails closed.
+async function exitCtx(auth, env, employeeId) {
+  if (!isUuid(employeeId)) return { res: err('employee_id required', 400) };
+  const er = await sb(`/rest/v1/employees?id=eq.${employeeId}&select=${EXIT_EMP_SELECT}&limit=1`, env);
+  if (!er.ok) return { res: err('db_error', 500) };
+  const emp = er.data?.[0];
+  if (!emp) return { res: err('not_found', 404) };
+  const self = !!emp.auth_user_id && emp.auth_user_id === auth.userId;
+  const hr = isHr(auth);
+  let chain = false;
+  if (!self && !hr) {
+    const edges = await loadOrgEdgesStrict(env);
+    if (!edges) return { res: x1Err('org_check_failed', 503) };
+    const me = callerEmployee(edges, auth.userId);
+    chain = !!me && me.id !== emp.id && inManagerChain(edges, emp.id, me.id);
+  }
+  return { emp, role: exitRole({ hr, self, chain }) };
+}
+async function loadExit(env, id) {
+  if (!isUuid(id)) return null;
+  return (await sb(`/rest/v1/employee_exits?id=eq.${id}&select=*&limit=1`, env)).data?.[0] || null;
+}
+async function exitItems(env, exitId) {
+  const r = await sb(`/rest/v1/exit_checklist_items?exit_id=eq.${exitId}&select=*&order=sort.asc,line_key.asc`, env);
+  return r.ok && Array.isArray(r.data) ? r.data : null;
+}
+async function exitNoticeDays(env) {
+  const r = await sb(`/rest/v1/settings?id=eq.1&select=exit_notice_days&limit=1`, env);
+  const n = r.ok ? r.data?.[0]?.exit_notice_days : null;
+  return n == null ? 30 : Number(n);
+}
+// PostgREST `ilike` with no `*` is a case-insensitive equality; LIKE's own % / _ are escaped.
+const ilikeExact = (s) => encodeURIComponent(String(s || '').trim().replace(/([%_\\])/g, '\\$1'));
+
+// The live lists under the checklist: Snorkel assets held, assets under the person's NAME with no custodian user
+// (unlinked — cannot be verified automatically), open Docket tasks, open payment requests.
+// → { ok, assets, unlinked_assets, assets_verifiable, tasks, payment_requests, payment_requests_verifiable }
+// (ok=false if any source failed — callers that GATE on it fail closed).
+async function exitLive(env, emp) {
+  const authId = isUuid(emp.auth_user_id) ? emp.auth_user_id : null;
+  const empty = Promise.resolve({ ok: true, data: [] });
+  const closed = ASSET_CLOSED_STATUSES.join(',');
+  const [ar, ur, tr, pr] = await Promise.all([
+    authId ? sbStore(`/rest/v1/assets?custodian_user_id=eq.${authId}&status=not.in.(${closed})&select=id,asset_code,name,status,category:category_id(name)&order=asset_code.asc&limit=200`, env) : empty,
+    emp.full_name ? sbStore(`/rest/v1/assets?custodian_user_id=is.null&custodian_name=ilike.${ilikeExact(emp.full_name)}&status=not.in.(${closed})&select=id,asset_code,name,status,custodian_name&limit=200`, env) : empty,
+    sbSchema('docket', `/rest/v1/tasks?or=(assignee_employee_id.eq.${emp.id},owner_employee_id.eq.${emp.id})&status=in.(${DOCKET_OPEN_STATUSES.join(',')})&archived_at=is.null&select=id,task_no,title,status,assignee_employee_id,owner_employee_id&order=task_no.asc&limit=200`, env),
+    authId ? sbStore(`/rest/v1/payment_requests?requested_by_user_id=eq.${authId}&status=in.(${PR_OPEN_STATUSES.join(',')})&select=id,request_no,purpose,status,amount_to_pay,invoice_total&order=id.desc&limit=100`, env) : empty,
+  ]);
+  const okAll = [ar, ur, tr, pr].every(x => x.ok && Array.isArray(x.data));
+  const rows = (r) => (r.ok && Array.isArray(r.data) ? r.data : []);
+  const unlinked = rows(ur).map(a => ({ id: a.id, asset_code: a.asset_code, name: a.name, status: a.status, custodian_name: a.custodian_name }));
+  return {
+    ok: okAll,
+    assets: rows(ar).map(a => ({ id: a.id, asset_code: a.asset_code, name: a.name, status: a.status, category: a.category?.name || null })),
+    unlinked_assets: unlinked,
+    assets_verifiable: assetsVerifiable(authId, unlinked.length),
+    tasks: rows(tr).map(t => ({ id: t.id, task_no: t.task_no, title: t.title, status: t.status,
+      as: t.assignee_employee_id === emp.id && t.owner_employee_id === emp.id ? 'owner_assignee' : t.assignee_employee_id === emp.id ? 'assignee' : 'owner' })),
+    payment_requests: rows(pr),
+    payment_requests_verifiable: !!authId,
+  };
+}
+
+// GET getExit?employee_id= — self, the manager chain or HR. The open exit (else the latest) + its checklist + the
+// live lists + what still blocks the close. rehire_eligible / F&F: HR only; payment-request amounts: HR only.
+async function getExit(url, auth, env) {
+  const c = await exitCtx(auth, env, url.searchParams.get('employee_id'));
+  if (c.res) return c.res;
+  if (!canSeeExit(c.role)) return x1Err('forbidden', 403);
+  const today = istToday();
+  const [xr, days] = await Promise.all([
+    sb(`/rest/v1/employee_exits?employee_id=eq.${c.emp.id}&select=*&order=created_at.desc&limit=10`, env),
+    exitNoticeDays(env),
+  ]);
+  if (!xr.ok) return err('db_error', 500);
+  const rows = xr.data || [];
+  const exit = rows.find(x => x.status === 'open') || rows[0] || null;
+  const base = {
+    employee: { id: c.emp.id, employee_code: c.emp.employee_code, full_name: c.emp.full_name, status: c.emp.status,
+      date_joined: c.emp.date_joined },
+    role: c.role, can_manage: canManageExit(c.role), notice_days: days, today,
+    history: rows.filter(x => x !== exit).map(x => ({ id: x.id, status: x.status, reason_code: x.reason_code, lwd: x.lwd })),
+  };
+  if (!exit) return ok({ ...base, exit: null, items: [], live: null, blockers: [], progress: null });
+  const items = await exitItems(env, exit.id);
+  if (!items) return err('db_error', 500);
+  let live = null, blockers = [];
+  if (exit.status === 'open') {
+    const l = await exitLive(env, c.emp);
+    live = { ...l, payment_requests: l.payment_requests.map(p => projectPaymentRequest(p, c.role)) };
+    blockers = closeBlockers(exit, items, { assets: l.assets.length, tasks: l.tasks.length }, today);
+    if (!l.ok) blockers.push({ code: 'live_check_failed' });
+  }
+  return ok({ ...base, exit: projectExit(exit, c.role), items, live, blockers, progress: itemProgress(items),
+    days_left: exit.status === 'open' ? daysLeft(exit.lwd, today) : null });
+}
+
+// GET getMyTeamExits — self-serve: the caller's own exit status + everyone below them in the chain (the /me
+// "Your team" list, for the managers who hold no podium_view). Directory-level fields only.
+async function getMyTeamExits(url, auth, env) {
+  const edges = await loadOrgEdgesStrict(env);
+  if (!edges) return x1Err('org_check_failed', 503);
+  const me = callerEmployee(edges, auth.userId);
+  if (!me) return ok({ employee_id: null, team: [] });
+  const ids = [...descendantsOf(edges, me.id)].filter(isUuid);
+  const [tr, onNotice] = await Promise.all([
+    ids.length ? sb(`/rest/v1/employees?id=in.(${ids.join(',')})&status=neq.exited&select=id,employee_code,full_name,job_title,manager_id&order=full_name.asc`, env) : Promise.resolve({ ok: true, data: [] }),
+    openExitEmployeeIds(env),
+  ]);
+  if (!tr.ok) return err('db_error', 500);
+  return ok({ employee_id: me.id, on_notice: onNotice.has(me.id),
+    team: (tr.data || []).map(e => ({ ...e, direct: e.manager_id === me.id, on_notice: onNotice.has(e.id) })) });
+}
+
+// GET getExits (HR) — the board: open exits, Google accounts to action (due first), the backfill queue with what
+// each exited person can still reach (never revoked automatically — revokeExitedAccess, per person).
+async function getExits(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const today = istToday();
+  const [xr, gr, er, ar, gAdmin] = await Promise.all([
+    sb(`/rest/v1/employee_exits?status=eq.open&select=id,employee_id,reason_code,initiated_by,notice_date,lwd,created_at,employee:employee_id(id,employee_code,full_name,job_title,auth_user_id,department:department_id(name))&order=lwd.asc`, env),
+    sb(`/rest/v1/google_exit_items?status=in.(${GOOGLE_LIVE_STATUSES.join(',')})&select=*,employee:employee_id(id,employee_code,full_name,manager_id)&order=created_at.asc`, env),
+    sb(`/rest/v1/employees?status=eq.exited&select=id,employee_code,full_name,exit_reason,date_exited,date_joined,work_email,auth_user_id&order=date_exited.desc.nullslast&limit=1000`, env),
+    sb(`/rest/v1/employee_exits?select=employee_id&limit=5000`, env),
+    isGoogleAdmin(auth, env),
+  ]);
+  if (![xr, gr, er, ar].every(r => r.ok && Array.isArray(r.data))) return err('db_error', 500);
+  const exits = xr.data;
+  const ids = exits.map(x => x.id);
+  const empIds = exits.map(x => x.employee_id).filter(isUuid);
+  const authIds = exits.map(x => x.employee?.auth_user_id).filter(isUuid);
+  const exitedAuth = er.data.map(e => e.auth_user_id).filter(isUuid);
+  const none = Promise.resolve({ ok: true, data: [] });
+  const inA = (list) => list.join(',');
+  const [ir, asr, tkr, upr, rlr, car, gar, xar, gir] = await Promise.all([
+    ids.length ? sb(`/rest/v1/exit_checklist_items?exit_id=in.(${inA(ids)})&select=exit_id,line_key,title,owner,required,allow_na,auto_source,status,sort`, env) : none,
+    authIds.length ? sbStore(`/rest/v1/assets?custodian_user_id=in.(${inA(authIds)})&status=not.in.(${ASSET_CLOSED_STATUSES.join(',')})&select=custodian_user_id&limit=2000`, env) : none,
+    empIds.length ? sbSchema('docket', `/rest/v1/tasks?or=(assignee_employee_id.in.(${inA(empIds)}),owner_employee_id.in.(${inA(empIds)}))&status=in.(${DOCKET_OPEN_STATUSES.join(',')})&archived_at=is.null&select=assignee_employee_id,owner_employee_id&limit=5000`, env) : none,
+    // What exited people can still reach (backfill review).
+    exitedAuth.length ? sbStore(`/rest/v1/users_profile?id=in.(${inA(exitedAuth)})&active=eq.true&select=id`, env) : none,
+    exitedAuth.length ? sbStore(`/rest/v1/podium_user_roles?user_id=in.(${inA(exitedAuth)})&select=user_id`, env) : none,
+    exitedAuth.length ? sb(`/rest/v1/comp_access?auth_user_id=in.(${inA(exitedAuth)})&select=auth_user_id`, env) : none,
+    exitedAuth.length ? sb(`/rest/v1/google_admin_access?auth_user_id=in.(${inA(exitedAuth)})&select=auth_user_id`, env) : none,
+    exitedAuth.length ? sbStore(`/rest/v1/assets?custodian_user_id=in.(${inA(exitedAuth)})&status=not.in.(${ASSET_CLOSED_STATUSES.join(',')})&select=custodian_user_id&limit=2000`, env) : none,
+    sb(`/rest/v1/google_exit_items?select=employee_id&limit=5000`, env),
+  ]);
+  if (!ir.ok) return err('db_error', 500);
+  const liveOk = asr.ok && tkr.ok;
+  const board = exits.map(x => {
+    const items = (ir.data || []).filter(i => i.exit_id === x.id);
+    const assets = (asr.data || []).filter(a => a.custodian_user_id && a.custodian_user_id === x.employee?.auth_user_id).length;
+    const tasks = (tkr.data || []).filter(t => t.assignee_employee_id === x.employee_id || t.owner_employee_id === x.employee_id).length;
+    const blockers = closeBlockers({ ...x, status: 'open' }, items, { assets, tasks }, today);
+    if (!liveOk) blockers.push({ code: 'live_check_failed' });
+    const { auth_user_id, ...employee } = x.employee || {};
+    return { exit_id: x.id, employee, reason_code: x.reason_code, initiated_by: x.initiated_by, notice_date: x.notice_date,
+      lwd: x.lwd, days_left: daysLeft(x.lwd, today), progress: itemProgress(items), blockers };
+  });
+  const google = gr.data.map(g => {
+    const { acting_id, ...row } = g;
+    return { ...row, due: googleItemDue(g, today), days_open: googleItemDaysOpen(g, today) };
+  }).sort((a, b) => (Number(b.due) - Number(a.due)) || ((b.days_open || 0) - (a.days_open || 0)));
+  const accessOk = [upr, rlr, car, gar, xar].every(r => r.ok && Array.isArray(r.data));
+  const count = (r, col, id) => (r.data || []).filter(x => x[col] === id).length;
+  // Any Google item at all (live or actioned) → never offered again (exit_open_google_item refuses too).
+  const hasItem = new Set([...gr.data, ...(gir.ok && Array.isArray(gir.data) ? gir.data : [])].map(g => g.employee_id));
+  const exited = er.data.map(e => {
+    const a = isUuid(e.auth_user_id) ? {
+      login_active: count(upr, 'id', e.auth_user_id) > 0, podium_roles: count(rlr, 'user_id', e.auth_user_id),
+      comp_access: count(car, 'auth_user_id', e.auth_user_id) > 0, google_admin: count(gar, 'auth_user_id', e.auth_user_id) > 0,
+      assets: count(xar, 'custodian_user_id', e.auth_user_id),
+    } : { login_active: false, podium_roles: 0, comp_access: false, google_admin: false, assets: 0 };
+    const { auth_user_id, ...row } = e;
+    return { ...row, auth_linked: isUuid(auth_user_id), access: a, access_left: accessLeft(a),
+      can_open_google_item: !!e.work_email && gir.ok && !hasItem.has(e.id) };
+  });
+  const recorded = new Set(ar.data.map(x => x.employee_id));
+  return ok({ today, exits: board, google, google_due: google.filter(g => g.due).length, can_act_google: gAdmin,
+    backfill: exited.filter(e => !recorded.has(e.id)),
+    access_left: exited.filter(e => recorded.has(e.id) && e.access_left.length),
+    access_check_ok: accessOk, reason_codes: EXIT_REASON_CODES });
+}
+
+// POST startExit {employee_id, reason_code, reason_note, notice_date, lwd?, lwd_override_reason?, rehire_eligible?}
+// Self-serve (self-scoped): self → resignation, notice today, default LWD. Manager chain → any reason, default
+// LWD, notice ≤ 7 days back. HR → LWD override with a reason + the private rehire flag. One transaction: exit_start.
+async function startExit(body, auth, env) {
+  const d = body.data || body;
+  const c = await exitCtx(auth, env, d.employee_id);
+  if (c.res) return c.res;
+  if (!canSeeExit(c.role)) return x1Err('forbidden', 403);
+  if (c.emp.status === 'exited') return x1Err('already_exited');
+  const [days, lr, tr] = await Promise.all([
+    exitNoticeDays(env),
+    sb(`/rest/v1/exit_checklist_lines?active=eq.true&select=*`, env),
+    sb(`/rest/v1/exit_tools?active=eq.true&select=id,name,sort,active`, env),
+  ]);
+  if (!lr.ok || !tr.ok || !Array.isArray(lr.data) || !Array.isArray(tr.data)) return err('db_error', 500);
+  const s = buildStartExit(d, c.role, days, istToday(), c.emp.date_joined);
+  if (s.error) return x1Err(s.error, s.error === 'forbidden' ? 403 : 400);
+  const items = snapshotItems(lr.data, tr.data, c.emp.employment_type);
+  const r = await hiringRpc(env, 'exit_start', { employee_id: c.emp.id, started_by: auth.userId, ...s, items });
+  return r.ok ? ok(r.data) : x1DbError(r);
+}
+
+// The exit, its employee and the caller's role, for the item/exit writes. → { exit, emp, role } | { res }
+async function exitWriteCtx(auth, env, exitId) {
+  const exit = await loadExit(env, exitId);
+  if (!exit) return { res: x1Err('exit_not_found', 404) };
+  const c = await exitCtx(auth, env, exit.employee_id);
+  if (c.res) return c;
+  return { exit, emp: c.emp, role: c.role };
+}
+
+// POST updateExitItem {item_id, status: done|na|open, note, document_id?} — self-serve: HR any line; the manager
+// chain only `owner = 'manager'` lines. The write is exit_update_item: under the exit lock it re-runs every rule
+// and the live asset / Docket checks itself, so a tick can never race a close.
+async function updateExitItem(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.item_id)) return err('item_id required', 400);
+  const item = (await sb(`/rest/v1/exit_checklist_items?id=eq.${d.item_id}&select=*&limit=1`, env)).data?.[0];
+  if (!item) return err('not_found', 404);
+  const c = await exitWriteCtx(auth, env, item.exit_id);
+  if (c.res) return c.res;
+  if (c.exit.status !== 'open') return x1Err('exit_not_open');
+  const te = canTickItem(c.role, item);
+  if (te) return x1Err(te, 403);
+  const note = String(d.note || '').trim().slice(0, 2000) || null;
+  // Pre-check for a clear answer (the RPC is the authority).
+  let live = {};
+  if (d.status === 'done' && (item.auto_source === 'snorkel_assets' || item.auto_source === 'open_work')) {
+    const l = await exitLive(env, c.emp);
+    if (!l.ok) return x1Err('live_check_failed', 502);
+    live = { assets: l.assets.length, tasks: l.tasks.length, assets_verifiable: l.assets_verifiable };
+  }
+  const ce = checkItemUpdate(item, { status: d.status, note }, live, c.role);
+  if (ce) return x1Err(ce, ce === 'bad_item_status' ? 400 : 409);
+  if ('document_id' in d && d.document_id && !isUuid(d.document_id)) return x1Err('bad_document', 400);
+  const p = { item_id: item.id, status: d.status, note, actor_user_id: auth.userId, role: c.role };
+  if ('document_id' in d) p.document_id = d.document_id || null;
+  const r = await hiringRpc(env, 'exit_update_item', p);
+  return r.ok ? ok(r.data) : x1DbError(r);
+}
+
+// POST updateExit {exit_id, lwd?, lwd_override_reason?, rehire_eligible?, exit_interview?, reason_code?, reason_note?}
+// HR. Only CHANGED fields count. LWD + reason only while open (the PATCH is guarded status=eq.open; 0 rows =
+// exit_not_open); a closed exit takes only the exit interview and the rehire flag.
+async function updateExit(body, auth, env) {
+  const d = body.data || body;
+  const c = await exitWriteCtx(auth, env, d.exit_id);
+  if (c.res) return c.res;
+  if (!canManageExit(c.role)) return x1Err('forbidden', 403);
+  const b = buildExitPatch(c.exit, d, await exitNoticeDays(env), istToday());
+  if (b.error) return x1Err(b.error, b.error === 'exit_not_open' ? 409 : 400);
+  if (!Object.keys(b.patch).length) return ok(projectExit(c.exit, 'hr'));
+  const guard = b.openOnly ? '&status=eq.open' : '';
+  const r = await sb(`/rest/v1/employee_exits?id=eq.${c.exit.id}${guard}`, env, { method: 'PATCH', body: JSON.stringify(b.patch) });
+  if (!r.ok) return x1DbError(r);
+  if (!r.data?.length) return x1Err('exit_not_open');
+  return ok(projectExit(r.data[0], 'hr'));
+}
+
+// POST cancelExit {exit_id, reason} (HR) — e.g. the resignation was withdrawn. The checklist stays as history.
+async function cancelExit(body, auth, env) {
+  const d = body.data || body;
+  const c = await exitWriteCtx(auth, env, d.exit_id);
+  if (c.res) return c.res;
+  if (!canManageExit(c.role)) return x1Err('forbidden', 403);
+  const reason = String(d.reason || '').trim();
+  if (reason.length < 5) return x1Err('cancel_reason_required', 400);
+  const r = await sb(`/rest/v1/employee_exits?id=eq.${c.exit.id}&status=eq.open`, env, { method: 'PATCH',
+    body: JSON.stringify({ status: 'cancelled', cancelled_at: nowIso(), cancelled_by: auth.userId, cancel_reason: reason.slice(0, 500) }) });
+  if (!r.ok) return x1DbError(r);
+  if (!r.data?.length) return x1Err('exit_not_open');
+  return ok({ exit_id: c.exit.id, status: 'cancelled' });
+}
+
+// POST closeExit {exit_id} (HR) — the only path to `exited`. The blockers are computed here first and returned
+// verbatim; exit_close re-checks under the lock (and is the authority). Then reports are reassigned.
+async function closeExit(body, auth, env) {
+  const d = body.data || body;
+  const c = await exitWriteCtx(auth, env, d.exit_id);
+  if (c.res) return c.res;
+  if (!canManageExit(c.role)) return x1Err('forbidden', 403);
+  if (c.exit.status !== 'open') return x1Err('exit_not_open');
+  const [items, l] = await Promise.all([exitItems(env, c.exit.id), exitLive(env, c.emp)]);
+  if (!items) return err('db_error', 500);
+  if (!l.ok) return x1Err('live_check_failed', 502);
+  const blockers = closeBlockers(c.exit, items, { assets: l.assets.length, tasks: l.tasks.length }, istToday());
+  if (blockers.length) return x1Err('exit_blocked', 409, { blockers });
+  const r = await hiringRpc(env, 'exit_close', { exit_id: c.exit.id, actor_user_id: auth.userId });
+  if (!r.ok) return x1DbError(r);
+  // Exiting someone must never leave their reports pointing at an exited row (RULE-PODIUM-010).
+  const reassigned = await reassignReportsOnExit(c.emp.id, auth, env);
+  return ok({ ...(r.data || {}), reassigned });
+}
+
+// POST backfillExit {employee_id, reason_code, lwd} (HR) — the one-time review of exits recorded before X1: a
+// closed exit with the HR-confirmed reason code + LWD; the old free text is kept as the note. No guessing.
+async function backfillExit(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!isUuid(d.employee_id)) return err('employee_id required', 400);
+  if (!EXIT_REASON_CODES.includes(d.reason_code)) return x1Err('bad_reason_code', 400);
+  // No allowFuture: date_exited is what the SG&A feed reads to STOP charging someone. (≥ date_joined: the RPC.)
+  const e = badDate(d.lwd, 'Last working day', {}); if (e) return x1Err('bad_lwd', 400, { detail: e });
+  const r = await hiringRpc(env, 'exit_backfill', { employee_id: d.employee_id, reason_code: d.reason_code, lwd: d.lwd, actor_user_id: auth.userId });
+  return r.ok ? ok(r.data) : x1DbError(r);
+}
+
+// POST revokeExitedAccess {employee_id} (HR) — backfill review: for an EXITED person, deactivate the LOT login
+// and remove the Podium role, salary access and Google-admin power (exit_revoke_access, logged in exit_events).
+// Never automatic — the lane decided HR presses it per person.
+async function revokeExitedAccess(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!isUuid(d.employee_id)) return err('employee_id required', 400);
+  const r = await hiringRpc(env, 'exit_revoke_access', { employee_id: d.employee_id, actor_user_id: auth.userId });
+  return r.ok ? ok(r.data) : x1DbError(r);
+}
+
+// POST openGoogleExitItem {employee_id} (HR) — backfill review: open the Google prompt for an exited person with a
+// work email and no live item (exit_open_google_item, logged in exit_events). Never suspends anything itself.
+async function openGoogleExitItem(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!isUuid(d.employee_id)) return err('employee_id required', 400);
+  const r = await hiringRpc(env, 'exit_open_google_item', { employee_id: d.employee_id, actor_user_id: auth.userId });
+  return r.ok ? ok(r.data) : x1DbError(r);
+}
+
+// Google user by id, else by address, verified to BE the address Podium holds.
+// → { guser } | { gone: true } (404 by id AND by address) | { res }
+async function verifiedGoogleUser(token, id, workEmail) {
+  const get = (k) => fetch(`${GDIR_USERS}/${encodeURIComponent(k)}?projection=basic`, { headers: { Authorization: `Bearer ${token}` } });
+  let r = id ? await get(id) : null;
+  if (!r || r.status === 404) r = await get(workEmail);   // a stale / absent id → the address, exact match below
+  if (r.status === 404) return { gone: true };
+  const gu = await r.json().catch(() => ({}));
+  if (!r.ok) return { res: x1Err('google_error', 502) };
+  if (!googleUserMatches(gu, workEmail)) return { res: x1Err('google_account_mismatch') };
+  return { guser: gu };
+}
+
+// POST actGoogleExitItem {item_id, action: transfer_and_suspend|suspend|keep|check_transfer, keep_until?, keep_reason?}
+// Google admin (L3). Never automatic (L5); the employee must still be `exited`. The item is CLAIMED first
+// (acting_id lease) so two admins can never act at once, and every write is guarded on the claim. The Google user
+// is verified to BE the recorded address before any write. transfer = Drive and Docs → the manager (L6), then
+// suspend → transfer_pending until "Check transfer" sees it completed. Every outcome lands in google_admin_log.
+async function actGoogleExitItem(body, auth, env) {
+  const gate = await requireGoogleAdmin(auth, env); if (gate) return gate;
+  const d = body.data || body;
+  if (!isUuid(d.item_id)) return err('item_id required', 400);
+  const item = (await sb(`/rest/v1/google_exit_items?id=eq.${d.item_id}&select=*,employee:employee_id(id,status,manager_id)&limit=1`, env)).data?.[0];
+  if (!item) return err('not_found', 404);
+  if (item.employee?.status !== 'exited') return x1Err('not_exited');
+  const today = istToday();
+  const ce = checkGoogleAction(item, d, today);
+  if (ce) return x1Err(ce, ce === 'bad_google_action' ? 400 : 409);
+  if (d.action !== 'keep' && !googleWriteConfigured(env)) return err('google_write_not_configured', 400);
+
+  // Claim (J1 attempt pattern). Losers get in_progress.
+  const actingId = crypto.randomUUID();
+  const cr = await sb(`/rest/v1/google_exit_items?id=eq.${item.id}&${googleClaimFilter()}`, env, { method: 'PATCH',
+    body: JSON.stringify({ acting_id: actingId, acting_until: new Date(Date.now() + GOOGLE_LEASE_MS).toISOString() }) });
+  if (!cr.ok) return x1DbError(cr);
+  if (!cr.data?.length) return x1Err('in_progress');
+  const mine = `id=eq.${item.id}&${googleClaimGuard(actingId)}`;
+  // Every write during the action: guarded on the claim AND checked. `finish` also releases the claim.
+  const write = async (patch) => {
+    const r = await sb(`/rest/v1/google_exit_items?${mine}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+    return r.ok && r.data?.length ? r.data[0] : null;
+  };
+  const release = () => write({ acting_id: null, acting_until: null });
+  const finish = async (patch) => {
+    const row = await write({ ...patch, acted_by: auth.userId, acted_at: nowIso(), acting_id: null, acting_until: null });
+    if (!row) return x1Err('conflict', 500);
+    const { acting_id, ...out } = row;
+    return ok(out);
+  };
+  const fail = async (res, patch = {}) => { await write({ ...patch, acting_id: null, acting_until: null }); return res; };
+  const logBase = { target_email: item.work_email, request: { google_exit_item_id: item.id } };
+
+  try {
+    if (d.action === 'keep') {
+      await googleAdminLog(env, auth, { ...logBase, action: 'keep_active', google_user_id: item.google_user_id,
+        request: { ...logBase.request, keep_until: d.keep_until }, ok: true });
+      return await finish({ status: 'kept', keep_until: d.keep_until, keep_reason: String(d.keep_reason).trim().slice(0, 500), last_error: null });
+    }
+
+    if (d.action === 'check_transfer') {
+      let dtToken;
+      try { dtToken = await googleWriteToken(env, 'datatransfer'); }
+      catch (e) { return await fail(err('google_write_not_configured: ' + (e?.message || e), 502)); }
+      const tr = await fetch(`https://admin.googleapis.com/admin/datatransfer/v1/transfers/${encodeURIComponent(item.transfer_id)}`, { headers: { Authorization: `Bearer ${dtToken}` } });
+      const td = await tr.json().catch(() => ({}));
+      const outcome = tr.ok ? transferOutcome(td) : 'error';
+      await googleAdminLog(env, auth, { ...logBase, action: 'transfer_checked', google_user_id: item.google_user_id,
+        request: { ...logBase.request, transfer_id: item.transfer_id, outcome, google_status: td?.overallTransferStatusCode || null },
+        ok: tr.ok, error: tr.ok ? null : (td?.error?.message || `HTTP ${tr.status}`) });
+      if (!tr.ok) return await fail(x1Err('google_error', 502));
+      if (outcome === 'completed') return await finish({ status: 'transferred_suspended', last_error: null });
+      if (outcome === 'failed') {
+        // Back to open with the error, transfer_id cleared — so a new transfer can be started deliberately.
+        return await finish({ status: 'open', transfer_id: null, transfer_to_employee_id: null,
+          last_error: `Drive transfer failed (${td?.overallTransferStatusCode || 'failed'})` });
+      }
+      await release();
+      return ok({ id: item.id, status: 'transfer_pending', still_running: true });
+    }
+
+    let token;
+    try { token = await googleWriteToken(env, 'directory'); }
+    catch (e) { return await fail(err('google_write_not_configured: ' + (e?.message || e), 502)); }
+    // Only 22 of 64 active employees carry google_user_id (2026-11-11): a 404 by id retries by address, and
+    // either way the user must BE that address. Gone both ways → terminal `gone`, logged.
+    const v = await verifiedGoogleUser(token, item.google_user_id, item.work_email);
+    if (v.gone) {
+      await googleAdminLog(env, auth, { ...logBase, action: 'account_gone', google_user_id: item.google_user_id, ok: true });
+      return await finish({ status: 'gone', last_error: null });
+    }
+    if (v.res) return await fail(v.res);
+    const gid = String(v.guser.id);
+    const patch = { google_user_id: gid };
+
+    if (d.action === 'transfer_and_suspend' && !item.transfer_id) {
+      const mgr = item.employee?.manager_id && isUuid(item.employee.manager_id)
+        ? (await sb(`/rest/v1/employees?id=eq.${item.employee.manager_id}&select=id,status,work_email,google_user_id&limit=1`, env)).data?.[0]
+        : null;
+      if (!mgr || mgr.status === 'exited' || !mgr.work_email) return await fail(x1Err('manager_has_no_google_account'));
+      const mv = await verifiedGoogleUser(token, mgr.google_user_id, mgr.work_email);
+      if (!mv.guser) return await fail(x1Err('manager_has_no_google_account'));
+      let dtToken;
+      try { dtToken = await googleWriteToken(env, 'datatransfer'); }
+      catch (e) { return await fail(err('google_write_not_configured: ' + (e?.message || e), 502)); }
+      const lr = await fetch('https://admin.googleapis.com/admin/datatransfer/v1/applications', { headers: { Authorization: `Bearer ${dtToken}` } });
+      const ld = await lr.json().catch(() => ({}));
+      if (!lr.ok) return await fail(x1Err('google_error', 502));
+      const tb = driveTransferBody(gid, mv.guser.id, ld.applications);
+      if (!tb) return await fail(x1Err('drive_app_not_found', 502));
+      const trr = await fetch('https://admin.googleapis.com/admin/datatransfer/v1/transfers', { method: 'POST',
+        headers: { ...gJson, Authorization: `Bearer ${dtToken}` }, body: JSON.stringify(tb) });
+      const trd = await trr.json().catch(() => ({}));
+      await googleAdminLog(env, auth, { ...logBase, action: 'drive_transfer', google_user_id: gid,
+        request: { ...logBase.request, ...tb, to_employee_id: mgr.id }, ok: trr.ok && !!trd.id, error: trr.ok ? (trd.id ? null : 'no transfer id') : (trd?.error?.message || `HTTP ${trr.status}`) });
+      if (!trr.ok || !trd.id) return await fail(x1Err('google_error', 502));
+      // Recorded before the suspend, so a failed suspend retried later never starts a second transfer.
+      const saved = await write({ transfer_id: String(trd.id), transfer_to_employee_id: mgr.id, google_user_id: gid });
+      if (!saved) return x1Err('conflict', 500);   // claim lost after Google accepted the transfer — reload shows it
+      item.transfer_id = String(trd.id);
+    }
+
+    const request = { suspended: true };
+    if (v.guser.suspended) {
+      await googleAdminLog(env, auth, { ...logBase, action: 'suspend_exited', google_user_id: gid,
+        request: { ...logBase.request, ...request, already: true }, ok: true });
+    } else {
+      const ur = await fetch(`${GDIR_USERS}/${encodeURIComponent(gid)}`, { method: 'PUT',
+        headers: { ...gJson, Authorization: `Bearer ${token}` }, body: JSON.stringify(request) });
+      const ud = await ur.json().catch(() => ({}));
+      await googleAdminLog(env, auth, { ...logBase, action: 'suspend_exited', google_user_id: gid,
+        request: { ...logBase.request, ...request }, ok: ur.ok, error: ur.ok ? null : (ud?.error?.message || `HTTP ${ur.status}`) });
+      if (!ur.ok) return await fail(x1Err('google_error', 502), patch);
+    }
+    // J1's row for a Podium-made account follows Google (best-effort; the item is the record).
+    await sb(`/rest/v1/work_accounts?email=eq.${encodeURIComponent(item.work_email)}&status=eq.created`, env, { method: 'PATCH',
+      prefer: 'return=minimal', body: JSON.stringify({ status: 'suspended', suspended_at: nowIso(), suspended_by: auth.userId }) });
+    return await finish({ ...patch, status: item.transfer_id ? 'transfer_pending' : 'suspended', last_error: null });
+  } catch (e) {
+    await release();
+    throw e;
+  }
+}
+
+// ── Checklist template + tools (admin data, L4/L8): HR or podium_admin ──────
+async function getExitChecklist(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const [lr, tr, days] = await Promise.all([
+    sb(`/rest/v1/exit_checklist_lines?select=*&order=sort.asc,key.asc`, env),
+    sb(`/rest/v1/exit_tools?select=*&order=sort.asc,name.asc`, env),
+    exitNoticeDays(env),
+  ]);
+  if (!lr.ok || !tr.ok) return err('db_error', 500);
+  return ok({ lines: lr.data || [], tools: tr.data || [], notice_days: days, owners: CHECKLIST_OWNERS, auto_sources: AUTO_SOURCES,
+    can_edit_notice_days: isAdmin(auth) });
+}
+
+// POST saveExitChecklistLine {key, title, owner, required, allow_na, applies_to, sort, active} — upsert by key.
+// auto_source is never written here: it is behaviour (a live check), not wording, so a new line is always manual.
+async function saveExitChecklistLine(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  const key = String(d.key || '').trim();
+  const title = String(d.title || '').trim();
+  if (!/^[a-z][a-z0-9_]{1,40}$/.test(key) || !title || title.length > 120 || !CHECKLIST_OWNERS.includes(d.owner)) return x1Err('bad_line', 400);
+  const applies = Array.isArray(d.applies_to) ? [...new Set(d.applies_to.map(String))].slice(0, 10) : [];
+  const row = { key, title, owner: d.owner, required: d.required !== false, allow_na: !!d.allow_na, applies_to: applies,
+    sort: Math.round(Number(d.sort) || 100), active: d.active !== false };
+  const r = await sb(`/rest/v1/exit_checklist_lines?on_conflict=key`, env, { method: 'POST',
+    prefer: 'return=representation,resolution=merge-duplicates', body: JSON.stringify([row]) });
+  if (!r.ok) return x1DbError(r);
+  return ok(r.data?.[0] || null);
+}
+
+// POST saveExitTool {id?, name, active, sort}
+async function saveExitTool(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  const name = String(d.name || '').trim();
+  if (!name || name.length > 80) return x1Err('bad_tool', 400);
+  const row = { name, active: d.active !== false, sort: Math.round(Number(d.sort) || 100) };
+  const r = d.id
+    ? (isUuid(d.id) ? await sb(`/rest/v1/exit_tools?id=eq.${d.id}`, env, { method: 'PATCH', body: JSON.stringify(row) }) : { ok: false, data: {} })
+    : await sb(`/rest/v1/exit_tools`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return d.id && !isUuid(d.id) ? err('bad id', 400) : x1DbError(r);
+  return ok(r.data?.[0] || null);
+}
+// ── end X1
+
 const GET_ACTIONS = {
   getMe, getSettings,
   getEmployees, getEmployee,
@@ -5806,6 +6395,8 @@ const GET_ACTIONS = {
   getOfferSetup, getOffers, getOffer, getOfferPdfUrl, getOfferTemplates,
   // Hiring J1 — work accounts (podium_view required: none of these is self-serve)
   getWorkAccount, checkWorkEmail,
+  // X1 — exits (getExit is self-serve, self-scoped by exitCtx; the rest need podium_view)
+  getExit, getExits, getExitChecklist, getMyTeamExits,
 };
 
 const POST_ACTIONS = {
@@ -5848,6 +6439,9 @@ const POST_ACTIONS = {
   recordOfferDecline, withdrawOffer, createOfferDocUploadUrl, previewOfferTemplate, saveOfferTemplate, saveSignatory,
   // Hiring J1 — work accounts + confirm joining (podium_view required: none of these is self-serve)
   createWorkAccount, resetWorkAccountPassword, confirmJoining, markNoShow, suspendWorkAccount,
+  // X1 — exits (startExit is self-serve, self-scoped by exitCtx; the rest need podium_view)
+  startExit, updateExitItem, updateExit, cancelExit, closeExit, backfillExit, actGoogleExitItem,
+  saveExitChecklistLine, saveExitTool, revokeExitedAccess, openGoogleExitItem,
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.
@@ -5879,6 +6473,9 @@ const SELF_SERVE_GET = new Set([
   // Hiring C3 — offers self-scope the same way (opening chain + snapshotted offer approver); the
   // template admin reads are gated inside to the salary allow-list / podium_admin.
   'getOfferSetup', 'getOffers', 'getOffer', 'getOfferPdfUrl', 'getOfferTemplates',
+  // X1 — your own exit (Resign) / your reports' exits; exitCtx self-scopes (self, manager chain, HR).
+  // getMyTeamExits = the caller's own chain only (the /me "Your team" list).
+  'getExit', 'getMyTeamExits',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
@@ -5902,6 +6499,9 @@ const SELF_SERVE_POST = new Set([
   // Hiring C3 — offers (see SELF_SERVE_GET).
   'previewOffer', 'createOffer', 'updateOfferDraft', 'submitOffer', 'decideOffer', 'markOfferSent', 'recordOfferAcceptance',
   'recordOfferDecline', 'withdrawOffer', 'createOfferDocUploadUrl', 'previewOfferTemplate', 'saveOfferTemplate', 'saveSignatory',
+  // X1 — Resign (self) / start a report's exit (manager chain) / tick manager lines; exitCtx self-scopes and
+  // canTickItem limits a manager to owner='manager' lines (exit_update_item re-checks).
+  'startExit', 'updateExitItem',
 ]);
 
 async function handleGet(url, request, env) {

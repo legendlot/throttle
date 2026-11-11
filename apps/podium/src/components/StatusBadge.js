@@ -1,6 +1,8 @@
 'use client';
 // Employee status → semantic dot-pill (Pit Wall v2). Tomorrow 10px uppercase + 5px dot.
 // active=ok · on_leave=warn · notice=bad · exited=neutral (handoff §5 / tokens.css).
+// X1: "On notice" is an OPEN exit, not a status (the person stays `active` for payroll) — pass `onNotice`
+// (getEmployees / getEmployee row.on_notice) and the pill shows the notice tone with "On notice".
 
 const STATUS = {
   active:   { label: 'Active',   fg: 'var(--ok-fg)',      bg: 'var(--ok-bg)',      bd: 'var(--ok-bd)' },
@@ -13,8 +15,10 @@ export function statusPill(status) {
   return STATUS[status] || { label: status || '—', fg: 'var(--neutral-fg)', bg: 'var(--neutral-bg)', bd: 'var(--neutral-bd)' };
 }
 
-export default function StatusBadge({ status, label }) {
-  const m = statusPill(status);
+export default function StatusBadge({ status, label, onNotice }) {
+  const notice = !!onNotice && status !== 'exited';
+  const m = statusPill(notice ? 'notice' : status);
+  if (notice && !label) label = 'On notice';
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 5,

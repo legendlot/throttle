@@ -13,7 +13,7 @@ import { Avatar, FilterChip, GridHead, GridRow, gridTh, SoftPill, btnPrimary, bt
 const TABS = [
   { id: 'active', label: 'Active' },
   { id: 'on_leave', label: 'On Leave' },
-  { id: 'notice', label: 'Notice' },
+  { id: 'notice', label: 'On notice' },   // worker: ?status=notice = people with an open exit
   { id: 'exited', label: 'Exited' },
   { id: 'all', label: 'All' },
 ];
@@ -68,7 +68,8 @@ export default function PeoplePage() {
         <Stat value={c('active')} label="Headcount" color="var(--yellow)" first />
         <Stat value={depts.length} label="Departments" />
         <Stat value={c('on_leave')} label="On Leave" color="var(--warn-fg)" />
-        <Stat value={c('notice')} label="Notice" color="var(--bad-fg)" />
+        {/* X1: on notice = an open exit (status stays active), so it is a flag, not a status count. */}
+        <Stat value={all.filter(e => e.on_notice).length} label="On notice" color="var(--bad-fg)" />
         <Stat value={newCount} label="New · 30d" color="var(--green-bright)" last />
         <span style={{ flex: 1 }} />
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, width: 240, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 11px', color: 'var(--t4)' }}>
@@ -124,7 +125,7 @@ export default function PeoplePage() {
                 {r.manager?.full_name || '—'}
                 {r.secondary_manager?.full_name && <div style={{ fontSize: 11, color: 'var(--t4)' }}>⋯ {r.secondary_manager.full_name} <span style={{ fontStyle: 'italic' }}>(dotted)</span></div>}
               </div>
-              <div style={{ padding: '11px 16px' }}><StatusBadge status={r.status} /></div>
+              <div style={{ padding: '11px 16px' }}><StatusBadge status={r.status} onNotice={r.on_notice} /></div>
             </GridRow>
           ))}
         </div>

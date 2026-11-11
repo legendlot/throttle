@@ -1,18 +1,19 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { X, RefreshCw, UserPlus, UserMinus, Ban, ArrowLeftRight, Check } from 'lucide-react';
+import { X, RefreshCw, UserPlus, AlertTriangle, Ban, ArrowLeftRight, Check } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
 
-// On-demand Google Directory sync — review-and-confirm. Proposes new joiners +
-// departures; you pick which to import (dept/manager editable), ignore, or exit.
+// On-demand Google Directory sync — review-and-confirm. Proposes new joiners (import / ignore,
+// dept/manager editable) and moves. X1: people suspended / missing in Google are ALERTS only — an exit
+// is started on the person's page (the worker refuses an exit list: exits_are_recorded_in_podium).
 export default function DirectorySyncModal({ session, onClose, onDone }) {
   const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
   const [rows, setRows] = useState([]);          // new candidates (editable)
-  const [departed, setDeparted] = useState([]);  // {…, exit}
+  const [departed, setDeparted] = useState([]);  // exit_started_outside_podium alerts (read-only)
   const [moves, setMoves] = useState([]);        // existing people whose Google signal changed
   const [baseline, setBaseline] = useState([]);  // nothing to review — just record the OU we saw
   const [submitting, setSubmitting] = useState(false);
@@ -22,7 +23,7 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
     try {
       const r = await podiumopsGet('getDirectorySyncPreview', {}, session);
       setData(r);
-      // `date_joined` starts EMPTY and is required — the mirror of the exit-date rule below.
+      // `date_joined` starts EMPTY and is required — the mirror of the (former) exit-date rule.
       // Google knows when it created the account, never when the person started work, and an
       // employee with no joining date counts as employed in EVERY month the salary run has ever
       // covered. All 8 undated employees found on 2026-09-09 were created by this screen.
@@ -33,12 +34,8 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
         department_id: c.suggested_department_id || '',
         manager_id: c.suggested_manager_id || '',
       })));
-      // ⚠️ `date_exited` starts EMPTY on purpose (S363) and must never be pre-filled with today.
-      // This screen used to send no date at all and the worker stamped `nowIso()` — the default did
-      // the choosing, and 10 of 12 dated exits ended up on the two days someone ran this sync.
-      // Same failure shape as the S308 challan `purpose` default. Whoever marks the exit types the
-      // real last working day; if they do not know it, they should not be ticking the box yet.
-      setDeparted((r.departed || []).map(d => ({ ...d, exit: false, date_exited: '' })));
+      // X1: alerts only — never exited from here (the S363 sync-day-date history is why exits moved to Podium).
+      setDeparted(r.departed || []);
       // A 'moved' row (Google's OU actually changed) defaults to Update with Google's
       // suggestion pre-filled. A 'differs' row defaults to NO action — Podium is finer
       // grained than Google, so a standing disagreement is usually Podium being right.
@@ -71,19 +68,6 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
       showToast(`Joining date required for ${undatedJoins.map(r => r.full_name).join(', ')}`, 'error');
       return;
     }
-    const exit = departed.filter(d => d.exit).map(d => ({ work_email: d.work_email, date_exited: d.date_exited }));
-    // Caught here as well as in the worker so the person sees WHICH row is missing a date, on the
-    // screen they are looking at, rather than a rejected batch.
-    const undated = departed.filter(d => d.exit && !d.date_exited);
-    if (undated.length) {
-      showToast(`Last working day required for ${undated.map(d => d.full_name).join(', ')}`, 'error');
-      return;
-    }
-    const future = departed.filter(d => d.exit && d.date_exited > new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
-    if (future.length) {
-      showToast(`Last working day is in the future for ${future.map(d => d.full_name).join(', ')}`, 'error');
-      return;
-    }
     const update = moves.filter(m => m.action === 'update')
       .map(m => ({ id: m.id, department_id: m.department_id || null, manager_id: m.manager_id || null, org_unit: m.org_unit }));
     // S369: `mgr_google_email` is what makes a MANAGER-ONLY dismissal stick. Sending only the org
@@ -92,19 +76,14 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
     // deliberately does not blank the baseline when it is absent.
     const dismiss = moves.filter(m => m.action === 'dismiss')
       .map(m => ({ id: m.id, org_unit: m.org_unit, mgr_google_email: m.mgr_google_email || null }));
-    if (!create.length && !ignore.length && !exit.length && !update.length && !dismiss.length && !baseline.length) { showToast('Nothing selected', 'error'); return; }
+    if (!create.length && !ignore.length && !update.length && !dismiss.length && !baseline.length) { showToast('Nothing selected', 'error'); return; }
     if (create.length > 20) { showToast('Import at most 20 at a time', 'error'); return; }
     setSubmitting(true);
     try {
-      const res = await podiumopsPost('importDirectoryCandidates', { data: { create, exit, ignore, update, dismiss, baseline } }, session);
-      const parts = [`${res.created?.length || 0} added`, `${res.exited?.length || 0} exited`, `${res.ignored?.length || 0} ignored`];
+      const res = await podiumopsPost('importDirectoryCandidates', { data: { create, ignore, update, dismiss, baseline } }, session);
+      const parts = [`${res.created?.length || 0} added`, `${res.ignored?.length || 0} ignored`];
       if (update.length || dismiss.length) parts.push(`${res.updated?.length || 0} updated`, `${res.dismissed?.length || 0} dismissed`);
       if (res.baselined) parts.push(`${res.baselined} recorded`);
-      // An exit silently moves reporting lines, so say so rather than let it pass unseen.
-      const moved = (res.reassigned || []).reduce((n, x) => n + (x.people?.length || 0), 0);
-      if (moved) parts.push(`${moved} report${moved === 1 ? '' : 's'} reassigned`);
-      const needs = (res.reassign_needs_attention || []).reduce((n, x) => n + (x.people?.length || 0), 0);
-      if (needs) parts.push(`${needs} need a manager`);
       const msg = parts.join(' · ');
       showToast(res.errors?.length ? `${msg} · ${res.errors.length} error(s)` : msg, res.errors?.length ? 'error' : 'success');
       onDone && onDone();
@@ -269,36 +248,24 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
 
               {departed.length > 0 && (
                 <>
-                  <div style={{ ...sectionTitle, marginTop: 16 }}><UserMinus size={13} /> Possibly departed ({departed.length})</div>
+                  <div style={{ ...sectionTitle, marginTop: 16, color: 'var(--state-error-fg)' }}><AlertTriangle size={13} /> Exit started outside Podium ({departed.length})</div>
                   <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6, lineHeight: 1.5 }}>
-                    Google only says the account is gone — it never says when someone last worked.
-                    Enter each person&rsquo;s <strong>real last working day</strong>; it decides the
-                    month their salary stops counting toward SG&amp;A. If you don&rsquo;t know it yet,
-                    leave the row unticked and exit them once HR confirms.
+                    These people are active in Podium but their Google account is suspended or gone. The sync never
+                    exits anyone — an exit is recorded in Podium with its reason, checklist and last working day.
+                    Open the person and use <strong>Start exit</strong>.
                   </div>
                   <table style={table}>
-                    <thead><tr><th style={th}>Mark exited</th><th style={th}>Name / email</th><th style={th}>Last working day *</th><th style={th}>Why</th></tr></thead>
+                    <thead><tr><th style={th}>Name / email</th><th style={th}>Google</th><th style={th}>In Podium</th></tr></thead>
                     <tbody>
-                      {departed.map((d, i) => (
+                      {departed.map(d => (
                         <tr key={d.id}>
-                          <td style={td}><input type="checkbox" checked={d.exit} onChange={e => setDeparted(prev => prev.map((x, j) => j === i ? { ...x, exit: e.target.checked } : x))} /></td>
                           <td style={td}><div style={{ fontWeight: 600 }}>{d.full_name}</div><div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>{d.work_email}</div></td>
-                          {/* Required, and deliberately NOT defaulted to today — see the load() note.
-                              Google tells us someone's account is gone, never when they last worked. */}
-                          <td style={td}>
-                            <input
-                              type="date"
-                              value={d.date_exited}
-                              disabled={!d.exit}
-                              max={new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}
-                              onChange={e => setDeparted(prev => prev.map((x, j) => j === i ? { ...x, date_exited: e.target.value } : x))}
-                              style={{ fontFamily: 'var(--font-mono)', fontSize: 12, padding: '4px 6px',
-                                       border: `1px solid ${d.exit && !d.date_exited ? 'var(--state-warning-fg)' : 'var(--border)'}`,
-                                       borderRadius: 4, background: d.exit ? 'var(--surface)' : 'transparent',
-                                       color: 'var(--text-1)', opacity: d.exit ? 1 : 0.4 }}
-                            />
+                          <td style={{ ...td, fontSize: 12, color: 'var(--state-error-fg)' }}>{d.reason}</td>
+                          <td style={{ ...td, fontSize: 12 }}>
+                            {d.exit_open
+                              ? <span style={{ color: 'var(--text-3)' }}>Exit already open</span>
+                              : <a href={`/people/detail/?id=${d.id}`} style={{ color: 'var(--podium-accent)', fontWeight: 600 }}>Start the exit here →</a>}
                           </td>
-                          <td style={{ ...td, fontSize: 12, color: 'var(--state-warning-fg)' }}>{d.reason}</td>
                         </tr>
                       ))}
                     </tbody>

@@ -94,22 +94,20 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
           <Field label="Date joined"><Input type="date" mono value={f.date_joined} onChange={e => set('date_joined', e.target.value)} /></Field>
           <Field label="Probation end"><Input type="date" mono value={f.probation_end_date} onChange={e => set('probation_end_date', e.target.value)} /></Field>
           <Field label="Confirmed on"><Input type="date" mono value={f.confirmed_at} onChange={e => set('confirmed_at', e.target.value)} /></Field>
-          <Field label="Status"><Select value={f.status} onChange={e => set('status', e.target.value)}>{EMPLOYEE_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</Select></Field>
+          {/* X1: exits happen ONLY through the Exit panel on the person's page (the worker refuses a hand-set
+              exited / notice status and any last-working-day or reason change — use_exit_flow). So the select
+              offers neither; an exited person's status, date and reason show read-only. */}
+          <Field label="Status">
+            {f.status === 'exited'
+              ? <Input value="Exited" disabled />
+              : <Select value={f.status} onChange={e => set('status', e.target.value)}>{EMPLOYEE_STATUSES.filter(s => (s.id !== 'exited' && s.id !== 'notice') || s.id === f.status).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</Select>}
+            {editing && f.status !== 'exited' && (
+              <div style={{ fontSize: 11, color: 'var(--t4)', marginTop: 4 }}>To exit someone, use the Exit panel on their profile.</div>
+            )}
+          </Field>
           {f.status === 'exited' && <>
-            {/* Required (S363): the worker rejects an exit with no date. This is the person's REAL
-                last working day — it decides the month their salary stops counting toward SG&A —
-                not the day the record is being updated. Never pre-fill it with today. */}
-            <Field label="Last working day *">
-              <Input type="date" mono value={f.date_exited}
-                max={new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}
-                onChange={e => set('date_exited', e.target.value)} />
-              {!f.date_exited && (
-                <div style={{ fontSize: 11, color: 'var(--state-warning-fg)', marginTop: 4 }}>
-                  Required — their real last working day, not today&rsquo;s date.
-                </div>
-              )}
-            </Field>
-            <Field label="Exit reason"><Input value={f.exit_reason} onChange={e => set('exit_reason', e.target.value)} /></Field>
+            <Field label="Last working day"><Input type="date" mono value={f.date_exited} disabled /></Field>
+            <Field label="Exit reason"><Input value={f.exit_reason} disabled /></Field>
           </>}
         </Grid>
       </Section>
@@ -140,9 +138,11 @@ function seed(initial) {
   if (!initial) o.status = 'active';
   return o;
 }
+// date_exited / exit_reason are shown, never sent: only the exit flow writes them (X1).
+const READ_ONLY = new Set(['date_exited', 'exit_reason']);
 function clean(f) {
   const o = {};
-  for (const k of FIELDS) o[k] = f[k] === '' ? null : f[k];
+  for (const k of FIELDS) if (!READ_ONLY.has(k)) o[k] = f[k] === '' ? null : f[k];
   return o;
 }
 

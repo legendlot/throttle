@@ -10,6 +10,7 @@ import { ObservationsPanel, WinsPanel, OneOnOnesPanel } from '../../../component
 import MyCompensation from '../../../components/MyCompensation.js';
 import MyPayouts from '../../../components/MyPayouts.js';
 import MyOkrsBlock from '../../../components/MyOkrsBlock.js';
+import { MyExitBlock } from '../../../components/ExitBits.js';
 
 const TABS = [
   { id: 'wins',         label: 'My Wins' },
@@ -45,6 +46,9 @@ export default function MyPerformancePage() {
       <MyCompensation />
       <MyPayouts />
       <MyOkrsBlock session={session} employeeId={me.employee_id} />
+      {/* X1: Resign / your own exit, and your reports' exits — most managers hold no podium_view, so this is
+          their only way in (getExit / getMyTeamExits / startExit / updateExitItem are self-serve). */}
+      <MyExitBlock employeeId={me.employee_id} session={session} />
 
       {open.length > 0 && (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 11, padding: '13px 16px', marginBottom: 18 }}>
