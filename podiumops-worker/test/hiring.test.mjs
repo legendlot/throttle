@@ -12,22 +12,29 @@ import {
 } from '../src/hiring.js';
 
 // ── Transitions ──────────────────────────────────────────────────────────────
-test('APP_TRANSITIONS: the manual moves of this slice, exactly', () => {
+test('APP_TRANSITIONS: the manual moves, exactly (C3 adds the offer / accepted closes)', () => {
   assert.deepEqual(APP_TRANSITIONS, {
     new:          ['screening', 'rejected', 'withdrawn', 'on_hold'],
     screening:    ['interviewing', 'rejected', 'withdrawn', 'on_hold'],
     interviewing: ['rejected', 'withdrawn', 'on_hold'],
     on_hold:      ['new', 'screening', 'interviewing', 'rejected', 'withdrawn'],
+    offer:        ['declined', 'withdrawn', 'rejected'],
+    accepted:     ['withdrawn'],
   });
 });
 
-test('offer / accepted / joined / declined / no_show are never set by hand', () => {
+test('offer / accepted / joined / no_show are never set by hand; declined only closes an offer', () => {
   for (const from of Object.keys(APP_TRANSITIONS)) {
-    for (const to of ['offer', 'accepted', 'joined', 'declined', 'no_show']) {
+    for (const to of ['offer', 'accepted', 'joined', 'no_show']) {
       assert.equal(checkTransition(from, to, 'x'), 'invalid_transition', `${from}→${to}`);
     }
+    if (from !== 'offer') assert.equal(checkTransition(from, 'declined', 'compensation'), 'invalid_transition', `${from}→declined`);
   }
-  assert.equal(checkTransition('interviewing', 'offer', 'x'), 'invalid_transition', '→offer is C3');
+  assert.equal(checkTransition('interviewing', 'offer', 'x'), 'invalid_transition', '→offer is the offer flow');
+  assert.equal(checkTransition('offer', 'declined', 'compensation'), null);
+  assert.equal(checkTransition('offer', 'declined', ''), 'reason_required');
+  assert.equal(checkTransition('accepted', 'withdrawn', 'other'), null);
+  assert.equal(checkTransition('accepted', 'rejected', 'other'), 'invalid_transition');
   for (const from of ['offer', 'accepted', ...TERMINAL_APP_STATUSES]) {
     assert.equal(checkTransition(from, 'screening', 'x'), 'invalid_transition', `nothing leaves ${from} manually`);
   }

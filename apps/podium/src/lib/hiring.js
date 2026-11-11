@@ -35,14 +35,18 @@ export const APP_STATUSES = [
 ];
 export const ACTIVE_APP_STATUSES = ['new', 'screening', 'interviewing', 'offer', 'accepted', 'on_hold'];
 
-// Manual moves allowed in this slice (→offer is C3's job). Mirrors APP_TRANSITIONS in the worker.
+// Manual moves. →offer / →accepted come only from the offer flow (sent / acceptance recorded); the C3
+// closes (offer → declined | withdrawn | rejected, accepted → withdrawn) need the live offer closed first.
+// Mirrors APP_TRANSITIONS in the worker.
 export const APP_TRANSITIONS = {
   new:          ['screening', 'rejected', 'withdrawn', 'on_hold'],
   screening:    ['interviewing', 'rejected', 'withdrawn', 'on_hold'],
   interviewing: ['rejected', 'withdrawn', 'on_hold'],
   on_hold:      ['new', 'screening', 'interviewing', 'rejected', 'withdrawn'],
+  offer:        ['declined', 'withdrawn', 'rejected'],
+  accepted:     ['withdrawn'],
 };
-export const REASON_REQUIRED = ['rejected', 'withdrawn'];
+export const REASON_REQUIRED = ['rejected', 'withdrawn', 'declined'];
 // Reject / withdraw reasons are a category (shown to everyone who sees the application); any free text
 // is a note the worker shows only to the opening's salary chain. Mirrors OUTCOME_REASON_CODES in the worker.
 export const OUTCOME_REASONS = [
@@ -96,6 +100,7 @@ export const CANDIDATE_DOC_TYPES = [
   { id: 'other',             label: 'Other',             tier: 'open' },
   { id: 'payslip',           label: 'Payslip',           tier: 'salary' },
   { id: 'signed_offer',      label: 'Signed offer',      tier: 'salary' },
+  { id: 'offer_evidence',    label: 'Offer as sent',     tier: 'salary' },
   { id: 'id_proof',          label: 'ID proof',          tier: 'hr' },
   { id: 'pan',               label: 'PAN',               tier: 'hr' },
   { id: 'address_proof',     label: 'Address proof',     tier: 'hr' },
@@ -111,7 +116,7 @@ export const JD_REQUIRED_MSG = 'Add the JD to this opening first. Without a JD t
 const ERROR_COPY = {
   jd_required: 'Add the JD to this opening first',
   resolve_applications_first: 'Close or move every active candidate before marking this opening filled or cancelled',
-  no_self_approval: 'You requested this band, so someone else has to approve it',
+  no_self_approval: 'You requested this, so someone else has to approve it',
   already_active: 'This candidate already has an active application on that opening',
   opening_not_open: 'The opening is not open for candidates',
   reason_required: 'A reason is required',
@@ -123,6 +128,36 @@ const ERROR_COPY = {
   no_self_chain: 'You cannot put yourself on this opening — ask a founder',
   reporting_manager_not_in_team: 'The reporting manager must be you or someone in your team',
   band_from_role_requires_comp: "Only the salary allow-list can use the role's band — enter a band instead",
+  // C3 offers
+  application_not_ready: 'Offers start once the candidate is interviewing',
+  band_not_approved: 'The opening has no approved band yet — get the band approved first',
+  draft_exists: 'This application already has an offer in progress — edit that one',
+  not_editable: 'Only a draft (or a rejected one) can be edited — revise instead',
+  signatory_required: 'Pick who signs the letter',
+  signatory_inactive: 'That signatory is not active',
+  template_missing: 'No current template for this kind of offer',
+  rule_set_missing: 'No statutory rule set covers that start date',
+  special_negative: 'The deductions exceed the allowances — the special allowance would be negative',
+  wage_rule: 'Basic would fall below 50% of fixed pay',
+  pf_opt_out_not_eligible: 'PF opt-out is allowed only when Basic is above the PF wage ceiling',
+  pf_opt_out_reason_required: 'Give a reason for not opting in to PF',
+  offer_expired: "The acceptance date is after the offer's validity — send a fresh revision",
+  close_offers_first: "Withdraw or close this application's live offer first",
+  already_accepted: 'Another revision of this offer is already accepted',
+  pdf_store_failed: 'The PDF could not be stored — try again',
+  template_error: 'The template has an unknown merge field or an unclosed section',
+  no_pdf: 'This revision has not been issued yet',
+  bad_fixed_annual: 'Enter the fixed salary (annual, whole rupees)',
+  bad_variable_annual: 'Enter the variable pay as whole rupees',
+  bad_stipend_monthly: 'Enter the monthly stipend',
+  bad_internship_months: 'Internship length must be 1–24 months',
+  start_date_required: 'Pick a start date',
+  designation_required: 'Designation is required',
+  location_required: 'Location is required',
+  bad_probation_months: 'Probation must be 0–12 months',
+  bad_valid_days: 'Validity must be 1–60 days',
+  bad_joining_bonus: 'Joining bonus must be whole rupees',
+  bad_retention_bonus: 'Retention bonus must be whole rupees',
 };
 export function hiringError(e, fallback = 'Something went wrong') {
   const msg = (e && e.message) || '';
@@ -173,3 +208,42 @@ export function numOrNull(v) {
   const n = Number(String(v).replace(/[,\s₹]/g, ''));
   return Number.isFinite(n) ? n : null;
 }
+
+// ── Offers (C3) ──────────────────────────────────────────────────────────────
+export const OFFER_STATUSES = [
+  { id: 'draft',             label: 'Draft',             tone: 'neutral' },
+  { id: 'pending_approval',  label: 'Pending approval',  tone: 'warn' },
+  { id: 'approved',          label: 'Approved',          tone: 'info' },
+  { id: 'approval_rejected', label: 'Approval rejected', tone: 'bad' },
+  { id: 'ready',             label: 'Ready to send',     tone: 'accent' },
+  { id: 'sent',              label: 'Sent',              tone: 'info' },
+  { id: 'accepted',          label: 'Accepted',          tone: 'ok' },
+  { id: 'declined',          label: 'Declined',          tone: 'bad' },
+  { id: 'expired',           label: 'Expired',           tone: 'warn' },
+  { id: 'withdrawn',         label: 'Withdrawn',         tone: 'neutral' },
+  { id: 'superseded',        label: 'Superseded',        tone: 'neutral' },
+];
+export const OFFER_OPEN_STATUSES = ['draft', 'pending_approval', 'approved', 'approval_rejected'];
+export const OFFER_WITHDRAWABLE = ['draft', 'pending_approval', 'approved', 'approval_rejected', 'ready', 'sent', 'accepted', 'expired'];
+export const BAND_CHECKS = [
+  { id: 'in_band',    label: 'In band',                         tone: 'ok' },
+  { id: 'below_band', label: 'Below band',                      tone: 'warn' },
+  { id: 'above_band', label: 'Above band — needs approval',     tone: 'bad' },
+  { id: 'extras',     label: 'One-time extras — need approval', tone: 'warn' },
+];
+export const VARIABLE_LABELS = [
+  { id: 'variable pay',  label: 'Variable pay' },
+  { id: 'incentive pay', label: 'Incentive pay' },
+];
+export const VARIABLE_FREQUENCIES = [
+  { id: 'half-yearly', label: 'Half-yearly' },
+  { id: 'monthly',     label: 'Monthly' },
+  { id: 'quarterly',   label: 'Quarterly' },
+  { id: 'annual',      label: 'Annual' },
+];
+export const OFFER_TEMPLATE_KEYS = [
+  { id: 'employment', label: 'Offer of Employment' },
+  { id: 'internship', label: 'Internship Offer' },
+];
+// Today in IST as YYYY-MM-DD (offers date and expire by India time).
+export function istTodayIso() { return new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10); }

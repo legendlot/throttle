@@ -15,18 +15,23 @@ export const TERMINAL_APP_STATUSES = ['joined', 'rejected', 'declined', 'withdra
 export const isActiveStatus = (s) => ACTIVE_APP_STATUSES.includes(s);
 export const isTerminalStatus = (s) => TERMINAL_APP_STATUSES.includes(s);
 
-// Manual moves only (this slice). →offer is C3's offer flow; offer/accepted/joined/declined/no_show
-// are never set by hand here, so they appear as neither a source nor a target.
+// Manual moves. →offer and →accepted are set ONLY by the offer flow (first sent revision / recorded
+// acceptance, C3 plan §0.8); →joined is C3b's. A declined / expired / withdrawn offer leaves the
+// application at `offer`, and these manual moves close it: offer → declined | withdrawn | rejected, and
+// accepted → withdrawn (LOT withdraws before joining). The handler refuses them while a live offer
+// revision exists (close_offers_first).
 export const APP_TRANSITIONS = {
   new:          ['screening', 'rejected', 'withdrawn', 'on_hold'],
   screening:    ['interviewing', 'rejected', 'withdrawn', 'on_hold'],
   interviewing: ['rejected', 'withdrawn', 'on_hold'],
   on_hold:      ['new', 'screening', 'interviewing', 'rejected', 'withdrawn'],
+  offer:        ['declined', 'withdrawn', 'rejected'],
+  accepted:     ['withdrawn'],
 };
-export const REASON_REQUIRED = ['rejected', 'withdrawn'];
+export const REASON_REQUIRED = ['rejected', 'withdrawn', 'declined'];
 
 // null when allowed, else an error code. `reason` is a category code (OUTCOME_REASON_CODES, below) —
-// required for rejected / withdrawn, optional otherwise; free text travels separately as a note.
+// required for rejected / withdrawn / declined, optional otherwise; free text travels separately as a note.
 export function checkTransition(from, to, reason) {
   if (!(APP_TRANSITIONS[from] || []).includes(to)) return 'invalid_transition';
   const r = String(reason ?? '').trim();
@@ -87,11 +92,12 @@ export const canSeeSalary   = (r) => !!(r && (r.comp || r.owner || r.manager || 
 export const canChangeChain = (r) => !!(r && r.hiring);
 
 // ── Candidate documents ──────────────────────────────────────────────────────
-export const CANDIDATE_DOC_TYPES = ['cv', 'payslip', 'signed_offer', 'id_proof', 'pan', 'address_proof', 'education',
+export const CANDIDATE_DOC_TYPES = ['cv', 'payslip', 'signed_offer', 'offer_evidence', 'id_proof', 'pan', 'address_proof', 'education',
   'experience_letter', 'relieving_letter', 'bank', 'photo', 'other'];
 const DOC_TIER = {
   cv: 'opening', education: 'opening', experience_letter: 'opening', photo: 'opening', other: 'opening',
-  payslip: 'salary', signed_offer: 'salary',
+  // offer_evidence (C3) = the offer as sent (email print / the PDF sent) — it carries the figures.
+  payslip: 'salary', signed_offer: 'salary', offer_evidence: 'salary',
   id_proof: 'hr', pan: 'hr', address_proof: 'hr', bank: 'hr',
   // relieving_letter is in the schema but not in the plan's table; it is a joining-stage document
   // (spec §joining) so it fails closed to HR until someone decides otherwise.
@@ -252,4 +258,143 @@ export function parseBand(min, max) {
   if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0) return { error: 'bad_band' };
   if (b < a) return { error: 'band_max_below_min' };
   return { band_min: Math.round(a), band_max: Math.round(b) };
+}
+
+// ── Offers (C3) ──────────────────────────────────────────────────────────────
+// Plan: docs/superpowers/plans/2026-11-11-podium-hiring-c3-offers.md. One row per revision.
+export const OFFER_STATUSES = ['draft', 'pending_approval', 'approved', 'approval_rejected', 'ready', 'sent',
+  'accepted', 'declined', 'expired', 'withdrawn', 'superseded'];
+// Pre-ready revisions: at most one per application (DB partial unique); only these are edited in place.
+export const OFFER_OPEN_STATUSES = ['draft', 'pending_approval', 'approved', 'approval_rejected'];
+export const OFFER_EDITABLE_STATUSES = ['draft', 'approval_rejected'];
+// Revisions that still bind LOT or the candidate — an application can't be closed by hand while one exists.
+export const OFFER_LIVE_STATUSES = [...OFFER_OPEN_STATUSES, 'ready', 'sent', 'accepted'];
+// LOT may withdraw at any point before joining (spec §C3), including after acceptance or expiry.
+export const OFFER_WITHDRAWABLE = [...OFFER_LIVE_STATUSES, 'expired'];
+// Application statuses an offer can be made from; `accepted` → the new revision is an amendment.
+export const OFFER_APP_STATUSES = ['interviewing', 'offer', 'accepted'];
+export const OFFER_TEMPLATE_KEYS = ['employment', 'internship'];
+export const VARIABLE_LABELS = ['variable pay', 'incentive pay'];
+export const VARIABLE_FREQUENCIES = ['half-yearly', 'monthly', 'quarterly', 'annual'];
+export const OFFER_DOC_KINDS = ['sent_evidence', 'signed'];
+
+// Create / revise / send = the opening's hiring owner or reporting manager (spec permission table) —
+// NOT podium_hiring and NOT HR unless they sit on that chain.
+export const canManageOffers = (r) => !!(r && (r.owner || r.manager));
+
+// Roles for one offer: the snapshotted OFFER approver sees the opening (and that offer's figures) even
+// when they are not the band approver — they cannot decide what they cannot read.
+export function offerRoles(roles, offer, meId) {
+  const r = { ...(roles || {}) };
+  if (meId && offer?.approver_employee_id === meId) r.approver = true;
+  return r;
+}
+
+// IST calendar date (offers expire and date by India time). → 'YYYY-MM-DD'
+export function istToday(nowMs = Date.now()) { return new Date(nowMs + 330 * 60000).toISOString().slice(0, 10); }
+export function addDaysIso(iso, n) {
+  const d = new Date(String(iso).slice(0, 10) + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + Number(n));
+  return d.toISOString().slice(0, 10);
+}
+export function isIsoDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(s + 'T00:00:00Z');
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+// Rupee amounts: a whole number ≥ 0 (numeric strings allowed — PostgREST and form inputs). → n | NaN | null
+function money(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = typeof v === 'number' ? v : Number(String(v).replace(/[,\s]/g, ''));
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : NaN;
+}
+
+const OFFER_TERM_KEYS = ['designation', 'department_name', 'location', 'start_date', 'probation_months', 'signatory_id',
+  'fixed_annual', 'variable_annual', 'variable_label', 'variable_frequency', 'joining_bonus', 'retention_bonus',
+  'stipend_monthly', 'internship_months', 'pf_opt_out', 'pf_opt_out_reason', 'valid_days'];
+
+// Offer terms from a request (merged over `defaults` for keys the request leaves out) → { terms } or
+// { error: code }. Error codes never carry a figure. `mode` = 'salary' | 'stipend' (from the template key).
+export function cleanOfferTerms(d, mode, defaults = {}) {
+  const src = {};
+  for (const k of OFFER_TERM_KEYS) src[k] = (d && d[k] !== undefined) ? d[k] : defaults[k];
+  const t = {};
+  t.designation = String(src.designation ?? '').trim();
+  if (!t.designation) return { error: 'designation_required' };
+  t.department_name = String(src.department_name ?? '').trim() || null;
+  t.location = String(src.location ?? '').trim() || null;
+  if (!t.location) return { error: 'location_required' };
+  if (!isIsoDate(src.start_date)) return { error: 'start_date_required' };
+  t.start_date = src.start_date;
+  if (src.probation_months === null || src.probation_months === undefined || src.probation_months === '') t.probation_months = null;
+  else {
+    const p = Number(src.probation_months);
+    if (!(Number.isInteger(p) && p >= 0 && p <= 12)) return { error: 'bad_probation_months' };
+    t.probation_months = p;
+  }
+  if (src.signatory_id === null || src.signatory_id === undefined || src.signatory_id === '') t.signatory_id = null;
+  else if (!UUID_ONLY.test(String(src.signatory_id))) return { error: 'bad_signatory_id' };
+  else t.signatory_id = src.signatory_id;
+  const vd = src.valid_days === null || src.valid_days === undefined || src.valid_days === '' ? 7 : Number(src.valid_days);
+  if (!(Number.isInteger(vd) && vd >= 1 && vd <= 60)) return { error: 'bad_valid_days' };
+  t.valid_days = vd;
+  for (const k of ['joining_bonus', 'retention_bonus']) {
+    const n = money(src[k]);
+    if (Number.isNaN(n)) return { error: `bad_${k}` };
+    t[k] = n ?? 0;
+  }
+  if (mode === 'stipend') {
+    const s = money(src.stipend_monthly);
+    if (!(s > 0)) return { error: 'bad_stipend_monthly' };
+    const m = Number(src.internship_months);
+    if (!(Number.isInteger(m) && m >= 1 && m <= 24)) return { error: 'bad_internship_months' };
+    Object.assign(t, { stipend_monthly: s, internship_months: m, fixed_annual: null, variable_annual: 0,
+      variable_label: 'variable pay', variable_frequency: 'half-yearly', pf_opt_out: false, pf_opt_out_reason: null });
+    return { terms: t };
+  }
+  const f = money(src.fixed_annual);
+  if (!(f > 0)) return { error: 'bad_fixed_annual' };
+  const v = money(src.variable_annual);
+  if (Number.isNaN(v)) return { error: 'bad_variable_annual' };
+  const label = String(src.variable_label ?? 'variable pay').trim().toLowerCase() || 'variable pay';
+  if (!VARIABLE_LABELS.includes(label)) return { error: 'bad_variable_label' };
+  const freq = String(src.variable_frequency ?? 'half-yearly').trim().toLowerCase() || 'half-yearly';
+  if (!VARIABLE_FREQUENCIES.includes(freq)) return { error: 'bad_variable_frequency' };
+  const optOut = src.pf_opt_out === true || src.pf_opt_out === 'true';
+  const reason = String(src.pf_opt_out_reason ?? '').trim() || null;
+  if (optOut && !reason) return { error: 'pf_opt_out_reason_required' };
+  Object.assign(t, { fixed_annual: f, variable_annual: v ?? 0, variable_label: label, variable_frequency: freq,
+    pf_opt_out: optOut, pf_opt_out_reason: optOut ? reason : null, stipend_monthly: null, internship_months: null });
+  return { terms: t };
+}
+
+// Storage: the issued PDF, and the two uploads an offer takes (the evidence of sending, the signed copy).
+const REF_PAT = 'OFR-\\d{4}-\\d{3,}';
+export function offerPdfPath(applicationId, offerRef, revision) {
+  return `offers/${applicationId}/${offerRef}-r${Number(revision)}.pdf`;
+}
+export function offerDocPath(candidateId, offerRef, revision, kind, ts = Date.now()) {
+  return `candidates/${candidateId}/offers/${offerRef}-r${Number(revision)}-${kind}-${Math.trunc(ts)}.pdf`;
+}
+// null when the path is exactly what offerDocPath mints for this candidate / offer revision / kind.
+export function checkOfferDocPath(path, candidateId, offerRef, revision, kind) {
+  if (!UUID_ONLY.test(String(candidateId || '')) || !OFFER_DOC_KINDS.includes(kind)) return 'bad_storage_path';
+  if (!new RegExp(`^${REF_PAT}$`).test(String(offerRef || '')) || !Number.isInteger(Number(revision))) return 'bad_storage_path';
+  if (typeof path !== 'string' || badSegments(path)) return 'bad_storage_path';
+  const re = new RegExp(`^candidates/${candidateId}/offers/${offerRef}-r${Number(revision)}-${kind}-\\d+\\.pdf$`);
+  return re.test(path) ? null : 'bad_storage_path';
+}
+
+// What a viewer WITHOUT salary on the opening may see of an offer revision: status and dates, no figures,
+// no annexure, no free-text notes (a decision / outcome note can quote a number).
+const OFFER_META_KEYS = ['id', 'application_id', 'opening_id', 'candidate_id', 'offer_ref', 'revision', 'status', 'mode',
+  'designation', 'start_date', 'issue_date', 'valid_until', 'sent_at', 'accepted_at', 'declined_at', 'created_at', 'updated_at'];
+const OFFER_NUM_KEYS = ['fixed_annual', 'variable_annual', 'joining_bonus', 'retention_bonus', 'stipend_monthly', 'total_ctc'];
+export function offerView(o, salaryOk) {
+  if (!o) return null;
+  if (!salaryOk) return Object.fromEntries(OFFER_META_KEYS.map(k => [k, o[k] ?? null]));
+  const out = { ...o };
+  for (const k of OFFER_NUM_KEYS) out[k] = o[k] === null || o[k] === undefined || o[k] === '' ? null : Number(o[k]);
+  return out;
 }

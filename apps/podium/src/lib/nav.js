@@ -1,7 +1,7 @@
 import {
   Users, Network, Briefcase, Building2, BarChart3, Settings, UserPlus,
   Star, Activity, ShieldCheck, UserCog, ClipboardCheck, BookOpen, Factory, Wallet,
-  TrendingUp, Target, ClipboardList,
+  TrendingUp, Target, ClipboardList, FileSignature,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -57,6 +57,9 @@ export const NAV_GROUPS = [
       // group are all admins today) — the worker enforces the comp allow-list server-side.
       { id: 'payouts',    label: 'Payouts',             route: '/admin/payouts',  icon: Wallet,      requires: 'podium_admin' },
       { id: 'factory-cost', label: 'Factory Cost',      route: '/admin/factory-cost', icon: Factory, requires: 'podium_admin' },
+      // Hiring C3 — offer templates + signatories. podium_offer_templates is getMe's display flag
+      // (salary allow-list OR podium_admin, = the worker's canAdminOfferTemplates).
+      { id: 'offer-templates', label: 'Offer Templates', route: '/admin/offer-templates', icon: FileSignature, requires: 'podium_offer_templates' },
     ],
   },
 ];

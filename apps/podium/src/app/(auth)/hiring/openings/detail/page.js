@@ -12,7 +12,7 @@ import {
 } from '../../../../../components/HiringBits.js';
 import {
   OPENING_STATUSES, APP_STATUSES, BUDGET_STATUSES, SOURCES, HIRING_EMPLOYMENT_TYPES, ACTIVE_APP_STATUSES,
-  JD_REQUIRED_MSG, hiringError, labelFrom, formatINR, formatBand, numOrNull, idOf, listOf, fmtDateTime,
+  JD_REQUIRED_MSG, OFFER_STATUSES, hiringError, labelFrom, formatINR, formatBand, numOrNull, idOf, listOf, fmtDateTime,
 } from '../../../../../lib/hiring.js';
 
 function OpeningDetailInner() {
@@ -501,7 +501,10 @@ function CandidatesCard({ opening, applications, hasJd, isOpen, canManage, canSe
               <div style={{ fontWeight: 600 }}>{c.full_name || a.candidate_name || '—'}</div>
               <div style={{ ...muted, fontSize: 11 }}>{c.candidate_code || a.candidate_code || ''}</div>
             </span>
-            <span><ListBadge list={APP_STATUSES} status={a.status} /></span>
+            <span style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
+              <ListBadge list={APP_STATUSES} status={a.status} />
+              {a.offer && <span style={{ fontSize: 10.5, color: 'var(--text-3)' }}>{a.offer.offer_ref} r{a.offer.revision} · {labelFrom(OFFER_STATUSES, a.offer.status)}</span>}
+            </span>
             <span style={{ color: 'var(--text-2)', fontSize: 12 }}>{labelFrom(SOURCES, a.source)}</span>
             <span className="num" style={{ fontSize: 12, color: 'var(--text-2)' }}>
               {('expected_ctc' in a || 'current_ctc' in a) ? <>{formatINR(a.current_ctc, { compact: true })} → {formatINR(a.expected_ctc, { compact: true })}</> : null}

@@ -32,7 +32,15 @@ import {
   JD_EXTS, CANDIDATE_DOC_EXTS, fileOk, retainUntil, normEmailKey, normPhoneKey, parseBand,
   canSeeDocRow, OUTCOME_REASON_CODES, redactReason, redactEvent, candidateEventsFor, checkFileSize,
   candidateDocPath, jdPath, checkCandidateDocPath, checkJdPath, cleanSearch,
-} from './hiring.js';   // Hiring C1/C2 — the pure permission + transition rules, see test/hiring.test.mjs
+  // C3 offers
+  canManageOffers, offerRoles, cleanOfferTerms, offerPdfPath, offerDocPath, checkOfferDocPath, offerView,
+  istToday, addDaysIso, isIsoDate, OFFER_OPEN_STATUSES, OFFER_EDITABLE_STATUSES, OFFER_LIVE_STATUSES, OFFER_WITHDRAWABLE,
+  OFFER_APP_STATUSES, OFFER_TEMPLATE_KEYS, OFFER_DOC_KINDS,
+} from './hiring.js';   // Hiring C1/C2/C3 — the pure permission + transition rules, see test/hiring.test.mjs + offers.test.mjs
+import { computeAnnexure, bandCheck, needsApproval } from './offer-calc.js';   // C3 CTC calculator (test/offer-calc.test.mjs)
+import {
+  renderOfferText, renderOfferPdf, sha256Hex, validateTemplateBody, SAMPLE_OFFER, SAMPLE_SIGNATORY, OFFER_FIELDS,
+} from './offer-render.js';   // C3 letter + PDF renderer (test/offer-render.test.mjs)
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 
@@ -401,7 +409,9 @@ async function getMe(url, auth, env) {
     // podium_super_admin is a DISPLAY flag for the nav/page guards only (never read server-side —
     // hasPerm reads auth.permissions); the worker gates on canCalibrate(auth).
     // podium_hiring_access is the same kind of display flag (nav only); every hiring action self-scopes.
-    permissions: { ...(auth.permissions || {}), podium_super_admin: !!auth.isSuperAdmin, podium_hiring_access: hiringOn },
+    // podium_offer_templates (nav only) mirrors canAdminOfferTemplates: salary allow-list or podium_admin.
+    permissions: { ...(auth.permissions || {}), podium_super_admin: !!auth.isSuperAdmin, podium_hiring_access: hiringOn,
+      podium_offer_templates: canComp(auth) || isAdmin(auth) },
     employee_id: me?.id || null,
     settings: sr.data?.[0] || { comp_vault_enabled: false, min_tenure_days: 90 },
     tier: { admin: isAdmin(auth), hr: isHr(auth), comp: canComp(auth), super_admin: !!auth.isSuperAdmin },
@@ -3685,13 +3695,17 @@ async function getOpening(url, auth, env) {
   if (!x) return err('not_found', 404);
   if (!canSeeOpening(x.roles)) return err('forbidden', 403);
   const sal = canSeeSalary(x.roles);
-  const [jr, br, ar, evr, founders] = await Promise.all([
+  const [jr, br, ar, evr, founders, ofr] = await Promise.all([
     sb(`/rest/v1/opening_jds?opening_id=eq.${id}&select=*&order=version.desc`, env),
     sb(`/rest/v1/opening_budgets?opening_id=eq.${id}&select=*,approver:approver_employee_id(id,full_name),requester:requested_by_employee_id(id,full_name)&order=version.desc`, env),
     sb(`/rest/v1/applications?opening_id=eq.${id}&select=*,candidate:candidate_id(id,candidate_code,full_name)&order=created_at.desc`, env),
     sb(`/rest/v1/application_events?opening_id=eq.${id}&select=*&order=created_at.desc&limit=100`, env),
     loadFounders(env),
+    // C3: each application's latest offer revision — status only (no figures) for the candidate rows.
+    sb(`/rest/v1/offers?opening_id=eq.${id}&select=application_id,offer_ref,revision,status&order=revision.desc`, env),
   ]);
+  const latestOffer = {};
+  for (const o of (ofr.data || [])) if (!latestOffer[o.application_id]) latestOffer[o.application_id] = o;
   if (!jr.ok || !br.ok || !ar.ok) return err('db_error', 500);
   const jds = jr.data || [];
   // Band numbers AND the free-text decision note are salary-chain only (a note can quote a number).
@@ -3700,7 +3714,8 @@ async function getOpening(url, auth, env) {
   const applications = (ar.data || []).map(a => {
     const base = { id: a.id, candidate: a.candidate, candidate_id: a.candidate_id, status: a.status, source: a.source,
       source_detail: a.source_detail, notice_period_days: a.notice_period_days, outcome_reason: redactReason(a.outcome_reason, sal),
-      moved_to_application_id: a.moved_to_application_id, created_at: a.created_at, closed_at: a.closed_at };
+      moved_to_application_id: a.moved_to_application_id, created_at: a.created_at, closed_at: a.closed_at,
+      offer: latestOffer[a.id] ? { offer_ref: latestOffer[a.id].offer_ref, revision: latestOffer[a.id].revision, status: latestOffer[a.id].status } : null };
     return sal ? { ...base, current_ctc: numOrNull(a.current_ctc), expected_ctc: numOrNull(a.expected_ctc) } : base;
   });
   // Approver: the pending request's snapshot, else who a request made now would go to.
@@ -3834,18 +3849,30 @@ async function getCandidate(url, auth, env) {
   if (!cand) return err('not_found', 404);
   const sc = await candidateScope(auth, me, env, id);
   if (!sc.canSee) return err('forbidden', 403);
-  const [dr, evr] = await Promise.all([
+  const visApps = sc.apps.filter(a => canSeeOpening(sc.byId[a.opening_id]?.roles));
+  const [dr, evr, ofr] = await Promise.all([
     sb(`/rest/v1/candidate_documents?candidate_id=eq.${id}&select=*&order=uploaded_at.desc`, env),
     sb(`/rest/v1/application_events?candidate_id=eq.${id}&select=*&order=created_at.desc&limit=200`, env),
+    visApps.length
+      ? sb(`/rest/v1/offers?application_id=in.(${visApps.map(a => a.id).join(',')})&select=id,application_id,opening_id,candidate_id,offer_ref,revision,status,mode,designation,start_date,issue_date,valid_until,sent_at,accepted_at,declined_at,created_at,updated_at,total_ctc,approver_employee_id&order=revision.desc`, env)
+      : Promise.resolve({ data: [] }),
   ]);
+  const offersAll = await expireDueOffers(env, auth, me, ofr.data || []);
   let salaryShown = false;
-  const applications = sc.apps.filter(a => canSeeOpening(sc.byId[a.opening_id]?.roles)).map(a => {
+  const applications = visApps.map(a => {
     const x = sc.byId[a.opening_id];
     const sal = canSeeSalary(x.roles);
     const { current_ctc, expected_ctc, ...rest } = a;
     rest.outcome_reason = redactReason(a.outcome_reason, sal);
+    // C3: the application's offer revisions — total CTC only where the caller has salary on that offer.
+    const offers = offersAll.filter(o => o.application_id === a.id).map(o => {
+      const os = canSeeSalary(offerRoles(x.roles, o, me?.id || null));
+      if (os && o.total_ctc != null) salaryShown = true;
+      const { approver_employee_id, ...v } = offerView(o, os);
+      return v;
+    });
     const out = { ...rest, opening: { id: x.o.id, opening_code: x.o.opening_code, designation: x.o.designation, status: x.o.status, has_jd: !!x.o.current_jd_id },
-      can_manage: canManageApps(x.roles), can_see_salary: sal,
+      can_manage: canManageApps(x.roles), can_see_salary: sal, can_offer: canManageOffers(x.roles), offers,
       allowed_transitions: APP_TRANSITIONS[a.status] || [] };
     if (sal) {
       out.current_ctc = numOrNull(current_ctc); out.expected_ctc = numOrNull(expected_ctc);
@@ -4002,20 +4029,6 @@ async function createOpening(body, auth, env) {
   return ok(r.data?.opening);
 }
 
-// Cancel a pending band and re-request it (same numbers) to `approver`, as `me` — whoever changed
-// the chain is the requester now (so they can never be its approver).
-async function rerequestPendingBand(openingId, pend, approver, me, auth, env) {
-  const vr = await sb(`/rest/v1/opening_budgets?opening_id=eq.${openingId}&select=version&order=version.desc&limit=1`, env);
-  const c = await sb(`/rest/v1/opening_budgets?id=eq.${pend.id}&status=eq.pending`, env, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled', decided_at: nowIso(), decision_note: 'chain changed — re-requested' }) });
-  if (!c.ok) return 'cancel_failed';
-  const n = await sb(`/rest/v1/opening_budgets`, env, { method: 'POST', body: JSON.stringify([{
-    opening_id: openingId, version: Number(vr.data?.[0]?.version || 0) + 1, band_min: pend.band_min, band_max: pend.band_max,
-    status: 'pending', requested_by: auth.userId, requested_by_employee_id: me?.id || null, approver_employee_id: approver,
-  }]) });
-  if (!n.ok) return 'rerequest_failed';
-  return null;
-}
-
 async function updateOpening(body, auth, env) {
   const d = body.data || body;
   const edges = await loadOrgEdges(env);
@@ -4052,20 +4065,24 @@ async function updateOpening(body, auth, env) {
     Object.assign(patch, chain);
   }
   if (!Object.keys(patch).length) return err('no_patch', 400);
-  const r = await sb(`/rest/v1/openings?id=eq.${x.o.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
-  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  const events = Object.keys(cp.patch).length ? [{ opening_id: x.o.id, event_type: 'opening_updated', detail: { fields: Object.keys(cp.patch) } }] : [];
+  const events = Object.keys(cp.patch).length ? [{ event_type: 'opening_updated', detail: { fields: Object.keys(cp.patch) } }] : [];
   if (Object.keys(chain).length) {
     const from = Object.fromEntries(Object.keys(chain).map(k => [k, x.o[k]]));
-    events.push({ opening_id: x.o.id, event_type: 'chain_changed', detail: { from, to: chain } });
-    // Either seat changing can change who may approve (owner + RM are both skipped) → re-request.
-    if (pend) {
-      const e = await rerequestPendingBand(x.o.id, pend, reApprover, me, auth, env);
-      if (e) { await hiringEvents(env, auth, me, events); return err(`chain changed but band re-request failed: ${e}`, 500); }
-      events.push({ opening_id: x.o.id, event_type: 'band_rerequested', detail: { reason: 'chain_changed', approver_employee_id: reApprover } });
-    }
+    events.push({ event_type: 'chain_changed', detail: { from, to: chain } });
+    // Either seat changing can change who may approve (owner + RM are both skipped) → the pending band is
+    // cancelled and re-requested (same numbers, requested by the caller) to the new approver. Patch +
+    // re-request + events are one transaction (0008 hiring_change_chain).
+    const r = await hiringRpc(env, 'hiring_change_chain', {
+      opening_id: x.o.id, patch, pending_budget_id: pend ? pend.id : null, approver_employee_id: reApprover,
+      events, actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+    });
+    if (rpcError(r) === 'stale') return errCode('stale', 'The band request changed — reload and retry', 409);
+    if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+    return ok(r.data?.opening);
   }
-  await hiringEvents(env, auth, me, events);
+  const r = await sb(`/rest/v1/openings?id=eq.${x.o.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await hiringEvents(env, auth, me, events.map(e => ({ ...e, opening_id: x.o.id })));
   return ok(r.data?.[0]);
 }
 
@@ -4120,19 +4137,11 @@ async function addOpeningJd(body, auth, env) {
     if (!t) return err('jd_text, storage_path or use_role_jd required', 400);
     row = { source: 'text', jd_text: t };
   }
-  const vr = await sb(`/rest/v1/opening_jds?opening_id=eq.${x.o.id}&select=version&order=version.desc&limit=1`, env);
-  const version = Number(vr.data?.[0]?.version || 0) + 1;
-  const ins = await sb(`/rest/v1/opening_jds`, env, { method: 'POST', body: JSON.stringify([{ ...row, opening_id: x.o.id, version, created_by: auth.userId }]) });
-  if (!ins.ok) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
-  const jd = ins.data[0];
-  // First JD on a draft opens it; never reopens on_hold / filled / cancelled.
-  const patch = { current_jd_id: jd.id, ...(x.o.status === 'draft' ? { status: 'open' } : {}) };
-  const up = await sb(`/rest/v1/openings?id=eq.${x.o.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
-  if (!up.ok) return err(`db_error: ${JSON.stringify(up.data)}`, 400);
-  const evs = [{ opening_id: x.o.id, event_type: 'jd_added', detail: { version, source: row.source } }];
-  if (patch.status) evs.push({ opening_id: x.o.id, event_type: 'opening_status', from_status: 'draft', to_status: 'open', reason: 'JD added' });
-  await hiringEvents(env, auth, me, evs);
-  return ok({ jd, opening: up.data?.[0] });
+  // Next version + make it current + (first JD on a draft) open the opening + events, one transaction
+  // (0008 hiring_add_jd). Never reopens on_hold / filled / cancelled.
+  const r = await hiringRpc(env, 'hiring_add_jd', { opening_id: x.o.id, jd: row, actor_user_id: auth.userId, actor_employee_id: me?.id || null });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok({ jd: r.data?.jd, opening: r.data?.opening });
 }
 
 async function createJdUploadUrl(body, auth, env) {
@@ -4156,29 +4165,18 @@ async function requestBandChange(body, auth, env) {
   if (!canEditOpening(x.roles)) return err('forbidden', 403);
   const band = parseBand(d.band_min, d.band_max);
   if (band.error) return err(band.error, 400);
-  const [founders, vr] = await Promise.all([
-    loadFounders(env),
-    sb(`/rest/v1/opening_budgets?opening_id=eq.${x.o.id}&select=version&order=version.desc&limit=1`, env),
-  ]);
+  const founders = await loadFounders(env);
   const approver = resolveApprover(edges, founders, x.o.reporting_manager_employee_id, me?.id || null, x.o.hiring_owner_employee_id);
   if (!approver) return err('no_approver — could not resolve a budget approver', 500);
-  const pend = x.budgets.find(b => b.status === 'pending');
-  if (pend) {
-    const c = await sb(`/rest/v1/opening_budgets?id=eq.${pend.id}`, env, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled', decided_at: nowIso(), decision_note: 'replaced by a newer request' }) });
-    if (!c.ok) return err(`db_error: ${JSON.stringify(c.data)}`, 400);
-  }
-  const ins = await sb(`/rest/v1/opening_budgets`, env, { method: 'POST', body: JSON.stringify([{
-    opening_id: x.o.id, version: Number(vr.data?.[0]?.version || 0) + 1, ...band, status: 'pending',
-    requested_by: auth.userId, requested_by_employee_id: me?.id || null, approver_employee_id: approver,
-    decision_note: null,
-  }]) });
-  if (!ins.ok) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
+  // Cancel any pending + insert the new pending version + band_requested event, one transaction (0008).
   // The request note is free text that may quote numbers → detail.note, which every read strips for
   // viewers without salary on this opening (redactEvent).
-  const note = String(d.note || '').trim();
-  await hiringEvents(env, auth, me, [{ opening_id: x.o.id, event_type: 'band_requested',
-    detail: { version: ins.data[0].version, approver_employee_id: approver, replaced_pending: !!pend, ...(note ? { note } : {}) } }]);
-  return ok(ins.data[0]);
+  const r = await hiringRpc(env, 'hiring_request_band_change', {
+    opening_id: x.o.id, band, approver_employee_id: approver, note: String(d.note || '').trim() || null,
+    actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+  });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.budget);
 }
 
 async function decideBand(body, auth, env) {
@@ -4363,6 +4361,11 @@ async function maybeStartRetention(candidateId, env) {
   await sb(`/rest/v1/candidates?id=eq.${candidateId}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ retain_until: retainUntil(todayIso()) }) });
 }
 
+async function hasLiveOffer(env, applicationId) {
+  const r = await sb(`/rest/v1/offers?application_id=eq.${applicationId}&status=in.(${OFFER_LIVE_STATUSES.join(',')})&select=id&limit=1`, env);
+  return !!r.data?.length;
+}
+
 async function setApplicationStatus(body, auth, env) {
   const d = body.data || body;
   const app = await loadApplication(env, d.id);
@@ -4377,6 +4380,10 @@ async function setApplicationStatus(body, auth, env) {
   if (bad === 'reason_required') return errCode('reason_required', 'A reason is required to reject or withdraw', 400);
   if (bad === 'bad_reason') return errCode('bad_reason', `reason must be one of: ${OUTCOME_REASON_CODES.join(', ')}`, 400);
   if (bad) return errCode('invalid_transition', `Cannot move ${app.status} → ${d.status} here`, 409);
+  // Closing an application that is at offer / accepted: its live offer revision is withdrawn / declined first.
+  if (['offer', 'accepted'].includes(app.status) && await hasLiveOffer(env, app.id)) {
+    return errCode('close_offers_first', OFFER_COPY.close_offers_first, 409);
+  }
   const reason = String(d.reason || '').trim() || null;
   const note = String(d.note || '').trim() || null;
   const patch = { status: d.status, ...(reason ? { outcome_reason: reason } : {}),
@@ -4407,6 +4414,8 @@ async function moveApplication(body, auth, env) {
   const { x: dst, res } = await intakeOpening(auth, me, env, d.to_opening_id);
   if (res) return res;
   if (!(APP_TRANSITIONS[app.status] || []).includes('withdrawn')) return errCode('invalid_transition', `Cannot move an application that is ${app.status}`, 409);
+  // Offers stay with the opening they were made for — close the live one before moving.
+  if (await hasLiveOffer(env, app.id)) return errCode('close_offers_first', OFFER_COPY.close_offers_first, 409);
   // New application + close the old one (guarded on the status read here) + both events, one
   // transaction (0007). Salary fields are NOT copied.
   const r = await hiringRpc(env, 'hiring_move_application', {
@@ -4481,6 +4490,646 @@ async function deleteCandidateDocument(body, auth, env) {
   return ok({ deleted: d.id });
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// HIRING C3 — offer letters. Plan: docs/superpowers/plans/2026-11-11-podium-hiring-c3-offers.md
+// One row per revision (podium.offers). Create / revise / send = the opening's hiring owner or reporting
+// manager (canManageOffers); approve = the snapshotted offer approver or a founder, never the requester.
+// Figures (terms, annexure, band, PDF) only to callers with salary on that opening (canSeeSalary over
+// offerRoles); podium_hiring alone sees status + dates. Every salary-bearing read logs comp_access_log.
+// Events carry ids / ref / revision / status only; free text goes to detail.note (stripped on read).
+// Error responses never echo a figure — offerDbError drops PostgREST's `details` ("Failing row contains").
+// ────────────────────────────────────────────────────────────────────────────
+
+const OFFER_CC_ALWAYS = ['hr@legendoftoys.com'];   // decision 9: HR is copied on every offer
+const OFFER_CC_FOUNDER_NAME = 'Afshaan Siddiqui';  // decision 9: + Afshaan (looked up, not hard-coded)
+const OFFER_COPY = {
+  application_not_ready: 'Offers start once the candidate is interviewing',
+  band_not_approved: 'The opening has no approved band yet — get the band approved first',
+  draft_exists: 'This application already has an offer in progress — edit that one',
+  not_editable: 'Only a draft (or a rejected one) can be edited — revise instead',
+  signatory_required: 'Pick who signs the letter',
+  signatory_inactive: 'That signatory is not active',
+  template_missing: 'No current template for this kind of offer',
+  rule_set_missing: 'No statutory rule set covers that start date',
+  special_negative: 'The deductions exceed the allowances — the special allowance would be negative',
+  wage_rule: 'Basic would fall below 50% of fixed pay',
+  pf_opt_out_not_eligible: 'PF opt-out is allowed only when Basic is above the PF wage ceiling',
+  offer_expired: 'The acceptance date is after the offer\'s validity — send a fresh revision',
+  close_offers_first: 'Withdraw or close this application\'s live offer first',
+  pdf_store_failed: 'The PDF could not be stored — try again',
+};
+const offerErr = (code, status = 422) => errCode(code, OFFER_COPY[code] || code.replace(/_/g, ' '), status);
+// PostgREST error → code + message only. `details` would carry the failing row (figures).
+function offerDbError(r) {
+  const d = r?.data && typeof r.data === 'object' ? r.data : {};
+  return err(`db_error: ${[d.code, d.message].filter(Boolean).join(' ') || r?.status}`, 400);
+}
+
+async function loadOffer(env, id) {
+  if (!isUuid(id)) return null;
+  return (await sb(`/rest/v1/offers?id=eq.${id}&select=*&limit=1`, env)).data?.[0] || null;
+}
+async function currentTemplate(env, key) {
+  return (await sb(`/rest/v1/offer_templates?template_key=eq.${key}&is_current=eq.true&select=*&limit=1`, env)).data?.[0] || null;
+}
+async function ruleSetFor(env, date) {
+  return (await sb(`/rest/v1/offer_rule_sets?effective_from=lte.${date}&or=(effective_to.is.null,effective_to.gte.${date})&select=*&order=effective_from.desc&limit=1`, env)).data?.[0] || null;
+}
+const templateKeyOf = (o) => o?.inputs?.template_key || (o?.mode === 'stipend' ? 'internship' : 'employment');
+
+// The application + opening (with roles) an offer action works on, from an application id.
+async function offerAppCtx(auth, env, applicationId) {
+  const app = await loadApplication(env, applicationId);
+  if (!app) return { res: err('not_found', 404) };
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, app.opening_id);
+  if (!x || !canSeeOpening(x.roles)) return { res: err('forbidden', 403) };
+  return { app, x, me, edges };
+}
+// …from an offer id; roles include the snapshotted offer approver.
+async function offerCtx(auth, env, offerId) {
+  const o = await loadOffer(env, offerId);
+  if (!o) return { res: err('not_found', 404) };
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, o.opening_id);
+  if (!x) return { res: err('not_found', 404) };
+  const roles = offerRoles(x.roles, o, me?.id || null);
+  if (!canSeeOpening(roles)) return { res: err('forbidden', 403) };
+  return { o, x, roles, me, edges };
+}
+
+// Offers need an open opening with a JD and an approved band.
+function offerOpeningGate(x) {
+  if (jdGate(x.o)) return errCode('jd_required', JD_REQUIRED_MSG, 409);
+  if (x.o.status !== 'open') return errCode('opening_not_open', 'The opening is not open', 409);
+  if (!x.o.current_budget_id || !x.budgets.some(b => b.id === x.o.current_budget_id)) return offerErr('band_not_approved', 409);
+  return null;
+}
+const currentBudget = (x) => x.budgets.find(b => b.id === x.o.current_budget_id) || null;
+
+function offerDefaults(o) {
+  return { designation: o.designation, department_name: o.department?.name || null, location: o.location_city,
+    start_date: o.target_join_date || null };
+}
+
+// Terms → the offers row fields + annexure + band check, or { error }. Pins rule set + budget.
+function buildOffer(terms, mode, opening, rs, budget, templateKey) {
+  const a = computeAnnexure({ ...terms, mode, work_state: opening.location_state }, rs.rules);
+  if (a.error) return { error: a.error };
+  const check = bandCheck(a.totals.total_ctc, [terms.joining_bonus, terms.retention_bonus], bandOf(budget));
+  const { valid_days, ...cols } = terms;
+  return {
+    annexure: a, band_check: check,
+    row: { ...cols, mode, total_ctc: a.totals.total_ctc, rule_set_id: rs.id, budget_id: budget?.id || null,
+      inputs: { ...terms, mode, template_key: templateKey, work_state: opening.location_state || null, rule_set_code: rs.code },
+      annexure: a, band_check: check },
+  };
+}
+
+// Lazy expiry: 'sent' revisions past valid_until (IST) flip to 'expired' (one RPC for the lot) before a
+// read or write uses them. → the rows with the new statuses.
+async function expireDueOffers(env, auth, me, offers) {
+  const today = istToday();
+  const due = (offers || []).filter(o => o.status === 'sent' && o.valid_until && o.valid_until < today);
+  if (!due.length) return offers || [];
+  const r = await hiringRpc(env, 'hiring_expire_offers', {
+    application_ids: [...new Set(due.map(o => o.application_id))], today, actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+  });
+  const gone = new Set(r.ok ? (r.data?.expired || []) : []);
+  return offers.map(o => (gone.has(o.id) ? { ...o, status: 'expired' } : o));
+}
+
+async function offerTransition(env, auth, me, o, expected, to, extra = {}) {
+  return hiringRpc(env, 'hiring_offer_transition', {
+    offer_id: o.id, expected_status: expected, to_status: to, set: extra.set || {}, evidence_doc: extra.evidence_doc || null,
+    acceptance_doc: extra.acceptance_doc || null, app_status: extra.app_status || null, event_type: extra.event_type || null,
+    event_note: extra.event_note || null, actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+  });
+}
+function transitionFailed(r) {
+  if (rpcError(r) === 'stale') return errCode('stale', 'This offer changed — reload and retry', 409);
+  if (r.data?.code === '23505') return errCode('already_accepted', 'Another revision of this offer is already accepted', 409);
+  return offerDbError(r);
+}
+
+// Default CC for "Mark as sent" (decision 9): hr@ + the opening's chain + Afshaan. Recorded, not sent (O1 sends).
+async function offerDefaultCc(env, x) {
+  const ids = [x.o.hiring_owner_employee_id, x.o.reporting_manager_employee_id].filter(Boolean);
+  const r = await sb(`/rest/v1/employees?or=(id.in.(${ids.join(',')}),full_name.eq.${encodeURIComponent(`"${OFFER_CC_FOUNDER_NAME}"`)})&select=work_email&limit=10`, env);
+  const emails = (r.data || []).map(e => String(e.work_email || '').trim().toLowerCase()).filter(Boolean);
+  return [...new Set([...OFFER_CC_ALWAYS, ...emails])];
+}
+
+// Render the frozen letter, store it, hash it, and move the revision to `ready` (from `draft` in band,
+// or from `approved`). The stored file is the record: downloads serve it, never a re-render.
+async function issueOffer(env, auth, me, o, from, set = {}) {
+  if (!o.signatory_id) return offerErr('signatory_required');
+  const [tr, sr, cr] = await Promise.all([
+    sb(`/rest/v1/offer_templates?id=eq.${o.template_id}&select=*&limit=1`, env),
+    sb(`/rest/v1/offer_signatories?id=eq.${o.signatory_id}&select=*&limit=1`, env),
+    sb(`/rest/v1/candidates?id=eq.${o.candidate_id}&select=full_name&limit=1`, env),
+  ]);
+  const template = tr.data?.[0], signatory = sr.data?.[0], candidate = cr.data?.[0];
+  if (!template) return offerErr('template_missing');
+  if (!signatory) return offerErr('signatory_required');
+  const issue = o.issue_date || istToday();
+  const offer = { ...offerView(o, true), issue_date: issue, valid_until: o.valid_until || addDaysIso(issue, Number(o.inputs?.valid_days || 7)) };
+  let bytes;
+  try { bytes = await renderOfferPdf({ template, offer, annexure: o.annexure, signatory, candidate }); }
+  catch (e) { if (e?.code === 'template_error') return errCode('template_error', e.message, 422); throw e; }
+  const sha = await sha256Hex(bytes);
+  const path = offerPdfPath(o.application_id, o.offer_ref, o.revision);
+  // Upsert: the path is per revision and only ever written before `ready`; the transition guard below
+  // lets exactly one writer through, and the same inputs render the same bytes.
+  const up = await storageFetch(`/object/${DOC_BUCKET}/${path}`, env, {
+    method: 'POST', headers: { 'Content-Type': 'application/pdf', 'x-upsert': 'true' }, body: bytes,
+  });
+  if (!up.ok) return offerErr('pdf_store_failed', 502);
+  const r = await offerTransition(env, auth, me, o, from, 'ready', {
+    set: { ...set, issue_date: issue, valid_until: offer.valid_until, pdf_path: path, pdf_sha256: sha, rendered_at: nowIso() },
+    event_type: 'offer_ready',
+  });
+  if (!r.ok) return transitionFailed(r);
+  return ok({ id: o.id, offer_ref: o.offer_ref, revision: o.revision, status: 'ready', pdf_sha256: sha });
+}
+
+// ── Reads ────────────────────────────────────────────────────────────────────
+
+async function getOfferSetup(url, auth, env) {
+  const c = await offerAppCtx(auth, env, url.searchParams.get('application_id'));
+  if (c.res) return c.res;
+  const { app, x, me, edges } = c;
+  if (!canManageOffers(x.roles)) return err('forbidden — offers are made by the opening\'s hiring owner or reporting manager', 403);
+  const [tr, sr, cr, founders, cc] = await Promise.all([
+    sb(`/rest/v1/offer_templates?is_current=eq.true&select=id,template_key,version,title,notes&order=template_key.asc`, env),
+    sb(`/rest/v1/offer_signatories?active=eq.true&select=id,display_name,phone,title,employee_id&order=display_name.asc`, env),
+    sb(`/rest/v1/candidates?id=eq.${app.candidate_id}&select=id,candidate_code,full_name,email&limit=1`, env),
+    loadFounders(env),
+    offerDefaultCc(env, x),
+  ]);
+  const approverId = resolveApprover(edges, founders, x.o.reporting_manager_employee_id, me?.id || null, x.o.hiring_owner_employee_id);
+  const ap = approverId ? (await sb(`/rest/v1/employees?id=eq.${approverId}&select=id,full_name,job_title&limit=1`, env)).data?.[0] : null;
+  const sal = canSeeSalary(x.roles);
+  const band = sal ? bandOf(currentBudget(x)) : null;
+  if (band) await logCompAccess(auth, 'getOfferSetup', null, x.o.opening_code, env, { application_id: app.id });
+  return ok({
+    application: { id: app.id, status: app.status },
+    candidate: cr.data?.[0] || null,
+    opening: { id: x.o.id, opening_code: x.o.opening_code, designation: x.o.designation, status: x.o.status,
+      employment_type: x.o.employment_type, location_state: x.o.location_state, has_jd: !!x.o.current_jd_id,
+      has_band: !!currentBudget(x) },
+    templates: tr.data || [], signatories: sr.data || [], band, approver: ap || null,
+    defaults: { ...offerDefaults(x.o), template_key: x.o.employment_type === 'intern' ? 'internship' : 'employment',
+      valid_days: 7, variable_label: 'variable pay', variable_frequency: 'half-yearly', sent_to: cr.data?.[0]?.email || null, sent_cc: cc },
+    can_see_salary: sal,
+  });
+}
+
+// POST, no write: the annexure + band check + letter text for terms being typed (debounced by the form).
+// Not comp-logged per keystroke: the caller already holds salary on the opening and supplied the figures.
+async function previewOffer(body, auth, env) {
+  const d = body.data || body;
+  const c = await offerAppCtx(auth, env, d.application_id);
+  if (c.res) return c.res;
+  const { app, x } = c;
+  if (!canSeeSalary(x.roles)) return err('forbidden', 403);
+  const key = d.template_key || (x.o.employment_type === 'intern' ? 'internship' : 'employment');
+  if (!OFFER_TEMPLATE_KEYS.includes(key)) return err('bad template_key', 400);
+  const mode = key === 'internship' ? 'stipend' : 'salary';
+  const ct = cleanOfferTerms(d, mode, offerDefaults(x.o));
+  if (ct.error) return offerErr(ct.error, 400);
+  const [tpl, rs, sr, cr] = await Promise.all([
+    currentTemplate(env, key), ruleSetFor(env, ct.terms.start_date),
+    ct.terms.signatory_id ? sb(`/rest/v1/offer_signatories?id=eq.${ct.terms.signatory_id}&select=*&limit=1`, env) : Promise.resolve({ data: [] }),
+    sb(`/rest/v1/candidates?id=eq.${app.candidate_id}&select=full_name&limit=1`, env),
+  ]);
+  if (!tpl) return offerErr('template_missing');
+  if (!rs) return offerErr('rule_set_missing');
+  const budget = currentBudget(x);
+  const b = buildOffer(ct.terms, mode, x.o, rs, budget, key);
+  if (b.error) return offerErr(b.error);
+  let text = null, templateError = null;
+  try {
+    text = renderOfferText({ template: tpl, offer: { ...b.row, offer_ref: 'OFR-PREVIEW', revision: null, issue_date: istToday() },
+      annexure: b.annexure, signatory: sr.data?.[0] || null, candidate: cr.data?.[0] || null });
+  } catch (e) { templateError = e?.message || 'template_error'; }
+  return ok({ annexure: b.annexure, total_ctc: b.annexure.totals.total_ctc, band_check: budget ? b.band_check : null,
+    needs_approval: budget ? needsApproval(b.band_check) : null, warnings: b.annexure.warnings, rule_set: rs.code,
+    template: { id: tpl.id, key, version: tpl.version }, text, template_error: templateError });
+}
+
+async function getOffers(url, auth, env) {
+  const c = await offerAppCtx(auth, env, url.searchParams.get('application_id'));
+  if (c.res) return c.res;
+  const { app, x, me } = c;
+  const r = await sb(`/rest/v1/offers?application_id=eq.${app.id}&select=*&order=revision.desc`, env);
+  if (!r.ok) return err('db_error', 500);
+  const rows = await expireDueOffers(env, auth, me, r.data || []);
+  let shown = false;
+  const offers = rows.map(o => {
+    const sal = canSeeSalary(offerRoles(x.roles, o, me?.id || null));
+    if (sal) shown = true;
+    const v = offerView(o, sal);
+    if (sal) { delete v.annexure; delete v.inputs; }   // the list carries the headline figures only
+    return { ...v, can_see_salary: sal };
+  });
+  if (shown) await logCompAccess(auth, 'getOffers', null, x.o.opening_code, env, { application_id: app.id });
+  return ok({ offers, can_manage: canManageOffers(x.roles), can_see_salary: canSeeSalary(x.roles) });
+}
+
+async function getOffer(url, auth, env) {
+  const c = await offerCtx(auth, env, url.searchParams.get('id'));
+  if (c.res) return c.res;
+  const { x, roles, me } = c;
+  const [o] = await expireDueOffers(env, auth, me, [c.o]);
+  const sal = canSeeSalary(roles);
+  const [evr, cr, founders] = await Promise.all([
+    sb(`/rest/v1/application_events?application_id=eq.${o.application_id}&event_type=like.offer_*&select=*&order=created_at.desc&limit=200`, env),
+    sb(`/rest/v1/candidates?id=eq.${o.candidate_id}&select=id,candidate_code,full_name,email&limit=1`, env),
+    loadFounders(env),
+  ]);
+  const events = (evr.data || []).filter(e => !e.detail?.offer_id || e.detail.offer_id === o.id || e.event_type === 'offer_superseded')
+    .map(e => redactEvent(e, sal));
+  const isFounder = !!auth.isSuperAdmin && !!me && founders.includes(me.id);
+  const meId = me?.id || null;
+  const can = {
+    manage: canManageOffers(x.roles),
+    decide: o.status === 'pending_approval' && !checkBandDecider(meId, isFounder, o),
+    see_salary: sal,
+  };
+  const base = { offer: offerView(o, sal), candidate: cr.data?.[0] || null,
+    opening: { id: x.o.id, opening_code: x.o.opening_code, designation: x.o.designation, status: x.o.status }, events, can };
+  if (!sal) return ok(base);
+  const empIds = [o.approver_employee_id, o.requested_by_employee_id, o.decided_by_employee_id].filter(Boolean);
+  const [tr, sr, rr, er, cc] = await Promise.all([
+    sb(`/rest/v1/offer_templates?id=eq.${o.template_id}&select=*&limit=1`, env),
+    o.signatory_id ? sb(`/rest/v1/offer_signatories?id=eq.${o.signatory_id}&select=*&limit=1`, env) : Promise.resolve({ data: [] }),
+    sb(`/rest/v1/offer_rule_sets?id=eq.${o.rule_set_id}&select=code,effective_from,effective_to&limit=1`, env),
+    empIds.length ? sb(`/rest/v1/employees?id=in.(${empIds.join(',')})&select=id,full_name`, env) : Promise.resolve({ data: [] }),
+    can.manage && o.status === 'ready' ? offerDefaultCc(env, x) : Promise.resolve(null),
+  ]);
+  const template = tr.data?.[0] || null;
+  let text = null, templateError = null;
+  try {
+    const issue = o.issue_date || istToday();
+    text = template ? renderOfferText({ template, offer: { ...offerView(o, true), issue_date: issue }, annexure: o.annexure,
+      signatory: sr.data?.[0] || null, candidate: cr.data?.[0] || null }) : null;
+  } catch (e) { templateError = e?.message || 'template_error'; }
+  const names = Object.fromEntries((er.data || []).map(e => [e.id, e.full_name]));
+  await logCompAccess(auth, 'getOffer', null, `${o.offer_ref} r${o.revision}`, env, { offer_id: o.id });
+  return ok({ ...base, text, template_error: templateError,
+    template: template ? { id: template.id, template_key: template.template_key, version: template.version, title: template.title } : null,
+    signatory: sr.data?.[0] || null, rule_set: rr.data?.[0] || null,
+    band: bandOf(x.budgets.find(b => b.id === o.budget_id) || null),
+    people: { approver: names[o.approver_employee_id] || null, requested_by: names[o.requested_by_employee_id] || null,
+      decided_by: names[o.decided_by_employee_id] || null },
+    default_cc: cc });
+}
+
+async function getOfferPdfUrl(url, auth, env) {
+  const c = await offerCtx(auth, env, url.searchParams.get('id'));
+  if (c.res) return c.res;
+  if (!canSeeSalary(c.roles)) return err('forbidden', 403);
+  if (!c.o.pdf_path) return errCode('no_pdf', 'This revision has not been issued yet', 409);
+  await logCompAccess(auth, 'getOfferPdfUrl', null, `${c.o.offer_ref} r${c.o.revision}`, env, { offer_id: c.o.id });
+  return signDownload(c.o.pdf_path, `${c.o.offer_ref}-r${c.o.revision}.pdf`, 'application/pdf', env);
+}
+
+// ── Writes ───────────────────────────────────────────────────────────────────
+
+async function createOffer(body, auth, env) {
+  const d = body.data || body;
+  const c = await offerAppCtx(auth, env, d.application_id);
+  if (c.res) return c.res;
+  const { app, x, me } = c;
+  if (!canManageOffers(x.roles)) return err('forbidden — offers are made by the opening\'s hiring owner or reporting manager', 403);
+  if (!OFFER_APP_STATUSES.includes(app.status)) return offerErr('application_not_ready', 409);
+  const gate = offerOpeningGate(x); if (gate) return gate;
+  const key = d.template_key || (x.o.employment_type === 'intern' ? 'internship' : 'employment');
+  if (!OFFER_TEMPLATE_KEYS.includes(key)) return err('bad template_key', 400);
+  const mode = key === 'internship' ? 'stipend' : 'salary';
+  const ct = cleanOfferTerms(d, mode, offerDefaults(x.o));
+  if (ct.error) return offerErr(ct.error, 400);
+  const [tpl, rs, open, sig] = await Promise.all([
+    currentTemplate(env, key), ruleSetFor(env, ct.terms.start_date),
+    sb(`/rest/v1/offers?application_id=eq.${app.id}&status=in.(${OFFER_OPEN_STATUSES.join(',')})&select=id&limit=1`, env),
+    ct.terms.signatory_id ? sb(`/rest/v1/offer_signatories?id=eq.${ct.terms.signatory_id}&select=active&limit=1`, env) : Promise.resolve(null),
+  ]);
+  if (open.data?.length) return offerErr('draft_exists', 409);
+  if (!tpl) return offerErr('template_missing');
+  if (!rs) return offerErr('rule_set_missing');
+  if (sig && !sig.data?.[0]?.active) return offerErr('signatory_inactive', 400);
+  const b = buildOffer(ct.terms, mode, x.o, rs, currentBudget(x), key);
+  if (b.error) return offerErr(b.error);
+  // Ref minted (revision 1) or reused + next revision + offer_created event, one transaction (0008).
+  const r = await hiringRpc(env, 'hiring_create_offer', {
+    offer: { ...b.row, application_id: app.id, opening_id: x.o.id, candidate_id: app.candidate_id, template_id: tpl.id },
+    year: istToday().slice(0, 4), actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+  });
+  if (r.data?.code === '23505') return offerErr('draft_exists', 409);
+  if (!r.ok) return offerDbError(r);
+  return ok({ offer: offerView(r.data?.offer, true), warnings: b.annexure.warnings, amendment: app.status === 'accepted' });
+}
+
+async function updateOfferDraft(body, auth, env) {
+  const d = body.data || body;
+  const c = await offerCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { o, x, me } = c;
+  if (!canManageOffers(x.roles)) return err('forbidden', 403);
+  if (!OFFER_EDITABLE_STATUSES.includes(o.status)) return offerErr('not_editable', 409);
+  const gate = offerOpeningGate(x); if (gate) return gate;
+  const key = templateKeyOf(o);
+  const ct = cleanOfferTerms({ ...(o.inputs || {}), ...d }, o.mode, offerDefaults(x.o));
+  if (ct.error) return offerErr(ct.error, 400);
+  const [tpl, rs, sig] = await Promise.all([
+    currentTemplate(env, key), ruleSetFor(env, ct.terms.start_date),
+    ct.terms.signatory_id ? sb(`/rest/v1/offer_signatories?id=eq.${ct.terms.signatory_id}&select=active&limit=1`, env) : Promise.resolve(null),
+  ]);
+  if (!tpl) return offerErr('template_missing');
+  if (!rs) return offerErr('rule_set_missing');
+  if (sig && !sig.data?.[0]?.active) return offerErr('signatory_inactive', 400);
+  // Still a draft → re-pin the current template / rule set / band (decision 2: recompute only while draft).
+  const b = buildOffer(ct.terms, o.mode, x.o, rs, currentBudget(x), key);
+  if (b.error) return offerErr(b.error);
+  const patch = { ...b.row, template_id: tpl.id, status: 'draft', approver_employee_id: null, requested_by_employee_id: null,
+    decided_by_employee_id: null, decided_at: null };
+  const r = await sb(`/rest/v1/offers?id=eq.${o.id}&status=in.(${OFFER_EDITABLE_STATUSES.join(',')})`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return offerDbError(r);
+  if (!r.data?.length) return errCode('stale', 'This offer changed — reload and retry', 409);
+  await hiringEvents(env, auth, me, [{ candidate_id: o.candidate_id, opening_id: o.opening_id, application_id: o.application_id,
+    event_type: 'offer_updated', from_status: o.status, to_status: 'draft', detail: { offer_id: o.id, offer_ref: o.offer_ref, revision: o.revision } }]);
+  return ok({ offer: offerView(r.data[0], true), warnings: b.annexure.warnings });
+}
+
+// draft → ready (in band / below band: render now) or → pending_approval (above band / extras).
+// approved → ready re-tries the render when the approval's render step failed.
+async function submitOffer(body, auth, env) {
+  const d = body.data || body;
+  const c = await offerCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { o, x, me, edges } = c;
+  if (!canManageOffers(x.roles)) return err('forbidden', 403);
+  if (!['draft', 'approved'].includes(o.status)) return errCode('invalid_transition', `Cannot submit an offer that is ${o.status}`, 409);
+  const gate = offerOpeningGate(x); if (gate) return gate;
+  const app = await loadApplication(env, o.application_id);
+  if (!OFFER_APP_STATUSES.includes(app?.status)) return offerErr('application_not_ready', 409);
+  if (o.status === 'approved') return issueOffer(env, auth, me, o, 'approved');
+  if (!o.signatory_id) return offerErr('signatory_required');
+  // The band may have moved since the draft was saved: check against the CURRENT approved band.
+  const budget = currentBudget(x);
+  const check = bandCheck(Number(o.total_ctc), [o.joining_bonus, o.retention_bonus], bandOf(budget));
+  const set = { band_check: check, budget_id: budget.id, requested_by_employee_id: me?.id || null,
+    decided_by_employee_id: null, decided_at: null, decision_note: null };
+  if (!needsApproval(check)) return issueOffer(env, auth, me, o, 'draft', set);
+  const founders = await loadFounders(env);
+  const approver = resolveApprover(edges, founders, x.o.reporting_manager_employee_id, me?.id || null, x.o.hiring_owner_employee_id);
+  if (!approver) return err('no_approver — could not resolve an offer approver', 500);
+  const r = await offerTransition(env, auth, me, o, 'draft', 'pending_approval', {
+    set: { ...set, approver_employee_id: approver }, event_type: 'offer_submitted',
+  });
+  if (!r.ok) return transitionFailed(r);
+  return ok({ id: o.id, status: 'pending_approval', approver_employee_id: approver });
+}
+
+async function decideOffer(body, auth, env) {
+  const d = body.data || body;
+  if (!['approve', 'reject'].includes(d.decision)) return err("decision must be 'approve' or 'reject'", 400);
+  const o = await loadOffer(env, d.id);
+  if (!o) return err('not_found', 404);
+  if (o.status !== 'pending_approval') return errCode('not_pending', 'This offer is no longer pending approval', 409);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const founders = await loadFounders(env);
+  const isFounder = !!auth.isSuperAdmin && !!me && founders.includes(me.id);
+  const bad = checkBandDecider(me?.id || null, isFounder, o);
+  if (bad === 'no_self_approval') return errCode('no_self_approval', 'You submitted this offer, so someone else has to approve it', 403);
+  if (bad) return err('forbidden — only the approver can decide this offer', 403);
+  const note = String(d.note || '').trim() || null;
+  const set = { decided_by_employee_id: me.id, decided_at: nowIso(), decision_note: note };
+  if (d.decision === 'reject') {
+    const r = await offerTransition(env, auth, me, o, 'pending_approval', 'approval_rejected', { set, event_type: 'offer_rejected', event_note: note });
+    if (!r.ok) return transitionFailed(r);
+    return ok({ id: o.id, status: 'approval_rejected' });
+  }
+  const r = await offerTransition(env, auth, me, o, 'pending_approval', 'approved', { set, event_type: 'offer_approved', event_note: note });
+  if (!r.ok) return transitionFailed(r);
+  // Approved → render + store + ready straight away. A render failure leaves it `approved`;
+  // the hiring owner's Submit re-tries the render (submitOffer from `approved`).
+  const issued = await issueOffer(env, auth, me, r.data.offer, 'approved');
+  if (issued.status !== 200) return ok({ id: o.id, status: 'approved', render_error: (await issued.json())?.error || 'render_failed' });
+  // Metadata only — deciding does not grant salary visibility (a founder override may be off the chain).
+  return ok({ id: o.id, status: 'ready' });
+}
+
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+
+async function markOfferSent(body, auth, env) {
+  const d = body.data || body;
+  const c = await offerCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { o, x, me } = c;
+  if (!canManageOffers(x.roles)) return err('forbidden', 403);
+  if (o.status !== 'ready') return errCode('invalid_transition', `Only a ready offer can be marked as sent (this one is ${o.status})`, 409);
+  const gate = offerOpeningGate(x); if (gate) return gate;
+  const app = await loadApplication(env, o.application_id);
+  if (!OFFER_APP_STATUSES.includes(app?.status)) return offerErr('application_not_ready', 409);
+  const to = String(d.sent_to || '').trim().toLowerCase();
+  if (!EMAIL_RE.test(to)) return err('sent_to must be an email address', 400);
+  const cc = (Array.isArray(d.sent_cc) ? d.sent_cc : String(d.sent_cc || '').split(/[,;\s]+/))
+    .map(e => String(e).trim().toLowerCase()).filter(Boolean);
+  if (cc.length > 20 || cc.some(e => !EMAIL_RE.test(e))) return err('sent_cc must be up to 20 email addresses', 400);
+  let sentAt = nowIso();
+  if (d.sent_at) {
+    const t = new Date(d.sent_at);
+    if (Number.isNaN(t.getTime()) || t.getTime() > Date.now() + 5 * 60000) return err('bad sent_at', 400);
+    sentAt = t.toISOString();
+  }
+  const sentDay = istToday(new Date(sentAt).getTime());
+  if (o.issue_date && sentDay < o.issue_date) return err('sent_at is before the issue date', 400);
+  // Validity runs from the send (default valid_days), never shorter than what the letter already says.
+  let validUntil = addDaysIso(sentDay, Number(o.inputs?.valid_days || 7));
+  if (o.valid_until && o.valid_until > validUntil) validUntil = o.valid_until;
+  if (d.valid_until) {
+    if (!isIsoDate(d.valid_until) || d.valid_until < sentDay) return err('bad valid_until', 400);
+    validUntil = d.valid_until;
+  }
+  let evidence = null;
+  if (d.evidence_storage_path) {
+    if (checkOfferDocPath(d.evidence_storage_path, o.candidate_id, o.offer_ref, o.revision, 'sent_evidence')) return err('bad storage_path', 400);
+    const fe = checkFileSize(d.file_size);
+    if (fe) return err('file_size must be a positive integer up to 15 MB', 400);
+    evidence = { storage_path: d.evidence_storage_path, file_name: d.file_name || null, mime_type: d.mime_type || 'application/pdf',
+      file_size: Number(d.file_size), title: `${o.offer_ref} r${o.revision} — as sent` };
+  }
+  // ready → sent + supersede the application's other ready/sent revisions + application → offer, one
+  // transaction (0008).
+  const r = await offerTransition(env, auth, me, o, 'ready', 'sent', {
+    set: { sent_at: sentAt, sent_by: auth.userId, sent_to: to, sent_cc: cc, valid_until: validUntil },
+    evidence_doc: evidence, app_status: 'offer', event_type: 'offer_sent',
+  });
+  if (!r.ok) return transitionFailed(r);
+  return ok({ id: o.id, status: 'sent', valid_until: validUntil, application_status: r.data?.application_status, superseded: r.data?.superseded || [] });
+}
+
+async function recordOfferAcceptance(body, auth, env) {
+  const d = body.data || body;
+  const c = await offerCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { o, x, me } = c;
+  if (!canManageOffers(x.roles)) return err('forbidden', 403);
+  // From `expired` too: a signed copy dated inside the validity counts even if it is recorded late.
+  if (!['sent', 'expired'].includes(o.status)) return errCode('invalid_transition', `Only a sent offer can be accepted (this one is ${o.status})`, 409);
+  if (!isIsoDate(d.accepted_at)) return err('accepted_at (YYYY-MM-DD) required', 400);
+  if (d.accepted_at > istToday()) return err('accepted_at is in the future', 400);
+  if (o.issue_date && d.accepted_at < o.issue_date) return err('accepted_at is before the issue date', 400);
+  if (o.valid_until && d.accepted_at > o.valid_until) return offerErr('offer_expired', 409);
+  if (checkOfferDocPath(d.signed_storage_path, o.candidate_id, o.offer_ref, o.revision, 'signed')) return err('signed copy required (bad storage_path)', 400);
+  if (checkFileSize(d.file_size)) return err('file_size must be a positive integer up to 15 MB', 400);
+  const app = await loadApplication(env, o.application_id);
+  if (!['offer', 'accepted'].includes(app?.status)) return offerErr('application_not_ready', 409);
+  const r = await offerTransition(env, auth, me, o, ['sent', 'expired'], 'accepted', {
+    set: { accepted_at: d.accepted_at },
+    acceptance_doc: { storage_path: d.signed_storage_path, file_name: d.file_name || null, mime_type: d.mime_type || 'application/pdf',
+      file_size: Number(d.file_size), title: `${o.offer_ref} r${o.revision} — signed` },
+    app_status: 'accepted', event_type: 'offer_accepted',
+  });
+  if (!r.ok) return transitionFailed(r);
+  // Headcount: warn (not block) once accepted offers on the opening reach it.
+  const ar = await sb(`/rest/v1/offers?opening_id=eq.${o.opening_id}&status=eq.accepted&select=id`, env);
+  const accepted = (ar.data || []).length;
+  const headcount = Number(x.o.headcount || 1);
+  return ok({ id: o.id, status: 'accepted', application_status: r.data?.application_status,
+    accepted_on_opening: accepted, headcount, warnings: accepted > headcount ? ['headcount_exceeded'] : (accepted === headcount ? ['headcount_full'] : []) });
+}
+
+async function recordOfferDecline(body, auth, env) {
+  const d = body.data || body;
+  const c = await offerCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { o, x, me } = c;
+  if (!canManageOffers(x.roles)) return err('forbidden', 403);
+  if (!['sent', 'expired'].includes(o.status)) return errCode('invalid_transition', `Only a sent offer can be declined (this one is ${o.status})`, 409);
+  const note = String(d.note || '').trim() || null;
+  const r = await offerTransition(env, auth, me, o, ['sent', 'expired'], 'declined', {
+    set: { declined_at: nowIso(), outcome_note: note }, event_type: 'offer_declined', event_note: note,
+  });
+  if (!r.ok) return transitionFailed(r);
+  return ok({ id: o.id, status: 'declined' });
+}
+
+async function withdrawOffer(body, auth, env) {
+  const d = body.data || body;
+  const reason = String(d.reason || '').trim();
+  if (!reason) return errCode('reason_required', 'A reason is required to withdraw an offer', 400);
+  const c = await offerCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { o, x, me } = c;
+  if (!canManageOffers(x.roles)) return err('forbidden', 403);
+  if (!OFFER_WITHDRAWABLE.includes(o.status)) return errCode('invalid_transition', `Cannot withdraw an offer that is ${o.status}`, 409);
+  const r = await offerTransition(env, auth, me, o, o.status, 'withdrawn', {
+    set: { outcome_note: reason }, event_type: 'offer_withdrawn', event_note: reason,
+  });
+  if (!r.ok) return transitionFailed(r);
+  return ok({ id: o.id, status: 'withdrawn' });
+}
+
+async function createOfferDocUploadUrl(body, auth, env) {
+  const d = body.data || body;
+  if (!OFFER_DOC_KINDS.includes(d.kind)) return err("kind must be 'sent_evidence' or 'signed'", 400);
+  const fe = fileOk(d.file_name, ['pdf'], d.file_size);
+  if (fe) return err(fe === 'bad_file_type' ? 'Upload a PDF' : fe, 400);
+  const c = await offerCtx(auth, env, d.offer_id);
+  if (c.res) return c.res;
+  if (!canManageOffers(c.x.roles)) return err('forbidden', 403);
+  return signUpload(offerDocPath(c.o.candidate_id, c.o.offer_ref, c.o.revision, d.kind), env);
+}
+
+// ── Templates + signatories (salary allow-list or podium_admin) ──────────────
+const canAdminOfferTemplates = (auth) => canComp(auth) || isAdmin(auth);
+
+async function getOfferTemplates(url, auth, env) {
+  if (!canAdminOfferTemplates(auth)) return err('forbidden', 403);
+  const [tr, sr, rr, er] = await Promise.all([
+    sb(`/rest/v1/offer_templates?select=*&order=template_key.asc,version.desc`, env),
+    sb(`/rest/v1/offer_signatories?select=*&order=active.desc,display_name.asc`, env),
+    sb(`/rest/v1/offer_rule_sets?select=code,effective_from,effective_to,notes,rules&order=effective_from.desc`, env),
+    sb(`/rest/v1/employees?status=neq.exited&select=id,employee_code,full_name,job_title&order=full_name.asc&limit=2000`, env),
+  ]);
+  if (!tr.ok || !sr.ok || !rr.ok) return err('db_error', 500);
+  return ok({ templates: tr.data || [], signatories: sr.data || [], rule_sets: rr.data || [], employees: er.data || [], fields: OFFER_FIELDS });
+}
+
+function cleanTemplateInput(d) {
+  if (!OFFER_TEMPLATE_KEYS.includes(d.template_key)) return { error: 'bad template_key' };
+  const title = String(d.title || '').trim();
+  const body = String(d.body || '').replace(/\r\n?/g, '\n').trim();
+  if (!title) return { error: 'title required' };
+  if (!body) return { error: 'body required' };
+  if (body.length > 20000) return { error: 'body too long' };
+  const addr = (Array.isArray(d.entity_address) ? d.entity_address : String(d.entity_address || '').split('\n'))
+    .map(s => String(s).trim()).filter(Boolean);
+  if (addr.length > 6) return { error: 'entity_address: up to 6 lines' };
+  return { t: { template_key: d.template_key, title, body, entity_name: String(d.entity_name || '').trim() || null,
+    entity_address: addr, footer_note: String(d.footer_note || '').trim() || null, notes: String(d.notes || '').trim() || null } };
+}
+
+async function previewOfferTemplate(body, auth, env) {
+  if (!canAdminOfferTemplates(auth)) return err('forbidden', 403);
+  const ci = cleanTemplateInput(body.data || body);
+  if (ci.error) return err(ci.error, 400);
+  const bad = validateTemplateBody(ci.t.body);
+  if (bad) return errCode('template_error', `template_error: ${bad}`, 422);
+  const rs = await ruleSetFor(env, istToday());
+  const mode = ci.t.template_key === 'internship' ? 'stipend' : 'salary';
+  const a = rs ? computeAnnexure({ ...SAMPLE_OFFER, mode, work_state: 'Karnataka' }, rs.rules) : null;
+  return ok({ text: renderOfferText({ template: ci.t, offer: SAMPLE_OFFER, annexure: a && !a.error ? a : null,
+    signatory: SAMPLE_SIGNATORY, candidate: { full_name: 'Sample Candidate' } }) });
+}
+
+async function saveOfferTemplate(body, auth, env) {
+  if (!canAdminOfferTemplates(auth)) return err('forbidden', 403);
+  const ci = cleanTemplateInput(body.data || body);
+  if (ci.error) return err(ci.error, 400);
+  // Dry render: an unknown merge field or unclosed section never becomes a current template.
+  const bad = validateTemplateBody(ci.t.body);
+  if (bad) return errCode('template_error', `template_error: ${bad}`, 422);
+  const me = callerEmployee(await loadOrgEdges(env), auth.userId);
+  const r = await hiringRpc(env, 'hiring_template_new_version', { ...ci.t, actor_user_id: auth.userId, actor_employee_id: me?.id || null });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.template);
+}
+
+async function saveSignatory(body, auth, env) {
+  if (!canAdminOfferTemplates(auth)) return err('forbidden', 403);
+  const d = body.data || body;
+  const row = {};
+  if (!d.id || 'display_name' in d) {
+    row.display_name = String(d.display_name || '').trim();
+    if (!row.display_name) return err('display_name required', 400);
+  }
+  if (!d.id || 'employee_id' in d) {
+    if (d.employee_id && !isUuid(d.employee_id)) return err('bad employee_id', 400);
+    row.employee_id = d.employee_id || null;
+  }
+  if ('phone' in d) row.phone = String(d.phone || '').trim() || null;
+  if ('title' in d) row.title = String(d.title || '').trim() || null;
+  if ('active' in d) row.active = !!d.active;
+  if (row.employee_id) {
+    const live = await activeEmployeeIds([row.employee_id], env);
+    if (!live.has(row.employee_id)) return err('the signatory must be a current employee', 400);
+  }
+  const r = d.id
+    ? (isUuid(d.id) ? await sb(`/rest/v1/offer_signatories?id=eq.${d.id}`, env, { method: 'PATCH', body: JSON.stringify(row) }) : { ok: false, status: 400, data: 'bad id' })
+    : await sb(`/rest/v1/offer_signatories`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (r.status === 409 || r.data?.code === '23505') return errCode('duplicate', 'That employee is already a signatory', 409);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (!r.data?.length) return err('not_found', 404);
+  return ok(r.data[0]);
+}
+
 const GET_ACTIONS = {
   getMe, getSettings,
   getEmployees, getEmployee,
@@ -4512,6 +5161,8 @@ const GET_ACTIONS = {
   // Hiring C1/C2
   getOpenings, getOpening, getJdDownloadUrl, getHiringLookups,
   getCandidates, getCandidate, getCandidateDocumentUrl, findCandidateDuplicates,
+  // Hiring C3 — offers
+  getOfferSetup, getOffers, getOffer, getOfferPdfUrl, getOfferTemplates,
 };
 
 const POST_ACTIONS = {
@@ -4549,6 +5200,9 @@ const POST_ACTIONS = {
   createOpening, updateOpening, setOpeningStatus, addOpeningJd, createJdUploadUrl, requestBandChange, decideBand,
   createCandidate, addApplication, updateCandidate, updateApplication, setApplicationStatus, moveApplication,
   createCandidateDocUploadUrl, recordCandidateDocument, deleteCandidateDocument,
+  // Hiring C3 — offers
+  previewOffer, createOffer, updateOfferDraft, submitOffer, decideOffer, markOfferSent, recordOfferAcceptance,
+  recordOfferDecline, withdrawOffer, createOfferDocUploadUrl, previewOfferTemplate, saveOfferTemplate, saveSignatory,
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.
@@ -4577,6 +5231,9 @@ const SELF_SERVE_GET = new Set([
   // podium_hiring / HR), so a manager with no Podium role reaches only their own openings.
   'getOpenings', 'getOpening', 'getJdDownloadUrl', 'getHiringLookups',
   'getCandidates', 'getCandidate', 'getCandidateDocumentUrl', 'findCandidateDuplicates',
+  // Hiring C3 — offers self-scope the same way (opening chain + snapshotted offer approver); the
+  // template admin reads are gated inside to the salary allow-list / podium_admin.
+  'getOfferSetup', 'getOffers', 'getOffer', 'getOfferPdfUrl', 'getOfferTemplates',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
@@ -4597,6 +5254,9 @@ const SELF_SERVE_POST = new Set([
   'createOpening', 'updateOpening', 'setOpeningStatus', 'addOpeningJd', 'createJdUploadUrl', 'requestBandChange', 'decideBand',
   'createCandidate', 'addApplication', 'updateCandidate', 'updateApplication', 'setApplicationStatus', 'moveApplication',
   'createCandidateDocUploadUrl', 'recordCandidateDocument', 'deleteCandidateDocument',
+  // Hiring C3 — offers (see SELF_SERVE_GET).
+  'previewOffer', 'createOffer', 'updateOfferDraft', 'submitOffer', 'decideOffer', 'markOfferSent', 'recordOfferAcceptance',
+  'recordOfferDecline', 'withdrawOffer', 'createOfferDocUploadUrl', 'previewOfferTemplate', 'saveOfferTemplate', 'saveSignatory',
 ]);
 
 async function handleGet(url, request, env) {

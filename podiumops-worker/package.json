@@ -1,7 +1,7 @@
 {
   "name": "podiumops-worker",
   "version": "1.0.0",
-  "description": "Podium People & Performance OS API \u2014 Cloudflare Worker",
+  "description": "Podium People & Performance OS API — Cloudflare Worker",
   "main": "src/index.js",
   "scripts": {
     "dev": "wrangler dev",
@@ -12,5 +12,8 @@
   "type": "module",
   "devDependencies": {
     "wrangler": "^4.83.0"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
   }
 }

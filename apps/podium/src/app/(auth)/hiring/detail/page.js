@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { ArrowLeft, Pencil, Save, Download, Trash2, UploadCloud, ArrowRightLeft } from 'lucide-react';
+import { ArrowLeft, Pencil, Save, Download, Trash2, UploadCloud, ArrowRightLeft, FileSignature } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
 import { fmtDate } from '../../../../lib/format.js';
 import { Avatar } from '../../../../components/ui.js';
@@ -13,8 +13,9 @@ import {
 } from '../../../../components/HiringBits.js';
 import {
   APP_STATUSES, OPENING_STATUSES, SOURCES, CANDIDATE_DOC_TYPES, CANDIDATE_DOC_ACCEPT, REASON_REQUIRED, ACTIVE_APP_STATUSES, OUTCOME_REASONS,
-  allowedTransitions, hiringError, labelFrom, formatINR, numOrNull, listOf, fmtDateTime,
+  OFFER_OPEN_STATUSES, allowedTransitions, hiringError, labelFrom, formatINR, numOrNull, listOf, fmtDateTime,
 } from '../../../../lib/hiring.js';
+import { OfferStatusBadge } from '../../../../components/OfferBits.js';
 
 // Salary fields on an application: the worker's flag, else "the fields came back".
 const appSeesSalary = (a) => (a.can_see_salary != null ? !!a.can_see_salary : ('expected_ctc' in a || 'current_ctc' in a));
@@ -239,6 +240,8 @@ function ApplicationRow({ a, emps, openOpenings, session, onChanged }) {
 
       {a.outcome_reason && !active && <div style={{ ...muted, marginTop: 4 }}>Reason: {labelFrom(OUTCOME_REASONS, a.outcome_reason)}</div>}
 
+      <OffersBlock a={a} />
+
       {next && (
         <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {needsReason && (
@@ -298,6 +301,40 @@ function ApplicationRow({ a, emps, openOpenings, session, onChanged }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Offers on one application (C3): revisions + create / continue / revise ──
+const OFFER_FROM_APP = ['interviewing', 'offer', 'accepted'];
+function OffersBlock({ a }) {
+  const router = useRouter();
+  const offers = a.offers || [];
+  const open = offers.find(o => OFFER_OPEN_STATUSES.includes(o.status));
+  const canCreate = a.can_offer && OFFER_FROM_APP.includes(a.status) && !open && a.opening?.status === 'open';
+  if (!offers.length && !canCreate) return null;
+  return (
+    <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: offers.length ? 6 : 0 }}>
+        <span style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600, flex: 1 }}>Offers</span>
+        {canCreate && (
+          <button onClick={() => router.push(`/hiring/offer/new/?application_id=${a.id}${offers[0] ? `&from=${offers[0].id}` : ''}`)} style={{ ...ghostBtn, padding: '4px 10px' }}>
+            <FileSignature size={13} /> {offers.length ? (a.status === 'accepted' ? 'Amend' : 'Revise') : 'Create offer'}
+          </button>
+        )}
+        {a.can_offer && open && (
+          <button onClick={() => router.push(`/hiring/offer/?id=${open.id}`)} style={{ ...ghostBtn, padding: '4px 10px' }}>Continue r{open.revision}</button>
+        )}
+      </div>
+      {offers.map(o => (
+        <div key={o.id} onClick={() => router.push(`/hiring/offer/?id=${o.id}`)}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0', fontSize: 12.5, cursor: 'pointer' }}>
+          <span style={{ fontWeight: 600 }}>{o.offer_ref} · r{o.revision}</span>
+          <OfferStatusBadge status={o.status} />
+          {o.total_ctc != null && <span className="num" style={{ color: 'var(--text-2)' }}>{formatINR(o.total_ctc, { compact: true })} CTC</span>}
+          <span style={{ ...muted, marginLeft: 'auto' }}>{o.sent_at ? `sent ${fmtDate(o.sent_at)}` : fmtDate(o.created_at)}</span>
+        </div>
+      ))}
     </div>
   );
 }

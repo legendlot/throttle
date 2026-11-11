@@ -60,10 +60,13 @@ const META = {
   '/hiring/openings':   { crumb: 'Hiring',      title: 'Openings' },
   '/hiring/openings/new':    { crumb: 'Hiring', title: 'New Opening' },
   '/hiring/openings/detail': { crumb: 'Hiring', title: 'Opening' },
+  '/hiring/offer':           { crumb: 'Hiring', title: 'Offer' },
+  '/hiring/offer/new':       { crumb: 'Hiring', title: 'Offer Terms' },
   '/manual':            { crumb: 'Org Design',  title: 'System Manual' },
   '/admin/roles':       { crumb: 'Admin',       title: 'Permissions' },
   '/admin/users':       { crumb: 'Admin',       title: 'Users' },
   '/admin/settings':    { crumb: 'Admin',       title: 'Settings' },
+  '/admin/offer-templates': { crumb: 'Admin',    title: 'Offer Templates' },
 };
 function chromeFor(pathname) {
   const clean = (pathname || '').replace(/\/$/, '') || '/';
