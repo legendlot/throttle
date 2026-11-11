@@ -8,7 +8,8 @@
 > and Karnataka PT have changed since the letters were written); a full offer state machine; atomic joining;
 > candidate documents in their own table; retention + deletion; approval-bypass and self-approval closed.
 > **v3.1: the six open decisions settled (Afshaan: "yes, all six"); NEW O1 = offer email + candidate
-> acceptance link, modelled on Ignition's deal-contract link (S441). The old O4 upload link folds into it.**
+> acceptance link, modelled on Ignition's deal-contract link (S441). The old O4 upload link folds into it.
+> v3.2: corrections — hr@ is CC'd on every offer; CTC includes PF + PT (shown as deductions → in-hand).**
 
 ## Goal
 
@@ -41,12 +42,15 @@ out of scope (hired and paid through the agency).
 5. A JD is optional to create an opening, required before CVs, stage moves or interviews.
 6. **The approver confirms an opening's band at creation and on any increase** (one click); offers inside
    it go freely.
-7. **Employee PF and PT are deductions, not part of fixed pay.** Fixed pay = gross + employer PF; the
-   annexure shows employee PF / PT / ESI on a separate "deductions → estimated in-hand" block. Finance to
-   confirm RazorpayX is set up the same way before go-live.
+7. **CTC always includes PF and PT (Afshaan, corrected same day).** The offer quotes CTC; employer PF,
+   employee PF and PT all sit inside it, exactly as today's annexure. They are deductions, and the annexure
+   adds a **"Deductions → estimated monthly in-hand"** block so the candidate sees take-home:
+   in-hand = CTC/12 − variable/12 − employer PF − employee PF − PT (− ESI), before income-tax TDS.
+   (Under this reading today's "Gross Total" line equals that in-hand figure.)
 8. **A second template for interns** ("Internship Offer": monthly stipend; no PF, PT or variable by default).
-9. **Offer emails CC the opening's chain + Afshaan, not hr@** (hr@ readers sit outside the salary rule).
-   Assumed from "yes, all six" — this one had no stated recommendation, so say if hr@ should stay.
+9. **HR is copied on every offer letter: CC hr@legendoftoys.com + the opening's chain + Afshaan.** hr@
+   readers therefore see offer salaries by email — a deliberate exception to decision 1, which governs
+   access inside Podium.
 10. **A new joiner with no accepted Podium offer is blocked at Directory-sync import**; an HR override needs
     a written reason and is logged.
 11. **Non-joiners' CVs and documents are deleted after 12 months** unless moved to a talent pool.
@@ -222,9 +226,8 @@ The rule set is data with `effective_from`. Each offer stores the rule-set versi
   not in the annexure.
 - **Wages check (Labour Codes):** Basic at 50% of fixed meets the 50% wage rule. Keep that rule as a
   validation, so a future template can't drop below it.
-- **Layout (decision 7):** earnings (Basic, HRA, Special, Travel, Telephone) = gross; + employer PF (+ employer ESI)
-  = fixed pay; + variable = total CTC. Below it, a deductions block: employee PF, employee ESI, PT → estimated monthly
-  in-hand. The pre-17-Sep fixtures keep the old layout (rule-set v0).
+- **Layout (decision 7):** today's annexure unchanged — earnings lines, Gross Total, employer PF, employee PF,
+  PT, Total Fixed, Variable, Total CTC — plus a new deductions → estimated monthly in-hand block below it.
 - Rounding: compute at full precision, display to the rupee.
 - Regression fixtures: the three mailbox letters must still reproduce exactly under the **pre-17-Sep rule
   set**. New offers use the current one.
@@ -306,7 +309,7 @@ on that page; Podium records it, emails the confirmation, then asks for the join
 - "Send offer" on a `ready` offer sends it from the **hiring owner's Gmail** (service-account impersonation,
   `gmail.compose` + `gmail.send` on domain-wide delegation). The worker only ever impersonates the hiring
   owner or reporting manager of that opening, never an arbitrary address.
-- To the candidate; CC the chain + Afshaan (decision 9).
+- To the candidate; CC hr@ + the chain + Afshaan (decision 9).
 - The body uses today's wording (congratulations, role, start date), plus the button **"View and respond to
   your offer"**. The PDF is attached too.
 - Each send creates a send intent first, then reconciles with Gmail, so a timeout can't double-send.
@@ -341,8 +344,8 @@ on that page; Podium records it, emails the confirmation, then asks for the join
   This is the negotiation loop: question → revision → a new link.
 
 **4. On acceptance — confirmation email.**
-- Sent automatically from the hiring owner's Gmail, in the same thread. To the candidate; CC the chain +
-  Afshaan.
+- Sent automatically from the hiring owner's Gmail, in the same thread. To the candidate; CC hr@ + the
+  chain + Afshaan.
 - Body: "Thank you — your acceptance of <role> is recorded", the joining date, what happens next, and the
   accepted PDF with its certificate page attached.
 - Plus a Podium-home notification for the hiring owner and reporting manager.
