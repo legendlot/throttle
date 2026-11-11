@@ -3,10 +3,11 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useListNav, Combobox } from '@throttle/ui';
-import { UserPlus, RefreshCw, Search } from 'lucide-react';
+import { UserPlus, RefreshCw, Search, KeyRound } from 'lucide-react';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import StatusBadge from '../../../components/StatusBadge.js';
 import DirectorySyncModal from '../../../components/DirectorySyncModal.js';
+import { OverrideAccountModal } from '../../../components/WorkAccountBits.js';
 import { Avatar, FilterChip, GridHead, GridRow, gridTh, SoftPill, btnPrimary, btnGhost } from '../../../components/ui.js';
 
 const TABS = [
@@ -29,6 +30,7 @@ export default function PeoplePage() {
   const [dept, setDept] = useState('');
   const [loading, setLoading] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
+  const [overrideOpen, setOverrideOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
     const r = rows[i]; if (r) router.push(`/people/detail/?id=${r.id}`);
@@ -59,6 +61,7 @@ export default function PeoplePage() {
       {syncOpen && (
         <DirectorySyncModal session={session} onClose={() => setSyncOpen(false)} onDone={() => setReloadKey(k => k + 1)} />
       )}
+      {overrideOpen && <OverrideAccountModal session={session} onClose={() => setOverrideOpen(false)} />}
 
       {/* Summary strip */}
       <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 11, padding: '14px 20px', marginBottom: 18, flexWrap: 'wrap', gap: '12px 0' }}>
@@ -83,6 +86,10 @@ export default function PeoplePage() {
             placeholder="All departments" options={depts.map(d => ({ value: d.id, label: d.name }))} />
         </div>
         <span style={{ flex: 1 }} />
+        {/* J1: display flag only (podium.google_admin_access) — the worker re-checks every call. */}
+        {perms?.podium_google_admin && (
+          <button onClick={() => setOverrideOpen(true)} style={btnGhost}><KeyRound size={13} strokeWidth={2.1} /> Create account without hiring</button>
+        )}
         {perms?.podium_hr && (
           <>
             <button onClick={() => setSyncOpen(true)} style={btnGhost}><RefreshCw size={13} strokeWidth={2.1} /> Sync from Google</button>

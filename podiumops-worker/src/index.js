@@ -38,7 +38,14 @@ import {
   OFFER_APP_STATUSES, OFFER_TEMPLATE_KEYS, OFFER_DOC_KINDS,
   offerTermsCanonical, isLatestSent, canSendOffer, needsNoLiveOffer, canMoveFrom, offerDbErrorCode,
 } from './hiring.js';   // Hiring C1/C2/C3 — the pure permission + transition rules, see test/hiring.test.mjs + offers.test.mjs
-import { computeAnnexure, bandCheck, needsApproval } from './offer-calc.js';   // C3 CTC calculator (test/offer-calc.test.mjs)
+import { computeAnnexure, bandCheck, needsApproval, componentsContract } from './offer-calc.js';   // C3 CTC calculator (test/offer-calc.test.mjs)
+import {
+  WORK_DOMAIN, toEmail, splitName, proposeLocalParts, checkLocalPart, tempPassword, isOurPendingAccount,
+  workAccountExternalIds, attemptClaimFilter, attemptGuard,
+  candidateDocToEmployeeDocType, employeeDocPath, defaultOu, joiningOffer, checkStartDate, SUSPENDABLE_APP_STATUSES,
+  workAccountDbErrorCode,
+  NOT_COPIED_ON_JOINING,
+} from './workaccount.js';   // J1 work accounts + confirm joining (test/workaccount.test.mjs)
 import {
   renderOfferText, renderOfferPdf, sha256Hex, validateTemplateBody, SAMPLE_OFFER, SAMPLE_SIGNATORY, OFFER_FIELDS,
 } from './offer-render.js';   // C3 letter + PDF renderer (test/offer-render.test.mjs)
@@ -443,10 +450,11 @@ const EMP_EMBED =
 async function getMe(url, auth, env) {
   const edges = await loadOrgEdges(env);
   const me = callerEmployee(edges, auth.userId);
-  const [sr, hiringOn, canCreateOpening] = await Promise.all([
+  const [sr, hiringOn, canCreateOpening, googleAdmin] = await Promise.all([
     sb(`/rest/v1/settings?id=eq.1&select=comp_vault_enabled,min_tenure_days&limit=1`, env),
     hiringAccess(auth, me, env),
     hasPerm(auth, 'podium_hiring') ? Promise.resolve(true) : hasActiveReports(me, env),
+    isGoogleAdmin(auth, env),
   ]);
   return ok({
     userId: auth.userId,
@@ -457,8 +465,9 @@ async function getMe(url, auth, env) {
     // hasPerm reads auth.permissions); the worker gates on canCalibrate(auth).
     // podium_hiring_access is the same kind of display flag (nav only); every hiring action self-scopes.
     // podium_offer_templates (nav only) mirrors canAdminOfferTemplates: salary allow-list or podium_admin.
+    // podium_google_admin (display only) = podium.google_admin_access (J1, L3); every J1 handler re-checks.
     permissions: { ...(auth.permissions || {}), podium_super_admin: !!auth.isSuperAdmin, podium_hiring_access: hiringOn,
-      podium_offer_templates: canComp(auth) || isAdmin(auth) },
+      podium_offer_templates: canComp(auth) || isAdmin(auth), podium_google_admin: googleAdmin },
     employee_id: me?.id || null,
     settings: sr.data?.[0] || { comp_vault_enabled: false, min_tenure_days: 90 },
     tier: { admin: isAdmin(auth), hr: isHr(auth), comp: canComp(auth), super_admin: !!auth.isSuperAdmin },
@@ -658,18 +667,31 @@ async function getMyCompensation(url, auth, env) {
 }
 
 // Documents — visible to hr/admin, self, or a manager in the chain. Bank/ID docs
-// are restricted to hr/admin/self even from a managing chain.
-const RESTRICTED_DOC_TYPES = new Set(['bank_details', 'id_proof']);
+// are restricted to hr/admin/self even from a managing chain — and so are the salary-bearing
+// letters (2026-11-11, J1): pay is allow-list only (RULE-PODIUM-002), and a manager could read a
+// report's CTC straight off their offer/increment letter.
+// J1 review: the salary letters are a tighter tier still — the salary allow-list (canComp) or the person
+// themselves; HR/admin alone no longer suffice (RULE-PODIUM-002: pay is allow-list only, not role-derived).
+// Non-self reads of them are logged to comp_access_log like every other salary read.
+const RESTRICTED_DOC_TYPES = new Set(['bank_details', 'id_proof', 'address_proof', 'offer_letter', 'increment_letter', 'appraisal_letter']);
+const SALARY_DOC_TYPES = new Set(['offer_letter', 'increment_letter', 'appraisal_letter']);
 
 function docAllowed(auth, edges, employeeId, docType) {
-  if (isHr(auth)) return true;
   const me = callerEmployee(edges, auth.userId);
+  const isSelf = !!me && me.id === employeeId;
+  if (SALARY_DOC_TYPES.has(docType)) return isSelf || canComp(auth);
+  if (isHr(auth)) return true;
   if (!me) return false;
-  const isSelf = me.id === employeeId;
   if (isSelf) return true;
   const isMgr = inManagerChain(edges, employeeId, me.id);
   if (!isMgr) return false;
-  return !RESTRICTED_DOC_TYPES.has(docType); // managers can't see bank/ID
+  return !RESTRICTED_DOC_TYPES.has(docType); // managers can't see bank/ID/address or the salary letters
+}
+// A salary letter read by someone other than its subject → audited (self-views are not, as getMyCompensation).
+function isAuditedSalaryDocRead(auth, edges, employeeId, docType) {
+  if (!SALARY_DOC_TYPES.has(docType)) return false;
+  const me = callerEmployee(edges, auth.userId);
+  return !(me && me.id === employeeId);
 }
 
 async function getDocuments(url, auth, env) {
@@ -680,6 +702,8 @@ async function getDocuments(url, auth, env) {
   const r = await sb(`/rest/v1/documents?employee_id=eq.${employee_id}&select=*&order=uploaded_at.desc`, env);
   if (!r.ok) return err('db_error', 500);
   const rows = (r.data || []).filter(d => docAllowed(auth, edges, employee_id, d.doc_type));
+  const salaryRows = rows.filter(d => isAuditedSalaryDocRead(auth, edges, employee_id, d.doc_type));
+  if (salaryRows.length) await logCompAccess(auth, 'getDocuments', employee_id, null, env, { doc_types: [...new Set(salaryRows.map(d => d.doc_type))], count: salaryRows.length });
   return ok({ documents: rows });
 }
 
@@ -693,6 +717,8 @@ async function getDocumentDownloadUrl(url, auth, env) {
   const edges = await loadOrgEdges(env);
   if (!docAllowed(auth, edges, doc.employee_id, doc.doc_type)) return err('forbidden', 403);
   if (!String(doc.storage_path).startsWith(`${doc.employee_id}/`)) return err('forbidden', 403);
+  if (isAuditedSalaryDocRead(auth, edges, doc.employee_id, doc.doc_type))
+    await logCompAccess(auth, 'getDocumentDownloadUrl', doc.employee_id, null, env, { document_id: doc.id, doc_type: doc.doc_type });
 
   const seg = String(doc.storage_path).split('/').map(encodeURIComponent).join('/');
   const sr = await storageFetch(`/object/sign/${DOC_BUCKET}/${seg}`, env, {
@@ -756,6 +782,19 @@ function badDate(v, label, { allowFuture = false } = {}) {
   return null;
 }
 
+// J1: a work email Podium created for a hire who has not joined yet belongs to Confirm joining — a hand-made
+// employee row with it would be a duplicate the joining step then refuses (podium_email_taken). Fails closed.
+// → null when free, else the error response.
+async function workEmailAwaitingJoining(env, email) {
+  const em = String(email || '').trim().toLowerCase();
+  if (!em) return null;
+  const r = await sb(`/rest/v1/work_accounts?email=eq.${encodeURIComponent(em)}&status=neq.failed&application_id=not.is.null&select=id,application:application_id(status)&limit=5`, env);
+  if (!r.ok || !Array.isArray(r.data)) return err('db_error: work_accounts lookup failed', 500);
+  return r.data.some(w => w.application?.status !== 'joined')
+    ? errCode('created_by_podium_awaiting_joining', 'Podium created this address for a hire who has not joined — use Confirm joining on the candidate', 409)
+    : null;
+}
+
 async function createEmployee(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!body.full_name) return err('full_name required', 400);
@@ -767,6 +806,7 @@ async function createEmployee(body, auth, env) {
   if (body.status === 'exited') {
     const e = badDate(body.date_exited, 'Last working day', {}); if (e) return err(e, 400);
   }
+  if (body.work_email) { const held = await workEmailAwaitingJoining(env, body.work_email); if (held) return held; }
   let code = String(body.employee_code || '').trim();
   if (!code) { code = await mintEmployeeCode(env); if (!code) return err('failed_to_mint_employee_code', 500); }
   const row = { employee_code: code, created_by: auth.userId, ...pickFields(body, EMPLOYEE_FIELDS) };
@@ -912,6 +952,7 @@ async function updateEmployee(body, auth, env) {
       }
     }
   }
+  if (patch.work_email) { const held = await workEmailAwaitingJoining(env, patch.work_email); if (held) return held; }
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
   const r = await sb(`/rest/v1/employees?id=eq.${body.employee_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
@@ -1587,6 +1628,22 @@ function mapOuToDept(ou, deptByName) {
   return deptByName.get(name) || null;
 }
 
+// J1: lowercased email → 'awaiting_joining' (tied to an application not yet joined) | 'override' (made
+// without hiring), for the live work_accounts rows Podium created.
+// FAILS CLOSED: null when the lookup fails — callers return db_error rather than treat every account as
+// "created outside Podium" (which would let the sync import a hire who has not joined).
+async function podiumMadeAccounts(env) {
+  const r = await sb(`/rest/v1/work_accounts?status=neq.failed&select=email,application_id,application:application_id(status)&limit=5000`, env);
+  if (!r.ok || !Array.isArray(r.data)) return null;
+  const m = new Map();
+  for (const w of r.data) {
+    const em = String(w.email || '').toLowerCase();
+    if (!w.application_id) m.set(em, 'override');
+    else if (w.application?.status !== 'joined') m.set(em, 'awaiting_joining');
+  }
+  return m;
+}
+
 async function getDirectorySyncPreview(url, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!googleConfigured(env)) return err('google_not_configured', 400);
@@ -1594,12 +1651,14 @@ async function getDirectorySyncPreview(url, auth, env) {
   try { gusers = await fetchGoogleUsers(env); }
   catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
 
-  const [sres, igRes, eRes, dRes] = await Promise.all([
+  const [sres, igRes, eRes, dRes, podiumMade] = await Promise.all([
     sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
     sb(`/rest/v1/directory_ignored?select=email`, env),
     sb(`/rest/v1/employees?select=id,full_name,work_email,status,department_id,manager_id,google_org_unit,google_manager_email&limit=5000`, env),
     sb(`/rest/v1/departments?select=id,name&limit=500`, env),
+    podiumMadeAccounts(env),
   ]);
+  if (!podiumMade) return err('db_error: work_accounts lookup failed', 500);
   const excluded = (sres.ok && sres.data?.[0]?.directory_excluded_ous) || ['/Admin and general'];
   const ignored = new Set((igRes.ok ? igRes.data : []).map(r => (r.email || '').toLowerCase()));
   const emps = eRes.ok ? eRes.data : [];
@@ -1711,8 +1770,12 @@ async function getDirectorySyncPreview(url, auth, env) {
     const deptId = mapOuToDept(gu.orgUnitPath, deptByName);
     const rel = (gu.relations || []).find(r => r.type === 'manager' && r.value);
     const mgr = rel ? empByEmail.get(rel.value.toLowerCase()) : null;
+    // J1: an account Podium created for a hire who has not joined yet becomes an employee through
+    // Confirm joining, never through this import (labelled, and refused by the create path).
+    const madeBy = podiumMade.get(email);
     newCands.push({
       email: gu.primaryEmail,
+      origin: madeBy === 'awaiting_joining' ? 'podium_awaiting_joining' : madeBy === 'override' ? 'podium_override' : 'outside',
       full_name: [gu.name?.givenName, gu.name?.familyName].filter(Boolean).join(' ') || gu.name?.fullName || gu.primaryEmail,
       org_unit: gu.orgUnitPath || '',
       job_title: gu.organizations?.[0]?.title || '',
@@ -1913,11 +1976,17 @@ async function importDirectoryCandidates(body, auth, env) {
     catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
     const gByEmail = new Map(gusers.map(u => [(u.primaryEmail || '').toLowerCase(), u]));
     const authMap = await authEmailMap(env);
-    const exRes = await sb(`/rest/v1/employees?select=work_email&limit=5000`, env);
+    const [exRes, podiumMade] = await Promise.all([
+      sb(`/rest/v1/employees?select=work_email&limit=5000`, env),
+      podiumMadeAccounts(env),
+    ]);
+    if (!podiumMade) return err('db_error: work_accounts lookup failed', 500);
     const existing = new Set((exRes.ok ? exRes.data : []).map(e => (e.work_email || '').toLowerCase()));
     for (const c of create) {
       const em = (c.email || '').toLowerCase();
       if (!em || existing.has(em)) { result.errors.push(`${c.email || '?'}: already exists`); continue; }
+      // J1: the hire joins via Confirm joining (employee + comp + documents in one transaction), not here.
+      if (podiumMade.get(em) === 'awaiting_joining') { result.errors.push(`${c.email}: created_by_podium_awaiting_joining`); continue; }
       const gu = gByEmail.get(em);
       if (!gu) { result.errors.push(`${c.email}: not in Google directory`); continue; }
       const seq = await nextEmployeeSeq(env);
@@ -4415,6 +4484,8 @@ async function hasLiveOffer(env, applicationId) {
 
 async function setApplicationStatus(body, auth, env) {
   const d = body.data || body;
+  // J1: a no-show keeps the accepted offer, so it has its own close (see markNoShow).
+  if (d.status === 'no_show') return markNoShow({ data: { application_id: d.id, reason: d.reason, note: d.note } }, auth, env);
   const app = await loadApplication(env, d.id);
   if (!app) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
@@ -5217,6 +5288,488 @@ async function saveSignatory(body, auth, env) {
   return ok(r.data[0]);
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// HIRING J1 — Podium creates the work account, then confirms joining.
+// Plan: docs/superpowers/plans/2026-11-11-podium-j1-work-accounts.md · pure rules: src/workaccount.js.
+// Two human steps: (1) a Google admin (podium.google_admin_access — per person, L3) creates the Google
+// user; the temp password exists ONLY in that response. (2) on the day the person turns up, HR / the
+// opening's chain confirms joining → hiring_confirm_joining (0009) writes the employee, the initial comp
+// event, the documents, `joined` and `filled` in one transaction. No-show → `no_show`; a created account
+// can then be suspended (logged). Google writes use googleWriteToken ONLY; every one lands in
+// podium.google_admin_log (request minus the password). Rehires are refused until X1.
+// ────────────────────────────────────────────────────────────────────────────
+
+const J1_COPY = {
+  forbidden_google_admin: 'Only a Google admin (Afshaan, Vinay, Mohit) can do this',
+  not_accepted: 'The application must be at Accepted',
+  offer_not_accepted: 'This application has no accepted offer',
+  offer_not_latest: 'A newer offer revision is in progress or was sent — finish it first',
+  rehire_not_supported_yet: 'This person was an employee before — rehires are not supported yet',
+  account_exists: 'A work account already exists for this application',
+  account_pending_other_email: 'An account for another address is still being created — retry that one',
+  email_taken: 'That address is already taken',
+  bad_org_unit: 'Pick an org unit from the list',
+  bad_name: 'Given and family name are required (up to 60 characters each)',
+  override_reason_required: 'Say why this account is created without hiring (at least 10 characters)',
+  local_required: 'Enter the part before @',
+  local_too_long: 'The address is too long',
+  local_bad_chars: 'Use lowercase letters, digits and dots only',
+  local_bad_dots: 'No dot at the start or end, and no two dots together',
+  google_error: 'Google refused the request',
+  record_failed: 'Google created the account but Podium could not record it — retry to finish',
+  no_work_account: 'Create the work account first',
+  employee_id_mismatch: 'This changed since you loaded it — reload and retry',
+  bad_start_date: 'Pick the actual start date',
+  start_date_too_far: 'The start date can be at most 7 days ahead — confirm joining on the day',
+  start_date_before_acceptance: 'The start date is before the offer was accepted',
+  doc_copy_failed: 'The hiring documents could not be copied — try again',
+  bad_document_path: 'A document path was outside the employee folder',
+  not_suspendable: 'Only an account whose application is No show or Withdrawn can be suspended here',
+  stale: 'This changed since you loaded it — reload and retry',
+  conflict: 'This conflicts with an existing record — reload and retry',
+  check_failed: 'The record failed a consistency check',
+  in_progress: 'Someone else is creating this account right now — wait a moment and reload',
+  not_resettable: 'Only a created account whose person has not joined can have its password reset here',
+  offer_changed: 'The offer changed while joining was being confirmed — reload and retry',
+  opening_closed: 'The opening is cancelled — reopen it before confirming joining',
+  headcount_full: 'The opening already has its full headcount joined',
+  created_by_podium_awaiting_joining: 'Podium created this address for a hire who has not joined — use Confirm joining on the candidate',
+};
+const j1Err = (code, status = 409) => errCode(code, J1_COPY[code] || code.replace(/_/g, ' '), status);
+function j1DbError(r) {
+  const m = workAccountDbErrorCode(r?.data);
+  if (m) return j1Err(m.code, m.status);
+  const d = r?.data && typeof r.data === 'object' ? r.data : {};
+  return err(`db_error: ${[d.code, d.message].filter(Boolean).join(' ') || r?.status}`, 400);
+}
+
+// L3 allow-list, AND the caller's Podium employee row is active (an exited admin keeps no Google power even
+// if the allow-list row was not removed). Resolved per call (display flag in getMe; every handler re-checks).
+async function isGoogleAdmin(auth, env) {
+  if (!auth?.userId || !isUuid(auth.userId)) return false;
+  const [r, er] = await Promise.all([
+    sb(`/rest/v1/google_admin_access?auth_user_id=eq.${auth.userId}&select=auth_user_id&limit=1`, env),
+    sb(`/rest/v1/employees?auth_user_id=eq.${auth.userId}&status=eq.active&select=id&limit=1`, env),
+  ]);
+  return !!(r.ok && r.data?.[0] && er.ok && er.data?.[0]);
+}
+async function requireGoogleAdmin(auth, env) { return (await isGoogleAdmin(auth, env)) ? null : j1Err('forbidden_google_admin', 403); }
+// Confirm joining / no-show: HR or podium_hiring ONLY — not the opening's owner / reporting manager. Joining
+// writes the employee record and the initial comp event, which is HR's act (and none of the J1 actions is
+// self-serve, so a manager without podium_view never reaches them anyway).
+const canConfirmJoining = (roles) => !!(roles?.hr || roles?.hiring);
+
+const GDIR_USERS = 'https://admin.googleapis.com/admin/directory/v1/users';
+const gJson = { 'Content-Type': 'application/json' };
+
+// Best-effort like logCompAccess: the Google write already happened. `request` never carries the password.
+async function googleAdminLog(env, auth, e) {
+  try {
+    await sb(`/rest/v1/google_admin_log`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify([{
+      actor: auth.userId, actor_email: auth.email || null, action: e.action, target_email: e.target_email,
+      google_user_id: e.google_user_id || null, work_account_id: e.work_account_id || null, request: e.request || null,
+      ok: !!e.ok, error: e.error ? String(e.error).slice(0, 500) : null,
+    }]) });
+  } catch (_e) { /* best-effort */ }
+}
+// Writes during a create attempt: only while this attempt still owns the row and it is still pending.
+async function waAttemptPatch(env, id, attemptId, patch) {
+  return sb(`/rest/v1/work_accounts?id=eq.${id}&${attemptGuard(attemptId)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+async function loadWorkAccount(env, q) {
+  return (await sb(`/rest/v1/work_accounts?${q}&select=*&limit=1`, env)).data?.[0] || null;
+}
+
+// The OUs that exist (from the live user list) — the create path only accepts one of these.
+function liveOus(gusers) {
+  return [...new Set(['/', ...(gusers || []).map(u => u.orgUnitPath).filter(Boolean)])].sort();
+}
+
+// Is each address free? Taken if a Podium employee has it, a live work_accounts row claims it, or Google
+// knows it (users.get with the READONLY token resolves aliases too). → [{email, available, reason}]
+async function emailAvailability(env, emails, { exceptWaId = null } = {}) {
+  const list = [...new Set((emails || []).map(e => String(e).toLowerCase()))].slice(0, 3);
+  if (!list.length) return [];
+  const inList = list.map(e => `"${encodeURIComponent(e)}"`).join(',');
+  let token = null;
+  try { token = await googleAccessToken(env); } catch (_e) { token = null; }
+  const [er, wr, ...gs] = await Promise.all([
+    sb(`/rest/v1/employees?work_email=in.(${inList})&select=work_email`, env),
+    sb(`/rest/v1/work_accounts?email=in.(${inList})&status=neq.failed&select=id,email`, env),
+    ...list.map(e => token
+      ? fetch(`${GDIR_USERS}/${encodeURIComponent(e)}?projection=basic`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.status).catch(() => 0)
+      : Promise.resolve(0)),
+  ]);
+  const inPodium = new Set((er.data || []).map(x => String(x.work_email || '').toLowerCase()));
+  const claimed = new Set((wr.data || []).filter(x => x.id !== exceptWaId).map(x => x.email));
+  return list.map((email, i) => {
+    if (inPodium.has(email)) return { email, available: false, reason: 'in_podium' };
+    if (claimed.has(email)) return { email, available: false, reason: 'podium_account' };
+    if (gs[i] === 200) return { email, available: false, reason: 'google' };
+    if (gs[i] === 404) return { email, available: true, reason: null };
+    return { email, available: null, reason: 'google_unavailable' };
+  });
+}
+
+// The create form: names, the two L1 proposals with availability, the live OUs, the L2 default OU.
+async function accountFormSetup(env, names, departmentId, exceptWaId) {
+  const [gusers, er] = await Promise.all([
+    fetchGoogleUsers(env),
+    departmentId && isUuid(departmentId)
+      ? sb(`/rest/v1/employees?department_id=eq.${departmentId}&status=eq.active&select=department_id,status,google_org_unit`, env)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const ous = liveOus(gusers);
+  const locals = proposeLocalParts(names.given, names.family);
+  const avail = await emailAvailability(env, locals.map(toEmail), { exceptWaId });
+  const dou = defaultOu(departmentId, er.data || []);
+  return {
+    given: names.given, family: names.family, domain: WORK_DOMAIN, ous, default_ou: ous.includes(dou) ? dou : '/',
+    proposals: locals.map((local, i) => ({ local, ...avail[i] })),
+  };
+}
+
+// GET getWorkAccount?application_id= — the Work account card. Visible to anyone who sees the opening; the
+// form (proposals, OUs — Google reads) only for a Google admin while no live account exists.
+// Without application_id: the override form setup (?name=), Google admins only.
+async function getWorkAccount(url, auth, env) {
+  const applicationId = url.searchParams.get('application_id');
+  const gAdmin = await isGoogleAdmin(auth, env);
+  if (!applicationId) {
+    if (!gAdmin) return j1Err('forbidden_google_admin', 403);
+    if (!googleConfigured(env)) return err('google_not_configured', 400);
+    try { return ok({ google_admin: true, form: await accountFormSetup(env, splitName(url.searchParams.get('name') || ''), null, null) }); }
+    catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
+  }
+  const c = await offerAppCtx(auth, env, applicationId);
+  if (c.res) return c.res;
+  const { app, x } = c;
+  const [wr, or, cr] = await Promise.all([
+    sb(`/rest/v1/work_accounts?application_id=eq.${app.id}&select=*&limit=1`, env),
+    sb(`/rest/v1/offers?application_id=eq.${app.id}&select=id,revision,status,sent_at,start_date,accepted_at&order=revision.desc`, env),
+    sb(`/rest/v1/candidates?id=eq.${app.candidate_id}&select=id,full_name,employee_id&limit=1`, env),
+  ]);
+  const wa = wr.data?.[0] || null;
+  const cand = cr.data?.[0] || {};
+  const jo = joiningOffer(or.data || []);
+  const rehire = !!cand.employee_id && cand.employee_id !== wa?.employee_id;
+  const [rq, emp] = await Promise.all([
+    wa?.requested_by ? sb(`/rest/v1/employees?auth_user_id=eq.${wa.requested_by}&select=full_name&limit=1`, env) : Promise.resolve({ data: [] }),
+    wa?.employee_id && app.status === 'joined' ? sb(`/rest/v1/employees?id=eq.${wa.employee_id}&select=id,employee_code,full_name&limit=1`, env) : Promise.resolve({ data: [] }),
+  ]);
+  let form = null;
+  if (gAdmin && app.status === 'accepted' && jo.offer && !rehire && (!wa || wa.status === 'failed' || wa.status === 'pending')) {
+    if (!googleConfigured(env)) form = { error: 'google_not_configured' };
+    else {
+      const names = wa ? { given: wa.given_name, family: wa.family_name } : splitName(cand.full_name);
+      try { form = await accountFormSetup(env, names, x.o.department_id, wa?.id || null); }
+      catch (_e) { form = { error: 'google_unavailable' }; }
+    }
+  }
+  return ok({
+    application_status: app.status, offer_accepted: !!jo.offer, offer_error: jo.error || null,
+    start_date: jo.offer?.start_date || null, accepted_at: jo.offer?.accepted_at || null, rehire,
+    work_account: wa, requested_by_name: rq.data?.[0]?.full_name || null, employee: emp.data?.[0] || null,
+    google_admin: gAdmin, can_confirm: canConfirmJoining(x.roles), today: istToday(), form,
+  });
+}
+
+// GET checkWorkEmail?local= — one availability answer for the Custom box.
+async function checkWorkEmail(url, auth, env) {
+  const gate = await requireGoogleAdmin(auth, env); if (gate) return gate;
+  const local = String(url.searchParams.get('local') || '').trim().toLowerCase();
+  const bad = checkLocalPart(local);
+  if (bad) return j1Err(bad, 400);
+  const except = url.searchParams.get('work_account_id');
+  const [a] = await emailAvailability(env, [toEmail(local)], { exceptWaId: isUuid(except) ? except : null });
+  return ok({ local, ...a });
+}
+
+// POST createWorkAccount — the only place the temp password exists (the response; resetWorkAccountPassword
+// is the other). Sequence: validate → claim the row for this attempt BEFORE Google → users.get (adopt only a
+// user stamped with this row's id, refuse anyone else's) → users.insert (stamped) → `created` + log. A retry
+// after a lost response adopts and sets a fresh password.
+async function createWorkAccount(body, auth, env) {
+  const gate = await requireGoogleAdmin(auth, env); if (gate) return gate;
+  if (!googleWriteConfigured(env) || !googleConfigured(env)) return err('google_write_not_configured', 400);
+  const d = body.data || body;
+  const local = String(d.local_part || '').trim().toLowerCase();
+  const lc = checkLocalPart(local);
+  if (lc) return j1Err(lc, 400);
+  const given = String(d.given_name || '').trim().replace(/\s+/g, ' ');
+  const family = String(d.family_name || '').trim().replace(/\s+/g, ' ');
+  if (!given || !family || given.length > 60 || family.length > 60) return j1Err('bad_name', 400);
+  const ou = String(d.org_unit_path || '').trim();
+  const email = toEmail(local);
+
+  let app = null, overrideReason = null;
+  if (d.application_id) {
+    app = await loadApplication(env, d.application_id);
+    if (!app) return err('not_found', 404);
+    if (app.status !== 'accepted') return j1Err('not_accepted');
+    const [or, cr] = await Promise.all([
+      sb(`/rest/v1/offers?application_id=eq.${app.id}&select=id,revision,status,sent_at&order=revision.desc`, env),
+      sb(`/rest/v1/candidates?id=eq.${app.candidate_id}&select=employee_id&limit=1`, env),
+    ]);
+    const jo = joiningOffer(or.data || []);
+    if (jo.error) return j1Err(jo.error);
+    if (cr.data?.[0]?.employee_id) return j1Err('rehire_not_supported_yet');
+  } else {
+    overrideReason = String(d.override_reason || '').trim();
+    if (overrideReason.length < 10) return j1Err('override_reason_required', 400);
+  }
+
+  let gusers;
+  try { gusers = await fetchGoogleUsers(env); }
+  catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
+  if (!liveOus(gusers).includes(ou)) return j1Err('bad_org_unit', 400);
+  const inPodium = await sb(`/rest/v1/employees?work_email=eq.${encodeURIComponent(email)}&select=id&limit=1`, env);
+  if (inPodium.data?.length) return j1Err('email_taken');
+
+  // Claim the row for THIS attempt before touching Google (B): a fresh attempt_id, taken only when the row
+  // is pending/failed and no other attempt started in the last 2 minutes. Losers get in_progress; every
+  // later write is guarded on (attempt_id, pending), so a loser can never overwrite or downgrade a winner.
+  const existing = await loadWorkAccount(env, app
+    ? `application_id=eq.${app.id}`
+    : `application_id=is.null&email=eq.${encodeURIComponent(email)}&status=in.(pending,failed)`);
+  if (existing && ['created', 'suspended'].includes(existing.status)) return j1Err('account_exists');
+  // A pending row for another address may already have a Google user (stamped with this row's id): finish that.
+  if (existing && existing.status === 'pending' && existing.email !== email) return j1Err('account_pending_other_email');
+  const attemptId = crypto.randomUUID();
+  const fields = { email, given_name: given, family_name: family, org_unit_path: ou, status: 'pending', last_error: null,
+    requested_by: auth.userId, attempt_id: attemptId, attempt_started_at: nowIso() };
+  let row;
+  if (existing) {
+    const r = await sb(`/rest/v1/work_accounts?id=eq.${existing.id}&${attemptClaimFilter()}`, env, { method: 'PATCH',
+      body: JSON.stringify(fields) });
+    if (!r.ok) return j1DbError(r);
+    if (!r.data?.length) return j1Err('in_progress');
+    row = r.data[0];
+  } else {
+    const r = await sb(`/rest/v1/work_accounts`, env, { method: 'POST', body: JSON.stringify([{ ...fields,
+      application_id: app?.id || null, candidate_id: app?.candidate_id || null, override_reason: overrideReason }]) });
+    // Another admin inserted the row for this application a moment ago: theirs is the live attempt.
+    if (r.data?.code === '23505' && /work_accounts_application_id/.test(String(r.data?.message || ''))) return j1Err('in_progress');
+    if (!r.ok) return j1DbError(r);
+    row = r.data?.[0];
+  }
+  const mine = (patch) => waAttemptPatch(env, row.id, attemptId, patch);
+
+  // externalIds (A) is the ownership proof a retry checks before adopting an existing Google user.
+  const googleUser = { primaryEmail: email, name: { givenName: given, familyName: family }, orgUnitPath: ou,
+    changePasswordAtNextLogin: true, externalIds: workAccountExternalIds(row.id) };
+  const logRequest = { ...googleUser, ...(overrideReason ? { override_reason: overrideReason } : {}) };
+  const fail = async (code, message, action = 'create_user', status = 409) => {
+    await mine({ status: 'failed', last_error: String(message || code).slice(0, 500) });
+    await googleAdminLog(env, auth, { action, target_email: email, work_account_id: row.id, request: logRequest, ok: false, error: message || code });
+    return j1Err(code, status);
+  };
+  let token;
+  try { token = await googleWriteToken(env, 'directory'); }
+  catch (e) { return fail('google_error', String(e?.message || e), 'create_user', 502); }
+  const hdr = { ...gJson, Authorization: `Bearer ${token}` };
+  const pw = tempPassword((n) => crypto.getRandomValues(new Uint8Array(n)));
+
+  const gr = await fetch(`${GDIR_USERS}/${encodeURIComponent(email)}?projection=full`, { headers: hdr });
+  const gd = await gr.json().catch(() => ({}));
+  if (gr.ok) {
+    // Adopt ONLY a Google user carrying this row's id (our own earlier insert). Anyone else's → taken.
+    if (!isOurPendingAccount(row, gd)) return fail('email_taken', 'already exists in Google (not created by this request)');
+    // Our earlier call created it and its response was lost: nobody has its password, so set a fresh one.
+    const ur = await fetch(`${GDIR_USERS}/${encodeURIComponent(gd.id)}`, { method: 'PUT', headers: hdr,
+      body: JSON.stringify({ password: pw, changePasswordAtNextLogin: true }) });
+    const ud = await ur.json().catch(() => ({}));
+    if (!ur.ok) return fail('google_error', ud?.error?.message || `HTTP ${ur.status}`, 'link_existing', 502);
+    const pr = await mine({ status: 'created', google_user_id: gd.id, last_error: null });
+    await googleAdminLog(env, auth, { action: 'link_existing', target_email: email, google_user_id: gd.id, work_account_id: row.id,
+      request: { reset_password: true, changePasswordAtNextLogin: true }, ok: true });
+    if (!pr.ok || !pr.data?.length) return j1Err('record_failed', 500);
+    return ok({ work_account_id: row.id, email, temp_password: pw, linked: true });
+  }
+  if (gr.status !== 404) return fail('google_error', gd?.error?.message || `HTTP ${gr.status}`, 'create_user', 502);
+
+  const ir = await fetch(GDIR_USERS, { method: 'POST', headers: hdr, body: JSON.stringify({ ...googleUser, password: pw }) });
+  const idata = await ir.json().catch(() => ({}));
+  if (ir.status === 409) return fail('email_taken', idata?.error?.message || 'in use in Google (user, group or alias)');
+  if (!ir.ok || !idata?.id) return fail('google_error', idata?.error?.message || `HTTP ${ir.status}`, 'create_user', 502);
+  const pr = await mine({ status: 'created', google_user_id: idata.id, last_error: null });
+  await googleAdminLog(env, auth, { action: 'create_user', target_email: email, google_user_id: idata.id, work_account_id: row.id,
+    request: logRequest, ok: true });
+  // Google has the user (stamped with this row's id); the row stays `pending`, so a retry adopts it and
+  // sets a fresh password.
+  if (!pr.ok || !pr.data?.length) return j1Err('record_failed', 500);
+  return ok({ work_account_id: row.id, email, temp_password: pw, linked: false });
+}
+
+// POST resetWorkAccountPassword {work_account_id} — the temp password was lost before first sign-in. Google
+// admin; the account is `created` and its person has not joined. Returns the new temp password ONCE.
+async function resetWorkAccountPassword(body, auth, env) {
+  const gate = await requireGoogleAdmin(auth, env); if (gate) return gate;
+  if (!googleWriteConfigured(env)) return err('google_write_not_configured', 400);
+  const d = body.data || body;
+  if (!isUuid(d.work_account_id)) return err('work_account_id required', 400);
+  const wa = await loadWorkAccount(env, `id=eq.${d.work_account_id}`);
+  if (!wa) return err('not_found', 404);
+  if (wa.status !== 'created' || !wa.google_user_id) return j1Err('not_resettable');
+  if (wa.application_id) {
+    const app = await loadApplication(env, wa.application_id);
+    if (!app || app.status === 'joined') return j1Err('not_resettable');
+  } else {
+    const er = await sb(`/rest/v1/employees?work_email=eq.${encodeURIComponent(wa.email)}&select=id&limit=1`, env);
+    if (!er.ok) return err('db_error', 500);
+    if (er.data?.length) return j1Err('not_resettable');
+  }
+  let token;
+  try { token = await googleWriteToken(env, 'directory'); }
+  catch (e) { return err('google_write_not_configured: ' + (e?.message || e), 502); }
+  const pw = tempPassword((n) => crypto.getRandomValues(new Uint8Array(n)));
+  const ur = await fetch(`${GDIR_USERS}/${encodeURIComponent(wa.google_user_id)}`, { method: 'PUT',
+    headers: { ...gJson, Authorization: `Bearer ${token}` }, body: JSON.stringify({ password: pw, changePasswordAtNextLogin: true }) });
+  const ud = await ur.json().catch(() => ({}));
+  await googleAdminLog(env, auth, { action: 'reset_password', target_email: wa.email, google_user_id: wa.google_user_id,
+    work_account_id: wa.id, request: { changePasswordAtNextLogin: true }, ok: ur.ok, error: ur.ok ? null : (ud?.error?.message || `HTTP ${ur.status}`) });
+  if (!ur.ok) return j1Err('google_error', 502);
+  return ok({ work_account_id: wa.id, email: wa.email, temp_password: pw });
+}
+// ── end J1 create
+
+const alreadyCopied = (r) => r.status === 409 || String(r.data?.statusCode) === '409'
+  || /already exists|duplicate/i.test(typeof r.data === 'string' ? r.data : JSON.stringify(r.data || {}));
+
+// POST confirmJoining {application_id, start_date} — the day the person turns up. Copies the hiring documents
+// (+ the issued offer PDF) under <employee_id>/hiring/, then ONE transaction (hiring_confirm_joining).
+// Re-running is safe: employee_id is allocated once and stored, copies treat "already exists" as done,
+// and the RPC returns the existing employee for an application already joined.
+async function confirmJoining(body, auth, env) {
+  const d = body.data || body;
+  const c = await offerAppCtx(auth, env, d.application_id);
+  if (c.res) return c.res;
+  const { app, x, me } = c;
+  if (!canConfirmJoining(x.roles)) return err('forbidden', 403);
+  const actor = { actor_user_id: auth.userId, actor_employee_id: me?.id || null };
+  let wa = await loadWorkAccount(env, `application_id=eq.${app.id}`);
+  if (app.status === 'joined') {
+    if (!wa?.employee_id) return j1Err('not_accepted');
+    const r = await hiringRpc(env, 'hiring_confirm_joining', { application_id: app.id, employee_id: wa.employee_id, ...actor });
+    return r.ok ? ok(r.data) : j1DbError(r);
+  }
+  if (app.status !== 'accepted') return j1Err('not_accepted');
+  if (!wa || wa.status !== 'created') return j1Err('no_work_account');
+  const [or, cr, dr] = await Promise.all([
+    sb(`/rest/v1/offers?application_id=eq.${app.id}&select=*&order=revision.desc`, env),
+    sb(`/rest/v1/candidates?id=eq.${app.candidate_id}&select=id,employee_id&limit=1`, env),
+    sb(`/rest/v1/candidate_documents?candidate_id=eq.${app.candidate_id}&select=*&order=uploaded_at.asc`, env),
+  ]);
+  if (!or.ok || !cr.ok || !dr.ok) return err('db_error', 500);
+  if (cr.data?.[0]?.employee_id) return j1Err('rehire_not_supported_yet');
+  const jo = joiningOffer(or.data || []);
+  if (jo.error) return j1Err(jo.error);
+  const off = jo.offer;
+  const sd = checkStartDate(d.start_date, istToday(), off.accepted_at);
+  if (sd) return j1Err(sd, 400);
+
+  // Allocate the employee id once (guarded on null), so retries reuse it and the copied paths agree.
+  if (!wa.employee_id) {
+    const pr = await sb(`/rest/v1/work_accounts?id=eq.${wa.id}&employee_id=is.null`, env, { method: 'PATCH',
+      body: JSON.stringify({ employee_id: crypto.randomUUID() }) });
+    if (!pr.ok) return j1DbError(pr);
+    wa = pr.data?.[0] || await loadWorkAccount(env, `id=eq.${wa.id}`);
+    if (!wa?.employee_id) return j1Err('stale');
+  }
+  const empId = wa.employee_id;
+
+  const docs = (dr.data || []).filter(cd => !NOT_COPIED_ON_JOINING.has(cd.doc_type)).map(cd => {
+    const name = cd.file_name || String(cd.storage_path).split('/').pop();
+    return { src: cd.storage_path, storage_path: employeeDocPath(empId, cd.id, name), doc_type: candidateDocToEmployeeDocType(cd.doc_type),
+      title: cd.title || name, file_name: name, mime_type: cd.mime_type || null, file_size: cd.file_size ?? null };
+  });
+  if (off.pdf_path) {
+    const name = `${off.offer_ref}-r${off.revision}.pdf`;
+    docs.push({ src: off.pdf_path, storage_path: employeeDocPath(empId, off.id, name), doc_type: 'offer_letter',
+      title: `${off.offer_ref} r${off.revision} — offer letter as issued`, file_name: name, mime_type: 'application/pdf', file_size: null });
+  }
+  const copies = await Promise.all(docs.map(doc => storageFetch(`/object/copy`, env, { method: 'POST', headers: gJson,
+    body: JSON.stringify({ bucketId: DOC_BUCKET, sourceKey: doc.src, destinationKey: doc.storage_path }) })));
+  // Say WHICH documents failed (title + type — never storage paths), so HR can fix or remove them.
+  const failed = docs.filter((_, i) => !copies[i].ok && !alreadyCopied(copies[i])).map(doc => ({ title: doc.title, doc_type: doc.doc_type }));
+  if (failed.length) {
+    const list = failed.map(f => `${f.title} (${f.doc_type})`).join('; ');
+    return json({ ok: false, error: `doc_copy_failed: ${list}`, code: 'doc_copy_failed', message: J1_COPY.doc_copy_failed, failed }, 502);
+  }
+
+  // offer_id + terms_hash: the RPC re-checks, under the application lock, that this is still the joining
+  // revision with these terms (the components and the documents above were built from it).
+  const r = await hiringRpc(env, 'hiring_confirm_joining', {
+    application_id: app.id, employee_id: empId, start_date: d.start_date, offer_id: off.id, terms_hash: off.terms_hash,
+    components: off.annexure ? componentsContract(off.annexure, off) : null,
+    documents: docs.map(({ src, ...rest }) => rest), ...actor,
+  });
+  if (!r.ok) return j1DbError(r);
+  return ok(r.data);
+}
+
+// POST markNoShow {application_id, reason?, note?} — accepted → no_show. The accepted offer stays as the
+// record (they accepted and did not turn up), so unlike the other closes it does not need withdrawing first;
+// an amendment still in flight does. setApplicationStatus routes →no_show here.
+async function markNoShow(body, auth, env) {
+  const d = body.data || body;
+  const c = await offerAppCtx(auth, env, d.application_id || d.id);
+  if (c.res) return c.res;
+  const { app, x, me } = c;
+  if (!canConfirmJoining(x.roles)) return err('forbidden', 403);
+  const reason = String(d.reason || '').trim() || null;
+  const bad = checkTransition(app.status, 'no_show', reason);
+  if (bad === 'bad_reason') return errCode('bad_reason', `reason must be one of: ${OUTCOME_REASON_CODES.join(', ')}`, 400);
+  if (bad) return errCode('invalid_transition', `Cannot mark ${app.status} as no-show`, 409);
+  const live = OFFER_LIVE_STATUSES.filter(s => s !== 'accepted');
+  const lr = await sb(`/rest/v1/offers?application_id=eq.${app.id}&status=in.(${live.join(',')})&select=id&limit=1`, env);
+  if (lr.data?.length) return errCode('close_offers_first', OFFER_COPY.close_offers_first, 409);
+  const note = String(d.note || '').trim() || null;
+  const r = await sb(`/rest/v1/applications?id=eq.${app.id}&status=eq.${app.status}`, env, { method: 'PATCH',
+    body: JSON.stringify({ status: 'no_show', closed_at: nowIso(), ...(reason ? { outcome_reason: reason } : {}) }) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (!r.data?.length) return errCode('stale', 'The application changed — reload and retry', 409);
+  await maybeStartRetention(app.candidate_id, env);
+  await hiringEvents(env, auth, me, [{ candidate_id: app.candidate_id, opening_id: app.opening_id, application_id: app.id,
+    event_type: 'status_changed', from_status: app.status, to_status: 'no_show', reason, detail: note ? { note } : null }]);
+  const wa = await loadWorkAccount(env, `application_id=eq.${app.id}`);
+  return ok({ id: app.id, status: 'no_show', work_account_status: wa?.status || null });
+}
+
+// POST suspendWorkAccount {work_account_id} — Google admin; only for an application that ended no_show /
+// withdrawn (X1 widens this). users.update {suspended:true}; row → suspended; logged.
+async function suspendWorkAccount(body, auth, env) {
+  const gate = await requireGoogleAdmin(auth, env); if (gate) return gate;
+  if (!googleWriteConfigured(env)) return err('google_write_not_configured', 400);
+  const d = body.data || body;
+  if (!isUuid(d.work_account_id)) return err('work_account_id required', 400);
+  const wa = await loadWorkAccount(env, `id=eq.${d.work_account_id}`);
+  if (!wa) return err('not_found', 404);
+  // Idempotent: already suspended → nothing to call, nothing to log again.
+  if (wa.status === 'suspended') return ok({ id: wa.id, status: 'suspended', already: true });
+  if (wa.status !== 'created' || !wa.google_user_id || !wa.application_id) return j1Err('not_suspendable');
+  const app = await loadApplication(env, wa.application_id);
+  if (!app || !SUSPENDABLE_APP_STATUSES.includes(app.status)) return j1Err('not_suspendable');
+  const request = { suspended: true };
+  let token;
+  try { token = await googleWriteToken(env, 'directory'); }
+  catch (e) { return err('google_write_not_configured: ' + (e?.message || e), 502); }
+  const ur = await fetch(`${GDIR_USERS}/${encodeURIComponent(wa.google_user_id)}`, { method: 'PUT',
+    headers: { ...gJson, Authorization: `Bearer ${token}` }, body: JSON.stringify(request) });
+  const ud = await ur.json().catch(() => ({}));
+  if (!ur.ok) {
+    await googleAdminLog(env, auth, { action: 'suspend_user', target_email: wa.email, google_user_id: wa.google_user_id,
+      work_account_id: wa.id, request, ok: false, error: ud?.error?.message || `HTTP ${ur.status}` });
+    return j1Err('google_error', 502);
+  }
+  const pr = await sb(`/rest/v1/work_accounts?id=eq.${wa.id}&status=eq.created`, env, { method: 'PATCH',
+    body: JSON.stringify({ status: 'suspended', suspended_at: nowIso(), suspended_by: auth.userId }) });
+  await googleAdminLog(env, auth, { action: 'suspend_user', target_email: wa.email, google_user_id: wa.google_user_id,
+    work_account_id: wa.id, request, ok: true });
+  if (!pr.ok || !pr.data?.length) return j1Err('record_failed', 500);
+  return ok({ id: wa.id, status: 'suspended' });
+}
+
 const GET_ACTIONS = {
   getMe, getSettings,
   getEmployees, getEmployee,
@@ -5251,6 +5804,8 @@ const GET_ACTIONS = {
   getCandidates, getCandidate, getCandidateDocumentUrl, findCandidateDuplicates,
   // Hiring C3 — offers
   getOfferSetup, getOffers, getOffer, getOfferPdfUrl, getOfferTemplates,
+  // Hiring J1 — work accounts (podium_view required: none of these is self-serve)
+  getWorkAccount, checkWorkEmail,
 };
 
 const POST_ACTIONS = {
@@ -5291,6 +5846,8 @@ const POST_ACTIONS = {
   // Hiring C3 — offers
   previewOffer, createOffer, updateOfferDraft, submitOffer, decideOffer, markOfferSent, recordOfferAcceptance,
   recordOfferDecline, withdrawOffer, createOfferDocUploadUrl, previewOfferTemplate, saveOfferTemplate, saveSignatory,
+  // Hiring J1 — work accounts + confirm joining (podium_view required: none of these is self-serve)
+  createWorkAccount, resetWorkAccountPassword, confirmJoining, markNoShow, suspendWorkAccount,
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.

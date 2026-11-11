@@ -37,6 +37,7 @@ export const ACTIVE_APP_STATUSES = ['new', 'screening', 'interviewing', 'offer',
 
 // Manual moves. →offer / →accepted come only from the offer flow (sent / acceptance recorded); the C3
 // closes (offer → declined | withdrawn | rejected, accepted → withdrawn) need the live offer closed first.
+// accepted → no_show (J1) keeps the accepted offer; →joined comes only from Confirm joining.
 // Mirrors APP_TRANSITIONS in the worker.
 export const APP_TRANSITIONS = {
   new:          ['screening', 'rejected', 'withdrawn', 'on_hold'],
@@ -44,7 +45,7 @@ export const APP_TRANSITIONS = {
   interviewing: ['rejected', 'withdrawn', 'on_hold'],
   on_hold:      ['new', 'screening', 'interviewing', 'rejected', 'withdrawn'],
   offer:        ['declined', 'withdrawn', 'rejected'],
-  accepted:     ['withdrawn'],
+  accepted:     ['withdrawn', 'no_show'],
 };
 export const REASON_REQUIRED = ['rejected', 'withdrawn', 'declined'];
 // Reject / withdraw reasons are a category (shown to everyone who sees the application); any free text
@@ -165,6 +166,41 @@ const ERROR_COPY = {
   bad_valid_days: 'Validity must be 1–60 days',
   bad_joining_bonus: 'Joining bonus must be whole rupees',
   bad_retention_bonus: 'Retention bonus must be whole rupees',
+  // J1 work accounts + joining
+  forbidden_google_admin: 'Only a Google admin (Afshaan, Vinay, Mohit) can do this',
+  forbidden_podium_view: 'You do not have access to do that',
+  not_accepted: 'The application must be at Accepted',
+  offer_not_accepted: 'This application has no accepted offer',
+  offer_not_latest: 'A newer offer revision is in progress or was sent — finish it first',
+  rehire_not_supported_yet: 'This person was an employee before — rehires are not supported yet',
+  account_exists: 'A work account already exists for this application',
+  account_pending_other_email: 'An account for another address is still being created — retry that one',
+  email_taken: 'That address is already taken — pick another',
+  bad_org_unit: 'Pick an org unit from the list',
+  bad_name: 'Given and family name are required (up to 60 characters each)',
+  override_reason_required: 'Say why this account is created without hiring (at least 10 characters)',
+  local_required: 'Enter the part before @',
+  local_too_long: 'The address is too long',
+  local_bad_chars: 'Use lowercase letters, digits and dots only',
+  local_bad_dots: 'No dot at the start or end, and no two dots together',
+  google_error: 'Google refused the request — try again, or check the address',
+  google_write_not_configured: 'Google account creation is not configured on the worker',
+  record_failed: 'Google created the account but Podium could not record it — create it again to finish',
+  no_work_account: 'Create the work account first',
+  employee_id_mismatch: 'This changed since you loaded it — refresh and try again',
+  bad_start_date: 'Pick the actual start date',
+  start_date_too_far: 'The start date can be at most 7 days ahead — confirm joining on the day',
+  start_date_before_acceptance: 'The start date is before the offer was accepted',
+  doc_copy_failed: 'The hiring documents could not be copied — try again',
+  bad_document_path: 'A document path was outside the employee folder',
+  not_suspendable: 'Only an account whose application is No show or Withdrawn can be suspended here',
+  check_failed: 'The record failed a consistency check',
+  in_progress: 'Someone else is creating this account right now — wait a moment and reload',
+  not_resettable: 'Only a created account whose person has not joined can have its password reset here',
+  offer_changed: 'The offer changed while joining was being confirmed — reload and retry',
+  opening_closed: 'The opening is cancelled — reopen it before confirming joining',
+  headcount_full: 'The opening already has its full headcount joined',
+  created_by_podium_awaiting_joining: 'Podium created this address for a hire who has not joined — use Confirm joining on the candidate',
 };
 export function hiringError(e, fallback = 'Something went wrong') {
   const msg = (e && e.message) || '';
@@ -253,3 +289,11 @@ export const OFFER_TEMPLATE_KEYS = [
 ];
 // Today in IST as YYYY-MM-DD (offers date and expire by India time).
 export function istTodayIso() { return new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10); }
+
+// ── Work accounts (J1) ───────────────────────────────────────────────────────
+export const WORK_ACCOUNT_STATUSES = [
+  { id: 'pending',   label: 'Creating',  tone: 'warn' },
+  { id: 'created',   label: 'Created',   tone: 'ok' },
+  { id: 'failed',    label: 'Failed',    tone: 'bad' },
+  { id: 'suspended', label: 'Suspended', tone: 'bad' },
+];

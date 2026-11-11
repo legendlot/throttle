@@ -16,17 +16,18 @@ export const isActiveStatus = (s) => ACTIVE_APP_STATUSES.includes(s);
 export const isTerminalStatus = (s) => TERMINAL_APP_STATUSES.includes(s);
 
 // Manual moves. →offer and →accepted are set ONLY by the offer flow (first sent revision / recorded
-// acceptance, C3 plan §0.8); →joined is C3b's. A declined / expired / withdrawn offer leaves the
-// application at `offer`, and these manual moves close it: offer → declined | withdrawn | rejected, and
-// accepted → withdrawn (LOT withdraws before joining). The handler refuses them while a live offer
-// revision exists (close_offers_first).
+// acceptance, C3 plan §0.8); →joined only by confirmJoining (J1). A declined / expired / withdrawn offer
+// leaves the application at `offer`, and these manual moves close it: offer → declined | withdrawn |
+// rejected, and accepted → withdrawn (LOT withdraws before joining). The handler refuses them while a live
+// offer revision exists (close_offers_first). accepted → no_show (J1) is the person not turning up: the
+// accepted offer stays as the record, so it goes through markNoShow, which does not require closing it.
 export const APP_TRANSITIONS = {
   new:          ['screening', 'rejected', 'withdrawn', 'on_hold'],
   screening:    ['interviewing', 'rejected', 'withdrawn', 'on_hold'],
   interviewing: ['rejected', 'withdrawn', 'on_hold'],
   on_hold:      ['new', 'screening', 'interviewing', 'rejected', 'withdrawn'],
   offer:        ['declined', 'withdrawn', 'rejected'],
-  accepted:     ['withdrawn'],
+  accepted:     ['withdrawn', 'no_show'],
 };
 export const REASON_REQUIRED = ['rejected', 'withdrawn', 'declined'];
 

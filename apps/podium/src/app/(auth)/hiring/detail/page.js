@@ -16,6 +16,7 @@ import {
   OFFER_OPEN_STATUSES, allowedTransitions, hiringError, labelFrom, formatINR, numOrNull, listOf, fmtDateTime,
 } from '../../../../lib/hiring.js';
 import { OfferStatusBadge } from '../../../../components/OfferBits.js';
+import { WorkAccountCard, WORK_ACCOUNT_APP_STATUSES } from '../../../../components/WorkAccountBits.js';
 
 // Salary fields on an application: the worker's flag, else "the fields came back".
 const appSeesSalary = (a) => (a.can_see_salary != null ? !!a.can_see_salary : ('expected_ctc' in a || 'current_ctc' in a));
@@ -241,6 +242,8 @@ function ApplicationRow({ a, emps, openOpenings, session, onChanged }) {
       {a.outcome_reason && !active && <div style={{ ...muted, marginTop: 4 }}>Reason: {labelFrom(OUTCOME_REASONS, a.outcome_reason)}</div>}
 
       <OffersBlock a={a} />
+
+      {WORK_ACCOUNT_APP_STATUSES.includes(a.status) && <WorkAccountCard a={a} session={session} onChanged={onChanged} />}
 
       {next && (
         <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>

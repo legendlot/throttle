@@ -26,8 +26,10 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
       // Google knows when it created the account, never when the person started work, and an
       // employee with no joining date counts as employed in EVERY month the salary run has ever
       // covered. All 8 undated employees found on 2026-09-09 were created by this screen.
+      // J1: an account Podium created for a hire who has not joined yet joins through Confirm joining on
+      // the candidate page — never imported here (the worker refuses it too), so it starts with no action.
       setRows((r.new_candidates || []).map(c => ({
-        ...c, action: 'import', date_joined: '',
+        ...c, action: c.origin === 'podium_awaiting_joining' ? 'none' : 'import', date_joined: '',
         department_id: c.suggested_department_id || '',
         manager_id: c.suggested_manager_id || '',
       })));
@@ -164,14 +166,19 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
                       {rows.map(r => (
                         <tr key={r.email} style={{ opacity: r.action === 'ignore' ? 0.45 : 1 }}>
                           <td style={td}>
-                            <div style={{ display: 'flex', gap: 4 }}>
-                              <button title="Import as person" style={pill(r.action === 'import', 'var(--podium-accent)', '#1f1f1f')} onClick={() => setRow(r.email, { action: 'import' })}><UserPlus size={12} /></button>
-                              <button title="Ignore (never show again)" style={pill(r.action === 'ignore', 'var(--surface-3)', 'var(--text-2)')} onClick={() => setRow(r.email, { action: 'ignore' })}><Ban size={12} /></button>
-                            </div>
+                            {r.origin === 'podium_awaiting_joining' ? (
+                              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>joins via<br />hiring</span>
+                            ) : (
+                              <div style={{ display: 'flex', gap: 4 }}>
+                                <button title="Import as person" style={pill(r.action === 'import', 'var(--podium-accent)', '#1f1f1f')} onClick={() => setRow(r.email, { action: 'import' })}><UserPlus size={12} /></button>
+                                <button title="Ignore (never show again)" style={pill(r.action === 'ignore', 'var(--surface-3)', 'var(--text-2)')} onClick={() => setRow(r.email, { action: 'ignore' })}><Ban size={12} /></button>
+                              </div>
+                            )}
                           </td>
                           <td style={td}>
                             <div style={{ fontWeight: 600 }}>{r.full_name}</div>
                             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>{r.email}</div>
+                            <div style={{ fontSize: 10.5, color: r.origin === 'podium_awaiting_joining' ? 'var(--podium-accent)' : 'var(--text-3)', marginTop: 2 }}>{ORIGIN_LABEL[r.origin] || ORIGIN_LABEL.outside}</div>
                           </td>
                           {/* Required, empty by default. NO `max`: unlike an exit date, a future
                               joining date is legitimate — people are onboarded before they start. */}
@@ -314,6 +321,13 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
     </div>
   );
 }
+
+// J1 (wording only): where a new Google account came from.
+const ORIGIN_LABEL = {
+  podium_awaiting_joining: 'Created by Podium — awaiting joining',
+  podium_override: 'Created by Podium without hiring',
+  outside: 'Created outside Podium',
+};
 
 const overlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 16px', overflow: 'auto' };
 const modal = { width: 'min(940px, 100%)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', maxHeight: '90vh' };
