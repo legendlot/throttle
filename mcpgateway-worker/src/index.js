@@ -17,6 +17,7 @@ import { OAuthProvider, OAuthError } from '@cloudflare/workers-oauth-provider';
 import {
   parseCidrs, ipAllowed, parseList, redirectAllowed, registrationAllowed,
   decodeJwtPayload, checkGoogleClaims, gateDecision, originAllowed, hmacHex, timingSafeEqualHex, esc, refusalText, refusalResponse, RPC_REFUSED, sha256Hex, ttlFor,
+  callOutcome, auditParams, rejectedParams,
 } from './checks.js';
 import { toolsFor, findTool } from './tools/index.js';
 
@@ -38,19 +39,39 @@ async function rpc(env, fn, args) {
   if (!res.ok) throw new Error(`rpc ${fn} ${res.status}`);
   return res.json();
 }
-async function audit(env, row) {
+// Returns false on failure; otherwise true, or the new row's id when `withId` (the call row, patched later).
+async function audit(env, row, { withId = false } = {}) {
   try {
-    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/mcp_audit`, {
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/mcp_audit${withId ? '?select=id' : ''}`, {
       method: 'POST',
       headers: {
         apikey: env.SUPABASE_SERVICE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-        'Content-Type': 'application/json', 'Content-Profile': 'store', Prefer: 'return=minimal',
+        'Content-Type': 'application/json', 'Content-Profile': 'store', 'Accept-Profile': 'store',
+        Prefer: withId ? 'return=representation' : 'return=minimal',
       },
       body: JSON.stringify(row),
     });
     if (!res.ok) { console.error('[audit] insert failed', res.status); return false; }
-    return true;
+    if (!withId) return true;
+    const j = await res.json().catch(() => null);
+    const id = Array.isArray(j) && j[0] && j[0].id;
+    return id ? String(id) : true; // row written but id unreadable: the call still runs, just unpatched
   } catch (e) { console.error('[audit] threw', e.message); return false; }
+}
+// Writes the outcome onto the call row (status, row_count, detail). Best effort, after the reply.
+async function auditOutcome(env, id, fields) {
+  if (typeof id !== 'string' || !/^\d+$/.test(id)) return;
+  try {
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/mcp_audit?id=eq.${id}&event=eq.call`, {
+      method: 'PATCH',
+      headers: {
+        apikey: env.SUPABASE_SERVICE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'application/json', 'Content-Profile': 'store', Prefer: 'return=minimal',
+      },
+      body: JSON.stringify(fields),
+    });
+    if (!res.ok) console.error('[audit] outcome patch failed', res.status);
+  } catch (e) { console.error('[audit] outcome threw', e.message); }
 }
 
 // ---------------------------------------------------------------- Slack (best effort, never blocks)
@@ -407,7 +428,12 @@ const mcpHandler = {
         if (roleReason) return denied(roleReason, 403, `${roleReason} (role pre-check)`);
         const args = (msg.params && msg.params.arguments) || {};
         const parsed = tool.parse(args);
-        if (!parsed.ok) return rpcResult(id, { isError: true, content: [{ type: 'text', text: parsed.error }] });
+        if (!parsed.ok) {
+          // Not a call (nothing reached a LOT app, no rate cost), but logged so bad arguments show up:
+          // names + size only, and never once over the hourly limit (no unbounded insert path; Codex 2026-11-11).
+          if (!d.overLimit) ctx.waitUntil(audit(env, { event: 'call_rejected', user_id: userId, email: gate.email, tool: name, params: rejectedParams(args), ip, status: 400, detail: `bad arguments: ${String(parsed.error).slice(0, 200)}` }));
+          return rpcResult(id, { isError: true, content: [{ type: 'text', text: parsed.error }] });
+        }
         if (tool.needsSession && !ctx.props.sbAccess) return denied('session expired', 401, 'no LOT session in token');
         if (d.overLimit) {
           ctx.waitUntil(audit(env, { event: 'rate_limited', user_id: userId, email: gate.email, tool: name, ip, status: 429 }));
@@ -415,13 +441,15 @@ const mcpHandler = {
           return refuse(msg, refusalText('rate limited', { callsPerHour: gate.calls_per_hour }));
         }
         // The audit row IS the rate-limit counter: no row, no call (fail closed).
-        if (!(await audit(env, { event: 'call', user_id: userId, email: gate.email, tool: name, params: args, row_count: null, ip, status: 200 }))) {
+        const callRow = await audit(env, { event: 'call', user_id: userId, email: gate.email, tool: name, params: auditParams(args), row_count: null, ip, status: 200, detail: 'running' }, { withId: true });
+        if (!callRow) {
           ctx.waitUntil(alertOnce(env, 'audit-down', '🚨 LOT MCP: audit writes are failing; every tool call is being refused (fail closed).'));
           return refuse(msg, refusalText('unreachable'));
         }
         let r;
         try { r = await tool.run({ env, sbAccess: ctx.props.sbAccess, gate, input: parsed.value }); }
         catch (e) { console.error('[tool]', name, e && e.message); r = { ok: false, reason: 'unreachable' }; }
+        ctx.waitUntil(auditOutcome(env, callRow, callOutcome(r)));
         if (!r.ok && r.userError) return rpcResult(id, { isError: true, content: [{ type: 'text', text: `The LOT app rejected that request: ${r.userError}` }] });
         if (!r.ok) {
           ctx.waitUntil(audit(env, { event: 'call_denied', user_id: userId, email: gate.email, tool: name, ip, status: r.reason === 'unreachable' ? 503 : 403, detail: `worker: ${r.reason}` }));

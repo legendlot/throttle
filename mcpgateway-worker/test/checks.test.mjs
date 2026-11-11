@@ -150,3 +150,42 @@ test('refusal response: HTTP 200, right shape per method, notifications silent',
   assert.notEqual(RPC_REFUSED, -32001); // MCP SDK RequestTimeout
   assert.equal(refusalResponse({ id: null, method: 'tools/call' }, r).body.id, null);
 });
+
+// ---- call outcome on the audit row (2026-11-11) ----
+import { rowCount, callOutcome, auditParams, rejectedParams } from '../src/checks.js';
+test('rowCount counts result lists, not notes; null for a plain summary', () => {
+  assert.equal(rowCount({ report: 'x', params: {}, result: [1, 2, 3] }), 3);
+  assert.equal(rowCount({ report: 'x', params: {}, result: [] }), 0);
+  assert.equal(rowCount({ report: 'x', result: { people: [1, 2], other: [3] } }), 3);
+  assert.equal(rowCount({ by_channel: [1, 2], notes: ['a', 'b', 'c'] }), 2);
+  assert.equal(rowCount({ net_revenue_ex_gst: 5, notes: ['a'] }), null);
+  assert.equal(rowCount({ report: 'x', result: null }), null);
+  assert.equal(rowCount(null), null);
+});
+test('callOutcome: ok / empty / truncated / rejected / refused / fault', () => {
+  assert.deepEqual(callOutcome({ ok: true, data: { result: [1] } }), { status: 200, row_count: 1, detail: 'ok' });
+  assert.deepEqual(callOutcome({ ok: true, data: { result: [] } }), { status: 200, row_count: 0, detail: 'ok: no rows' });
+  assert.match(callOutcome({ ok: true, data: { truncated: ['rows: showing 300 of 900'], result: [] } }).detail, /^ok: truncated \(rows: showing 300 of 900\)$/);
+  assert.deepEqual(callOutcome({ ok: false, userError: 'bad   id\nhere' }), { status: 422, row_count: null, detail: 'rejected by app: bad id here' });
+  assert.deepEqual(callOutcome({ ok: false, reason: 'worker denied' }), { status: 403, row_count: null, detail: 'refused: worker denied' });
+  assert.deepEqual(callOutcome({ ok: false, reason: 'unreachable' }), { status: 503, row_count: null, detail: 'fault: unreachable' });
+  assert.equal(callOutcome({ ok: false, reason: 'write unconfirmed' }).status, 503);
+  assert.equal(callOutcome(undefined).status, 503);
+  assert.ok(callOutcome({ ok: false, userError: 'x'.repeat(5000) }).detail.length <= 220);
+});
+test('auditParams keeps small args, replaces huge ones with their size', () => {
+  assert.deepEqual(auditParams({ report: 'a' }), { report: 'a' });
+  assert.deepEqual(auditParams(undefined), {});
+  const big = auditParams({ id: 'a1b2', body: 'x'.repeat(3990) });
+  assert.equal(big.id, 'a1b2'); assert.equal(big.body.length, 301); assert.ok(big._clipped_from_bytes > 4000);
+  const hindi = auditParams({ q: 'ह'.repeat(3990) }); // 3,990 chars but ~12 KB of UTF-8
+  assert.ok(hindi._clipped_from_bytes > 11000); assert.equal(hindi.q.length, 301);
+  const c = {}; c.self = c;
+  assert.deepEqual(auditParams(c), { unserialisable: true });
+});
+test('rejected calls keep only argument names + size; Docket writes carry no row_count; gateway guard is labelled', () => {
+  assert.deepEqual(rejectedParams({ report: 'x', q: 'y'.repeat(9000) }), { keys: ['report', 'q'], bytes: 9021 });
+  assert.deepEqual(rejectedParams('junk'), { keys: [], bytes: 6 });
+  assert.equal(rowCount({ done: 'docket_set_status', result: { subtasks: [1, 2] } }), null);
+  assert.match(callOutcome({ ok: false, userError: 'this task is abandoned', byGateway: true }).detail, /^refused by gateway: /);
+});

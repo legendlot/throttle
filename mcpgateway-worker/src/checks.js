@@ -154,6 +154,55 @@ export function refusalResponse(msg, { text, fault }) {
   return { status: 200, body: { jsonrpc: '2.0', id: msg.id, error: { code: fault ? RPC_FAULT : RPC_REFUSED, message: text } } };
 }
 
+// ---- What a tool call actually returned, written onto its `call` audit row afterwards (2026-11-11:
+// the row is written BEFORE the call as the rate counter, so without this the log could not tell a
+// call that returned data from one the app rejected or one that came back empty).
+// row_count = items in the result's top-level lists (null when the result is a single summary object).
+const NOT_ROWS = new Set(['notes', 'truncated', 'params', 'errors']);
+export function rowCount(data) {
+  if (data && typeof data === 'object' && 'done' in data) return null; // a Docket write: one task, not rows
+  const t = data && typeof data === 'object' && !Array.isArray(data) && 'result' in data ? data.result : data;
+  if (Array.isArray(t)) return t.length;
+  if (!t || typeof t !== 'object') return null;
+  const lists = Object.entries(t).filter(([k, v]) => Array.isArray(v) && !NOT_ROWS.has(k)).map(([, v]) => v);
+  return lists.length ? lists.reduce((n, a) => n + a.length, 0) : null;
+}
+const clip = (s, n = 200) => String(s ?? '').replace(/\s+/g, ' ').slice(0, n);
+// r = a tool's run() result. Returns the fields patched onto the call row: { status, row_count, detail }.
+export function callOutcome(r) {
+  if (r && r.ok) {
+    const n = rowCount(r.data);
+    const cut = r.data && Array.isArray(r.data.truncated) && r.data.truncated.length;
+    return { status: 200, row_count: n, detail: cut ? `ok: truncated (${clip(r.data.truncated.join('; '))})` : n === 0 ? 'ok: no rows' : 'ok' };
+  }
+  // byGateway: the gateway's own pre-check refused it (Docket guardTask); nothing reached the app.
+  if (r && r.userError) return { status: 422, row_count: null, detail: `${r.byGateway ? 'refused by gateway' : 'rejected by app'}: ${clip(r.userError)}` };
+  const reason = (r && r.reason) || 'unreachable';
+  const fault = refusalText(reason).fault;
+  return { status: fault ? 503 : 403, row_count: null, detail: `${fault ? 'fault' : 'refused'}: ${clip(reason, 80)}` };
+}
+// Tool arguments as stored on a call row: whole when under 4,000 UTF-8 bytes; otherwise every key is kept
+// (a Docket write's task id must survive) and long strings are clipped to 300 characters.
+const AUDIT_MAX_BYTES = 4000;
+const utf8Len = s => new TextEncoder().encode(s).length;
+export function auditParams(args) {
+  let s;
+  try { s = JSON.stringify(args ?? {}); } catch { return { unserialisable: true }; }
+  const bytes = utf8Len(s);
+  if (bytes <= AUDIT_MAX_BYTES) return args ?? {};
+  const cut = v => (typeof v === 'string' ? (v.length > 300 ? `${v.slice(0, 300)}…` : v) : Array.isArray(v) ? v.slice(0, 20).map(cut) : v && typeof v === 'object' ? '[object]' : v);
+  const o = { _clipped_from_bytes: bytes };
+  if (args && typeof args === 'object' && !Array.isArray(args)) for (const k of Object.keys(args).slice(0, 30)) o[k] = cut(args[k]);
+  return utf8Len(JSON.stringify(o)) <= AUDIT_MAX_BYTES * 3 ? o : { _clipped_from_bytes: bytes, keys: Object.keys(args || {}).slice(0, 30) };
+}
+// A call refused for bad arguments: its arguments are unvalidated, so only their names and size are kept.
+export function rejectedParams(args) {
+  const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+  let bytes = null;
+  try { bytes = utf8Len(JSON.stringify(args ?? {})); } catch { /* unserialisable */ }
+  return { keys: Object.keys(a).slice(0, 30).map(k => k.slice(0, 60)), bytes };
+}
+
 export async function sha256Hex(s) {
   const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
   return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join('');

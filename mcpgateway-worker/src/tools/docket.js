@@ -21,7 +21,7 @@ async function guardTask(env, sbAccess, input, rule) {
   const r = await getAs(env.DOCKETOPS, sbAccess, 'getTask', { id: input.id });
   if (!r.ok) return r.reason === 'worker denied' ? { ok: false, reason: 'docket denied' } : r;
   const e = rule(r.data || {});
-  return e ? { ok: false, userError: e } : null;
+  return e ? { ok: false, userError: e, byGateway: true } : null;
 }
 const notAbandoned = t => (t.status === 'abandoned' ? 'this task is abandoned, so it is read-only (as in the Docket app). Reopen it first with docket_set_status.' : null);
 
