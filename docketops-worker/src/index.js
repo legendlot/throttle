@@ -23,6 +23,8 @@
  *
  * Spec: docs/superpowers/specs/2026-06-03-docket-design.md ; systems/docket.md
  */
+import { istDateStr, isExpired, isDueOn, istHM, lateFlag, buildRegister } from './register-core.mjs';
+
 
 // ── CORS ──────────────────────────────────────────────────────────────────
 const CORS = {
@@ -79,6 +81,19 @@ async function sbIn(sb, ids, build, env, size = 150) {
   const bad = res.find(r => !r.ok);
   if (bad) return bad;
   return { ok: true, status: 200, data: res.flatMap(r => (Array.isArray(r.data) ? r.data : [])) };
+}
+
+// Read every row of a GET, a page at a time — PostgREST's max-rows would silently clip one big read
+// (a 30-item chart over 30 days is already ~900 ticks).
+async function sbAll(sb, path, env, page = 1000) {
+  const out = [];
+  for (let off = 0; ; off += page) {
+    const r = await sb(`${path}&limit=${page}&offset=${off}`, env);
+    if (!r.ok) return r;
+    const rows = Array.isArray(r.data) ? r.data : [];
+    out.push(...rows);
+    if (rows.length < page) return { ok: true, status: 200, data: out };
+  }
 }
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -238,11 +253,6 @@ async function touchActivity(auth, env) {
 // ── Checklists / recurring tasks (RULE-DOCKET-008) ───────────────────────────
 // A recurring task is a docket.tasks row (is_recurring=true + recurrence jsonb); per-day
 // completion lives in docket.checklist_completions. All date math is IST (Asia/Kolkata).
-function istDateStr(d = new Date()) {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(d); // 'YYYY-MM-DD'
-}
 const TIME_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
 function validateRecurrence(rec) {
   if (!rec || typeof rec !== 'object') return 'recurrence required';
@@ -268,24 +278,22 @@ function normalizeRecurrence(rec) {
   if (rec.until) out.until = rec.until;                   // optional expiry (IST date); omitted = never expires
   return out;
 }
-// A recurring task is expired (and drops off the checklist) once today is past its `until` date.
-function isExpired(rec, dateStr) { return !!(rec && rec.until && rec.until < dateStr); }
-// Is a recurrence due on the given IST calendar date ('YYYY-MM-DD')?
-function isDueOn(rec, dateStr) {
-  if (!rec || !rec.freq) return false;
-  if (rec.freq === 'daily') return true;
-  if (rec.freq === 'weekly') {
-    const wd = new Date(`${dateStr}T12:00:00Z`).getUTCDay(); // 0=Sun..6=Sat for that calendar date
-    return Array.isArray(rec.days_of_week) && rec.days_of_week.map(Number).includes(wd);
-  }
-  if (rec.freq === 'monthly') {
-    const y = +dateStr.slice(0, 4), m = +dateStr.slice(5, 7), day = +dateStr.slice(8, 10);
-    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate(); // last day of month m (1-based)
-    const dom = Number(rec.day_of_month);
-    return day === dom || (day === lastDay && dom > lastDay); // clamp short months
-  }
-  return false;
+// ── Register helpers (F8 P1) ──
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// A real calendar date ('2026-00-01' / '2026-02-30' pass the regex but are not dates — review #8).
+function isValidDate(s) { if (!DATE_RE.test(s || '')) return false; const d = new Date(`${s}T12:00:00Z`); return !isNaN(d) && d.toISOString().slice(0, 10) === s; }
+// Recurring tasks in a private space the caller can't open stay hidden (review #1) — your own always show.
+async function visibleRecurring(tasks, auth, env) {
+  if (!tasks.some(t => t.space_id && t.owner_employee_id !== auth.employeeId)) return tasks;
+  auth._scopeP = auth._scopeP || programScopeArgs(auth, env);
+  const { memberSpaceIds, defaultId } = await auth._scopeP;
+  const ok = new Set([defaultId, ...(memberSpaceIds || [])]);
+  return tasks.filter(t => t.owner_employee_id === auth.employeeId || !t.space_id || ok.has(t.space_id));
 }
+function addDays(dateStr, n) { const d = new Date(`${dateStr}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function datesBetween(from, to) { const out = []; for (let d = from; d <= to && out.length < 400; d = addDays(d, 1)) out.push(d); return out; }
+// A tick is recorded for today or a past date only (S250 / F8 C2): a future tick would make adherence unauditable.
+function futureDateErr(date) { return date > istDateStr() ? err('future_date', 422) : null; }
 // Person-level checklist visibility: view_all, self, or same department (mirrors task baseline).
 function canViewChecklistOf(auth, targetEmp) {
   if (canViewAll(auth)) return true;
@@ -335,18 +343,6 @@ function canEditTemplate(auth, tmpl) {
 async function loadTemplate(id, env) {
   const r = await sbDocket(`/rest/v1/checklist_templates?id=eq.${enc(id)}&select=*&limit=1`, env);
   return (r.ok && r.data?.[0]) || null;
-}
-// IST 'HH:MM' for an ISO timestamp (used for late detection + display).
-function istHM(iso) {
-  if (!iso) return '';
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).format(new Date(iso));
-}
-// Late = completed after the section's due_time (IST). No due_time → never late.
-function lateFlag(completedAtIso, dueTime) {
-  if (!dueTime || !completedAtIso) return false;
-  return istHM(completedAtIso) > dueTime;
 }
 // The set of employee_ids a caller may MONITOR (Oversight scope, R1):
 // view_all → everyone; else direct reports ∪ people I assigned a template/recurring task to.
@@ -1046,7 +1042,7 @@ async function getChecklist(url, auth, env) {
   const tRes = await sbDocket(
     `/rest/v1/tasks?is_recurring=eq.true&owner_employee_id=eq.${enc(targetId)}&status=neq.abandoned&select=*&order=created_at.asc`, env);
   if (!tRes.ok) return err('db_error', 500);
-  const live = (tRes.data || []).filter(t => !isExpired(t.recurrence, date));
+  const live = (await visibleRecurring(tRes.data || [], auth, env)).filter(t => !isExpired(t.recurrence, date));
   const recRows = await hydrateTasks(live, auth, env);
   const recIds = recRows.map(t => t.id);
   const complMap = {};
@@ -1092,17 +1088,24 @@ async function getChecklist(url, auth, env) {
       ]);
       const items = itemRes.data || [];
       const itemIds = items.map(i => i.id);
+      // F8 C1: a shared template's tick counts whoever made it; a per-person one only the target's own.
+      const sharedTmpl = new Set(dueTmpls.filter(t => t.run_scope === 'shared').map(t => t.id));
+      const tmplOfSec = {}; sections.forEach(s => { tmplOfSec[s.id] = s.template_id; });
+      const sharedItem = new Set(items.filter(i => sharedTmpl.has(tmplOfSec[i.section_id])).map(i => i.id));
       const itemComplRes = itemIds.length
-        ? await sbDocket(`/rest/v1/checklist_item_completions?template_item_id=in.${inList(itemIds)}&employee_id=eq.${enc(targetId)}&occurrence_date=eq.${date}&select=template_item_id,completed_at,completed_by_user_id`, env)
+        ? await sbDocket(`/rest/v1/checklist_item_completions?template_item_id=in.${inList(itemIds)}&occurrence_date=eq.${date}&select=template_item_id,employee_id,completed_at,completed_by_user_id,done_by_note&order=completed_at.asc`, env)
         : { data: [] };
-      const itemCompl = {}; (itemComplRes.data || []).forEach(c => { itemCompl[c.template_item_id] = c; });
+      const itemCompl = {}; (itemComplRes.data || []).forEach(c => {
+        if (itemCompl[c.template_item_id]) return;   // first tick wins
+        if (sharedItem.has(c.template_item_id) || c.employee_id === targetId) itemCompl[c.template_item_id] = c;
+      });
       allCompleterIds = uniq([...allCompleterIds, ...Object.values(itemCompl).map(c => c.completed_by_user_id)]);
       const commBySec = {}; (secCommRes.data || []).forEach(c => { commBySec[c.section_id] = c.body || ''; });
       const itemsBySec = {}; items.forEach(i => { (itemsBySec[i.section_id] ||= []).push(i); });
       const deptName = {}; (deptRes.data || []).forEach(d => { deptName[d.id] = d.name; });
       const secByT = {}; sections.forEach(s => { (secByT[s.template_id] ||= []).push(s); });
       template_runs = dueTmpls.map(t => ({
-        template: { id: t.id, name: t.name, role_label: t.role_label, department_name: deptName[t.department_id] || null },
+        template: { id: t.id, name: t.name, role_label: t.role_label, run_scope: t.run_scope || 'per_person', department_name: deptName[t.department_id] || null },
         _can_complete: isOwn,
         sections: (secByT[t.id] || []).map(s => ({
           id: s.id, title: s.title, subtitle: s.subtitle, due_time: s.due_time,
@@ -1113,6 +1116,7 @@ async function getChecklist(url, auth, env) {
               id: it.id, title: it.title, help_text: it.help_text, tags: it.tags || [],
               completed: !!c, completed_at: c?.completed_at || null,
               completed_by_user_id: c?.completed_by_user_id || null,
+              done_by_note: c?.done_by_note || null,
               late: c ? lateFlag(c.completed_at, s.due_time) : false,
             };
           }),
@@ -1135,6 +1139,130 @@ async function getChecklist(url, auth, env) {
   return ok({
     owner: { id: target.id, full_name: target.full_name, department_id: target.department_id },
     date, recurring_items, template_runs,
+  });
+}
+
+// ── F8 P1 — the checklist REGISTER: rows × occurrence dates, with adherence ──────────────────────
+// Three shapes (spec 2026-11-11-docket-checklists-v2.md §3.1):
+//   ?employee_id=                → that person's flat recurring tasks (rows = tasks)
+//   ?template_id=&employee_id=   → a per_person template's chart for that assignee
+//   ?template_id=                → a shared template's one chart
+// Window from..to (IST dates; `to` clamped to today; ≤ 92 days; default the 14 days ending today).
+// Columns = dates in the window where at least one row is due. A row is due on a date when its
+// recurrence says so, the date is on/after the row's start (task created / assigned), and not past
+// `until`. Adherence counts a due date only once it is over — today counts only if already ticked.
+async function checklistPersonGate(auth, targetId, env) {
+  const empRes = await sbPodium(`/rest/v1/employees?id=eq.${enc(targetId)}&select=id,full_name,department_id&limit=1`, env);
+  const target = empRes.ok && empRes.data?.[0];
+  if (!target) return { error: err('employee_not_found', 404) };
+  if (canViewChecklistOf(auth, target) || (await peopleInScope(auth, env)).has(targetId)) return { target };
+  return { error: err('forbidden', 403) };
+}
+async function getChecklistRegister(url, auth, env) {
+  const today = istDateStr();
+  let to = url.searchParams.get('to') || today;
+  if (!isValidDate(to)) return err('invalid date', 400);
+  if (to > today) to = today;
+  const from = url.searchParams.get('from') || addDays(to, -13);
+  if (!isValidDate(from)) return err('invalid date', 400);
+  if (from > to) return err('invalid_range', 400);
+  const days = datesBetween(from, to);
+  if (days.length > 92) return err('range_too_long (max 92 days)', 400);
+  const templateId = url.searchParams.get('template_id');
+  const employeeId = url.searchParams.get('employee_id');
+
+  let rows = [], ticks = [], canTick = false, canClearAny = false, owner = null, template = null, templates = [];
+  if (!templateId) {
+    // Flat recurring tasks of one person (RULE-DOCKET-008).
+    if (!employeeId) return err('employee_id or template_id required', 400);
+    const g = await checklistPersonGate(auth, employeeId, env); if (g.error) return g.error;
+    owner = { id: g.target.id, full_name: g.target.full_name };
+    const tRes = await sbDocket(
+      `/rest/v1/tasks?is_recurring=eq.true&owner_employee_id=eq.${enc(employeeId)}&status=neq.abandoned&archived_at=is.null&select=id,task_no,title,recurrence,created_at,space_id,owner_employee_id&order=created_at.asc`, env);
+    if (!tRes.ok) return err('db_error', 500);
+    rows = (await visibleRecurring(tRes.data || [], auth, env)).map(t => ({
+      id: t.id, kind: 'task', task_no: t.task_no, title: t.title, section: null,
+      due_time: t.recurrence?.time || null, rec: t.recurrence, start: istDateStr(new Date(t.created_at)), spans: null,
+    }));
+    if (rows.length) {
+      const c = await sbAll(sbDocket, `/rest/v1/checklist_completions?task_id=in.${inList(rows.map(r => r.id))}&occurrence_date=gte.${from}&occurrence_date=lte.${to}&select=task_id,occurrence_date,completed_at,completed_by_user_id&order=completed_at.asc,id.asc`, env);
+      ticks = (c.ok ? c.data : []).map(x => ({ row: x.task_id, date: x.occurrence_date, at: x.completed_at, by: x.completed_by_user_id, note: null }));
+    }
+    canTick = !!auth.employeeId && auth.employeeId === employeeId;   // you complete your own (as Today)
+    // The person's active template assignments, so the page can fetch each template's register.
+    const aRes = await sbDocket(`/rest/v1/checklist_assignments?employee_id=eq.${enc(employeeId)}&unassigned_at=is.null&select=template_id`, env);
+    const tIds = uniq((aRes.ok ? aRes.data : []).map(a => a.template_id));
+    if (tIds.length) {
+      const tr = await sbDocket(`/rest/v1/checklist_templates?id=in.${inList(tIds)}&archived_at=is.null&is_active=eq.true&select=id,name,run_scope&order=name.asc`, env);
+      templates = (tr.ok ? tr.data : []).map(t => ({ id: t.id, name: t.name, run_scope: t.run_scope || 'per_person' }));
+    }
+  } else {
+    const tmpl = await loadTemplate(templateId, env);
+    if (!tmpl) return err('not_found', 404);
+    const shared = tmpl.run_scope === 'shared';
+    template = { id: tmpl.id, name: tmpl.name, run_scope: tmpl.run_scope || 'per_person' };
+    const asgRes = await sbDocket(`/rest/v1/checklist_assignments?template_id=eq.${enc(templateId)}&select=employee_id,assigned_at,unassigned_at&order=assigned_at.asc`, env);
+    const asg = asgRes.ok ? asgRes.data : [];
+    // Spans the template counted for this chart: [from, until) date pairs. Inactive / archived
+    // templates stop generating due dates the day they were switched off (review #6).
+    const offDate = tmpl.archived_at ? istDateStr(new Date(tmpl.archived_at))
+      : (tmpl.is_active === false ? istDateStr(new Date(tmpl.updated_at || tmpl.created_at)) : null);
+    const live = !offDate;
+    let spans;
+    if (shared) {
+      const amAssignee = await isAssignee(auth, templateId, env);
+      let allowed = amAssignee || canViewAll(auth) || canEditTemplate(auth, tmpl);
+      const activeIds = uniq(asg.filter(a => !a.unassigned_at).map(a => a.employee_id));
+      if (!allowed && activeIds.length) {
+        // Same reach as Today: anyone who may view an assignee's checklist sees the shared chart (review #7).
+        const er = await sbPodium(`/rest/v1/employees?id=in.${inList(activeIds)}&select=id,department_id`, env);
+        allowed = (er.ok ? er.data : []).some(e => canViewChecklistOf(auth, e));
+        if (!allowed) { const scope = await peopleInScope(auth, env); allowed = activeIds.some(id => scope.has(id)); }
+      }
+      if (!allowed) return err('forbidden', 403);
+      canTick = amAssignee && live && !!auth.employeeId;   // toggleChecklistItem needs an employee (review #10)
+      canClearAny = isAdmin(auth) || canEditTemplate(auth, tmpl);
+      // Due only while someone was assigned — the union of every assignment period (review #2b).
+      spans = asg.map(a => [istDateStr(new Date(a.assigned_at)), a.unassigned_at ? istDateStr(new Date(a.unassigned_at)) : '9999-12-31'])
+        .map(([a, b]) => [a, offDate && offDate < b ? offDate : b]);
+    } else {
+      if (!employeeId) return err('employee_id required for a per-person checklist', 400);
+      const mine = asg.filter(a => a.employee_id === employeeId);
+      if (!mine.length) return err('not_assigned', 404);
+      const g = await checklistPersonGate(auth, employeeId, env); if (g.error) return g.error;
+      owner = { id: g.target.id, full_name: g.target.full_name };
+      canTick = live && !!auth.employeeId && auth.employeeId === employeeId && mine.some(a => !a.unassigned_at);
+      // Only the days this person was actually assigned count (review #4).
+      spans = mine.map(a => [istDateStr(new Date(a.assigned_at)), a.unassigned_at ? istDateStr(new Date(a.unassigned_at)) : '9999-12-31'])
+        .map(([a, b]) => [a, offDate && offDate < b ? offDate : b]);
+    }
+    const secRes = await sbDocket(`/rest/v1/checklist_template_sections?template_id=eq.${enc(templateId)}&select=id,title,due_time&order=sort_order.asc`, env);
+    const sections = secRes.data || [];
+    const itemRes = sections.length
+      ? await sbDocket(`/rest/v1/checklist_template_items?section_id=in.${inList(sections.map(x => x.id))}&select=id,section_id,title,sort_order,created_at&order=sort_order.asc`, env)
+      : { data: [] };
+    const itemsBySec = {}; (itemRes.data || []).forEach(i => { (itemsBySec[i.section_id] ||= []).push(i); });
+    rows = sections.flatMap(sec => (itemsBySec[sec.id] || []).map(i => ({
+      // An item added later is not "missed" before it existed (review #5).
+      id: i.id, kind: 'item', title: i.title, section: sec.title, due_time: sec.due_time || null, rec: tmpl.recurrence,
+      start: i.created_at ? istDateStr(new Date(i.created_at)) : '0000-01-01', spans,
+    })));
+    if (rows.length) {
+      const c = await sbAll(sbDocket, `/rest/v1/checklist_item_completions?template_item_id=in.${inList(rows.map(r => r.id))}&occurrence_date=gte.${from}&occurrence_date=lte.${to}${shared ? '' : `&employee_id=eq.${enc(employeeId)}`}&select=template_item_id,occurrence_date,completed_at,completed_by_user_id,done_by_note&order=completed_at.asc,id.asc`, env);
+      ticks = (c.ok ? c.data : []).map(x => ({ row: x.template_item_id, date: x.occurrence_date, at: x.completed_at, by: x.completed_by_user_id, note: x.done_by_note || null }));
+    }
+  }
+
+  const names = {};
+  const byIds = uniq(ticks.map(t => t.by));
+  if (byIds.length) {
+    const up = await sbStore(`/rest/v1/users_profile?id=in.${inList(byIds)}&select=id,full_name`, env);
+    (up.ok ? up.data : []).forEach(u => { names[u.id] = u.full_name; });
+  }
+  const reg = buildRegister({ rows, ticks, days, today, names, userId: auth.userId });
+  return ok({
+    from, to, today, kind: templateId ? 'template' : 'recurring', template, templates, owner,
+    can_tick: canTick, can_clear_any: canClearAny, ...reg,
   });
 }
 
@@ -1235,7 +1363,7 @@ async function getChecklistOversight(url, auth, env) {
   const asg = asgRes.data || [];
   const tmplIds = uniq(asg.map(a => a.template_id));
   const tmplRes = tmplIds.length
-    ? await sbDocket(`/rest/v1/checklist_templates?id=in.${inList(tmplIds)}&archived_at=is.null&is_active=eq.true&select=id,name,recurrence`, env)
+    ? await sbDocket(`/rest/v1/checklist_templates?id=in.${inList(tmplIds)}&archived_at=is.null&is_active=eq.true&select=id,name,recurrence,run_scope`, env)
     : { data: [] };
   const tmplById = {}; (tmplRes.data || []).forEach(t => { tmplById[t.id] = t; });
   const dueTmplIds = (tmplRes.data || []).filter(t => isDueOn(t.recurrence, date) && !isExpired(t.recurrence, date)).map(t => t.id);
@@ -1254,6 +1382,7 @@ async function getChecklistOversight(url, auth, env) {
     ? await sbDocket(`/rest/v1/checklist_item_completions?template_item_id=in.${inList(itemIds)}&occurrence_date=eq.${date}&select=template_item_id,employee_id`, env)
     : { data: [] };
   const doneByEmpItem = new Set((itemComplRes.data || []).map(c => `${c.employee_id}|${c.template_item_id}`));
+  const doneAnyItem = new Set((itemComplRes.data || []).map(c => c.template_item_id));   // shared templates (F8 C1)
 
   const itemsBySec = {}; items.forEach(i => { (itemsBySec[i.section_id] ||= []).push(i.id); });
   const secByTmpl = {}; sections.forEach(s => { (secByTmpl[s.template_id] ||= []).push(s); });
@@ -1264,10 +1393,11 @@ async function getChecklistOversight(url, auth, env) {
     const recurring = { done: recIds.filter(id => recDone.has(id)).length, total: recIds.length };
     const templates = (tmplsByEmp[e.id] || []).filter(tid => dueTmplIds.includes(tid)).map(tid => {
       const secs = secByTmpl[tid] || [];
+      const shared = tmplById[tid].run_scope === 'shared';
       let done = 0, total = 0; const incompleteSections = [];
       for (const s of secs) {
         const sItemIds = itemsBySec[s.id] || [];
-        const sDone = sItemIds.filter(iid => doneByEmpItem.has(`${e.id}|${iid}`)).length;
+        const sDone = sItemIds.filter(iid => shared ? doneAnyItem.has(iid) : doneByEmpItem.has(`${e.id}|${iid}`)).length;
         done += sDone; total += sItemIds.length;
         if (sItemIds.length && sDone < sItemIds.length) incompleteSections.push(s.title);
       }
@@ -1444,8 +1574,10 @@ async function toggleChecklistOccurrence(body, auth, env) {
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
   const date = d.date || istDateStr();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('invalid date', 400);
+  if (!isValidDate(date)) return err('invalid date', 400);
+  const fut = futureDateErr(date); if (fut) return fut;
   const completed = d.completed === true || d.completed === 'true';
+  if (completed && !isDueOn(task.recurrence, date)) return err('not_due', 422);
   if (completed) {
     const r = await sbDocket(`/rest/v1/checklist_completions?on_conflict=task_id,occurrence_date`, env, {
       method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates',
@@ -1479,6 +1611,19 @@ async function saveChecklistTemplate(body, auth, env) {
       recurrence: rec, is_active: d.is_active !== false,
       updated_at: nowIso(), updated_by_user_id: auth.userId,
     };
+    if (d.run_scope !== undefined) {
+      const want = d.run_scope === 'shared' ? 'shared' : 'per_person';
+      if (want !== (template.run_scope || 'per_person')) {
+        // Switching chart type would re-read every past tick differently — locked once anything is ticked.
+        const secs = await sbDocket(`/rest/v1/checklist_template_sections?template_id=eq.${enc(d.id)}&select=id`, env);
+        const secIds = (secs.ok ? secs.data : []).map(x => x.id);
+        const its = secIds.length ? await sbDocket(`/rest/v1/checklist_template_items?section_id=in.${inList(secIds)}&select=id`, env) : { data: [] };
+        const itIds = (its.data || []).map(x => x.id);
+        const ticked = itIds.length ? await sbDocket(`/rest/v1/checklist_item_completions?template_item_id=in.${inList(itIds)}&select=id&limit=1`, env) : { data: [] };
+        if (ticked.data?.length) return err('run_scope_locked: this checklist already has ticks', 422);
+      }
+      upd.run_scope = want;
+    }
     const r = await sbDocket(`/rest/v1/checklist_templates?id=eq.${enc(d.id)}`, env, {
       method: 'PATCH', prefer: 'return=representation', body: JSON.stringify(upd) });
     if (!r.ok || !r.data?.[0]) return err('update_failed: ' + JSON.stringify(r.data), 400);
@@ -1489,6 +1634,7 @@ async function saveChecklistTemplate(body, auth, env) {
         name: String(d.name).trim(), role_label: d.role_label || null,
         department_id: d.department_id || null, description: d.description || null,
         recurrence: rec, created_by_user_id: auth.userId,
+        run_scope: d.run_scope === 'shared' ? 'shared' : 'per_person',
       }]) });
     if (!r.ok || !r.data?.[0]) return err('create_failed: ' + JSON.stringify(r.data), 400);
     template = r.data[0];
@@ -1622,16 +1768,39 @@ async function toggleChecklistItem(body, auth, env) {
   const templateId = await templateIdOfItem(d.template_item_id, env);
   if (!templateId) return err('item_not_found', 404);
   if (!(await isAssignee(auth, templateId, env))) return err('forbidden', 403);
+  const tmpl = await loadTemplate(templateId, env);
+  if (!tmpl) return err('item_not_found', 404);
+  const shared = tmpl.run_scope === 'shared';   // F8 C1: one chart per date, any assignee ticks
   const date = d.date || istDateStr();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('invalid date', 400);
+  if (!isValidDate(date)) return err('invalid date', 400);
+  const fut = futureDateErr(date); if (fut) return fut;
   const completed = d.completed === true || d.completed === 'true';
+  if (completed && !isDueOn(tmpl.recurrence, date)) return err('not_due', 422);
+  const itemQ = `template_item_id=eq.${enc(d.template_item_id)}&occurrence_date=eq.${date}`;
   if (completed) {
+    if (!tmpl.is_active || tmpl.archived_at) return err('template_inactive', 422);
+    const note = d.done_by_note != null ? (String(d.done_by_note).trim().slice(0, 120) || null) : null; // F8 C7
+    const row = { template_item_id: d.template_item_id, employee_id: auth.employeeId, occurrence_date: date, completed_by_user_id: auth.userId, done_by_note: note };
+    if (shared) {
+      // One tick per (item, date), enforced by checklist_item_completions_shared_uq. A 409 means someone
+      // else ticked it first — their tick stands.
+      const r = await sbDocket(`/rest/v1/checklist_item_completions`, env, {
+        method: 'POST', prefer: 'return=minimal', body: JSON.stringify({ ...row, shared: true }) });
+      if (!r.ok && r.status !== 409) return err('complete_failed: ' + JSON.stringify(r.data), 400);
+      return ok({ template_item_id: d.template_item_id, date, completed: true });
+    }
     const r = await sbDocket(`/rest/v1/checklist_item_completions?on_conflict=template_item_id,employee_id,occurrence_date`, env, {
-      method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates',
-      body: JSON.stringify({ template_item_id: d.template_item_id, employee_id: auth.employeeId, occurrence_date: date, completed_by_user_id: auth.userId }) });
+      method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates', body: JSON.stringify(row) });
     if (!r.ok) return err('complete_failed: ' + JSON.stringify(r.data), 400);
   } else {
-    await sbDocket(`/rest/v1/checklist_item_completions?template_item_id=eq.${enc(d.template_item_id)}&employee_id=eq.${enc(auth.employeeId)}&occurrence_date=eq.${date}`, env,
+    // Per-person: only your own. Shared: the person who ticked it, or the template's editor / an admin —
+    // a tick is the record, so one assignee can't wipe another's (hostile review #5).
+    if (shared && !(isAdmin(auth) || canEditTemplate(auth, tmpl))) {
+      const ex = await sbDocket(`/rest/v1/checklist_item_completions?${itemQ}&select=completed_by_user_id`, env);
+      const rows = ex.ok ? ex.data : [];
+      if (rows.length && !rows.some(r => r.completed_by_user_id === auth.userId)) return err('not_your_tick', 403);
+    }
+    await sbDocket(`/rest/v1/checklist_item_completions?${itemQ}${shared ? '' : `&employee_id=eq.${enc(auth.employeeId)}`}`, env,
       { method: 'DELETE', prefer: 'return=minimal' });
   }
   return ok({ template_item_id: d.template_item_id, date, completed });
@@ -2340,7 +2509,7 @@ async function deleteScratchNote(body, auth, env) {
 const GET_ACTIONS = {
   getMe, getDepartments, getEmployees,
   getTasks, getProgramTasks, getMyTasks, getStaleTasks, searchTasks, getTask, getTaskLinks, getDashboard,
-  getChecklist, getChecklistTemplates, getChecklistTemplate, getChecklistOversight,
+  getChecklist, getChecklistTemplates, getChecklistTemplate, getChecklistOversight, getChecklistRegister,
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,

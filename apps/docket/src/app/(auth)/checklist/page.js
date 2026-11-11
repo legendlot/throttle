@@ -4,7 +4,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { Plus, Check, Repeat, Pencil, Ban, Archive, ChevronLeft, ChevronRight, ListChecks, CalendarDays, Eye } from 'lucide-react';
+import { Plus, Check, Repeat, Pencil, Ban, Archive, ChevronLeft, ChevronRight, ListChecks, CalendarDays, Eye, Grid3x3 } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { RecurrencePopover } from '../../../components/RecurrencePopover.js';
 import { GroupHeader } from '../../../components/tasks/GroupHeader.js';
@@ -13,6 +13,7 @@ import { SegmentedTabs, Button, IconButton, EmptyState } from '../../../componen
 import { ChecklistRun } from '../../../components/ChecklistRun.js';
 import { ChecklistTemplateEditor } from '../../../components/ChecklistTemplateEditor.js';
 import { OversightPanel } from '../../../components/OversightPanel.js';
+import { ChecklistRegister } from '../../../components/ChecklistRegister.js';
 import { TaskView } from '../../../components/task/TaskView.js';
 import { recurrenceSummary, templateRecurrenceSummary, fmtTime, fmtISTDate, isValidRecurrence, isDueOn, isExpired, restOfWeek, WEEKDAYS } from '../../../lib/recurrence.js';
 import { fmtClockIST } from '../../../lib/checklist.js';
@@ -37,6 +38,9 @@ export default function ChecklistPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
   const [tab, setTab] = useState('day');           // 'day' | 'manage' | 'oversight'
+  // F8 P1: My day shows the same ticks two ways — the Today list or the Register chart. Remembered per device.
+  const [dayView, setDayViewState] = useState(() => { try { return localStorage.getItem('docket.checklist.view') === 'register' ? 'register' : 'today'; } catch { return 'today'; } });
+  const setDayView = (v) => { setDayViewState(v); try { localStorage.setItem('docket.checklist.view', v); } catch { /* private mode */ } };
   const [collapsed, setCollapsed] = useState({});  // group key → true (P7 list-view groups)
   const toggleGroup = (k) => setCollapsed(c => ({ ...c, [k]: !c[k] }));
   // '' = today. Any past date is viewable AND completable — the whole worker path is already
@@ -88,7 +92,8 @@ export default function ChecklistPage() {
     catch (e) { showToast(e.message || 'Failed to load checklist', 'error'); setData(null); }
     finally { setLoading(false); }
   }, [session, showToast]);
-  useEffect(() => { if (personId && tab === 'day') load(personId, viewDate); }, [personId, tab, viewDate, load]);
+  // Manage's "My recurring tasks" list reads the same payload, so it loads there too (hostile review #1).
+  useEffect(() => { if (personId && ((tab === 'day' && dayView === 'today') || tab === 'manage')) load(personId, viewDate); }, [personId, tab, dayView, viewDate, load]);
 
   const loadTemplates = useCallback(async () => {
     if (!session) return;
@@ -186,8 +191,12 @@ export default function ChecklistPage() {
 
       {tab === 'day' && (<>
         <div className="cl-head">
-          <p className="cl-lede">Recurring tasks{isOwn ? ' on your checklist' : ` on ${data?.owner?.full_name || 'this'}’s checklist`}. Check them off as you go.</p>
-          <div className="cl-datenav">
+          <SegmentedTabs label="Checklist view" value={dayView} onChange={setDayView}
+            tabs={[{ value: 'today', label: 'Today', icon: ListChecks }, { value: 'register', label: 'Register', icon: Grid3x3 }]} />
+          <p className="cl-lede">{dayView === 'register'
+            ? `Every day at a glance${isOwn ? '' : ` for ${viewablePeople.find(e => e.id === personId)?.full_name || 'this person'}`}: a tick per item per day, adherence at the end of each row.`
+            : <>Recurring tasks{isOwn ? ' on your checklist' : ` on ${data?.owner?.full_name || 'this'}’s checklist`}. Check them off as you go.</>}</p>
+          {dayView === 'today' && <div className="cl-datenav">
             <IconButton icon={ChevronLeft} size="sm" variant="neutral" label="Previous day"
               onClick={() => setViewDate(shiftISO(today || istToday, -1))} />
             <span className={'cl-datelbl' + (isToday ? '' : ' past')}>{isToday ? 'Today' : fmtISTDate(today)}</span>
@@ -195,7 +204,7 @@ export default function ChecklistPage() {
             <IconButton icon={ChevronRight} size="sm" variant="neutral" label={canGoNext ? 'Next day' : 'Cannot tick a future checklist'}
               disabled={!canGoNext} onClick={() => canGoNext && setViewDate(shiftISO(today, 1))} />
             {!isToday && <Button size="sm" onClick={() => setViewDate('')}>Today</Button>}
-          </div>
+          </div>}
           {viewablePeople.length > 1 && (
             <div className="cl-person">
               <Combobox value={personId} allowClear={false} style={{ width: 260, maxWidth: '100%' }}
@@ -204,7 +213,7 @@ export default function ChecklistPage() {
             </div>
           )}
         </div>
-        {loading ? <Spinner /> : nothingToday ? (
+        {dayView === 'register' ? <ChecklistRegister personId={personId} session={session} isOwn={isOwn} /> : loading ? <Spinner /> : nothingToday ? (
           <EmptyState icon={ListChecks} title={`Nothing scheduled for ${isToday ? 'today' : fmtISTDate(today)}`}
             body={isOwn ? 'Add a recurring task or a checklist template under Manage.' : 'Nothing on this checklist for the day.'} />
         ) : (<>

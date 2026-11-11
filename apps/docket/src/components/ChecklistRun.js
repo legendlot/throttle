@@ -33,7 +33,7 @@ export function ChecklistRun({ run, canComplete, onToggleItem, onSaveComment, co
   return (
     <section className="cl-group cl-run">
       <GroupHeader variant="cl-ghead" collapsed={isCollapsed} onToggle={onToggle || (() => setLocalCollapsed(c => !c))}
-        group={{ label: run.template.name, rows: [], count: `${done}/${total}`, icon: ClipboardList, hint: tags || null }} />
+        group={{ label: run.template.name, rows: [], count: `${done}/${total}`, icon: ClipboardList, hint: [run.template.run_scope === 'shared' ? 'Shared chart' : null, tags].filter(Boolean).join(' · ') || null }} />
       {!isCollapsed && (run.sections || []).map(s => {
         const sd = (s.items || []).filter(i => i.completed).length;
         return (
@@ -64,6 +64,7 @@ export function ChecklistRun({ run, canComplete, onToggleItem, onSaveComment, co
                       <span className={'cl-done-at' + (it.late ? ' late' : '')}>
                         {it.late ? 'late · ' : ''}{fmtClockIST(it.completed_at)}
                         {it.completed_by ? ` · ${it.completed_by}` : ''}
+                        {it.done_by_note ? ` · for ${it.done_by_note}` : ''}
                       </span>
                     )}
                     {(it.tags || []).map(t => <TagPill key={t} tag={t} />)}

@@ -1,6 +1,6 @@
 # Docket — Checklists v2: register view, adherence, and record checklists (F8)
 
-> 2026-11-11 · Status: **✅ SETTLED 2026-11-11 — C1–C7 + C9 recommendations accepted ("Yes, accept them"); C8 (phase order) open** · Builds on RULE-DOCKET-008 (S124 flat recurring
+> 2026-11-11 · Status: **✅ SETTLED 2026-11-11 — C1–C7 + C9 accepted; C8 = P1 (register) first. P1 BUILT 2026-11-11.** · Builds on RULE-DOCKET-008 (S124 flat recurring
 > tasks) and RULE-DOCKET-009 (S127 checklist templates). Replaces nothing that has data; reshapes a layer that has none.
 
 ## 1. What Afshaan asked for (2026-11-11)
@@ -44,8 +44,9 @@ One concept, **a checklist template**, now with a `kind`:
 
 - **Same data, two views.** Today = the existing *My day* run (`ChecklistRun`). Register = a grid with
   **rows = items** (grouped by section) and **columns = occurrences**, from the same `checklist_item_completions`.
-- **Columns follow the cadence.** Daily: one column per day, with days the routine isn't due shown greyed.
-  Weekly: one column per week. Monthly: one per month. The window ends at today; you page back with ‹ ›.
+- **Columns = the dates something was due** (as built, P1): a daily chart shows every day, a Monday-only
+  weekly chart shows Mondays. Within a column, a row not due that day shows a dot. Window 7D / 14D / 30D
+  (opens on 14D — the Today view is the toggle beside it), ‹ › to page back, never past today.
 - **Cells:**
   - ✓ done
   - ✓ amber: done late (after the section's `due_time`, as R2 already computes)
@@ -54,8 +55,8 @@ One concept, **a checklist template**, now with a `kind`:
   - dot: not due that day
   - Hover shows who ticked and when.
 - **Adherence:** done ÷ due occurrences, at the end of every row (per item), at the foot of every column (per
-  day), and overall for the window. It reuses Oversight's existing arithmetic, so the two numbers can never
-  disagree.
+  day), and overall for the window. **Today counts only once ticked** (the day isn't over) — so for TODAY
+  the register and Oversight differ by design (Oversight counts today's unticked items as due).
 - **Ticking in the register:** click a cell. **Past only**, the S250 rule: ticking a future date would make
   adherence unauditable. A past-day back-fill is stamped with the date it was actually made, and a back-filled
   tick shows as a hollow ✓ so the chart tells the truth (decision C2).
@@ -213,7 +214,7 @@ P1 and P2 are independent. P2 can ship first if the launch checklist is the more
 - **C7: Who ticks a floor routine** when the doer has no Docket login (housekeeping, floor staff)?
   Recommended: **the assigned supervisor ticks on their behalf**. The tick records who ticked, and an optional
   "done by" note names the doer. A shared tablet login is the alternative.
-- **C8: Phase order.** P1 (register) first, or P2 (launch records) first? This is your call: it depends on
+- **C8: Phase order.** ✅ **P1 (register) first** (Afshaan, 2026-11-11). P1 (register) first, or P2 (launch records) first? This is your call: it depends on
   which is used first.
 - **C9: The 22 inactive recurring tasks.** Clean up before the pilot (§5.4). Recommended **yes**: send each
   owner a keep/stop list.
@@ -221,3 +222,20 @@ P1 and P2 are independent. P2 can ship first if the launch checklist is the more
 Sources: Afshaan's brief (2026-11-11). Live counts from `docket.tasks`, `checklist_completions`,
 `checklist_templates`, `checklist_item_completions` and `public.product_master` (65 products) on 2026-11-11.
 `systems/docket.md` §Checklists (S124, S127, S250).
+
+## 8. P1 as built — review-driven rules (2026-11-11)
+
+Hostile review + Codex pass on the P1 diff; each became a rule, enforced in code:
+- **A recorded tick is never dropped.** A tick on a day the CURRENT schedule skips still shows and counts
+  (schedules change: DKT-334/335 went Tue/Thu → Mon/Wed/Fri with 6 real ticks on the old days).
+- **Due only while it applied:** a row is due from its start (task created / item added / assigned) and only
+  inside assignment periods (shared = the union of all assignees'), cut at the day a template was switched
+  off or archived. Inactive templates take no ticks.
+- **One shared tick per (item, date), enforced by the DB** (`checklist_item_completions_shared_uq`); a
+  second simultaneous tick gets a 409 and the first stands.
+- **A shared tick is a record:** only the person who made it, the template's creator or an admin can clear it.
+- **Chart type is locked once ticked** (`run_scope_locked`): switching would re-read every past tick.
+- **Private spaces:** a viewer only sees someone's recurring tasks in spaces they can open (also fixed in
+  `getChecklist`, which had the same gap).
+- **Future and off-schedule ticks are refused server-side** (`future_date`, `not_due` — untick is always allowed).
+- Arithmetic lives in `docketops-worker/src/register-core.mjs`, tested by `docketops-worker/test/register-core.test.mjs`.

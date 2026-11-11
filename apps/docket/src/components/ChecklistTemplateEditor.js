@@ -8,7 +8,7 @@ import { docketopsGet, docketopsPost } from '../lib/docketopsFetch.js';
 import { RecurrencePopover } from './RecurrencePopover.js';
 import { CHECKLIST_TAGS } from './TagPill.js';
 import { isValidTemplateRecurrence } from '../lib/recurrence.js';
-import { Button, IconButton } from './ui/index.js';
+import { SegmentedTabs, Button, IconButton } from './ui/index.js';
 
 const blankItem = () => ({ id: null, title: '', help_text: '', tags: [] });
 const blankSection = () => ({ id: null, title: '', subtitle: '', due_time: '', items: [blankItem()] });
@@ -22,14 +22,14 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
 
   useEffect(() => {
     if (!templateId) {
-      setDraft({ id: null, name: '', role_label: '', department_id: '', description: '', recurrence: { freq: 'daily' }, sections: [blankSection()] });
+      setDraft({ id: null, name: '', role_label: '', department_id: '', description: '', recurrence: { freq: 'daily' }, run_scope: 'per_person', sections: [blankSection()] });
       setAssignees([]);
       return;
     }
     docketopsGet('getChecklistTemplate', { id: templateId }, session).then(t => {
       setDraft({
         id: t.id, name: t.name || '', role_label: t.role_label || '', department_id: t.department_id || '',
-        description: t.description || '', recurrence: t.recurrence || { freq: 'daily' },
+        description: t.description || '', recurrence: t.recurrence || { freq: 'daily' }, run_scope: t.run_scope || 'per_person',
         sections: (t.sections || []).map(s => ({ id: s.id, title: s.title, subtitle: s.subtitle || '', due_time: s.due_time || '', items: (s.items || []).map(i => ({ id: i.id, title: i.title, help_text: i.help_text || '', tags: i.tags || [] })) })),
       });
       setAssignees(t.assignees || []);
@@ -61,7 +61,7 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
       const res = await docketopsPost('saveChecklistTemplate', {
         id: draft.id, name: draft.name.trim(), role_label: draft.role_label || null,
         department_id: draft.department_id || null, description: draft.description || null,
-        recurrence: draft.recurrence,
+        recurrence: draft.recurrence, run_scope: draft.run_scope,
         sections: draft.sections.map(s => ({ id: s.id, title: s.title, subtitle: s.subtitle || null, due_time: s.due_time || null, items: s.items.map(i => ({ id: i.id, title: i.title, help_text: i.help_text || null, tags: i.tags || [] })) })),
       }, session);
       const newId = res?.id || draft.id;
@@ -91,6 +91,14 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
 
       <div className="cl-field"><span>Schedule</span>
         <RecurrencePopover value={draft.recurrence} hideTime onChange={r => patch({ recurrence: r })} /></div>
+
+      {/* F8 C1: a shared chart is ONE register per date (a washroom, a line) — any assignee ticks it. */}
+      <div className="cl-field"><span>Chart</span>
+        <SegmentedTabs label="Chart" value={draft.run_scope} onChange={v => patch({ run_scope: v })}
+          tabs={[{ value: 'per_person', label: 'Each person their own' }, { value: 'shared', label: 'One shared chart' }]} />
+        <small className="cl-hint">{draft.run_scope === 'shared'
+          ? 'One chart for everyone assigned. Whoever ticks an item ticks it for the day, and the tick records who.'
+          : 'Every assignee keeps their own chart and ticks only their own.'}</small></div>
 
       <div className="cl-field"><span>Assigned to</span>
         <div className="cl-assignees">

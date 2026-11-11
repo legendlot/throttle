@@ -3,6 +3,13 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.7.0] - 2026-11-11
+### Added
+- **Checklists**: the Today | Register switch on My day; The Register (7D/14D/30D window, paging,
+  cell states, hover detail, adherence % and colour bands, ticking rules, one block per chart,
+  read-only view for Managers/Reviewers); Shared charts (the template Chart setting, "Ticking for
+  someone? Name them", any assignee can clear a tick).
+
 ## [1.6.0] - 2026-11-11
 ### Added
 - **Inside a Task**: a Dependencies section covering Waiting on, Blocking and Related links, adding
