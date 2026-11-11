@@ -1,6 +1,6 @@
 # Docket — Checklists v2: register view, adherence, and record checklists (F8)
 
-> 2026-11-11 · Status: **DRAFT — §7 decisions open (Afshaan)** · Builds on RULE-DOCKET-008 (S124 flat recurring
+> 2026-11-11 · Status: **✅ SETTLED 2026-11-11 — C1–C7 + C9 recommendations accepted ("Yes, accept them"); C8 (phase order) open** · Builds on RULE-DOCKET-008 (S124 flat recurring
 > tasks) and RULE-DOCKET-009 (S127 checklist templates). Replaces nothing that has data; reshapes a layer that has none.
 
 ## 1. What Afshaan asked for (2026-11-11)
@@ -175,6 +175,15 @@ used**. Better screens won't fix that on their own. What would:
    near zero, stop investing and say so.
 4. **The 22 dead recurring tasks.** Ask each owner to keep or stop theirs (or stop them all, as with the
    stale-task cleanup) **before** the pilot, so the register doesn't open on a wall of red.
+   **Breakdown (2026-11-11):**
+   - **3 tasks owned by people who have left** (Ankit DKT-411, Anusha DKT-241, Jyothi DKT-398): stop.
+   - **5 of Tanya's weekly sales reviews** (DKT-332..336): the one real success. 64, 64, 37, 36 and 11 ticks
+     from June to 9 Oct, then nothing. Ask her whether to keep them; they are evidence that a weekly
+     review-shaped checklist works.
+   - **11 production-floor routines** (Karthik, Kishan, Mrudula, Padam, Sagar: line flush, calibration,
+     material verification, manpower setup…): 0–2 ticks ever. These are the natural **routine pilot**. They
+     should be rebuilt as one shared floor register (C1, C7) rather than 11 solo items.
+   - **Adnan DKT-1021** (0 ticks) and **Afshaan DKT-135** (2 ticks, last 15 Jun): owner's call.
 
 ## 6. Size and phasing
 
@@ -185,7 +194,7 @@ used**. Better screens won't fix that on their own. What would:
 
 P1 and P2 are independent. P2 can ship first if the launch checklist is the more pressing need.
 
-## 7. Decisions — open
+## 7. Decisions — ✅ recommendations accepted 2026-11-11 (C8 still open)
 
 - **C1: Shared runs.** Add `run_scope` (`per_person` | `shared`) so a washroom chart is one chart whoever
   cleans? Recommended **yes**.
