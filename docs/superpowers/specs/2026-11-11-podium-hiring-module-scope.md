@@ -4,6 +4,7 @@
 > v2 (same day) folds in Afshaan's answers: openings with salary bands move into Core; over-band offers need
 > the manager above; hiring managers see their own candidates' numbers; calendar invites carry a Podium link;
 > one standard letter, reverse-engineered from the letters in Afshaan's mailbox (§C3).
+> v2.1: an opening carries a JD — optional to create, required before CVs, stage moves or interviews (§C1).
 
 ## Goal
 
@@ -45,10 +46,21 @@ assigned to it.
 letters use designations like "Assistant Store Manager" that differ from the role name), department,
 **reporting manager** (`reporting_manager_employee_id`), **hiring owner** (`hiring_owner_employee_id` —
 the person running it, e.g. Finance or the team lead; defaults to the creator), location, headcount,
-**salary band** (fixed-pay min / max, annual; variable target optional), target joining date, status
-`open / on_hold / filled / cancelled`, notes.
+**salary band** (fixed-pay min / max, annual; variable target optional), target joining date, **JD** (below), status
+`draft / open / on_hold / filled / cancelled`, notes.
 
 - Band pre-fills from the job role's band and can be changed.
+- **JD — optional to create, required to hire against.** An opening can be saved with every other field
+  filled and no JD; it sits as `draft` ("JD needed"). The JD is an attached file (PDF/DOCX, stored in the
+  private bucket under the opening, `jd_storage_path`) or pasted text (`jd_text`); if the job role already
+  carries a JD, "Use the role's JD" fills it in one click. Adding a JD moves the opening to `open`.
+- **The JD gate** (enforced in the worker, not just hidden in the UI): until the opening has a JD you
+  cannot attach a CV / add a candidate to it (single or bulk, C4), move any of its candidates to another
+  stage, or schedule an interview (O3). Each blocked action says "Add the JD to this opening first" with a
+  link to do it. Removing the JD later is not allowed once the opening has candidates (replace it instead;
+  the old version is kept).
+- The hiring chain and interviewers see the JD on the opening and on each candidate page, so every round
+  interviews against the same document.
 - **Approver** = the reporting manager's own manager (one step up the solid `manager_id` chain), computed
   and shown on the opening. In practice this resolves to Vinay or Afshaan. If the reporting manager is a
   founder, the other founder approves. Either founder can always approve.
@@ -64,6 +76,7 @@ the person running it, e.g. Finance or the team lead; defaults to the creator), 
 - `status`: `new → screening → interviewing → offer → accepted → joined`, plus `rejected` / `declined` /
   `withdrawn` / `on_hold`. Every change writes a `candidate_events` row (who, when, from→to, note).
 - A candidate can be **moved to another opening** (logged) — common when someone fits a different role.
+  The target opening must have a JD (C1 gate).
 - `documents` gains a nullable `candidate_id`; a CHECK requires `employee_id` or `candidate_id`. New
   `doc_type`s: `cv`, `id_proof` (Aadhaar), `pan`, `address_proof`, `education`, `experience_letter`,
   `relieving_letter`, `payslip`, `bank`, `photo`, `signed_offer`, `other`.
@@ -187,7 +200,8 @@ PDF: an HTML print view on the letterhead (like the appraisal letter), stored in
 
 ## C4 — Bulk CV upload → candidate profiles (Core)
 
-1. On an opening (or `/hiring/import`), drop 1–100 CVs (PDF, DOCX, scans).
+1. On an opening that has a JD (C1 gate; `/hiring/import` asks you to pick one), drop 1–100 CVs (PDF,
+   DOCX, scans).
 2. Each file goes to the private bucket; the worker sends it to the Claude API (`claude-haiku-5-5`;
    Sonnet only if Haiku misreads) and gets back: name, email, phone, location, current employer/title,
    total experience, skills, education, CTC and notice period if stated. One file per request, driven
@@ -225,7 +239,7 @@ service account (impersonation), so replies come back to them. The email copies 
 
 ## O3 — One-click interview scheduling (Optional, after O2)
 
-Pick date + time + duration → "Schedule". Podium creates a Google Calendar event on the organiser's
+Pick date + time + duration → "Schedule" (blocked until the opening has a JD). Podium creates a Google Calendar event on the organiser's
 calendar with the interviewers as guests, a Meet link, the round name, and **a link to the candidate's
 Podium page** (sign-in required; the CV never leaves the private bucket). Reschedule/cancel in Podium
 updates the event. Candidate not invited unless toggled. Setup: add `calendar.events` to domain-wide
