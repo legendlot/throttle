@@ -55,6 +55,16 @@ import {
   buildExitPatch, accessLeft,
 } from './exits.js';   // X1 exits + no-dues (test/exits.test.mjs)
 import {
+  OB_OWNERS, OB_AUTO_SOURCES, OB_NOTE_MAX, JOINER_WINDOW_DAYS, DEFAULT_REQUIRED_DOC_TYPES, SALARY_PRIVATE_FIELDS, DOC_TYPE_LABELS,
+  SELF_DOC_EXTS, profileMissing, completionPct, validateProfileInput, maskAccount, projectPrivate, projectChangeRequest,
+  onboardingRole, canSeeOnboarding, canManageOnboarding, canTickOnboardingItem, autoStatus, itemState, onboardingBlockers,
+  onboardingProgress, checkOnboardingItemUpdate, dueDate, itemOverdue, fyLabelFor, joinersWithoutOnboarding,
+  snapshotOnboardingItems, policyApplies, checkAcknowledge, policyPath, selfDocTypes, selfDocPath, isSelfDocPath,
+  xpayrollRow, xpayrollCsv, currentCtc, onboardingDbErrorCode,
+  PAN_RE, normPan, checkStoredObject, XPAYROLL_HEADERS, XPAYROLL_TEXT_COLUMNS, CHANGE_GROUPS, groupChangeRequests,
+  cleanChangeDecision, selfViewItem, selfViewOnboarding, cleanOnboardingLine,
+} from './onboarding.js';   // J2 onboarding + profile completion (test/onboarding.test.mjs)
+import {
   renderOfferText, renderOfferPdf, sha256Hex, validateTemplateBody, SAMPLE_OFFER, SAMPLE_SIGNATORY, OFFER_FIELDS,
 } from './offer-render.js';   // C3 letter + PDF renderer (test/offer-render.test.mjs)
 
@@ -696,7 +706,10 @@ async function getMyCompensation(url, auth, env) {
 const RESTRICTED_DOC_TYPES = new Set(['bank_details', 'id_proof', 'address_proof', 'offer_letter', 'increment_letter', 'appraisal_letter']);
 const SALARY_DOC_TYPES = new Set(['offer_letter', 'increment_letter', 'appraisal_letter']);
 
-function docAllowed(auth, edges, employeeId, docType) {
+// J2: a document the person uploaded themselves (<employee_id>/self/…, /welcome) is restricted like the
+// RESTRICTED_DOC_TYPES whatever its type — self + HR only, never the manager chain ("you and HR only").
+const isSelfUploadPath = (p) => typeof p === 'string' && p.includes('/self/');
+function docAllowed(auth, edges, employeeId, docType, storagePath = null) {
   const me = callerEmployee(edges, auth.userId);
   const isSelf = !!me && me.id === employeeId;
   if (SALARY_DOC_TYPES.has(docType)) return isSelf || canComp(auth);
@@ -705,6 +718,7 @@ function docAllowed(auth, edges, employeeId, docType) {
   if (isSelf) return true;
   const isMgr = inManagerChain(edges, employeeId, me.id);
   if (!isMgr) return false;
+  if (isSelfUploadPath(storagePath)) return false; // self uploads: self + HR only
   return !RESTRICTED_DOC_TYPES.has(docType); // managers can't see bank/ID/address or the salary letters
 }
 // A salary letter read by someone other than its subject → audited (self-views are not, as getMyCompensation).
@@ -721,7 +735,7 @@ async function getDocuments(url, auth, env) {
   if (!canSeeFull(auth, edges, employee_id)) return err('forbidden', 403);
   const r = await sb(`/rest/v1/documents?employee_id=eq.${employee_id}&select=*&order=uploaded_at.desc`, env);
   if (!r.ok) return err('db_error', 500);
-  const rows = (r.data || []).filter(d => docAllowed(auth, edges, employee_id, d.doc_type));
+  const rows = (r.data || []).filter(d => docAllowed(auth, edges, employee_id, d.doc_type, d.storage_path));
   const salaryRows = rows.filter(d => isAuditedSalaryDocRead(auth, edges, employee_id, d.doc_type));
   if (salaryRows.length) await logCompAccess(auth, 'getDocuments', employee_id, null, env, { doc_types: [...new Set(salaryRows.map(d => d.doc_type))], count: salaryRows.length });
   return ok({ documents: rows });
@@ -735,7 +749,7 @@ async function getDocumentDownloadUrl(url, auth, env) {
   const doc = dr.data?.[0];
   if (!doc) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
-  if (!docAllowed(auth, edges, doc.employee_id, doc.doc_type)) return err('forbidden', 403);
+  if (!docAllowed(auth, edges, doc.employee_id, doc.doc_type, doc.storage_path)) return err('forbidden', 403);
   if (!String(doc.storage_path).startsWith(`${doc.employee_id}/`)) return err('forbidden', 403);
   if (isAuditedSalaryDocRead(auth, edges, doc.employee_id, doc.doc_type))
     await logCompAccess(auth, 'getDocumentDownloadUrl', doc.employee_id, null, env, { document_id: doc.id, doc_type: doc.doc_type });
@@ -815,6 +829,18 @@ async function workEmailAwaitingJoining(env, email) {
     : null;
 }
 
+// J2: PAN through the HR edit paths gets the /welcome validator — trimmed, spaces stripped, uppercased, then
+// ^[A-Z]{5}[0-9]{4}[A-Z]$ (blank clears). Mutates `obj`; → null | the error response.
+function cleanPanField(obj) {
+  if (!obj || !('pan_number' in obj)) return null;
+  const raw = obj.pan_number;
+  if (raw === null || raw === undefined || String(raw).trim() === '') { obj.pan_number = null; return null; }
+  const v = normPan(raw);
+  if (!PAN_RE.test(v)) return errCode('bad_pan', 'PAN looks like ABCDE1234F (5 letters, 4 digits, 1 letter)', 400);
+  obj.pan_number = v;
+  return null;
+}
+
 async function createEmployee(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!body.full_name) return err('full_name required', 400);
@@ -827,6 +853,7 @@ async function createEmployee(body, auth, env) {
   let code = String(body.employee_code || '').trim();
   if (!code) { code = await mintEmployeeCode(env); if (!code) return err('failed_to_mint_employee_code', 500); }
   const row = { employee_code: code, created_by: auth.userId, ...pickFields(body, EMPLOYEE_FIELDS) };
+  { const pe = cleanPanField(row); if (pe) return pe; }
   const r = await sb(`/rest/v1/employees`, env, { method: 'POST', body: JSON.stringify([row]) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   return ok(r.data?.[0]);
@@ -954,6 +981,7 @@ async function updateEmployee(body, auth, env) {
     if (employeeWriteTouchesExit(patch, cr.data[0] || {})) return x1Err('use_exit_flow', 400);
   }
   if (patch.work_email) { const held = await workEmailAwaitingJoining(env, patch.work_email); if (held) return held; }
+  { const pe = cleanPanField(patch); if (pe) return pe; }
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
   const r = await sb(`/rest/v1/employees?id=eq.${body.employee_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
@@ -5618,7 +5646,7 @@ async function confirmJoining(body, auth, env) {
   if (app.status === 'joined') {
     if (!wa?.employee_id) return j1Err('not_accepted');
     const r = await hiringRpc(env, 'hiring_confirm_joining', { application_id: app.id, employee_id: wa.employee_id, ...actor });
-    return r.ok ? ok(r.data) : j1DbError(r);
+    return r.ok ? ok({ ...(r.data || {}), ...(await onboardingAfterJoining(env, wa.employee_id, auth.userId)) }) : j1DbError(r);
   }
   if (app.status !== 'accepted') return j1Err('not_accepted');
   if (!wa || wa.status !== 'created') return j1Err('no_work_account');
@@ -5672,7 +5700,27 @@ async function confirmJoining(body, auth, env) {
     documents: docs.map(({ src, ...rest }) => rest), ...actor,
   });
   if (!r.ok) return j1DbError(r);
-  return ok(r.data);
+  return ok({ ...(r.data || {}), ...(await onboardingAfterJoining(env, empId, auth.userId)) });
+}
+
+// J2 hook (decision 5): start the joiner's onboarding right after the joining commits. Best-effort — a failure
+// NEVER fails the joining; it is reported (onboarding_started: false + the code) and the HR board lists the person
+// under "joined without an onboarding" with a Start button. An onboarding that already exists (a re-run) counts.
+async function onboardingAfterJoining(env, employeeId, actorUserId) {
+  try {
+    // ANY onboarding row (open, complete or CANCELLED) → never auto-start again: a re-run of confirmJoining after HR
+    // cancelled one must not resurrect it. HR can still start one by hand.
+    const er = await sb(`/rest/v1/employee_onboardings?employee_id=eq.${employeeId}&select=status&order=created_at.desc&limit=1`, env);
+    if (!er.ok || !Array.isArray(er.data)) return { onboarding_started: false, onboarding_error: 'db_error' };
+    if (er.data.length) return { onboarding_existing: er.data[0].status };
+    const r = await startOnboardingFor(env, employeeId, actorUserId, 'joining');
+    if (r.ok) return { onboarding_started: true, onboarding_id: r.data?.onboarding_id || null };
+    const code = onboardingDbErrorCode(r.data)?.code || 'db_error';
+    if (code === 'onboarding_already_open' || code === 'onboarding_already_complete') return { onboarding_started: true, onboarding_existing: true };
+    return { onboarding_started: false, onboarding_error: code };
+  } catch (e) {
+    return { onboarding_started: false, onboarding_error: 'exception' };
+  }
 }
 
 // POST markNoShow {application_id, reason?, note?} — accepted → no_show. The accepted offer stays as the
@@ -6339,7 +6387,7 @@ async function saveExitChecklistLine(body, auth, env) {
   if (!/^[a-z][a-z0-9_]{1,40}$/.test(key) || !title || title.length > 120 || !CHECKLIST_OWNERS.includes(d.owner)) return x1Err('bad_line', 400);
   const applies = Array.isArray(d.applies_to) ? [...new Set(d.applies_to.map(String))].slice(0, 10) : [];
   const row = { key, title, owner: d.owner, required: d.required !== false, allow_na: !!d.allow_na, applies_to: applies,
-    sort: Math.round(Number(d.sort) || 100), active: d.active !== false };
+    sort: (d.sort === '' || d.sort == null || !Number.isFinite(Number(d.sort)) ? 100 : Math.round(Number(d.sort))), active: d.active !== false };
   const r = await sb(`/rest/v1/exit_checklist_lines?on_conflict=key`, env, { method: 'POST',
     prefer: 'return=representation,resolution=merge-duplicates', body: JSON.stringify([row]) });
   if (!r.ok) return x1DbError(r);
@@ -6352,7 +6400,7 @@ async function saveExitTool(body, auth, env) {
   const d = body.data || body;
   const name = String(d.name || '').trim();
   if (!name || name.length > 80) return x1Err('bad_tool', 400);
-  const row = { name, active: d.active !== false, sort: Math.round(Number(d.sort) || 100) };
+  const row = { name, active: d.active !== false, sort: (d.sort === '' || d.sort == null || !Number.isFinite(Number(d.sort)) ? 100 : Math.round(Number(d.sort))) };
   const r = d.id
     ? (isUuid(d.id) ? await sb(`/rest/v1/exit_tools?id=eq.${d.id}`, env, { method: 'PATCH', body: JSON.stringify(row) }) : { ok: false, data: {} })
     : await sb(`/rest/v1/exit_tools`, env, { method: 'POST', body: JSON.stringify([row]) });
@@ -6360,6 +6408,737 @@ async function saveExitTool(body, auth, env) {
   return ok(r.data?.[0] || null);
 }
 // ── end X1
+
+// ────────────────────────────────────────────────────────────────────────────
+// J2 — ONBOARDING (joiners) + PROFILE COMPLETION (everyone, once). Plan docs/superpowers/plans/
+// 2026-11-12-podium-j2-onboarding.md. Pure rules: src/onboarding.js · SQL: migrations/0011_onboarding.sql.
+// Sensitive fields live in podium.employee_private (decision 1), read ONLY by getMyProfile (self, full),
+// getEmployeePrivate (HR: bank masked; comp: + salary fields, logged) and exportXPayroll (comp, logged).
+// Self-change of a filled PAN / bank field → profile_change_requests, HR approves (decision 4). Onboarding starts
+// from confirmJoining (best-effort, decision 5); auto lines are computed, never ticked (decision 6); nothing here
+// gates payroll (decision 7).
+// Reach: a brand-new joiner has NO Podium role (permissions {} → no podium_view), so every self action below is in
+// SELF_SERVE_* and self-scopes on employees.auth_user_id = the caller. getOnboarding / updateOnboardingItem are
+// self-serve for the manager chain (most managers hold no podium_view, as X1).
+// ────────────────────────────────────────────────────────────────────────────
+
+const J2_COPY = {
+  no_employee: 'Your login is not linked to an employee profile yet — ask HR',
+  invalid_fields: 'Some fields need fixing',
+  cannot_clear_protected: 'PAN and bank details cannot be cleared once filled — enter the new value to request a change',
+  forbidden: 'You cannot act on this onboarding',
+  forbidden_item: 'Only HR — or the manager, for manager lines — can set this line',
+  set_automatically: 'This line is checked automatically and is already done',
+  auto_line_open: 'This line is checked automatically — fix the source (profile, Snorkel, policies…) instead of ticking it',
+  unverifiable_note_required: 'This line cannot be checked automatically — say how it was verified',
+  na_not_allowed: 'This line cannot be marked N/A',
+  na_note_required: 'Say why this line does not apply',
+  bad_item_status: 'Pick Done, N/A or Open',
+  item_not_found: 'Checklist line not found',
+  onboarding_not_found: 'Onboarding not found',
+  onboarding_not_open: 'This onboarding is not open',
+  onboarding_already_open: 'An onboarding is already open for this person',
+  onboarding_already_complete: 'This person has already completed onboarding',
+  onboarding_incomplete: 'Required lines are still open',
+  onboarding_blocked: 'The onboarding cannot complete yet — clear the open lines listed',
+  already_exited: 'This person has exited',
+  employee_not_found: 'Employee not found',
+  no_lines: 'The onboarding checklist has no active lines — add some under Admin → Onboarding Checklist',
+  cancel_reason_required: 'Say why the onboarding is cancelled (at least 5 characters)',
+  change_request_not_found: 'Change request not found',
+  change_request_not_pending: 'This change request has already been decided',
+  bad_decision: 'Approve or reject',
+  decision_note_required: 'Say why the change is rejected',
+  own_change_request: 'Another HR person decides your own change request',
+  change_already_pending: 'A change is already awaiting HR approval',
+  change_request_changed: 'The person changed this request since you loaded it — reload and look again',
+  bad_group: 'Pick PAN or bank details',
+  bad_pan: 'PAN looks like ABCDE1234F (5 letters, 4 digits, 1 letter)',
+  upload_not_found: 'The upload did not arrive — pick the file and upload again',
+  storage_check_failed: 'Could not check the upload right now — try again',
+  audit_failed: 'The export could not be logged, so it was not produced — try again',
+  policy_not_found: 'Policy not found',
+  policy_not_applicable: 'This policy does not apply to you',
+  policy_version_stale: 'A newer version of this policy was published — reload and read it',
+  already_acknowledged: 'Already acknowledged',
+  bad_policy: 'A policy needs a title and an uploaded PDF',
+  bad_doc_type: 'Pick a document type',
+  bad_file_type: 'Upload a PDF or an image (JPG, PNG, WEBP)',
+  file_too_large: 'The file is over 15 MB',
+  bad_file_size: 'The file is empty or over 15 MB',
+  bad_line: 'Check the line: key, title, owner and the due offset (−60 to 365 days)',
+  live_check_failed: 'Could not check the profile / Snorkel right now — try again',
+  org_check_failed: 'Could not check the reporting line right now — try again',
+  conflict: 'This conflicts with an existing record — reload and retry',
+  check_failed: 'The record failed a consistency check',
+};
+const j2Err = (code, status = 409, extra = {}) =>
+  json({ ok: false, error: code, message: J2_COPY[code] || code.replace(/_/g, ' '), ...extra }, status);
+function j2DbError(r) {
+  const m = onboardingDbErrorCode(r?.data);
+  if (m) return j2Err(m.code, m.status, m.detail ? { detail: m.detail } : {});
+  const d = r?.data && typeof r.data === 'object' ? r.data : {};
+  return err(`db_error: ${[d.code, d.message].filter(Boolean).join(' ') || r?.status}`, 400);
+}
+
+// Everything the completion rule and the auto lines read off the employee row (values never leave the worker
+// except to the person themselves).
+const OB_EMP_SELECT = 'id,employee_code,full_name,preferred_name,status,employment_type,auth_user_id,manager_id,work_email,job_title,'
+  + 'date_joined,probation_end_date,date_of_birth,gender,blood_group,personal_email,phone,emergency_contact_name,emergency_contact_phone,pan_number';
+const OB_EMP_PUBLIC = (e) => ({ id: e.id, employee_code: e.employee_code, full_name: e.full_name, job_title: e.job_title ?? null,
+  status: e.status, date_joined: e.date_joined ?? null, employment_type: e.employment_type ?? null });
+const inList = (l) => l.join(',');
+
+async function j2Settings(env) {
+  const r = await sb(`/rest/v1/settings?id=eq.1&select=profile_campaign_launched_at,profile_campaign_launched_by,profile_required_doc_types,pt_state&limit=1`, env);
+  const s = r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  return {
+    ok: !!s,
+    launched_at: s?.profile_campaign_launched_at || null,
+    required_doc_types: Array.isArray(s?.profile_required_doc_types) ? s.profile_required_doc_types : DEFAULT_REQUIRED_DOC_TYPES,
+    pt_state: s?.pt_state || 'Karnataka',
+  };
+}
+
+// The caller's own employee row (self = employees.auth_user_id IS the caller — never the org graph).
+async function myOnboardingEmployee(auth, env) {
+  const r = await sb(`/rest/v1/employees?auth_user_id=eq.${auth.userId}&status=neq.exited&select=${OB_EMP_SELECT}&limit=1`, env);
+  if (!r.ok || !Array.isArray(r.data)) return { res: err('db_error', 500) };
+  return { emp: r.data[0] || null };
+}
+
+// Batched facts for the completion rule + the auto lines, for many employees at once (no per-row awaits).
+// → { ok, byId: Map(id → facts), policies } ; facts = { priv, doc_types, missing, docs_missing, policies_applicable,
+//   policies_pending, auth_linked, assets, probation_set }. ok=false if any source failed (gates fail closed).
+async function loadProfileFacts(env, emps, requiredDocTypes) {
+  const ids = emps.map(e => e.id).filter(isUuid);
+  const authIds = emps.map(e => e.auth_user_id).filter(isUuid);
+  const none = Promise.resolve({ ok: true, data: [] });
+  const [pr, dr, pol, ar, asr] = await Promise.all([
+    ids.length ? sb(`/rest/v1/employee_private?employee_id=in.(${inList(ids)})&select=*`, env) : none,
+    ids.length ? sb(`/rest/v1/documents?employee_id=in.(${inList(ids)})&select=employee_id,doc_type`, env) : none,
+    sb(`/rest/v1/policies?active=eq.true&select=id,title,version,applies_to,active,published_at&order=title.asc`, env),
+    ids.length ? sb(`/rest/v1/policy_acknowledgements?employee_id=in.(${inList(ids)})&select=employee_id,policy_id,version`, env) : none,
+    authIds.length ? sbStore(`/rest/v1/assets?custodian_user_id=in.(${inList(authIds)})&status=not.in.(${ASSET_CLOSED_STATUSES.join(',')})&select=custodian_user_id`, env) : none,
+  ]);
+  const okAll = [pr, dr, pol, ar, asr].every(x => x.ok && Array.isArray(x.data));
+  const rows = (r) => (r.ok && Array.isArray(r.data) ? r.data : []);
+  const privBy = new Map(rows(pr).map(p => [p.employee_id, p]));
+  const docsBy = new Map();
+  for (const d of rows(dr)) { if (!docsBy.has(d.employee_id)) docsBy.set(d.employee_id, new Set()); docsBy.get(d.employee_id).add(d.doc_type); }
+  const acked = new Set(rows(ar).map(a => `${a.employee_id}|${a.policy_id}|${a.version}`));
+  const assetsBy = new Map();
+  for (const a of rows(asr)) assetsBy.set(a.custodian_user_id, (assetsBy.get(a.custodian_user_id) || 0) + 1);
+  const policies = rows(pol);
+  const byId = new Map();
+  for (const e of emps) {
+    const priv = privBy.get(e.id) || null;
+    const have = docsBy.get(e.id) || new Set();
+    const applicable = policies.filter(p => policyApplies(p, e.employment_type));
+    byId.set(e.id, {
+      priv,
+      doc_types: [...have],
+      missing: profileMissing(e, priv, [...have], requiredDocTypes),
+      docs_missing: (requiredDocTypes || []).filter(t => !have.has(t)),
+      policies_applicable: applicable.length,
+      policies_pending: applicable.filter(p => !acked.has(`${e.id}|${p.id}|${p.version}`)).length,
+      auth_linked: isUuid(e.auth_user_id),
+      assets: isUuid(e.auth_user_id) ? (assetsBy.get(e.auth_user_id) || 0) : 0,
+      probation_set: !!e.probation_end_date,
+      acked_ids: applicable.filter(p => acked.has(`${e.id}|${p.id}|${p.version}`)).map(p => p.id),
+    });
+  }
+  return { ok: okAll, byId, policies };
+}
+
+// Items as every caller sees them: + the live state, overdue (IST), and whether THIS caller may set the line.
+function decorateItems(items, facts, today, role) {
+  return (items || []).map(i => {
+    const s = itemState(i, facts);
+    return { ...i, state: s.state, live: s.live, resolved: s.resolved, overdue: itemOverdue(i, facts, today),
+      can_set: !canTickOnboardingItem(role, i) && (!i.auto_source || s.live === 'unverifiable' || !!i.allow_na || i.status !== 'open') };
+  });
+}
+
+// The employee + the caller's role on THIS person's onboarding (X1's exitCtx shape). → { emp, role } | { res }
+async function onboardingCtx(auth, env, employeeId) {
+  if (!isUuid(employeeId)) return { res: err('employee_id required', 400) };
+  const er = await sb(`/rest/v1/employees?id=eq.${employeeId}&select=${OB_EMP_SELECT}&limit=1`, env);
+  if (!er.ok) return { res: err('db_error', 500) };
+  const emp = er.data?.[0];
+  if (!emp) return { res: err('not_found', 404) };
+  const self = !!emp.auth_user_id && emp.auth_user_id === auth.userId;
+  const hr = isHr(auth);
+  let chain = false;
+  if (!self && !hr) {
+    const edges = await loadOrgEdgesStrict(env);
+    if (!edges) return { res: j2Err('org_check_failed', 503) };
+    const me = callerEmployee(edges, auth.userId);
+    chain = !!me && me.id !== emp.id && inManagerChain(edges, emp.id, me.id);
+  }
+  return { emp, role: onboardingRole({ hr, self, chain }) };
+}
+
+// Start an onboarding (the J1 hook + HR's Start). → the PostgREST result of onboarding_start.
+async function startOnboardingFor(env, employeeId, actorUserId, via) {
+  const [er, lr] = await Promise.all([
+    sb(`/rest/v1/employees?id=eq.${employeeId}&select=id,status,employment_type&limit=1`, env),
+    sb(`/rest/v1/onboarding_lines?active=eq.true&select=*`, env),
+  ]);
+  if (!er.ok || !lr.ok || !Array.isArray(lr.data)) return { ok: false, status: 500, data: { message: 'db_error' } };
+  const emp = er.data?.[0];
+  if (!emp) return { ok: false, status: 404, data: { message: 'podium_employee_not_found' } };
+  const items = snapshotOnboardingItems(lr.data, emp.employment_type);
+  return hiringRpc(env, 'onboarding_start', { employee_id: emp.id, started_by: actorUserId, started_via: via, items });
+}
+
+// ── Self-serve ───────────────────────────────────────────────────────────────
+
+// GET getMyProfile — the caller's own profile, private details (full), documents, policies with ack status, open
+// onboarding (read-only), pending change requests and the completion rule's missing list.
+async function getMyProfile(url, auth, env) {
+  const m = await myOnboardingEmployee(auth, env);
+  if (m.res) return m.res;
+  if (!m.emp) return ok({ employee: null });
+  const emp = m.emp;
+  const today = istToday();
+  const st = await j2Settings(env);
+  const [facts, dr, obr, cr] = await Promise.all([
+    loadProfileFacts(env, [emp], st.required_doc_types),
+    sb(`/rest/v1/documents?employee_id=eq.${emp.id}&select=id,doc_type,title,file_name,uploaded_at,storage_path&order=uploaded_at.desc`, env),
+    sb(`/rest/v1/employee_onboardings?employee_id=eq.${emp.id}&status=eq.open&select=*&limit=1`, env),
+    sb(`/rest/v1/profile_change_requests?employee_id=eq.${emp.id}&select=id,field,new_value,status,rev,requested_at,decided_at,decision_note&order=requested_at.desc&limit=20`, env),
+  ]);
+  if (!facts.ok || !dr.ok || !obr.ok || !cr.ok) return err('db_error', 500);
+  const f = facts.byId.get(emp.id);
+  const ob = obr.data?.[0] || null;
+  let items = [];
+  if (ob) {
+    const ir = await sb(`/rest/v1/onboarding_items?onboarding_id=eq.${ob.id}&select=*&order=sort.asc,line_key.asc`, env);
+    if (!ir.ok) return err('db_error', 500);
+    items = decorateItems(ir.data || [], f, today, 'employee').map(selfViewItem);
+  }
+  const { auth_user_id, manager_id, ...profile } = emp;
+  const acked = new Set(f.acked_ids);
+  const policies = facts.policies.filter(p => policyApplies(p, emp.employment_type))
+    .map(p => ({ id: p.id, title: p.title, version: p.version, published_at: p.published_at, acknowledged: acked.has(p.id) }));
+  // Own documents: their own, restricted types included. Who uploaded is not exposed; self uploads are marked.
+  const documents = (dr.data || []).map(({ storage_path, ...d }) => ({ ...d, self_uploaded: isSelfDocPath(emp.id, storage_path) }));
+  return ok({
+    today, employee: profile, private: f.priv || {}, documents, policies,
+    onboarding: ob ? { ...selfViewOnboarding(ob), items, progress: onboardingProgress(items, f) } : null,
+    change_requests: cr.data || [],
+    missing: f.missing, completion_pct: completionPct(f.missing, st.required_doc_types),
+    required_doc_types: st.required_doc_types, self_doc_types: selfDocTypes(st.required_doc_types),
+    campaign_launched: !!st.launched_at,
+    show_banner: (!!st.launched_at || !!ob) && f.missing.length > 0,
+    fy_label: fyLabelFor(today),
+  });
+}
+
+// POST saveMyProfile {fields} — whitelist only (onboarding.js PROFILE_*_FIELDS). Validated + normalised here;
+// profile_save_self writes first fills and turns a change to a filled PAN / bank field into a change request.
+async function saveMyProfile(body, auth, env) {
+  const d = body.data || body;
+  const m = await myOnboardingEmployee(auth, env);
+  if (m.res) return m.res;
+  if (!m.emp) return j2Err('no_employee', 404);
+  const v = validateProfileInput(d.fields, istToday());
+  if (v.errors.length) return j2Err('invalid_fields', 400, { errors: v.errors });
+  if (!Object.keys(v.employee).length && !Object.keys(v.private).length) return ok({ written: [], change_requests: [] });
+  const r = await hiringRpc(env, 'profile_save_self', { employee_id: m.emp.id, actor_user_id: auth.userId,
+    employee: v.employee, private: v.private });
+  return r.ok ? ok(r.data) : j2DbError(r);
+}
+
+// POST createMyDocumentUploadUrl {doc_type, file_name, file_size} — the person's own ID / address / bank proof (+
+// education / other). Path under <employee_id>/self/ with a timestamp: never an HR upload's object.
+async function createMyDocumentUploadUrl(body, auth, env) {
+  const d = body.data || body;
+  const m = await myOnboardingEmployee(auth, env);
+  if (m.res) return m.res;
+  if (!m.emp) return j2Err('no_employee', 404);
+  const st = await j2Settings(env);
+  if (!selfDocTypes(st.required_doc_types).includes(d.doc_type)) return j2Err('bad_doc_type', 400);
+  const fe = fileOk(String(d.file_name || ''), SELF_DOC_EXTS, d.file_size);
+  if (fe) return j2Err(fe, 400);
+  const path = selfDocPath(m.emp.id, d.doc_type, d.file_name);
+  const seg = path.split('/').map(encodeURIComponent).join('/');
+  const sr = await storageFetch(`/object/upload/sign/${DOC_BUCKET}/${seg}`, env, { method: 'POST' });
+  if (!sr.ok || !sr.data?.url) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
+  return ok({ storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null });
+}
+
+// HEAD on the private bucket (service role) → { ok, status, size, mime } from the response headers.
+async function storageHead(env, path) {
+  const seg = String(path).split('/').map(encodeURIComponent).join('/');
+  try {
+    const r = await fetch(`${env.SUPABASE_URL}/storage/v1/object/authenticated/${DOC_BUCKET}/${seg}`, { method: 'HEAD',
+      headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
+    return { ok: r.ok, status: r.status, size: r.headers.get('content-length'), mime: r.headers.get('content-type') };
+  } catch (_e) { return { ok: false, status: 502 }; }
+}
+
+// POST recordMyDocument {doc_type, storage_path, file_name, title} — size + mime type are read from storage.
+async function recordMyDocument(body, auth, env) {
+  const d = body.data || body;
+  const m = await myOnboardingEmployee(auth, env);
+  if (m.res) return m.res;
+  if (!m.emp) return j2Err('no_employee', 404);
+  const st = await j2Settings(env);
+  if (!selfDocTypes(st.required_doc_types).includes(d.doc_type)) return j2Err('bad_doc_type', 400);
+  if (!isSelfDocPath(m.emp.id, d.storage_path) || !String(d.storage_path).startsWith(`${m.emp.id}/self/${d.doc_type}/`))
+    return err('storage_path must be under your own upload folder', 400);
+  const fe = fileOk(String(d.file_name || ''), SELF_DOC_EXTS, null);
+  if (fe) return j2Err(fe, 400);
+  // The object must EXIST under their own path; size + mime type come from storage, never from the client.
+  const so = checkStoredObject(await storageHead(env, d.storage_path));
+  if (so.error) return j2Err(so.error, so.error === 'storage_check_failed' ? 502 : 400);
+  const name = String(d.file_name).slice(0, 200);
+  const row = { employee_id: m.emp.id, uploaded_by: auth.userId, doc_type: d.doc_type, storage_path: d.storage_path,
+    title: String(d.title || DOC_TYPE_LABELS[d.doc_type] || name).trim().slice(0, 200), file_name: name,
+    mime_type: so.mime, file_size: so.size };
+  const r = await sb(`/rest/v1/documents`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return j2DbError(r);
+  const { storage_path, ...out } = r.data?.[0] || {};
+  return ok(out);
+}
+
+// POST acknowledgePolicy {policy_id, version} — the current active version of a policy that applies to you.
+// Append-only (0011 trigger); a repeat is a no-op (ignore-duplicates).
+async function acknowledgePolicy(body, auth, env) {
+  const d = body.data || body;
+  const m = await myOnboardingEmployee(auth, env);
+  if (m.res) return m.res;
+  if (!m.emp) return j2Err('no_employee', 404);
+  if (!isUuid(d.policy_id)) return err('policy_id required', 400);
+  const pr = await sb(`/rest/v1/policies?id=eq.${d.policy_id}&select=id,version,applies_to,active&limit=1`, env);
+  if (!pr.ok) return err('db_error', 500);
+  const ce = checkAcknowledge(pr.data?.[0] || null, d.version, m.emp.employment_type);
+  if (ce) return j2Err(ce, ce === 'policy_not_found' ? 404 : 409);
+  const p = pr.data[0];
+  const r = await sb(`/rest/v1/policy_acknowledgements?on_conflict=employee_id,policy_id,version`, env, { method: 'POST',
+    prefer: 'return=minimal,resolution=ignore-duplicates', body: JSON.stringify([{ employee_id: m.emp.id, policy_id: p.id, version: p.version }]) });
+  if (!r.ok) return j2DbError(r);
+  return ok({ policy_id: p.id, version: p.version, acknowledged: true });
+}
+
+// POST withdrawMyChangeRequest {group: pan|bank} — the person takes back their own pending change (every pending
+// field of the group). Guarded on status=pending, so a request HR has just decided is not touched.
+async function withdrawMyChangeRequest(body, auth, env) {
+  const d = body.data || body;
+  const m = await myOnboardingEmployee(auth, env);
+  if (m.res) return m.res;
+  if (!m.emp) return j2Err('no_employee', 404);
+  const fields = CHANGE_GROUPS[d.group];
+  if (!fields) return j2Err('bad_group', 400);
+  const r = await sb(`/rest/v1/profile_change_requests?employee_id=eq.${m.emp.id}&status=eq.pending&field=in.(${fields.join(',')})`, env, {
+    method: 'PATCH', body: JSON.stringify({ status: 'withdrawn', decided_by: auth.userId, decided_at: nowIso(), decision_note: 'Withdrawn by the person' }) });
+  if (!r.ok) return j2DbError(r);
+  if (!r.data?.length) return j2Err('change_request_not_pending');
+  return ok({ group: d.group, withdrawn: r.data.length });
+}
+
+// GET getPolicyFile?policy_id= — a 2-minute signed URL. HR any policy; anyone else only a policy that applies to them.
+async function getPolicyFile(url, auth, env) {
+  const id = url.searchParams.get('policy_id');
+  if (!isUuid(id)) return err('policy_id required', 400);
+  const pr = await sb(`/rest/v1/policies?id=eq.${id}&select=id,title,version,storage_path,applies_to,active&limit=1`, env);
+  if (!pr.ok) return err('db_error', 500);
+  const p = pr.data?.[0];
+  if (!p) return j2Err('policy_not_found', 404);
+  if (!isHr(auth)) {
+    const m = await myOnboardingEmployee(auth, env);
+    if (m.res) return m.res;
+    if (!m.emp || !policyApplies(p, m.emp.employment_type)) return err('forbidden', 403);
+  }
+  if (!String(p.storage_path).startsWith('policies/')) return err('forbidden', 403);
+  const seg = String(p.storage_path).split('/').map(encodeURIComponent).join('/');
+  const sr = await storageFetch(`/object/sign/${DOC_BUCKET}/${seg}`, env, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresIn: 120 }) });
+  if (!sr.ok || !sr.data?.signedURL) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  return ok({ url: `${env.SUPABASE_URL}/storage/v1${sr.data.signedURL}`, title: p.title, version: p.version });
+}
+
+// ── One person's onboarding (self read-only · manager chain ticks manager lines · HR all) ──
+
+// GET getOnboarding?employee_id= — the open onboarding (else the latest) + live line states + blockers.
+async function getOnboarding(url, auth, env) {
+  const c = await onboardingCtx(auth, env, url.searchParams.get('employee_id'));
+  if (c.res) return c.res;
+  if (!canSeeOnboarding(c.role)) return j2Err('forbidden', 403);
+  const today = istToday();
+  const st = await j2Settings(env);
+  const [or, facts] = await Promise.all([
+    sb(`/rest/v1/employee_onboardings?employee_id=eq.${c.emp.id}&select=*&order=created_at.desc&limit=10`, env),
+    loadProfileFacts(env, [c.emp], st.required_doc_types),
+  ]);
+  if (!or.ok || !facts.ok) return err('db_error', 500);
+  const rows = or.data || [];
+  const ob = rows.find(o => o.status === 'open') || rows[0] || null;
+  const f = facts.byId.get(c.emp.id);
+  const base = { employee: OB_EMP_PUBLIC(c.emp), role: c.role, can_manage: canManageOnboarding(c.role), today,
+    can_start: canManageOnboarding(c.role) && c.emp.status !== 'exited' && !rows.some(o => o.status === 'open' || o.status === 'complete'),
+    history: rows.filter(o => o !== ob).map(o => ({ id: o.id, status: o.status, created_at: o.created_at })),
+    // The completion rule's labels only (never values) — the manager sees what is left, not the data.
+    profile_missing: f.missing.map(x => x.label) };
+  if (!ob) return ok({ ...base, onboarding: null, items: [], blockers: [], progress: null });
+  const ir = await sb(`/rest/v1/onboarding_items?onboarding_id=eq.${ob.id}&select=*&order=sort.asc,line_key.asc`, env);
+  if (!ir.ok) return err('db_error', 500);
+  const self = c.role === 'employee';
+  const items = decorateItems(ir.data || [], f, today, c.role).map(i => (self ? selfViewItem(i) : i));
+  return ok({ ...base, onboarding: self ? selfViewOnboarding(ob) : ob, items, blockers: ob.status === 'open' ? onboardingBlockers(ir.data || [], f) : [],
+    progress: onboardingProgress(ir.data || [], f) });
+}
+
+// POST updateOnboardingItem {item_id, status: done|na|open, note} — self-serve: HR any line (auto lines only while
+// unverifiable, with a note); the manager chain only owner='manager' manual lines. onboarding_update_item re-checks
+// every rule under the onboarding lock, including the live auto check.
+async function updateOnboardingItem(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.item_id)) return err('item_id required', 400);
+  const item = (await sb(`/rest/v1/onboarding_items?id=eq.${d.item_id}&select=*&limit=1`, env)).data?.[0];
+  if (!item) return j2Err('item_not_found', 404);
+  const ob = (await sb(`/rest/v1/employee_onboardings?id=eq.${item.onboarding_id}&select=id,employee_id,status&limit=1`, env)).data?.[0];
+  if (!ob) return j2Err('onboarding_not_found', 404);
+  const c = await onboardingCtx(auth, env, ob.employee_id);
+  if (c.res) return c.res;
+  if (ob.status !== 'open') return j2Err('onboarding_not_open');
+  const te = canTickOnboardingItem(c.role, item);
+  if (te) return j2Err(te, 403);
+  const note = String(d.note || '').trim().slice(0, OB_NOTE_MAX) || null;
+  let live = null;
+  if (item.auto_source && d.status === 'done') {
+    const st = await j2Settings(env);
+    const facts = await loadProfileFacts(env, [c.emp], st.required_doc_types);
+    if (!facts.ok) return j2Err('live_check_failed', 502);
+    live = autoStatus(item.auto_source, facts.byId.get(c.emp.id));
+  }
+  const ce = checkOnboardingItemUpdate(item, { status: d.status, note }, live, c.role);
+  if (ce) return j2Err(ce, ce === 'bad_item_status' ? 400 : ce === 'forbidden_item' ? 403 : 409);
+  const r = await hiringRpc(env, 'onboarding_update_item', { item_id: item.id, status: d.status, note,
+    actor_user_id: auth.userId, role: c.role });
+  return r.ok ? ok(r.data) : j2DbError(r);
+}
+
+// POST startOnboarding {employee_id} (HR) — for an active employee with no open / complete onboarding (joiners added
+// outside J1, or a J1 hook that failed).
+async function startOnboarding(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  const c = await onboardingCtx(auth, env, d.employee_id);
+  if (c.res) return c.res;
+  if (!canManageOnboarding(c.role)) return j2Err('forbidden', 403);
+  const r = await startOnboardingFor(env, c.emp.id, auth.userId, 'hr');
+  return r.ok ? ok(r.data) : j2DbError(r);
+}
+
+async function onboardingWriteCtx(auth, env, onboardingId) {
+  if (!isUuid(onboardingId)) return { res: err('onboarding_id required', 400) };
+  const ob = (await sb(`/rest/v1/employee_onboardings?id=eq.${onboardingId}&select=*&limit=1`, env)).data?.[0];
+  if (!ob) return { res: j2Err('onboarding_not_found', 404) };
+  const c = await onboardingCtx(auth, env, ob.employee_id);
+  if (c.res) return c;
+  if (!canManageOnboarding(c.role)) return { res: j2Err('forbidden', 403) };
+  return { ob, emp: c.emp };
+}
+
+// POST completeOnboarding {onboarding_id} (HR, never one's own) — blockers computed here and returned verbatim;
+// onboarding_complete re-checks every line (auto lines live) under the lock and is the authority.
+async function completeOnboarding(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  const c = await onboardingWriteCtx(auth, env, d.onboarding_id);
+  if (c.res) return c.res;
+  if (c.ob.status !== 'open') return j2Err('onboarding_not_open');
+  const st = await j2Settings(env);
+  const [ir, facts] = await Promise.all([
+    sb(`/rest/v1/onboarding_items?onboarding_id=eq.${c.ob.id}&select=*`, env),
+    loadProfileFacts(env, [c.emp], st.required_doc_types),
+  ]);
+  if (!ir.ok) return err('db_error', 500);
+  if (!facts.ok) return j2Err('live_check_failed', 502);
+  const blockers = onboardingBlockers(ir.data || [], facts.byId.get(c.emp.id));
+  if (blockers.length) return j2Err('onboarding_blocked', 409, { blockers });
+  const r = await hiringRpc(env, 'onboarding_complete', { onboarding_id: c.ob.id, actor_user_id: auth.userId });
+  return r.ok ? ok(r.data) : j2DbError(r);
+}
+
+// POST cancelOnboarding {onboarding_id, reason} (HR) — e.g. started for the wrong person. Items stay as history.
+async function cancelOnboarding(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  const c = await onboardingWriteCtx(auth, env, d.onboarding_id);
+  if (c.res) return c.res;
+  const reason = String(d.reason || '').trim();
+  if (reason.length < 5) return j2Err('cancel_reason_required', 400);
+  const r = await sb(`/rest/v1/employee_onboardings?id=eq.${c.ob.id}&status=eq.open`, env, { method: 'PATCH',
+    body: JSON.stringify({ status: 'cancelled', cancelled_at: nowIso(), cancelled_by: auth.userId, cancel_reason: reason.slice(0, 500) }) });
+  if (!r.ok) return j2DbError(r);
+  if (!r.data?.length) return j2Err('onboarding_not_open');
+  return ok({ onboarding_id: c.ob.id, status: 'cancelled' });
+}
+
+// ── HR boards ────────────────────────────────────────────────────────────────
+
+// Every active employee's completion (labels only, never values). → { ok, rows, totals, incomplete, active }
+async function completionSnapshot(env, st) {
+  const er = await sb(`/rest/v1/employees?status=eq.active&select=${OB_EMP_SELECT},department:department_id(name)&order=full_name.asc&limit=2000`, env);
+  if (!er.ok || !Array.isArray(er.data)) return { ok: false };
+  const emps = er.data;
+  const facts = await loadProfileFacts(env, emps, st.required_doc_types);
+  if (!facts.ok) return { ok: false };
+  const totals = {};
+  const rows = emps.map(e => {
+    const f = facts.byId.get(e.id);
+    for (const x of f.missing) { totals[x.key] = totals[x.key] || { key: x.key, label: x.label, missing: 0 }; totals[x.key].missing += 1; }
+    return { employee: { ...OB_EMP_PUBLIC(e), department: e.department?.name || null }, missing: f.missing.map(x => x.label),
+      missing_keys: f.missing.map(x => x.key), completion_pct: completionPct(f.missing, st.required_doc_types) };
+  });
+  return { ok: true, rows, totals: Object.values(totals).sort((a, b) => b.missing - a.missing), active: rows.length,
+    incomplete: rows.filter(r => r.missing.length).length };
+}
+
+// GET getProfileCompletion (HR) — per active employee: the missing labels + completion %; per-field totals.
+async function getProfileCompletion(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const st = await j2Settings(env);
+  const s = await completionSnapshot(env, st);
+  if (!s.ok) return err('db_error', 500);
+  return ok({ launched_at: st.launched_at, required_doc_types: st.required_doc_types, active: s.active, incomplete: s.incomplete,
+    totals: s.totals, people: s.rows });
+}
+
+// GET getOnboardingBoard (HR) — open onboardings × lines (overdue = unresolved + due before IST today), joiners in
+// the last 90 days with no onboarding, and the campaign stats.
+async function getOnboardingBoard(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const today = istToday();
+  const st = await j2Settings(env);
+  const from = dueDate(today, -JOINER_WINDOW_DAYS);
+  const [or, jr, s] = await Promise.all([
+    sb(`/rest/v1/employee_onboardings?status=eq.open&select=*&order=created_at.asc&limit=500`, env),
+    sb(`/rest/v1/employees?status=eq.active&date_joined=gte.${from}&select=id,employee_code,full_name,job_title,status,date_joined,employment_type&order=date_joined.desc&limit=500`, env),
+    completionSnapshot(env, st),
+  ]);
+  if (!or.ok || !jr.ok || !Array.isArray(or.data) || !Array.isArray(jr.data) || !s.ok) return err('db_error', 500);
+  const obs = or.data;
+  const obIds = obs.map(o => o.id).filter(isUuid);
+  const empIds = obs.map(o => o.employee_id).filter(isUuid);
+  const joinerIds = jr.data.map(e => e.id).filter(isUuid);
+  const none = Promise.resolve({ ok: true, data: [] });
+  const [ir, er, cov] = await Promise.all([
+    obIds.length ? sb(`/rest/v1/onboarding_items?onboarding_id=in.(${inList(obIds)})&select=*&order=sort.asc`, env) : none,
+    empIds.length ? sb(`/rest/v1/employees?id=in.(${inList(empIds)})&select=${OB_EMP_SELECT}`, env) : none,
+    joinerIds.length ? sb(`/rest/v1/employee_onboardings?employee_id=in.(${inList(joinerIds)})&status=in.(open,complete)&select=employee_id,status`, env) : none,
+  ]);
+  if (![ir, er, cov].every(x => x.ok && Array.isArray(x.data))) return err('db_error', 500);
+  const facts = await loadProfileFacts(env, er.data, st.required_doc_types);
+  if (!facts.ok) return err('db_error', 500);
+  const empBy = new Map(er.data.map(e => [e.id, e]));
+  const board = obs.map(o => {
+    const e = empBy.get(o.employee_id) || { id: o.employee_id };
+    const f = facts.byId.get(o.employee_id) || {};
+    const raw = ir.data.filter(i => i.onboarding_id === o.id);
+    const items = decorateItems(raw, f, today, 'hr');
+    return { onboarding_id: o.id, started_via: o.started_via, created_at: o.created_at, employee: OB_EMP_PUBLIC(e),
+      items: items.map(i => ({ id: i.id, line_key: i.line_key, title: i.title, owner: i.owner, required: i.required,
+        auto_source: i.auto_source, due_date: i.due_date, state: i.state, overdue: i.overdue })),
+      overdue: items.filter(i => i.overdue).length, progress: onboardingProgress(raw, f), blockers: onboardingBlockers(raw, f) };
+  });
+  return ok({ today, onboardings: board, joiners_without: joinersWithoutOnboarding(jr.data, cov.data, today),
+    campaign: { launched_at: st.launched_at, active: s.active, incomplete: s.incomplete }, can_export: canComp(auth) });
+}
+
+// POST launchProfileCampaign (HR) — stamps settings once (idempotent: a second press keeps the first stamp).
+async function launchProfileCampaign(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const r = await sb(`/rest/v1/settings?id=eq.1&profile_campaign_launched_at=is.null`, env, { method: 'PATCH',
+    body: JSON.stringify({ profile_campaign_launched_at: nowIso(), profile_campaign_launched_by: auth.userId, updated_at: nowIso() }) });
+  if (!r.ok) return j2DbError(r);
+  const st = await j2Settings(env);
+  const s = await completionSnapshot(env, st);
+  if (!s.ok) return err('db_error', 500);
+  return ok({ launched_at: st.launched_at, already: !r.data?.length, active: s.active, incomplete: s.incomplete });
+}
+
+// GET getProfileChangeRequests (HR) — pending changes grouped per person: PAN alone, the bank fields as ONE "Bank
+// details" change. Each row carries its rev (decideProfileChange must send them back). Bank account masked (new +
+// current). Then the last 50 decided / withdrawn.
+async function getProfileChangeRequests(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const [pr, dr] = await Promise.all([
+    sb(`/rest/v1/profile_change_requests?status=eq.pending&select=*,employee:employee_id(id,employee_code,full_name,pan_number,auth_user_id)&order=requested_at.asc`, env),
+    sb(`/rest/v1/profile_change_requests?status=neq.pending&select=*,employee:employee_id(id,employee_code,full_name)&order=decided_at.desc&limit=50`, env),
+  ]);
+  if (!pr.ok || !dr.ok || !Array.isArray(pr.data)) return err('db_error', 500);
+  const ids = [...new Set(pr.data.map(x => x.employee_id).filter(isUuid))];
+  const vr = ids.length ? await sb(`/rest/v1/employee_private?employee_id=in.(${inList(ids)})&select=employee_id,bank_account_number,bank_ifsc,bank_account_name`, env) : { ok: true, data: [] };
+  if (!vr.ok) return err('db_error', 500);
+  const privBy = new Map((vr.data || []).map(p => [p.employee_id, p]));
+  const empBy = new Map(pr.data.map(x => [x.employee_id, x.employee || {}]));
+  const rows = pr.data.map(x => {
+    const cur = x.field === 'pan_number' ? x.employee?.pan_number : privBy.get(x.employee_id)?.[x.field];
+    const { employee, ...r } = projectChangeRequest(x);
+    return { ...r, current_value: x.field === 'bank_account_number' ? maskAccount(cur) : (cur ?? null) };
+  });
+  const pending = groupChangeRequests(rows).map(g => {
+    const { pan_number, auth_user_id, ...employee } = empBy.get(g.employee_id) || {};
+    return { ...g, employee, own: !!auth_user_id && auth_user_id === auth.userId };
+  });
+  return ok({ pending, decided: (dr.data || []).map(projectChangeRequest) });
+}
+
+// POST decideProfileChange {employee_id, group: pan|bank, items: [{id, rev}], decision: approved|rejected, note}
+// (HR; never one's own). One decision for the whole group; profile_change_decide refuses if any pending row of the
+// group is not exactly at the rev HR saw (podium_change_request_changed).
+async function decideProfileChange(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!isUuid(d.employee_id)) return err('employee_id required', 400);
+  const c = cleanChangeDecision(d);
+  if (c.error) return j2Err(c.error, 400);
+  const er = await sb(`/rest/v1/employees?id=eq.${d.employee_id}&select=id,auth_user_id&limit=1`, env);
+  if (!er.ok) return err('db_error', 500);
+  if (!er.data?.[0]) return j2Err('employee_not_found', 404);
+  if (er.data[0].auth_user_id === auth.userId) return j2Err('own_change_request', 403);
+  const r = await hiringRpc(env, 'profile_change_decide', { employee_id: d.employee_id, group: c.group, expected: c.expected,
+    decision: c.decision, note: c.note, actor_user_id: auth.userId });
+  return r.ok ? ok(r.data) : j2DbError(r);
+}
+
+// GET getEmployeePrivate?employee_id= — self (full) · HR (addresses / UAN / ESIC / IFSC, bank account masked) ·
+// comp (+ the salary-tier fields; a cross-person read → comp_access_log, decision 2).
+async function getEmployeePrivate(url, auth, env) {
+  const id = url.searchParams.get('employee_id');
+  if (!isUuid(id)) return err('employee_id required', 400);
+  const er = await sb(`/rest/v1/employees?id=eq.${id}&select=id,full_name,auth_user_id&limit=1`, env);
+  if (!er.ok) return err('db_error', 500);
+  const emp = er.data?.[0];
+  if (!emp) return err('not_found', 404);
+  const self = !!emp.auth_user_id && emp.auth_user_id === auth.userId;
+  const hr = isHr(auth), comp = canComp(auth);
+  if (!self && !hr && !comp) return err('forbidden', 403);
+  const pr = await sb(`/rest/v1/employee_private?employee_id=eq.${id}&select=*&limit=1`, env);
+  if (!pr.ok) return err('db_error', 500);
+  const row = pr.data?.[0] || { employee_id: id };
+  if (comp && !self) await logCompAccess(auth, 'getEmployeePrivate', id, null, env, { fields: SALARY_PRIVATE_FIELDS });
+  return ok({ employee_id: id, private: projectPrivate(row, { self, hr, comp }), tier: { self, hr, comp } });
+}
+
+// GET exportXPayroll?employee_ids=a,b — canComp (decision 3: it carries Annual CTC + past salary); one
+// comp_access_log row per employee. The CSV reproduces the XPayroll sheet's headers verbatim (onboarding.js).
+async function exportXPayroll(url, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  const ids = [...new Set(String(url.searchParams.get('employee_ids') || '').split(',').map(s => s.trim()).filter(isUuid))].slice(0, 200);
+  if (!ids.length) return err('employee_ids required', 400);
+  const st = await j2Settings(env);
+  const [er, pr, cr, car] = await Promise.all([
+    sb(`/rest/v1/employees?id=in.(${inList(ids)})&select=id,employee_code,full_name,work_email,date_joined,job_title,pan_number,phone,gender,date_of_birth,department:department_id(name)&order=full_name.asc`, env),
+    sb(`/rest/v1/employee_private?employee_id=in.(${inList(ids)})&select=*`, env),
+    sb(`/rest/v1/compensation_events?employee_id=in.(${inList(ids)})&select=employee_id,event_type,new_ctc,effective_date,created_at&order=effective_date.desc,created_at.desc`, env),
+    sb(`/rest/v1/candidates?employee_id=in.(${inList(ids)})&select=id,employee_id`, env),
+  ]);
+  if (![er, pr, cr, car].every(x => x.ok && Array.isArray(x.data))) return err('db_error', 500);
+  const candIds = car.data.map(c => c.id).filter(isUuid);
+  const offr = candIds.length
+    ? await sb(`/rest/v1/offers?candidate_id=in.(${inList(candIds)})&status=eq.accepted&select=candidate_id,pf_opt_out,revision,accepted_at&order=accepted_at.desc.nullslast,revision.desc`, env)
+    : { ok: true, data: [] };
+  if (!offr.ok) return err('db_error', 500);
+  const empOfCand = new Map(car.data.map(c => [c.id, c.employee_id]));
+  const pfBy = new Map();
+  for (const o of offr.data || []) { const e = empOfCand.get(o.candidate_id); if (e && !pfBy.has(e)) pfBy.set(e, o.pf_opt_out); }
+  const privBy = new Map(pr.data.map(p => [p.employee_id, p]));
+  const rows = er.data.map(e => xpayrollRow({ emp: e, priv: privBy.get(e.id) || {}, department: e.department?.name || null,
+    ctc: currentCtc(cr.data.filter(x => x.employee_id === e.id)), pf_opt_out: pfBy.has(e.id) ? pfBy.get(e.id) : null, pt_state: st.pt_state }));
+  // PF Y/N blank = no accepted offer carried the flag — the UI warns before HR uploads.
+  const pfBlank = er.data.filter(e => !pfBy.has(e.id) || (pfBy.get(e.id) !== true && pfBy.get(e.id) !== false))
+    .map(e => ({ id: e.id, employee_code: e.employee_code, full_name: e.full_name }));
+  // One audit row per employee, in ONE insert — and unlike a single read, the export FAILS CLOSED without it: a
+  // bulk salary + bank file must never leave unlogged.
+  let ar;
+  try {
+    ar = await sb(`/rest/v1/comp_access_log`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(er.data.map(e => ({
+      viewer_user_id: auth.userId, viewer_name: auth.fullName || null, action: 'exportXPayroll', subject_employee_id: e.id,
+      subject_label: null, detail: { count: er.data.length } }))) });
+  } catch (_e) { ar = { ok: false }; }
+  if (!ar?.ok) return j2Err('audit_failed', 500);
+  // rows = typed cells for the app's .xlsx writer (text_columns written as text); csv = the fallback (="…" text).
+  return ok({ headers: XPAYROLL_HEADERS, rows, text_columns: XPAYROLL_TEXT_COLUMNS, csv: xpayrollCsv(rows),
+    file_name: `xpayroll-onboarding-${istToday()}.xlsx`, count: rows.length, pf_blank: pfBlank });
+}
+
+// ── Admin: the onboarding template + policies (HR / podium_admin) ────────────
+
+async function getOnboardingTemplate(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const r = await sb(`/rest/v1/onboarding_lines?select=*&order=sort.asc,key.asc`, env);
+  if (!r.ok) return err('db_error', 500);
+  return ok({ lines: r.data || [], owners: OB_OWNERS, auto_sources: OB_AUTO_SOURCES });
+}
+
+// POST saveOnboardingLine {key, title, owner, required, allow_na, applies_to, due_offset_days, sort, active} — upsert
+// by key. auto_source is never written here (behaviour, not wording — as X1): a new line is always manual.
+async function saveOnboardingLine(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const row = cleanOnboardingLine(body.data || body);
+  if (row.error) return j2Err(row.error, 400);
+  const r = await sb(`/rest/v1/onboarding_lines?on_conflict=key`, env, { method: 'POST',
+    prefer: 'return=representation,resolution=merge-duplicates', body: JSON.stringify([row]) });
+  if (!r.ok) return j2DbError(r);
+  return ok(r.data?.[0] || null);
+}
+
+// GET getPolicies (HR) — every version, with the acknowledgement count per row.
+async function getPolicies(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const [pr, ar] = await Promise.all([
+    sb(`/rest/v1/policies?select=id,title,version,applies_to,active,published_at&order=title.asc,version.desc`, env),
+    sb(`/rest/v1/policy_acknowledgements?select=policy_id`, env),
+  ]);
+  if (!pr.ok || !ar.ok) return err('db_error', 500);
+  const counts = {};
+  for (const a of ar.data || []) counts[a.policy_id] = (counts[a.policy_id] || 0) + 1;
+  return ok({ policies: (pr.data || []).map(p => ({ ...p, acknowledgements: counts[p.id] || 0 })) });
+}
+
+// POST createPolicyUploadUrl {file_name, file_size} (HR) — a PDF under policies/ in the private bucket.
+async function createPolicyUploadUrl(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  const fe = fileOk(String(d.file_name || ''), ['pdf'], d.file_size);
+  if (fe) return j2Err(fe === 'bad_file_type' ? 'bad_policy' : fe, 400);
+  const path = policyPath(d.file_name);
+  const seg = path.split('/').map(encodeURIComponent).join('/');
+  const sr = await storageFetch(`/object/upload/sign/${DOC_BUCKET}/${seg}`, env, { method: 'POST' });
+  if (!sr.ok || !sr.data?.url) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
+  return ok({ storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null });
+}
+
+// POST savePolicy {title, storage_path, applies_to} (HR) — publishes a new title, or the next version of one
+// (policy_publish: the old version is deactivated; its acks stay valid for it only).
+async function savePolicy(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  const applies = Array.isArray(d.applies_to) ? [...new Set(d.applies_to.map(String))].slice(0, 10) : [];
+  const r = await hiringRpc(env, 'policy_publish', { title: String(d.title || '').trim(), storage_path: d.storage_path,
+    applies_to: applies, actor_user_id: auth.userId });
+  return r.ok ? ok(r.data) : j2DbError(r);
+}
+
+// POST setPolicyActive {id, active} (HR) — withdraw a policy (or bring an old version back if none is active).
+async function setPolicyActive(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!isUuid(d.id) || typeof d.active !== 'boolean') return err('id + active required', 400);
+  const r = await sb(`/rest/v1/policies?id=eq.${d.id}`, env, { method: 'PATCH', body: JSON.stringify({ active: d.active }) });
+  if (!r.ok) return j2DbError(r);
+  if (!r.data?.length) return j2Err('policy_not_found', 404);
+  return ok(r.data[0]);
+}
+// ── end J2
 
 const GET_ACTIONS = {
   getMe, getSettings,
@@ -6399,6 +7178,9 @@ const GET_ACTIONS = {
   getWorkAccount, checkWorkEmail,
   // X1 — exits (getExit is self-serve, self-scoped by exitCtx; the rest need podium_view)
   getExit, getExits, getExitChecklist, getMyTeamExits,
+  // J2 — onboarding + profile completion (self-serve ones listed in SELF_SERVE_GET)
+  getMyProfile, getPolicyFile, getOnboarding, getEmployeePrivate, exportXPayroll,
+  getOnboardingBoard, getProfileCompletion, getProfileChangeRequests, getOnboardingTemplate, getPolicies,
 };
 
 const POST_ACTIONS = {
@@ -6444,6 +7226,10 @@ const POST_ACTIONS = {
   // X1 — exits (startExit is self-serve, self-scoped by exitCtx; the rest need podium_view)
   startExit, updateExitItem, updateExit, cancelExit, closeExit, backfillExit, actGoogleExitItem,
   saveExitChecklistLine, saveExitTool, revokeExitedAccess, openGoogleExitItem,
+  // J2 — onboarding + profile completion (self-serve ones listed in SELF_SERVE_POST)
+  saveMyProfile, createMyDocumentUploadUrl, recordMyDocument, acknowledgePolicy, updateOnboardingItem, withdrawMyChangeRequest,
+  startOnboarding, completeOnboarding, cancelOnboarding, launchProfileCampaign, decideProfileChange,
+  saveOnboardingLine, createPolicyUploadUrl, savePolicy, setPolicyActive,
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.
@@ -6478,6 +7264,11 @@ const SELF_SERVE_GET = new Set([
   // X1 — your own exit (Resign) / your reports' exits; exitCtx self-scopes (self, manager chain, HR).
   // getMyTeamExits = the caller's own chain only (the /me "Your team" list).
   'getExit', 'getMyTeamExits',
+  // J2 — a brand-new joiner holds NO Podium role, so their own profile / policies / onboarding must be here.
+  // getMyProfile self-scopes on auth_user_id; getPolicyFile = HR or a policy that applies to the caller;
+  // getOnboarding self-scopes via onboardingCtx (self, manager chain, HR); getEmployeePrivate = self / HR / comp
+  // inside; exportXPayroll = requireComp (a comp-only user need not hold podium_view).
+  'getMyProfile', 'getPolicyFile', 'getOnboarding', 'getEmployeePrivate', 'exportXPayroll',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
@@ -6504,6 +7295,10 @@ const SELF_SERVE_POST = new Set([
   // X1 — Resign (self) / start a report's exit (manager chain) / tick manager lines; exitCtx self-scopes and
   // canTickItem limits a manager to owner='manager' lines (exit_update_item re-checks).
   'startExit', 'updateExitItem',
+  // J2 — the joiner's own profile, documents and policy acks (self-scoped on auth_user_id), and the manager
+  // chain's onboarding lines (onboardingCtx + canTickOnboardingItem; onboarding_update_item re-checks).
+  'saveMyProfile', 'createMyDocumentUploadUrl', 'recordMyDocument', 'acknowledgePolicy', 'updateOnboardingItem',
+  'withdrawMyChangeRequest',
 ]);
 
 async function handleGet(url, request, env) {

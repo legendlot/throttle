@@ -174,7 +174,8 @@ export function WorkAccountCard({ a, session, onChanged }) {
     if (!window.confirm(`Confirm they joined on ${fmtDate(startDate)}? This creates the employee record.`)) return;
     run('confirmJoining', { application_id: a.id, start_date: startDate }, r => {
       setNeedsResolution(!!r.opening_needs_resolution);
-      showToast(`Joined — ${r.employee_code}${r.opening_filled ? ' · opening filled' : ''}`, 'success');
+      // J2: onboarding starts with the joining, best-effort — a failure is reported, never blocks (HR's board lists them).
+      showToast(`Joined — ${r.employee_code}${r.opening_filled ? ' · opening filled' : ''}${r.onboarding_started === false ? ' · onboarding NOT started — start it from People → Onboarding' : r.onboarding_started ? ' · onboarding started' : ''}`, 'success');
     });
   }
   function markNoShow() {

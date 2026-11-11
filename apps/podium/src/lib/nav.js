@@ -1,7 +1,7 @@
 import {
   Users, Network, Briefcase, Building2, BarChart3, Settings, UserPlus,
   Star, Activity, ShieldCheck, UserCog, ClipboardCheck, BookOpen, Factory, Wallet,
-  TrendingUp, Target, ClipboardList, FileSignature, LogOut, ListChecks,
+  TrendingUp, Target, ClipboardList, FileSignature, LogOut, ListChecks, IdCard, UserCheck, ScrollText,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -15,12 +15,17 @@ export const NAV_GROUPS = [
       { id: 'new',         label: 'New Person',  route: '/people/new',  icon: UserPlus, accent: 'orange', requires: 'podium_hr' },
       // X1 — open exits, Google accounts to action, the backfill review (HR; the worker gates getExits).
       { id: 'exits',       label: 'Exits',       route: '/exits',       icon: LogOut,    requires: 'podium_hr' },
+      // J2 — joiners' onboarding, the profile campaign, PAN / bank change requests, the XPayroll export (HR).
+      { id: 'onboarding',  label: 'Onboarding',  route: '/onboarding',  icon: UserCheck, requires: 'podium_hr' },
     ],
   },
   {
     id: 'performance', label: 'PERFORMANCE', icon: Activity,
     items: [
       { id: 'me',   label: 'My Performance', route: '/me',   icon: Star },
+      // J2 — your own profile / documents / policies (+ "Your first weeks" for a joiner). No requires: a joiner
+      // has no Podium role, and this is where the banner sends them.
+      { id: 'welcome', label: 'My Profile', route: '/welcome', icon: IdCard },
       // Everyone: your self-appraisal + the reports you must review, for the open cycle.
       { id: 'reviews', label: 'Reviews', route: '/reviews', icon: ClipboardList },
       { id: 'okrs', label: 'OKRs',           route: '/okrs', icon: Target,   requires: 'podium_view' },
@@ -64,6 +69,9 @@ export const NAV_GROUPS = [
       { id: 'offer-templates', label: 'Offer Templates', route: '/admin/offer-templates', icon: FileSignature, requires: 'podium_offer_templates' },
       // X1 — the no-dues template + tools list (HR / admin; the worker gates with isHr).
       { id: 'exit-checklist', label: 'Exit Checklist', route: '/admin/exit-checklist', icon: ListChecks, requires: 'podium_hr' },
+      // J2 — the onboarding template + policies (HR / admin; the worker gates with isHr).
+      { id: 'onboarding-checklist', label: 'Onboarding Checklist', route: '/admin/onboarding-checklist', icon: ListChecks, requires: 'podium_hr' },
+      { id: 'policies', label: 'Policies', route: '/admin/policies', icon: ScrollText, requires: 'podium_hr' },
     ],
   },
 ];

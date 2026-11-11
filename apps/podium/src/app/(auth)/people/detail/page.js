@@ -11,6 +11,7 @@ import StatusBadge from '../../../../components/StatusBadge.js';
 import { ObservationsPanel, WinsPanel, OneOnOnesPanel } from '../../../../components/PerformancePanels.js';
 import PayoutsPanel from '../../../../components/PayoutsPanel.js';
 import { ExitPanel } from '../../../../components/ExitBits.js';
+import { OnboardingCard, PrivateDetailsCard } from '../../../../components/OnboardingBits.js';
 import { fmtDate, fmtMoney, tenure, labelOf, EMPLOYMENT_TYPES, DOC_TYPES, GENDER_LABELS } from '../../../../lib/format.js';
 
 const TABS = [
@@ -121,6 +122,9 @@ export default function PersonDetailPage() {
           {data.can_see_comp && <PayoutsPanel employeeId={e.id} session={session} />}
           {/* X1: self (Resign), the manager chain and HR — the worker scopes it; renders nothing otherwise. */}
           {full && <ExitPanel employeeId={e.id} session={session} onChanged={load} />}
+          {/* J2: onboarding (manager chain ticks manager lines, HR all — the worker scopes it) + HR / comp private details. */}
+          {full && <OnboardingCard employeeId={e.id} session={session} />}
+          {(canEdit || data.can_see_comp) && <PrivateDetailsCard employeeId={e.id} session={session} />}
         </div>
         )
       ) : tab === 'observations' ? (

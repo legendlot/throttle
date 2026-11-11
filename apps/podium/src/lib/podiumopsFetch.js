@@ -35,6 +35,11 @@ export async function podiumopsPost(action, body = {}, session) {
     body: JSON.stringify({ action, ...body }),
   });
   const data = await res.json();
-  if (!res.ok || data.ok === false) throw new Error(data.error || `podiumopsPost ${action} failed (${res.status})`);
+  if (!res.ok || data.ok === false) {
+    // J2: the whole error body rides along (e.g. saveMyProfile's per-field `errors`); message stays the code.
+    const e = new Error(data.error || `podiumopsPost ${action} failed (${res.status})`);
+    e.body = data;
+    throw e;
+  }
   return data.data;
 }

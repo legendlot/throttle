@@ -11,6 +11,7 @@ import MyCompensation from '../../../components/MyCompensation.js';
 import MyPayouts from '../../../components/MyPayouts.js';
 import MyOkrsBlock from '../../../components/MyOkrsBlock.js';
 import { MyExitBlock } from '../../../components/ExitBits.js';
+import { ProfileBanner } from '../../../components/OnboardingBits.js';
 
 const TABS = [
   { id: 'wins',         label: 'My Wins' },
@@ -41,6 +42,8 @@ export default function MyPerformancePage() {
   const open = me.open_action_items || [];
   return (
     <div style={{ maxWidth: 840 }}>
+      {/* J2: "Complete your profile — N items left" while the campaign is on (or a joiner's onboarding is open). */}
+      <ProfileBanner session={session} />
       <AppraisalsBanner session={session} />
 
       <MyCompensation />

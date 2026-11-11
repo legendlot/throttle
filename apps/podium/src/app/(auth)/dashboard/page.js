@@ -6,6 +6,7 @@ import { Spinner } from '@throttle/ui';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import { labelOf, EMPLOYMENT_TYPES, tenure } from '../../../lib/format.js';
 import { Avatar, KpiTile, card, cardLabel } from '../../../components/ui.js';
+import { ProfileBanner } from '../../../components/OnboardingBits.js';
 
 const BAR_COLS = ['#F2CD1A', '#9fb0ff', '#4ade80', '#fb923c', '#fbbf24', '#ff8a8a'];
 
@@ -44,6 +45,8 @@ export default function DashboardPage() {
 
   return (
     <div>
+      {/* J2: your own "Complete your profile" banner (self-scoped getMyProfile). */}
+      <ProfileBanner session={session} />
       {/* KPI rail */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
         <KpiTile label="Headcount" value={active.length} sub={newCount ? `+${newCount} this month` : 'steady'} subColor="var(--green-bright)" stripe />
