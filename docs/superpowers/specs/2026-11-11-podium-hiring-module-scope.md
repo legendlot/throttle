@@ -267,6 +267,10 @@ plus `withdrawn` (by LOT, any time before joining) and `superseded`.
 
 ## C4 — Bulk CV upload
 
+> **Afshaan 2026-11-12: no Claude API for CV reading.** He wants a reader that parses the different CV formats
+> itself (PDF text / DOCX / scans) instead of an LLM API route — or a reasoned case for the API route. Discuss when
+> C4 comes up; until then the extraction step below is OPEN.
+
 1. Pick an opening that has a JD, then drop 1–100 CVs (PDF/DOCX/scans; size and type limits).
 2. Files land in a **staging area** (`cv_imports` batch + per-file rows). An abandoned batch is purged after
    7 days.
