@@ -216,7 +216,7 @@ Codex's review found that today's Docket would not keep a founders-only space pr
 | A3 | `setParent` checks neither that the caller can see the parent nor that both tasks share a space — a baseline user can attach their task under any private task id and read its title back. | Require `canSeeTask(parent)` and `parent.space_id = child.space_id`; a sub-task's space and plan link always follow the parent. |
 | A4 | `moveTask` / `bulkMoveTasks` check the destination space only. | Require access to the source space too; moving **out of** a founders-only space requires `docket_plan_admin`. |
 | A5 | `assignDocketRole` / role edits are gated by `docket_admin`, which five accounts hold. | Roles carrying `docket_plan_admin` can be created, edited or assigned **only by a plan admin**; a non-plan-admin cannot change a plan admin's role. |
-| A6 | Docket `admin` (sees every General task) is held by Afshaan, Vinay, **Mohit, Shashwat and "Jarvis"**. The agreement: Mohit and each lead see only their own. | Q4 — **must be answered before 16 Nov**; default applied at P0: Mohit and Shashwat move to baseline, "Jarvis" is identified, then changed. |
+| A6 | Docket `admin` (sees every General task) is held by Afshaan, Vinay, **Mohit, Shashwat and "Jarvis"**. The agreement: Mohit and each lead see only their own. | **Answered (Q4):** Mohit and Shashwat keep admin; founders get super admin (`docket_plan_admin`), which alone opens the register. |
 
 ### 5.2 Permissions and rules
 
@@ -476,18 +476,26 @@ Today it acts **as the person**, single-item writes only, every write audited
   deadlines lock as usual) in one transaction; nothing bypasses a check because it came from a template.
 - Four seeds — launch, US shipment, month-end close, new joiner — written by the owning leads, not this spec.
 
-## 12. Phases
+## 12. Releases (re-cut 2026-11-11 — no due dates)
 
-| Phase | Date | Ships |
-|---|---|---|
-| **P0-a** | **by 14 Nov** | the access holes A1–A5 · Founders' space + confidentiality triggers · `docket_plan_admin` + role-grant guard · Q4/A6 applied · transactional deadline RPC · access tests |
-| **P0-b** | **by 16 Nov** | `plan_items` + history (all kinds in the schema; themes + proposed milestones live, at levels F/O/T/L) · `tasks.plan_item_id` + the Plan field in the drawer + connector (`docket_plan` themes/items, `plan_item_id`) · List: week-ending group-by + Week filter + setting · week cohort table + its trigger (so scores are exact from week one) · one-time load of themes + 82 proposed milestones |
-| **P1** | **by 30 Nov** | lifecycle RPCs + matrix + split · results · done-when/measure/⚠ · proposals + queue · three-week view + warnings · review pack (provisional/final, cron close) + staleness + escalation + export + snapshots · Saturday founders' page · hand-off fields + accept + pack section · Slack app, identities, reminders, shortcut, `/docket`, buttons · connector plan writes · Programs retired · Plan field + week grouping on Grid, Board, quick capture · `docket_review` level R |
-| **P2** | **December** (re-plan page by 20 Dec) | tree view · templates + seeds · Incoming hand-offs UI · measure auto-check · score trend chart · re-plan page |
+Afshaan, 2026-11-11: *"I don't care about the due dates … build continuously, as fast as possible, test it to
+the limit, then release. Progressive releases."* The 16 Nov / 30 Nov / December phases are dropped; the work
+ships as a sequence of releases, each tested hard and released on its own. **Docket is not populated by
+this build** — themes and milestones are entered by the founders, item by item, in the container R1 ships.
 
-**P0 is never cut below the access walls.** If P0-b slips, what moves is the List grouping and the Plan
-field's polish — tasks can still be linked through the connector — not A1–A6, the Founders' space or the
-triggers. The 20 Nov review runs on the runbook either way.
+| Release | Ships |
+|---|---|
+| **R1 — the container** | Super admin (`docket_plan_admin`, Afshaan + Vinay) + role-grant guard (A5) · `plan_items` + `plan_item_history`, all writes via transactional RPCs · create/edit themes, milestones, results; agree / redate / drop / done / reopen (§4.3 minus split) · `/plan` register (super admins: everything; others: "My milestones" + results under them) · projection levels F / O / T (§5.3) · `restricted` themes invisible below F |
+| R2 — tasks link up | `tasks.plan_item_id` + Plan field (drawer, quick capture, Grid, Board) + chips + filters + Unplanned · level L redaction in hydration/search/connector · Founders' space + confidentiality triggers + A4 · connector `docket_plan` read + `plan_item_id` |
+| R3 — lifecycle depth | split (§4.3.1) · done-when/measure + ⚠ no data source · proposals + queue (§4.5) |
+| R4 — weeks | week-ending group-by + Week filter (all views) · three-week view + warnings (§7.2) |
+| R5 — the score | transactional deadline RPC · `week_commitments` cohort · `week_score()` · connector `score` |
+| R6 — review | review pack (provisional/final) + staleness + export + snapshots · Saturday founders' page · level R (Associates) |
+| R7 — Slack | Docket Slack app, identities, cron, reminders, shortcut, `/docket`, buttons |
+| R8 — hand-offs | fields + accept + pack section + Incoming |
+| R9 — | tree view · templates · measure auto-check · score trend · re-plan page · Programs retired |
+
+Order can change release to release; each is hostile-reviewed and smoked live before the next starts.
 
 ## 13. Out of scope
 
@@ -512,8 +520,9 @@ Time tracking, sprints/points, docs and whiteboards, custom fields, an automatio
   redate/split/drop.
 - **Q3 — May a teammate see the code + title of a milestone they don't own when they can see a task under
   it?** Default no ("Another owner's milestone").
-- **Q4 — Mohit, Shashwat and "Jarvis" hold Docket admin (every General task). Before 16 Nov:** default —
-  founders keep admin; Mohit and Shashwat move to baseline; identify "Jarvis", then change it.
+- **Q4 — ANSWERED 2026-11-11 (Afshaan):** Mohit and Shashwat **keep Docket admin** (General task visibility);
+  Afshaan and Vinay are **super admins** (`docket_plan_admin` on top of admin) — only they see the whole
+  register and targets. "Jarvis" is Afshaan's agent principal; losing access is fine, handled separately.
 - **Q5 — Reminder times, recipients, and which Slack channels team packs post to** (§9.2 defaults).
 - **Q6 — Theme targets visible to anyone below the founders?** Default no.
 - **Q7 — Do the Founders' Associates see the whole unrestricted register (level R) to run the reviews?**
