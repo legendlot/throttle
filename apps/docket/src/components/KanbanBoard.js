@@ -17,6 +17,7 @@ import { Avatar, personColor } from './primitives.js';
 import { SETTABLE_STATUSES, STATUS_MAP } from '../lib/tasks.js';
 import { Pill, Menu, MenuItem, AvatarStack, Button } from './ui/index.js';
 import { PriorityFlag, DeadlineCell } from './tasks/TaskCells.js';
+import { DepsBadge } from './task/Dependencies.js';
 import { useQuickCapture, CaptureChips, withHint, keepFocus, isSubmitKey } from './tasks/QuickCapture.js';
 
 const NONE = '__none__';
@@ -320,7 +321,10 @@ function KanbanCard({ task, axis, ctx, dragging, onDragStart, onDragEnd, onMove,
       aria-label={`${task.task_no ? task.task_no + ' ' : ''}${task.title}${ed ? ' — Shift+Left/Right to move' : ''}`}
       draggable={ed} onDragStart={ed ? (e) => onDragStart(e, task) : undefined} onDragEnd={onDragEnd}
       onClick={() => openDrawer(task.id)} onKeyDown={onKeyDown}>
-      <div className="kb-title">{task.title}</div>
+      <div className="kb-title-row">
+        <div className="kb-title">{task.title}</div>
+        <DepsBadge task={task} getSession={ctx.getSession} editable={ed && task.status !== 'abandoned'} onOpen={openDrawer} onChanged={ctx.depsChanged} />
+      </div>
       {size === 's' ? (
         <div className="kb-meta">{owner}<span className="kb-id">{task.task_no}</span></div>
       ) : <>

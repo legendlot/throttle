@@ -1,6 +1,6 @@
 # Docket — task dependencies (F7), modelled on ClickUp
 
-> 2026-11-11 · Status: **scoped, awaiting Afshaan's calls in §6** · Reverses one line of
+> 2026-11-11 · Status: **✅ SETTLED 2026-11-11 — all §6 recommendations accepted ("Yes, build it"); building** · Reverses one line of
 > `2026-11-09-docket-functionality.md` §4 ("Dependencies — not proposed, `blocked` used on 6 tasks"):
 > Afshaan asked for it ahead of moving the team onto Docket "in a big way".
 
@@ -73,7 +73,7 @@ docket.task_links
 
 ### 3.5 Manual + tests
 - Manual 1.6.0: task-detail and task-list chapters.
-- Unit tests: cycle refusal, visibility masking, the 409 → force flow, unblock history.
+- Unit tests: client-side only (`apps/docket/src/lib/deps.test.mjs`). docketops-worker has no test harness. The cycle check, visibility masking, 409/force and unblock history were verified in a rolled-back DB transaction and in the live smoke, not by a suite.
 - Hostile review before commit.
 
 ## 4. Deliberately not copied
@@ -96,7 +96,7 @@ One package, about one session including review, deploy and manual:
 
 Nothing existing changes shape. Tasks with no links render exactly as today.
 
-## 6. Decisions for Afshaan (recommendations first)
+## 6. Decisions — ✅ all recommendations accepted 2026-11-11
 
 - **G1 — Related links in v1?** Recommended **yes**. It comes almost free with the same table and picker, and ClickUp users expect it.
 - **G2 — Does an abandoned blocker clear the wait?** Recommended **yes**, labelled "Blocker abandoned" so the waiting owner knows the work wasn't actually done.
@@ -107,3 +107,31 @@ Nothing existing changes shape. Tasks with no links render exactly as today.
 Sources: ClickUp Help — *Intro to Dependency Relationships*, *Create Dependency Relationships in tasks*,
 *Create Dependency Relationships in views*, *Dependency Warnings*, *Rescheduling dependencies*, *Create
 relationships on tasks* (help.clickup.com, read 2026-11-11).
+
+## 7. API contract (build reference)
+
+**Link item** (a task on the other end, visible to the caller):
+`{ link_id, kind: 'blocks'|'relates', id, task_no, title, status, owner_name, due, space_name, cleared }`
+— `due` = effective deadline (revised ?? deadline) or null; `cleared` = status is done or abandoned.
+
+**`links` object**:
+`{ waiting_on: [item], blocking: [item], related: [item], hidden: { waiting_on, blocking, related }, hidden_links: [{ link_id, direction }], waiting_open, blocking_open }`
+— `hidden_links` = ids only, so the editable end can still remove a link to a task it can no longer open.
+— `hidden.*` = links whose other task the caller can't open (rendered "N task(s) you can't see", never a number/title);
+`waiting_open` / `blocking_open` count open (not done/abandoned) other ends INCLUDING hidden ones.
+
+| Call | Shape |
+|---|---|
+| `getTask` | adds `links` (object above) |
+| GET `getTaskLinks?id=` | `links` only — same gate as getTask (for the row/card popover) |
+| every list row (`getTasks`, `getMyTasks`, `getProgramTasks`, `getStaleTasks` via hydrateTasks) | adds `waiting_open`, `waiting_total`, `blocking_open`, `related_count` (ints, hidden included) |
+| list filter param | `deps=waiting` (waiting_open>0) · `deps=blocking` (blocking_open>0) on getTasks / getMyTasks / getProgramTasks |
+| POST `addTaskLink` `{ id, other_id, kind: 'waiting_on'\|'blocks'\|'relates' }` | → `{ link_id }`. Refusals: 404 `not_found` · 403 `forbidden` (can't edit `id`) · 403 `forbidden_other` (can't open `other_id`) · 422 `self_link` · `cycle` · `already_linked` · `recurring_task` · `archived_task` · `abandoned_read_only` (this task) · `other_abandoned` |
+| POST `removeTaskLink` `{ link_id }` | → `{ removed: true }`. Needs edit rights on a non-abandoned end; 404 `not_found`, 403 `forbidden` |
+| POST `changeStatus` `{ id, status: 'done', force? }` | a task with `waiting_open > 0` and no `force: true` → **409** `{ ok:false, error:'waiting_on', blockers:[{ task_no, title, status }], hidden_open }` |
+| POST `bulkUpdateTasks` `{ field:'status', value:'done', force? }` | any target waiting and no `force` → **409** `{ ok:false, error:'waiting_on', waiting_count, waiting_ids }` |
+
+**History events** (task_history, shown in the task's history panel): `link_added` / `link_removed`
+(`field: 'dependency'`, `note`: `waiting on` | `blocks` | `related to`, value = the other task rendered by the
+worker as `DKT-n · title` or `a task you can't see`), and `unblocked` on a waiting task when its last open
+blocker becomes done/abandoned (value = the blocker, rendered the same way).

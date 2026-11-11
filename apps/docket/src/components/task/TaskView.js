@@ -23,7 +23,7 @@
 import { createRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Spinner, useToast } from '@throttle/ui';
-import { X, ChevronLeft, ChevronRight, ChevronDown, Link2, MoreHorizontal, PanelRight, Maximize2, SquareStack, ArrowUp, Plus, Check, Ban, RotateCcw, Hash } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, ChevronDown, Link2, MoreHorizontal, PanelRight, Maximize2, SquareStack, ArrowUp, Plus, Check, Ban, RotateCcw, Hash, OctagonMinus } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../lib/docketopsFetch.js';
 import { useChrome } from '../../lib/chrome.js';
 import { personColor } from '../primitives.js';
@@ -34,6 +34,9 @@ import { PRIORITIES } from '../../lib/tasks.js';
 import { recurrenceSummary } from '../../lib/recurrence.js';
 import { TaskProps } from './TaskProps.js';
 import { TaskActivity } from './TaskActivity.js';
+import { DepsStrip, DepAddFlow } from './Dependencies.js';
+import { linkCount, sendDone, doneConfirmText, DECLINED } from '../../lib/deps.js';
+import { useCommandSource } from '../../lib/commandSources.js';
 import { readMode, writeMode, goFull, leaveFull, readReturn, readOrder, claimFull } from './taskViewMode.js';
 
 const MODE_META = {
@@ -82,6 +85,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   const [mTab, setMTab] = useState('details');        // mobile: details | activity
   const [modeMenu, setModeMenu] = useState(false);
   const [moreMenu, setMoreMenu] = useState(false);
+  const [depAnchor, setDepAnchor] = useState(null);   // F7 add flow: the ref it opens against, or null
   const [sections, setSections] = useState({});       // collapsed sections
   const [nav, setNav] = useState({ prev: null, next: null });
   const refs = useMemo(() => ({ status: createRef(), owner: createRef(), collab: createRef(), deadline: createRef(), priority: createRef(), team: createRef(), program: createRef(), space: createRef() }), []);
@@ -91,6 +95,8 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   const composerRef = useRef(null);
   const modeRef = useRef(null);
   const moreRef = useRef(null);
+  const depAddRef = useRef(null);
+  const depDescRef = useRef(null);
 
   // A stored "full page" preference: an overlay open goes straight to the full page.
   const order = useCallback(() => (fixedMode === 'full' ? readOrder() : (getOrder?.() || [])), [fixedMode, getOrder]);
@@ -136,7 +142,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   }, [id, userKey, showToast]); // eslint-disable-line react-hooks/exhaustive-deps
   // A different task: drop the old one (nothing — Shift+S… — can edit it mid-load) and
   // its open picker. Only here, not on every reload.
-  useEffect(() => { setTask(null); setLoading(true); setEdit(null); setAbandonMode(false); server.current = { id: null, title: '', description: '' }; }, [id]);
+  useEffect(() => { setTask(null); setLoading(true); setEdit(null); setAbandonMode(false); setDepAnchor(null); server.current = { id: null, title: '', description: '' }; }, [id]);
   useEffect(() => { load(); }, [load]);
   // Side mode: an edit made in the list behind (row edit, board drag) reloads the panel.
   // Skipped right after our own load (our writes refresh the page too).
@@ -157,6 +163,10 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   const canEdit = !!task?._can_edit && task?.status !== 'abandoned';
   const canAddSub = canEdit && task && !task.parent_task_id && !task.is_recurring;
   const mutated = useCallback(async () => { await load(true); onMutated?.(); }, [load, onMutated]);
+  // F7: no dependencies UI on a recurring task; add / remove only while editable (not
+  // abandoned, not archived — the worker refuses those too).
+  const showDeps = !!task && !task.is_recurring;
+  const canLink = showDeps && canEdit && !task.archived_at;
 
   /* ---------------- writes (the drawer's, call for call) ---------------- */
   async function saveField(field, value) {
@@ -167,7 +177,15 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   }
   async function setStatus(status) {
     setBusy(true);
-    try { await docketopsPost('changeStatus', { id: task.id, status }, session); if (status === 'done') showToast('Marked done', 'success'); await mutated(); }
+    try {
+      // Done on a task still waiting on open blockers: the worker answers 409 waiting_on →
+      // warn and offer "Mark done anyway" (F7 decision G3).
+      const send = (force) => docketopsPost('changeStatus', { id: task.id, status, ...(force ? { force: true } : {}) }, session);
+      if (status === 'done') {
+        if (await sendDone(send, (m) => window.confirm(m), (d) => doneConfirmText(d, task.task_no)) === DECLINED) return;
+      } else await send(false);
+      if (status === 'done') showToast('Marked done', 'success'); await mutated();
+    }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
     finally { setBusy(false); }
   }
@@ -231,6 +249,12 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
     collabOpts: task ? employees.filter(e => !(task.collaborators || []).some(c => c.employee_id === e.id) && e.id !== task.owner_employee_id).map(e => ({ value: e.id, label: e.full_name })) : [],
   }), [departments, employees, programs, spaces, task]);
   const revisions = (task?.history || []).filter(h => h.event_type === 'deadline_revised').length;
+
+  // ⌘K "Add dependency" for the open task (CommandBar reads source 'taskView'). Opens the add
+  // flow against the ⋯ button — the one anchor every layout and mobile tab has.
+  const startDep = useCallback((ref) => { setMoreMenu(false); setDepAnchor(ref || moreRef); }, []);
+  const cmdTask = useMemo(() => (canLink ? { taskNo: task.task_no, addDependency: () => startDep(moreRef) } : null), [canLink, task?.task_no, startDep]); // eslint-disable-line react-hooks/exhaustive-deps
+  useCommandSource('taskView', cmdTask);
 
   /* ---------------- navigation / layout ---------------- */
   // Leaving the task (close, ‹ ›, another task, a mode switch) can unmount a field before
@@ -403,10 +427,13 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
           <MenuItem icon={Link2} onClick={copyLink}>Copy link</MenuItem>
           <MenuItem icon={Hash} onClick={copyId}>Copy task id</MenuItem>
           {canAddSub && <MenuItem icon={Plus} shortcut="s" onClick={startSubtask}>Add sub-task</MenuItem>}
+          {canLink && <MenuItem icon={OctagonMinus} onClick={() => startDep(moreRef)}>Add dependency…</MenuItem>}
           {canEdit && task?.status !== 'done' && <MenuItem icon={Check} onClick={() => setStatus('done')}>Mark done</MenuItem>}
           {canEdit && <><MenuSeparator /><MenuItem icon={Ban} danger onClick={startAbandon}>Abandon…</MenuItem></>}
           {task?.status === 'abandoned' && task._can_edit && <MenuItem icon={RotateCcw} onClick={() => setStatus('not_started')}>Reactivate</MenuItem>}
         </Menu>
+        {task && canLink && <DepAddFlow open={!!depAnchor} anchorRef={depAnchor || moreRef} task={task} session={session}
+          onClose={() => setDepAnchor(null)} onAdded={mutated} />}
         {/* A caller that pins an overlay mode (Grid triage) can't have it switched — "Full page"
             would navigate away from the session underneath. */}
         {(!fixedMode || fixedMode === 'full') && <>
@@ -447,8 +474,19 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
       <TaskProps task={task} canEdit={canEdit} busy={busy} edit={edit} setEdit={setEdit} refs={refs}
         abandonMode={abandonMode} setAbandonMode={setAbandonMode} actions={actions} opts={opts} revisions={revisions} />
 
+      {/* F7 Dependencies strip — above the description, only when something is linked. */}
+      {showDeps && linkCount(task.links) > 0 && (
+        <DepsStrip task={task} canEdit={canLink} session={session} onChange={mutated} onOpen={openOther}
+          addRef={depAddRef} onAdd={() => startDep(depAddRef)} />
+      )}
+
       <div className="tv-desc">
-        <div className="tv-sh">Description</div>
+        <div className="tv-sh-row">
+          <div className="tv-sh">Description</div>
+          {canLink && linkCount(task.links) === 0 && (
+            <button ref={depDescRef} type="button" className="tv-add dp-add" onClick={() => startDep(depDescRef)}><Plus size={12} /> Dependency</button>
+          )}
+        </div>
         {canEdit ? (
           <textarea ref={descRef} className="tv-desc-input" placeholder="Add a description…" value={descDraft} aria-label="Description"
             onChange={e => { setDescDraft(e.target.value); grow(e.target); }}

@@ -35,12 +35,63 @@
   <tbody>
     <tr><td><strong>Title and description</strong></td><td>The title (and, on a sub-task, a link up to its parent) and a free-text description. If you can edit the task, click either to change it.</td></tr>
     <tr><td><strong>Properties panel</strong></td><td>A tidy list of fields: Status, Owner, Collaborators, Deadline, Priority, Team, Program, Space, Created (and Completed once done). Click a value to change it. A recurring checklist item shows <strong>Repeats</strong> in place of Deadline.</td></tr>
+    <tr><td><strong>Dependencies</strong></td><td>Waiting on, Blocking and Related links to other tasks. Shown once something is linked (see below).</td></tr>
     <tr><td><strong>Sub-tasks</strong></td><td>The child tasks, with their own owners and statuses, and a done/total count.</td></tr>
     <tr><td><strong>Documents</strong></td><td>Links to outside files (Drive, Sheets, anything with a web address). Docket stores the link, not the file.</td></tr>
     <tr><td><strong>Activity</strong></td><td>Two tabs: <strong>Comments</strong>, with a box at the bottom to write a comment, and <strong>History</strong>, the full audit trail.</td></tr>
   </tbody>
 </table>
 <p>Sub-tasks and Documents are sections you can fold shut by clicking their headings.</p>
+
+<h2 class="sec">Dependencies: waiting on, blocking, related</h2>
+<p>A dependency links two tasks so everyone can see what has to happen first. One link is shown from both ends: if DKT-12 is <em>waiting on</em> DKT-9, then DKT-9 shows as <em>blocking</em> DKT-12.</p>
+<table class="tbl">
+  <thead><tr><th>Link</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Waiting on</strong></td><td>This task cannot really finish until the other task is done. While at least one of those other tasks is still open, this task counts as <em>waiting</em>.</td></tr>
+    <tr><td><strong>Blocking</strong></td><td>The other end of the same link: other tasks are waiting for this one.</td></tr>
+    <tr><td><strong>Related</strong></td><td>A plain cross-reference with no order and no rules. Useful for &ldquo;see also&rdquo;.</td></tr>
+  </tbody>
+</table>
+<p>Links can join tasks in different spaces. Once you have linked at least one task, a <strong>Dependencies</strong> strip appears above the description, with a group for each kind (empty groups are hidden). Each row shows a status dot, the <code>DKT-</code> number, the title, the owner and the due date; click a row to open that task.</p>
+
+<h3>Adding a dependency</h3>
+<ol class="steps">
+  <li>Open the task and choose <strong>Add dependency&hellip;</strong> in the <strong>More actions</strong> (&hellip;) menu. Three other doors lead to the same place: the <strong>+ Add</strong> button on the Dependencies strip, the <strong>+ Dependency</strong> button beside the Description heading when nothing is linked yet, and <span class="kbd">&#8984;K</span> then <em>Add dependency to DKT-&hellip;</em> while the task is open.</li>
+  <li>Pick the kind: <strong>Waiting on&hellip;</strong>, <strong>Blocks&hellip;</strong> or <strong>Related to&hellip;</strong>.</li>
+  <li>Search for the other task by title or <code>DKT-</code> number (two or more characters, in every space you can open) and press <span class="kbd">Enter</span> or click it. Docket confirms with <em>Linked DKT-&hellip;</em>.</li>
+</ol>
+<p>To remove a link, click the <strong>x</strong> at the end of its row (<em>Remove link</em>). You need edit rights on the task you are working in. Both adding and removing are written to the History tab of both tasks (<em>Added dependency</em>, <em>Removed dependency</em>). When the last open blocker of a task is finished or abandoned, the waiting task gets an <em>Unblocked</em> line in its History.</p>
+
+<h3>Finished and abandoned blockers</h3>
+<p>A blocker counts as <strong>cleared</strong> once it is Done. An <strong>abandoned</strong> blocker also counts as cleared, but its row is tagged <strong>Blocker abandoned</strong> so the waiting owner knows the work was dropped, not completed. Cleared links stay on the strip as a record.</p>
+
+<h3>Marking a waiting task done</h3>
+<p>Docket warns you but does not stop you. If you mark a task done while it is still waiting on open tasks, a confirmation appears, for example <em>DKT-9 is still waiting on: DKT-4 Print run. Mark done anyway?</em> Confirm to finish it, or cancel to leave it as it is. The same warning appears when you tick it in the list, drag it on the board or use it in a bulk update (<em>3 of these are waiting on open tasks. Mark all done anyway?</em>).</p>
+
+<h3>Date clash hint</h3>
+<p>If a task is waiting on a blocker that is due <em>after</em> the task itself, the blocker&rsquo;s row shows an amber line such as <em>DKT-123 is due 30 Nov, after this task (25 Nov)</em>. It is only a hint. Docket never moves a date for you, because every deadline change needs a reason.</p>
+
+<h3>Tasks you can&rsquo;t see</h3>
+<p>If a linked task lives in a space you cannot open, it appears only as <em>1 task you can&rsquo;t see</em> (or <em>3 tasks you can&rsquo;t see</em>). No title, number or owner is shown, but it still counts towards <em>waiting</em>.</p>
+
+<h3>What Docket refuses</h3>
+<table class="tbl">
+  <thead><tr><th>You try to&hellip;</th><th>Docket says</th></tr></thead>
+  <tbody>
+    <tr><td>Make a loop (A waits on B, B waits on C, C waits on A)</td><td><em>That would make a loop of tasks waiting on each other.</em></td></tr>
+    <tr><td>Link a task to itself</td><td><em>A task can&rsquo;t depend on itself.</em></td></tr>
+    <tr><td>Link the same two tasks again</td><td><em>These two tasks are already linked.</em></td></tr>
+    <tr><td>Add a dependency to a recurring (checklist) task</td><td><em>Recurring tasks can&rsquo;t have dependencies.</em></td></tr>
+    <tr><td>Change links on an abandoned task, or link to one</td><td><em>This task is abandoned, so it&rsquo;s read-only.</em> / <em>That task is abandoned. Pick an open one.</em> Reactivate the task first to change its links.</td></tr>
+    <tr><td>Link to a task you cannot open</td><td><em>You can&rsquo;t open that task, so you can&rsquo;t link it.</em></td></tr>
+  </tbody>
+</table>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Waiting and Blocked are two different things</div>
+  <p>The <strong>Blocked</strong> status is still a manual choice you make in the Status picker; Docket never sets it for you, and a waiting task keeps whatever status it has. Nothing about a dependency changes a deadline or a status automatically. Reviewers can see links but not change them.</p>
+</div>
 
 <h2 class="sec">Editing</h2>
 <p>Every property is click-to-edit in the panel: click it, pick the new value, and it saves. The title and description save when you click away. You can only edit a task you own, created, or (as an admin) any task. Reviewers see all of this without the edit controls.</p>

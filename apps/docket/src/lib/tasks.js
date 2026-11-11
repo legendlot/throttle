@@ -51,5 +51,8 @@ export const EVENT_LABEL = {
   document_added: 'Document added',
   document_removed: 'Document removed',
   abandoned: 'Abandoned',
+  link_added: 'Dependency added',      // F7 — HistoryPanel renders these as one line (lib/deps.js historyLine)
+  link_removed: 'Dependency removed',
+  unblocked: 'Unblocked',
 };
 export function eventLabel(ev) { return EVENT_LABEL[ev] || ev; }

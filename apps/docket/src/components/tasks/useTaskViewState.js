@@ -44,22 +44,24 @@ export function useTaskViewState({ lensParam }) {
   const [programId, setProgramId] = useState('');
   const [overdue, setOverdue] = useState(false);
   const [revised, setRevised] = useState(false);
+  // F7: '' | 'waiting' (waiting on open tasks) | 'blocking' (blocks open tasks) → getTasks / getMyTasks / getProgramTasks `deps`.
+  const [deps, setDeps] = useState('');
   const [mine, setMine] = useState(lensParam === 'mine');
   // `lens=mine` (sidebar "My tasks") drives the mine filter; absent → off.
   useEffect(() => { setMine(lensParam === 'mine'); }, [lensParam]);
   const [q, setQ] = useState('');
 
   const activeFilterCount = [status, departmentId, employeeId, priority, programId].filter(Boolean).length
-    + [overdue, revised, mine].filter(Boolean).length;
+    + [overdue, revised, deps, mine].filter(Boolean).length;
   const clearFilters = useCallback(() => {
     setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId('');
-    setOverdue(false); setRevised(false); setMine(false);
+    setOverdue(false); setRevised(false); setDeps(''); setMine(false);
   }, []);
   // The Filter popover's own count + clear: Me mode is its own toolbar toggle (P2).
   const panelFilterCount = activeFilterCount - (mine ? 1 : 0);
   const clearPanelFilters = useCallback(() => {
     setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId('');
-    setOverdue(false); setRevised(false);
+    setOverdue(false); setRevised(false); setDeps('');
   }, []);
 
   // ---- view prefs (sticky per person, per device) ----
@@ -139,7 +141,7 @@ export function useTaskViewState({ lensParam }) {
 
   return {
     filters: { status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId, priority, setPriority,
-      programId, setProgramId, overdue, setOverdue, revised, setRevised, mine, setMine, q, setQ,
+      programId, setProgramId, overdue, setOverdue, revised, setRevised, deps, setDeps, mine, setMine, q, setQ,
       activeFilterCount, clearFilters, panelFilterCount, clearPanelFilters },
     groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView,
     cardSize, chooseCardSize,

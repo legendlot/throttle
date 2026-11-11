@@ -37,6 +37,14 @@ async function callAs(binding, url, init) {
     // Worker-side failures that come back as 4xx (docketops: `update_failed: {db json}`) are faults, and their
     // DB diagnostics never reach Claude (Codex 2026-11-09). Only plain request errors are shown.
     if (SERVER_FAIL.test(j.error) || /[{}]/.test(j.error)) return { ok: false, reason: 'unreachable', serverFail: true };
+    // Docket F7: done on a task still waiting on open tasks. Name the blockers (docketops already masked any
+    // the person can't open) and say how to override.
+    if (j.error === 'waiting_on') {
+      const list = (Array.isArray(j.blockers) ? j.blockers : []).slice(0, 5)
+        .map(b => `${b.task_no} ${String(b.title || '').slice(0, 60)}`).join('; ');
+      const more = Number(j.hidden_open) > 0 ? ` (+${Number(j.hidden_open)} you can't see)` : '';
+      return { ok: false, userError: `waiting_on: still waiting on ${list || 'open tasks'}${more}. Call again with force: true to mark it done anyway.`.slice(0, MAX_ERR) };
+    }
     return { ok: false, userError: j.error.slice(0, MAX_ERR) };
   }
   if (!res.ok || !j || j.ok !== true || j.data === undefined || j.data === null) return { ok: false, reason: 'unreachable' };

@@ -50,6 +50,7 @@ export async function docketopsPost(action, body = {}, session) {
   if (!res.ok || data.ok === false) {
     const e = new Error(data.error || `docketopsPost ${action} failed (${res.status})`);
     e.status = res.status;   // callers may tell a 4xx (changed / forbidden) from a 5xx (F3 triage)
+    e.detail = data;         // the full refusal body, as workerFetch does — F7's 409 waiting_on lists its blockers
     throw e;
   }
   // Only after a CONFIRMED success — a failed write must not move a badge.

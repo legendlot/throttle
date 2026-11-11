@@ -20,6 +20,7 @@ import { docketopsGet, docketopsPost } from '../../lib/docketopsFetch.js';
 import { parseQuickAdd, fmtDeadlineLabel } from '../../lib/quickAdd.js';
 import { groupStale, staleAge, reviseError, effective } from '../../lib/stale.js';
 import { useChrome } from '../../lib/chrome.js';
+import { sendDone, doneConfirmText, bulkDoneConfirmText, DECLINED } from '../../lib/deps.js';
 import { modPressed } from '../../lib/platform.js';
 
 // The deadline alone from a quick-typed phrase — same trick as Grid triage.
@@ -92,11 +93,14 @@ export function StaleSweep() {
   const mark = (id, on) => setBusy(b => { const n = new Set(b); if (on) n.add(id); else n.delete(id); return n; });
 
   // One write per row. The row leaves only once the worker confirms; on failure it stays + a toast.
-  async function rowWrite(t, action, body, okText) {
+  // `confirmText(detail)` (done only): a 409 waiting_on asks first and resends with force (F7).
+  async function rowWrite(t, action, body, okText, confirmText) {
     if (busy.has(t.id)) return false;
     mark(t.id, true);
     try {
-      const res = await docketopsPost(action, { id: t.id, ...body }, session);
+      const send = (force) => docketopsPost(action, { id: t.id, ...body, ...(force ? { force: true } : {}) }, session);
+      const res = confirmText ? await sendDone(send, (m) => window.confirm(m), confirmText) : await send(false);
+      if (res === DECLINED) return false;
       // A first deadline the worker ignored (someone set one first) is not a success.
       if (action === 'updateTask' && body.deadline && !(res?.updated || []).includes('deadline')) {
         showToast(`${t.task_no}: a deadline was already set elsewhere — reloaded`, 'error');
@@ -125,7 +129,7 @@ export function StaleSweep() {
       }
     } catch { /* the write below reports its own error */ }
     finally { mark(t.id, false); }
-    return rowWrite(t, 'changeStatus', { status: 'done' }, 'marked done');
+    return rowWrite(t, 'changeStatus', { status: 'done' }, 'marked done', (d) => doneConfirmText(d, t.task_no));
   }
   const revise = (t, iso, reason) => (effective(t)
     ? rowWrite(t, 'reviseDeadline', { new_deadline: iso, reason: reason.trim() }, `revised to ${fmtDeadlineLabel(iso)}`)
@@ -135,12 +139,14 @@ export function StaleSweep() {
   // Bulk: the existing actions skip abandoned + non-editable rows and say how many.
   // → true once the worker answered (even "0 updated"), false on a failed request — the
   // abandon bar keeps its reason open on false.
-  async function runBulk(action, payload, verb) {
+  async function runBulk(action, payload, verb, confirmText) {
     const ids = [...selected];
     if (!ids.length || bulkBusy) return false;
     setBulkBusy(true);
     try {
-      const res = await docketopsPost(action, { ids, ...payload }, session);
+      const send = (force) => docketopsPost(action, { ids, ...payload, ...(force ? { force: true } : {}) }, session);
+      const res = confirmText ? await sendDone(send, (m) => window.confirm(m), confirmText) : await send(false);
+      if (res === DECLINED) return false;
       const updated = res?.updated ?? 0, skipped = res?.skipped ?? 0;
       showToast(`${verb} ${updated}${skipped ? ` · skipped ${skipped} (not editable or already closed)` : ''}`, updated ? 'success' : 'info');
       setSelected(new Set());
@@ -149,7 +155,7 @@ export function StaleSweep() {
     } catch (e) { showToast(e.message || `${verb} failed`, 'error'); return false; }
     finally { setBulkBusy(false); }
   }
-  const bulkDone = () => runBulk('bulkUpdateTasks', { field: 'status', value: 'done' }, 'Marked done');
+  const bulkDone = () => runBulk('bulkUpdateTasks', { field: 'status', value: 'done' }, 'Marked done', bulkDoneConfirmText);
   async function bulkAbandon(reason) {
     if (!window.confirm(`Abandon ${selected.size} task${selected.size === 1 ? '' : 's'}? This is terminal.`)) return false;
     return runBulk('bulkAbandonTasks', { reason: reason.trim() }, 'Abandoned');

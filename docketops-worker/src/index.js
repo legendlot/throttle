@@ -514,20 +514,93 @@ async function getAllSpaces(url, auth, env) {
   return ok((spaces.data || []).map(s => ({ ...s, owner_name: oName[s.owner_user_id] || null, member_count: mCount[s.id] || 0 })));
 }
 
+// ── F7 dependencies (migration 0013, spec 2026-11-11-docket-dependencies.md §7) ─────────────
+// task_links_for returns raw ids + the other end's status (open counts only, never sent for a hidden
+// task); task_cards applies getTask's gate and nulls everything about a task the caller can't open.
+const isOpenStatus = s => s !== 'done' && s !== 'abandoned';
+// The app sends force: true; the MCP gateway's boolean params arrive as the string 'true'.
+const isForce = v => v === true || v === 'true';
+async function rawLinks(taskIds, env) {
+  if (!taskIds.length) return [];
+  const r = await sbDocket(`/rest/v1/rpc/task_links_for`, env, { method: 'POST', body: JSON.stringify({ p_task_ids: taskIds }) });
+  return (r.ok && Array.isArray(r.data)) ? r.data : [];
+}
+function linkCounts(raw) {
+  const m = {};
+  raw.forEach(l => {
+    const c = m[l.task_id] = m[l.task_id] || { waiting_open: 0, waiting_total: 0, blocking_open: 0, related_count: 0 };
+    if (l.direction === 'waiting_on') { c.waiting_total++; if (isOpenStatus(l.other_status)) c.waiting_open++; }
+    else if (l.direction === 'blocking') { if (isOpenStatus(l.other_status)) c.blocking_open++; }
+    else c.related_count++;
+  });
+  return m;
+}
+async function taskCards(ids, auth, env) {
+  const out = {};
+  if (!ids.length) return out;
+  // One accessibleSpaces read per request, however many card lookups it makes (hostile review #8).
+  auth._scopeP = auth._scopeP || programScopeArgs(auth, env);
+  const { memberSpaceIds, defaultId } = await auth._scopeP;
+  const r = await sbDocket(`/rest/v1/rpc/task_cards`, env, { method: 'POST', body: JSON.stringify({
+    p_ids: ids, p_user: auth.userId, p_employee: auth.employeeId, p_dept: auth.departmentId,
+    p_view_all: canViewAll(auth), p_member_space_ids: memberSpaceIds, p_default_space_id: defaultId,
+  }) });
+  (r.ok && Array.isArray(r.data) ? r.data : []).forEach(c => { out[c.id] = c; });
+  return out;
+}
+const cardLabel = c => (c && c.visible) ? `${c.task_no} · ${c.title}` : 'a task you can’t see';
+async function buildLinks(taskId, auth, env) {
+  const mine = (await rawLinks([taskId], env)).filter(l => l.task_id === taskId);
+  // hidden_links carries ids only, so a link to a task the caller can no longer open can still be removed
+  // from the end they CAN edit (hostile review #4) — no title, number or status of the hidden task.
+  const out = { waiting_on: [], blocking: [], related: [], hidden: { waiting_on: 0, blocking: 0, related: 0 }, hidden_links: [], waiting_open: 0, blocking_open: 0 };
+  if (!mine.length) return out;
+  const cards = await taskCards(uniq(mine.map(l => l.other_id)), auth, env);
+  const empIds = uniq(Object.values(cards).filter(c => c.visible).map(c => c.owner_employee_id));
+  const empRes = empIds.length ? await sbPodium(`/rest/v1/employees?id=in.${inList(empIds)}&select=id,full_name`, env) : { data: [] };
+  const empName = {}; (empRes.data || []).forEach(e => { empName[e.id] = e.full_name; });
+  mine.forEach(l => {
+    if (l.direction === 'waiting_on' && isOpenStatus(l.other_status)) out.waiting_open++;
+    if (l.direction === 'blocking' && isOpenStatus(l.other_status)) out.blocking_open++;
+    const c = cards[l.other_id];
+    if (!c || !c.visible) { out.hidden[l.direction]++; out.hidden_links.push({ link_id: l.link_id, direction: l.direction }); return; }
+    out[l.direction].push({
+      link_id: l.link_id, kind: l.kind, id: c.id, task_no: c.task_no, title: c.title, status: c.status,
+      owner_name: empName[c.owner_employee_id] || null, due: c.due, space_name: c.space_name, cleared: !isOpenStatus(c.status),
+    });
+  });
+  const ord = (a, b) => (a.cleared - b.cleared) || String(a.task_no).localeCompare(String(b.task_no), undefined, { numeric: true });
+  out.waiting_on.sort(ord); out.blocking.sort(ord); out.related.sort(ord);
+  return out;
+}
+// deps=waiting | deps=blocking list filter (after hydrateTasks, which adds the counts).
+function depsFilter(rows, deps) {
+  if (deps === 'waiting') return rows.filter(t => (t.waiting_open || 0) > 0);
+  if (deps === 'blocking') return rows.filter(t => (t.blocking_open || 0) > 0);
+  return rows;
+}
+// After tasks go done/abandoned: an 'unblocked' history row on every task whose LAST open blocker that was.
+async function logUnblocked(ids, auth, env) {
+  if (!ids.length) return;
+  await sbDocket(`/rest/v1/rpc/log_unblocked`, env, { method: 'POST', body: JSON.stringify({ p_closed_ids: ids, p_actor: auth.userId }) });
+}
+
 async function hydrateTasks(rows, auth, env) {
   if (!rows.length) return rows;
   const deptIds = uniq(rows.map(t => t.department_id));
   const taskIds = uniq(rows.map(t => t.id));
   const userIds = uniq(rows.map(t => t.created_by_user_id));
   // Every id list goes through sbIn (≤150 per request) — a big list would overflow the URL.
-  const [deptRes, childRes, collabRes, docRes, commRes, creatorRes] = await Promise.all([
+  const [deptRes, childRes, collabRes, docRes, commRes, creatorRes, linkRaw] = await Promise.all([
     sbIn(sbPodium, deptIds, l => `/rest/v1/departments?id=in.${l}&select=id,name`, env),
     sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?parent_task_id=in.${l}&select=parent_task_id,status`, env),
     sbIn(sbDocket, taskIds, l => `/rest/v1/task_collaborators?task_id=in.${l}&select=task_id,employee_id`, env),
     sbIn(sbDocket, taskIds, l => `/rest/v1/task_documents?task_id=in.${l}&select=task_id`, env),
     sbIn(sbDocket, taskIds, l => `/rest/v1/task_comments?task_id=in.${l}&deleted_at=is.null&select=task_id`, env),
     sbIn(sbStore, userIds, l => `/rest/v1/users_profile?id=in.${l}&select=id,full_name`, env),
+    rawLinks(taskIds, env),
   ]);
+  const linkN = linkCounts(linkRaw);
   // Employee names: owners + every collaborator (collaborator ids are only known after collabRes).
   const empIds = uniq([...rows.map(t => t.owner_employee_id), ...(collabRes.data || []).map(c => c.employee_id)]);
   const empRes = await sbIn(sbPodium, empIds, l => `/rest/v1/employees?id=in.${l}&select=id,full_name`, env);
@@ -557,6 +630,8 @@ async function hydrateTasks(rows, auth, env) {
     collaborators: collabByTask[t.id] || [],
     child_count: childCount[t.id] || 0, child_done: childDone[t.id] || 0,
     collab_count: (collabByTask[t.id] || []).length, doc_count: docs[t.id] || 0, comment_count: comm[t.id] || 0,
+    waiting_open: linkN[t.id]?.waiting_open || 0, waiting_total: linkN[t.id]?.waiting_total || 0,
+    blocking_open: linkN[t.id]?.blocking_open || 0, related_count: linkN[t.id]?.related_count || 0,
     _can_edit: canEditTask(auth, t),
   }));
 }
@@ -584,7 +659,7 @@ async function getTasks(url, auth, env) {
   const r = await sbDocket(`/rest/v1/rpc/list_tasks`, env, { method: 'POST', body: JSON.stringify(params) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
   const rows = await hydrateTasks(r.data || [], auth, env);
-  return ok(rows);
+  return ok(depsFilter(rows, q.get('deps')));
 }
 
 // Cross-space program view: every visible top-level task tagged to a program, across all
@@ -616,7 +691,7 @@ async function getProgramTasks(url, auth, env) {
     const sName = {}; (sr.ok ? sr.data : []).forEach(s => { sName[s.id] = s.name; });
     rows = rows.map(t => ({ ...t, space_name: sName[t.space_id] || null }));
   }
-  return ok(rows);
+  return ok(depsFilter(rows, q.get('deps')));
 }
 
 // Cross-space "My tasks": every non-recurring task the caller OWNS or COLLABORATES on,
@@ -655,7 +730,7 @@ async function getMyTasks(url, auth, env) {
     else if (auth.employeeId && (t.collaborators || []).some(c => c.id === auth.employeeId)) _relation = 'collaborator';
     return { ...t, _relation };
   });
-  return ok(rows);
+  return ok(depsFilter(rows, q.get('deps')));
 }
 
 // F4 "Clean up" — the stale-work sweep. Pull-only (decisions §S309: nothing is sent).
@@ -837,6 +912,11 @@ async function getTask(url, auth, env) {
   const userName = {}; (upRes.data || []).forEach(u => { userName[u.id] = u.full_name; });
 
   const children = (childRes.data || []).map(c => ({ ...c, owner_name: empName[c.owner_employee_id] || null }));
+  // F7: dependency links, and history rows whose value is a linked task's id rendered behind the gate.
+  const depHist = (histRes.data || []).filter(h => h.field === 'dependency');
+  const depIds = uniq(depHist.flatMap(h => [h.new_value, h.old_value]).filter(v => /^[0-9a-f-]{36}$/i.test(v || '')));
+  const [links, depCards] = await Promise.all([buildLinks(task.id, auth, env), taskCards(depIds, auth, env)]);
+  const depLabel = v => (v && /^[0-9a-f-]{36}$/i.test(v)) ? cardLabel(depCards[v]) : v;
   const prog = task.program_id
     ? (await sbDocket(`/rest/v1/programs?id=eq.${enc(task.program_id)}&select=id,name,color&limit=1`, env)).data?.[0]
     : null;
@@ -854,9 +934,69 @@ async function getTask(url, auth, env) {
     collaborators: (collabRes.data || []).map(c => ({ ...c, full_name: empName[c.employee_id] || null })),
     documents: docRes.data || [],
     comments: (commRes.data || []).map(c => ({ ...c, author_name: userName[c.author_user_id] || null })),
-    history: (histRes.data || []).map(h => ({ ...h, actor_name: userName[h.actor_user_id] || null })),
+    history: (histRes.data || []).map(h => ({
+      ...h, actor_name: userName[h.actor_user_id] || null,
+      ...(h.field === 'dependency' ? { old_value: depLabel(h.old_value), new_value: depLabel(h.new_value) } : {}),
+      // done-vs-abandoned of a blocker you can't open is not yours to know (hostile review #5).
+      ...(h.event_type === 'unblocked' && !depCards[h.new_value]?.visible ? { note: null } : {}),
+    })),
+    links,
     _can_edit: canEditTask(auth, task),
   });
+}
+
+// F7: just the links (row/card popover). Same gate as getTask.
+async function getTaskLinks(url, auth, env) {
+  const id = url.searchParams.get('id');
+  if (!id) return err('id required', 400);
+  const task = await loadTask(id, env);
+  if (!task) return err('not_found', 404);
+  const space = await loadSpace(task.space_id, env);
+  if (!space) return err('space_not_found', 404);
+  if (space.is_default) { if (!(await canSeeTask(auth, task, env))) return err('forbidden', 403); }
+  else { if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403); }
+  return ok(await buildLinks(task.id, auth, env));   // the links object only (spec §7)
+}
+
+// F7: add a dependency / related link. kind is from `id`'s point of view: waiting_on | blocks | relates.
+// The caller must be able to EDIT `id` and OPEN both tasks (an admin's edit right alone doesn't reach a
+// private space it isn't in). Everything about the tasks themselves is re-checked in add_task_link.
+async function addTaskLink(body, auth, env) {
+  const d = body.data || body;
+  if (!d.id || !d.other_id || !d.kind) return err('id, other_id and kind required', 400);
+  if (!['waiting_on', 'blocks', 'relates'].includes(d.kind)) return err('bad_kind', 400);
+  if (!UUID_RE.test(String(d.id)) || !UUID_RE.test(String(d.other_id))) return err('invalid id', 400);
+  if (d.id === d.other_id) return err('self_link', 422);
+  const task = await loadTask(d.id, env);
+  if (!task) return err('not_found', 404);
+  const cards = await taskCards([d.id, d.other_id], auth, env);
+  if (!canEditTask(auth, task) || !cards[d.id]?.visible) return err('forbidden', 403);
+  if (task.status === 'abandoned') return err('abandoned_read_only', 422);
+  if (!cards[d.other_id]) return err('not_found', 404);
+  if (!cards[d.other_id].visible) return err('forbidden_other', 403);
+  const r = await sbDocket(`/rest/v1/rpc/add_task_link`, env, { method: 'POST', body: JSON.stringify({
+    p_task: d.id, p_other: d.other_id, p_kind: d.kind, p_user: auth.userId }) });
+  if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
+  const res = r.data || {};
+  if (!res.ok) return err(res.code || 'link_failed', res.code === 'not_found' ? 404 : 422);
+  return ok({ link_id: res.link_id });
+}
+
+// F7: remove a link. Needs edit rights on an end that is not abandoned and that the caller can open.
+async function removeTaskLink(body, auth, env) {
+  const d = body.data || body;
+  if (!d.link_id) return err('link_id required', 400);
+  const lr = await sbDocket(`/rest/v1/task_links?id=eq.${enc(d.link_id)}&select=from_task_id,to_task_id&limit=1`, env);
+  const link = lr.ok && lr.data?.[0];
+  if (!link) return err('not_found', 404);
+  const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList([link.from_task_id, link.to_task_id])}&select=*`, env);
+  const ends = tr.ok ? (tr.data || []) : [];
+  const cards = await taskCards(ends.map(t => t.id), auth, env);
+  if (!ends.some(t => t.status !== 'abandoned' && canEditTask(auth, t) && cards[t.id]?.visible)) return err('forbidden', 403);
+  const r = await sbDocket(`/rest/v1/rpc/remove_task_link`, env, { method: 'POST', body: JSON.stringify({ p_link_id: d.link_id, p_user: auth.userId }) });
+  if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
+  if (!r.data?.ok) return err(r.data?.code || 'not_found', 404);
+  return ok({ removed: true });
 }
 
 async function getDashboard(url, auth, env) {
@@ -1554,6 +1694,17 @@ async function changeStatus(body, auth, env) {
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === d.status) return ok({ id: task.id, unchanged: true });
+  // F7 dependency warning (ClickUp's): done while still waiting on an open task → 409 unless force.
+  if (d.status === 'done' && !isForce(d.force)) {
+    const open = (await rawLinks([task.id], env)).filter(l => l.direction === 'waiting_on' && isOpenStatus(l.other_status));
+    if (open.length) {
+      const cards = await taskCards(uniq(open.map(l => l.other_id)), auth, env);
+      const vis = uniq(open.map(l => l.other_id)).map(i => cards[i]).filter(c => c && c.visible);
+      return json({ ok: false, error: 'waiting_on',
+        blockers: vis.map(c => ({ task_no: c.task_no, title: c.title, status: c.status })),
+        hidden_open: uniq(open.map(l => l.other_id)).length - vis.length }, 409);
+    }
+  }
 
   const updates = { status: d.status, updated_by: auth.userId, updated_at: nowIso() };
   updates.completed_at = d.status === 'done' ? nowIso() : null;
@@ -1562,6 +1713,8 @@ async function changeStatus(body, auth, env) {
   const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, { method: 'PATCH', body: JSON.stringify(updates) });
   if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
   await logHistory(env, task.id, auth.userId, 'status_changed', { field: 'status', old: task.status, new: d.status, note: d.note || null });
+  // Only a task that was OPEN can unblock anything — done→abandoned or back would log twice (review #3).
+  if (d.status === 'done' && isOpenStatus(task.status)) await logUnblocked([task.id], auth, env);
   return ok({ id: task.id, status: d.status });
 }
 
@@ -1609,12 +1762,21 @@ async function bulkUpdateTasks(body, auth, env) {
     if (value === 'abandoned') return err('use abandonTask to abandon (reason required)', 422);
     const targets = editable.filter(t => t.status !== value);
     if (!targets.length) return ok({ updated: 0, skipped, field });
+    // F7: a blocker that is ALSO in this batch doesn't count — it's being closed in the same action.
+    if (value === 'done' && !isForce(d.force)) {
+      const inBatch = new Set(targets.map(t => t.id));
+      const waiting = uniq((await rawLinks([...inBatch], env))
+        .filter(l => l.direction === 'waiting_on' && isOpenStatus(l.other_status) && !inBatch.has(l.other_id))
+        .map(l => l.task_id));
+      if (waiting.length) return json({ ok: false, error: 'waiting_on', waiting_count: waiting.length, waiting_ids: waiting }, 409);
+    }
     const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(targets.map(t => t.id))}`, env, {
       method: 'PATCH', prefer: 'return=minimal',
       body: JSON.stringify({ ...stamp, status: value, completed_at: value === 'done' ? nowIso() : null }),
     });
     if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
     await logHistoryBatch(env, auth.userId, targets.map(t => ({ task_id: t.id, event_type: 'status_changed', field: 'status', old: t.status, new: value })));
+    if (value === 'done') await logUnblocked(targets.filter(t => isOpenStatus(t.status)).map(t => t.id), auth, env);
     return ok({ updated: targets.length, skipped, field });
   }
 
@@ -1783,6 +1945,7 @@ async function bulkAbandonTasks(body, auth, env) {
   if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
   await logHistoryBatch(env, auth.userId, targets.map(t => ({
     task_id: t.id, event_type: 'abandoned', field: 'status', old: t.status, new: 'abandoned', note: reason })));
+  await logUnblocked(targets.filter(t => isOpenStatus(t.status)).map(t => t.id), auth, env);
   return ok({ updated: targets.length, skipped });
 }
 
@@ -1802,6 +1965,7 @@ async function abandonTask(body, auth, env) {
   });
   if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
   await logHistory(env, task.id, auth.userId, 'abandoned', { field: 'status', old: task.status, new: 'abandoned', note: d.reason });
+  if (isOpenStatus(task.status)) await logUnblocked([task.id], auth, env);
   return ok({ id: task.id, status: 'abandoned' });
 }
 
@@ -2175,7 +2339,7 @@ async function deleteScratchNote(body, auth, env) {
 // ════════════════════════════════════════════════════════════════════════════
 const GET_ACTIONS = {
   getMe, getDepartments, getEmployees,
-  getTasks, getProgramTasks, getMyTasks, getStaleTasks, searchTasks, getTask, getDashboard,
+  getTasks, getProgramTasks, getMyTasks, getStaleTasks, searchTasks, getTask, getTaskLinks, getDashboard,
   getChecklist, getChecklistTemplates, getChecklistTemplate, getChecklistOversight,
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
@@ -2184,6 +2348,7 @@ const GET_ACTIONS = {
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,
   bulkSetCollaborator, bulkMoveTasks, bulkAbandonTasks,
+  addTaskLink, removeTaskLink,
   createRecurringTask, updateRecurrence, toggleChecklistOccurrence,
   saveChecklistTemplate, archiveChecklistTemplate,
   assignChecklistTemplate, unassignChecklistTemplate,

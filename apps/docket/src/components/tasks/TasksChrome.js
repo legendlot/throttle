@@ -187,7 +187,7 @@ export function TasksToolbar(p) {
 
 /* ---------------- Filter panel (inside the Filter popover) ---------------- */
 function FilterPanel({ status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId,
-  priority, setPriority, programId, setProgramId, overdue, setOverdue, revised, setRevised,
+  priority, setPriority, programId, setProgramId, overdue, setOverdue, revised, setRevised, deps = '', setDeps,
   teamOpts, empOpts, programOpts, filterCount, clearFilters, hideProgramFilter, hideOwnerFilter }) {
   const Sel = ({ label, value, set, any, options }) => (
     <label className="tk-fp-grp">
@@ -212,6 +212,16 @@ function FilterPanel({ status, setStatus, departmentId, setDepartmentId, employe
           <Button variant="neutral" size="sm" className={revised ? 'is-on' : undefined} aria-pressed={revised} onClick={() => setRevised(r => !r)}>Revised</Button>
         </div>
       </div>
+      {setDeps && (
+        <div className="tk-fp-grp">
+          <span className="tk-fp-lbl">Dependencies</span>
+          <div className="tk-fp-toggles">
+            {/* One at a time: the worker takes a single deps value. */}
+            <Button variant="neutral" size="sm" className={deps === 'waiting' ? 'is-on' : undefined} aria-pressed={deps === 'waiting'} onClick={() => setDeps(d => (d === 'waiting' ? '' : 'waiting'))}>Waiting on others</Button>
+            <Button variant="neutral" size="sm" className={deps === 'blocking' ? 'is-on' : undefined} aria-pressed={deps === 'blocking'} onClick={() => setDeps(d => (d === 'blocking' ? '' : 'blocking'))}>Blocking others</Button>
+          </div>
+        </div>
+      )}
       {filterCount > 0 && <Button variant="ghost" size="sm" className="tk-fp-clear" onClick={clearFilters}>Clear filters</Button>}
     </div>
   );

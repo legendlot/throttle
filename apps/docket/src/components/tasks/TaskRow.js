@@ -6,12 +6,13 @@
 // Layout: the row is a grid on the list's `--tl-cols` (title + visible columns).
 // Left gutter (outside the grid): the select checkbox — on hover, always in Select
 // mode. Title cell: [expand] status circle · title (ellipsis) · DKT id (never wraps)
-// · REV / sub-task count · hover + sub-task and ⋯ menu.
+// · REV / sub-task count · F7 dependency badge · hover + sub-task and ⋯ menu.
 import { memo, useEffect, useRef, useState } from 'react';
 import { ChevronRight, Check, X, Plus, MoreHorizontal, Link2, MessageSquare, UserPlus, Users, Building2, Tag, ExternalLink, CornerDownRight, Ban, CircleCheck, CircleDashed } from 'lucide-react';
 import { Avatar, OptionList, personColor } from '../primitives.js';
 import { AvatarStack, GhostCell, Menu, MenuItem, MenuSeparator, Popover, Button } from '../ui/index.js';
 import { EditableSelect, StatusCircle, StatusCell, PriorityFlag, DeadlineCell, AbandonForm, stop, contain } from './TaskCells.js';
+import { DepsBadge } from '../task/Dependencies.js';
 
 export const ROW_SELECTOR = '.tl-row[tabindex="0"]';
 
@@ -158,6 +159,7 @@ export const TaskRow = memo(function TaskRow({
           )}
           {showIds && !nested && <span className="tl-id">{task.task_no}</span>}
           {hasKids && <span className="tl-kids" title="Sub-tasks done">{task.child_done ?? 0}/{task.child_count ?? 0}</span>}
+          <DepsBadge task={task} getSession={actions.getSession} editable={ed} onOpen={openDrawer} onChanged={actions.depsChanged} />
           <span className="tl-row-acts">
             {canAddSub && (
               <button type="button" className="tl-act" aria-label="Add sub-task" title="Add sub-task  (s)" onClick={(e) => { stop(e); startAddSub(); }}><Plus size={13} /></button>

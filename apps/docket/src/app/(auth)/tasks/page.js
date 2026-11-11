@@ -30,6 +30,7 @@ import { BulkBar } from '../../../components/tasks/BulkBar.js';
 import { ROW_SELECTOR } from '../../../components/tasks/TaskRow.js';
 import { useTaskViewState, visibleColumns, COLUMNS } from '../../../components/tasks/useTaskViewState.js';
 import { Button, EmptyState } from '../../../components/ui/index.js';
+import { sendDone, doneConfirmText, bulkDoneConfirmText, DECLINED } from '../../../lib/deps.js';
 
 const GROUP_OPTS = [
   { value: 'none', label: 'No grouping' }, { value: 'person', label: 'Owner' },
@@ -74,7 +75,7 @@ function TasksBoard() {
   const { filters: f, groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView, cardSize, chooseCardSize,
     showIds, toggleShowIds, subtaskMode, chooseSubtaskMode, cols, toggleColumn, moveColumn, resizeColumn, resetColumns,
     collapsed, toggleGroupCollapsed, setGroupsCollapsed } = view;
-  const { status, departmentId, employeeId, priority, programId, overdue, revised, mine, q } = f;
+  const { status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, q } = f;
 
   const [tasks, setTasks] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -165,14 +166,14 @@ function TasksBoard() {
     try {
       const common = {
         status, department_id: departmentId, employee_id: employeeId, priority,
-        overdue: overdue ? '1' : '', revised: revised ? '1' : '', lens: mine ? 'mine' : '',
+        overdue: overdue ? '1' : '', revised: revised ? '1' : '', deps, lens: mine ? 'mine' : '',
       };
       // My-tasks: cross-space owner+collaborator list. Program mode: cross-space aggregation
       // of one program's tasks. Otherwise the normal single-space board.
       const r = mineMode
         ? await docketopsGet('getMyTasks', {
             status, department_id: departmentId, priority, program_id: programId,
-            overdue: overdue ? '1' : '', revised: revised ? '1' : '',
+            overdue: overdue ? '1' : '', revised: revised ? '1' : '', deps,
           }, session)
         : inProgramMode
           ? await docketopsGet('getProgramTasks', { program_id: viewProgramId, ...common }, session)
@@ -180,7 +181,7 @@ function TasksBoard() {
       setTasks(Array.isArray(r) ? r : []);
     } catch (e) { showToast(e.message || 'Failed to load tasks', 'error'); }
     finally { setLoading(false); }
-  }, [session, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, mine, showToast]);
+  }, [session, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, showToast]);
   useEffect(() => { load(); }, [load]);
 
   // F4: My tasks' "Clean up N" — my stale count (count_only: no hydration). Re-read after
@@ -237,7 +238,11 @@ function TasksBoard() {
   async function saveField(task, field, value) {
     try {
       if (field === 'status') {
-        await docketopsPost('changeStatus', { id: task.id, status: value }, session);
+        // F7: done on a task still waiting on open blockers → 409 waiting_on → confirm, resend forced.
+        const send = (force) => docketopsPost('changeStatus', { id: task.id, status: value, ...(force ? { force: true } : {}) }, session);
+        if (value === 'done') {
+          if (await sendDone(send, (m) => window.confirm(m), (d) => doneConfirmText(d, task.task_no)) === DECLINED) return;
+        } else await send(false);
         patchRow(task.id, { status: value });
       } else if (field === 'title') {
         await docketopsPost('updateTask', { id: task.id, title: value }, session);
@@ -335,7 +340,7 @@ function TasksBoard() {
 
   /* ---------------- stable actions for memoised rows ---------------- */
   const live = useRef({});
-  live.current = { saveField, abandonInline, reviseInline, addSubtask, addCollab, copyTaskLink, createInGroup, viewOpen: drawerId != null, closeTask };
+  live.current = { saveField, abandonInline, reviseInline, addSubtask, addCollab, copyTaskLink, createInGroup, viewOpen: drawerId != null, closeTask, session, load };
   const toggleSelect = useCallback((id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }), []);
   const actions = useMemo(() => ({
     saveField: (...a) => live.current.saveField(...a),
@@ -353,6 +358,9 @@ function TasksBoard() {
     enterSelect: () => setSelectMode(true),
     clearSubRequest: () => setSubRequest(null),
     focusedRowRef,
+    // F7 row badge popover: reads getTaskLinks with the live session; an unlink re-reads the list.
+    getSession: () => live.current.session,
+    depsChanged: () => live.current.load(),
   }), [toggleSelect]);
 
   // ⌘K bar (P6): this page's loaded rows (any task here opens in place) + its view
@@ -531,7 +539,12 @@ function TasksBoard() {
     const ids = [...selected];
     if (!ids.length) return;
     try {
-      const res = await docketopsPost('bulkUpdateTasks', { ids, field, value, reason }, session);
+      const send = (force) => docketopsPost('bulkUpdateTasks', { ids, field, value, reason, ...(force ? { force: true } : {}) }, session);
+      // F7: bulk done with any target still waiting → 409 waiting_on {waiting_count} → one confirm.
+      const res = field === 'status' && value === 'done'
+        ? await sendDone(send, (m) => window.confirm(m), bulkDoneConfirmText)
+        : await send(false);
+      if (res === DECLINED) return;
       const updated = res?.updated ?? 0, skipped = res?.skipped ?? 0;
       showToast(`Updated ${updated}${skipped ? ` · skipped ${skipped}` : ''}`, updated ? 'success' : 'info');
       clearSelection();
@@ -593,6 +606,7 @@ function TasksBoard() {
   const gridCtx = {
     saveField: actions.saveField, openDrawer: actions.openDrawer, showSpace: crossSpace, ownerCellOpts,
     selectMode, selected, toggleSelect, enterSelect: actions.enterSelect,
+    getSession: actions.getSession, depsChanged: actions.depsChanged,
   };
   // Board (P4): a column's "+ Add task" creates through the same createInGroup as a list
   // group foot — the column's axis value prefilled (status via the follow-up changeStatus),
@@ -679,7 +693,7 @@ function TasksBoard() {
         onExpandAll={expandAll} onCollapseAll={collapseAll} subtaskMode={subtaskMode} chooseSubtaskMode={chooseSubtaskMode}
         filterOpen={filterOpen} setFilterOpen={setFilterOpen} filterCount={f.panelFilterCount}
         filter={{ status, setStatus: f.setStatus, departmentId, setDepartmentId: f.setDepartmentId, employeeId, setEmployeeId: f.setEmployeeId,
-          priority, setPriority: f.setPriority, programId, setProgramId: f.setProgramId, overdue, setOverdue: f.setOverdue, revised, setRevised: f.setRevised,
+          priority, setPriority: f.setPriority, programId, setProgramId: f.setProgramId, overdue, setOverdue: f.setOverdue, revised, setRevised: f.setRevised, deps, setDeps: f.setDeps,
           teamOpts, empOpts, programOpts, filterCount: f.panelFilterCount, clearFilters: f.clearPanelFilters, hideProgramFilter: inProgramMode, hideOwnerFilter: mineMode }}
         showMe={!mineMode} mine={mine} setMine={f.setMine}
         showArchive={!mineMode && !boardMode} archiveDone={archiveDone} toggleArchiveDone={toggleArchiveDone}

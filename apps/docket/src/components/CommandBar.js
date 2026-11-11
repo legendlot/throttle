@@ -6,7 +6,8 @@
 //   Spaces & programs  — the shell's getMe spaces (General · My spaces · By others) + programs
 //   Navigation         — the rail destinations (Dashboard perm-gated, Admin for docket_admin)
 //   Commands           — New task / space / program, My tasks, List ↔ Board + density (on
-//                        /tasks, via useCommandSource('tasksView')), sidebar, shortcuts
+//                        /tasks, via useCommandSource('tasksView')), sidebar, shortcuts;
+//                        F7 "Add dependency to DKT-n" while an editable TaskView is open ('taskView')
 // Empty query: Recent (last 5 picks, localStorage `docket.cmdk.recent`) + Navigation +
 // Commands. ↑↓ (wrap) · Home/End · Enter runs · ⌘/Ctrl+Enter opens a task full-page ·
 // Esc closes and gives focus back. ARIA combobox + listbox (aria-activedescendant).
@@ -18,7 +19,7 @@
 // and a late reply never moves it (if their row drops out of the results, it returns to the top).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Hash, Lock, Flag,
-  SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info, Loader2 } from 'lucide-react';
+  SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info, Loader2, OctagonMinus } from 'lucide-react';
 import { fuzzyMatch, dktQuery, rankGroups, scoreTask, serverFloor } from '../lib/fuzzy.js';
 import { docketopsGet } from '../lib/docketopsFetch.js';
 import { getCommandSource } from '../lib/commandSources.js';
@@ -51,7 +52,7 @@ function pushRecent(userId, item) {
   const snap = { key: item.key, label: item.label, sub: item.sub || '', kind: item.kind, taskId: item.taskId || null };
   try { localStorage.setItem(RECENT_KEY(userId), JSON.stringify([snap, ...readRecent(userId).filter(r => r.key !== item.key)].slice(0, 5))); } catch { /* ignore */ }
 }
-const snapshot = (userId) => ({ tasks: getCommandSource('tasks') || null, view: getCommandSource('tasksView') || null, recent: readRecent(userId) });
+const snapshot = (userId) => ({ tasks: getCommandSource('tasks') || null, view: getCommandSource('tasksView') || null, taskView: getCommandSource('taskView') || null, recent: readRecent(userId) });
 
 function Highlight({ text, idx }) {
   if (!idx || !idx.length) return text;
@@ -82,7 +83,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
   // Cross-space server search (F5). rows are kept for the query they answered (q).
   const [remote, setRemote] = useState({ q: '', rows: [], status: 'idle' });
   const reqRef = useRef(0);
-  const [snap] = useState(() => (typeof window === 'undefined' ? { tasks: null, view: null, recent: [] } : snapshot(userId)));
+  const [snap] = useState(() => (typeof window === 'undefined' ? { tasks: null, view: null, taskView: null, recent: [] } : snapshot(userId)));
   const mod = useModLabel();
   const inputRef = useRef(null);
   const listRef = useRef(null);
@@ -153,7 +154,10 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
     }
 
     const v = snap.view;
+    const tv = snap.taskView;   // the open TaskView (F7), when its task is editable
     const cmds = [
+      // keepView: acts ON the open task, so the view must stay up (see run()).
+      ...(tv ? [{ key: 'cmd:add-dep', label: `Add dependency to ${tv.taskNo}`, icon: OctagonMinus, keepView: true, run: tv.addDependency }] : []),
       { key: 'cmd:new-task', label: 'New task', icon: SquarePen, kbd: 'c', run: onNewTask },
       { key: 'cmd:new-space', label: 'New space', icon: FolderPlus, run: onNewSpace },
       { key: 'cmd:new-program', label: 'New program', icon: Flag, run: onNewProgram },
@@ -249,7 +253,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
     // Anything but a task pick acts on the page — close an open TaskView first so it
     // doesn't run behind the view (and its focus trap). A task pick just switches it.
     const src = getCommandSource('tasks');
-    const viewOpen = item.kind !== 'task' && src?.isViewOpen?.();
+    const viewOpen = item.kind !== 'task' && !item.keepView && src?.isViewOpen?.();
     if (viewOpen) src.closeTask();
     // After the bar (and the view) have unmounted, so the action's own focus wins.
     setTimeout(() => item.run(full && item.kind === 'task'), viewOpen ? 60 : 0);

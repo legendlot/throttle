@@ -124,8 +124,9 @@ const docketTools = [
   }),
   writeTool({
     name: 'docket_set_status', title: 'Set a Docket task\'s status', action: 'changeStatus',
-    description: 'Move a task to not_started, in_progress, done or blocked (this also reopens an abandoned task).',
-    params: { id: TASK, status: { ...STATUS, about: 'New status.' }, note: { ...optText(500), about: 'Optional note for the history.' } },
+    description: 'Move a task to not_started, in_progress, done or blocked (this also reopens an abandoned task). Marking done a task that is still waiting on open tasks is refused with `waiting_on` and the list of blockers; confirm with the person, then call again with force: true.',
+    params: { id: TASK, status: { ...STATUS, about: 'New status.' }, note: { ...optText(500), about: 'Optional note for the history.' },
+      force: { ...T.bool, about: 'true marks the task done even though it is still waiting on open tasks (the Docket app asks the same confirmation).' } },
     required: ['id', 'status'],
   }),
   writeTool({

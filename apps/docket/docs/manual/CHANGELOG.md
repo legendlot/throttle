@@ -3,6 +3,16 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.6.0] - 2026-11-11
+### Added
+- **Inside a Task**: a Dependencies section covering Waiting on, Blocking and Related links, adding
+  them (More actions menu, the strip, the command bar), removing them, cleared and abandoned
+  blockers, the "mark done anyway" warning, the date clash hint, "N tasks you can't see", what is
+  refused, and that the Blocked status stays a separate manual choice.
+- **The Tasks List**: the dependency icon on rows and board cards (waiting with a count, blocking,
+  cleared) and its popover; the **Waiting on others** and **Blocking others** filters.
+- **Signing In & Getting Around**: the "Add dependency" command.
+
 ## [1.5.0] - 2026-11-09
 ### Added
 - **Signing In & Getting Around**: the command bar (Cmd/Ctrl+K) now searches tasks in every
