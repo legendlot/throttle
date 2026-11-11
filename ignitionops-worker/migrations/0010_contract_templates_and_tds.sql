@@ -56,7 +56,7 @@ as $$
     select e.id, e.created_at,
       (select min(s.dispatched_at) from public.ecom_shipments s
         where nullif(trim(e.shipping_order_id), '') is not null
-          and s.lifecycle not in ('rto', 'cancelled')          -- goods that came back were not received
+          and coalesce(s.lifecycle, '') not in ('rto', 'cancelled')       -- goods that came back were not received
           and upper(regexp_replace(s.shopify_order_name, '[^A-Za-z0-9]', '', 'g'))
             = upper(regexp_replace(e.shipping_order_id, '[^A-Za-z0-9]', '', 'g'))) as dispatched_at,
       e.stage, e.gifted_no_post
