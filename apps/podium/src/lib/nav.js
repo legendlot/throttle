@@ -29,6 +29,15 @@ export const NAV_GROUPS = [
     ],
   },
   {
+    // Hiring (C1 openings + C2 candidates). podium_hiring_access is getMe's display flag:
+    // podium_hiring OR a people manager OR on any opening's chain — the worker self-scopes every action.
+    id: 'hiring', label: 'HIRING', icon: UserPlus,
+    items: [
+      { id: 'openings',   label: 'Openings',   route: '/hiring/openings', icon: Briefcase, requires: 'podium_hiring_access' },
+      { id: 'candidates', label: 'Candidates', route: '/hiring',          icon: Users,     requires: 'podium_hiring_access' },
+    ],
+  },
+  {
     id: 'org', label: 'ORG DESIGN', icon: Briefcase,
     items: [
       { id: 'roles',       label: 'Roles & KPIs', route: '/roles',       icon: Briefcase, requires: 'podium_view' },

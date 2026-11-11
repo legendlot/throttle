@@ -25,6 +25,12 @@
 
 import { intParam } from './params.mjs';
 import { sanitizeRich } from './richtext.mjs';   // S396 — review-box HTML whitelist, see richtext.mjs
+import {
+  ACTIVE_APP_STATUSES, TERMINAL_APP_STATUSES, isTerminalStatus, APP_TRANSITIONS, checkTransition, APP_SOURCES,
+  OPENING_STATUSES, resolveApprover, checkBandDecider, openingRoles, canSeeOpening, canEditOpening, canManageApps,
+  canSeeSalary, canChangeChain, CANDIDATE_DOC_TYPES, docTier, canSeeCandidateDoc, JD_REQUIRED_MSG, jdGate,
+  JD_EXTS, CANDIDATE_DOC_EXTS, fileOk, retainUntil, normEmailKey, normPhoneKey, openingCode, candidateCode, parseBand,
+} from './hiring.js';   // Hiring C1/C2 — the pure permission + transition rules, see test/hiring.test.mjs
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 
@@ -380,7 +386,11 @@ const EMP_EMBED =
 async function getMe(url, auth, env) {
   const edges = await loadOrgEdges(env);
   const me = callerEmployee(edges, auth.userId);
-  const sr = await sb(`/rest/v1/settings?id=eq.1&select=comp_vault_enabled,min_tenure_days&limit=1`, env);
+  const [sr, hiringOn, canCreateOpening] = await Promise.all([
+    sb(`/rest/v1/settings?id=eq.1&select=comp_vault_enabled,min_tenure_days&limit=1`, env),
+    hiringAccess(auth, me, env),
+    hasPerm(auth, 'podium_hiring') ? Promise.resolve(true) : hasActiveReports(me, env),
+  ]);
   return ok({
     userId: auth.userId,
     email: auth.email,
@@ -388,10 +398,12 @@ async function getMe(url, auth, env) {
     fullName: auth.fullName,
     // podium_super_admin is a DISPLAY flag for the nav/page guards only (never read server-side —
     // hasPerm reads auth.permissions); the worker gates on canCalibrate(auth).
-    permissions: { ...(auth.permissions || {}), podium_super_admin: !!auth.isSuperAdmin },
+    // podium_hiring_access is the same kind of display flag (nav only); every hiring action self-scopes.
+    permissions: { ...(auth.permissions || {}), podium_super_admin: !!auth.isSuperAdmin, podium_hiring_access: hiringOn },
     employee_id: me?.id || null,
     settings: sr.data?.[0] || { comp_vault_enabled: false, min_tenure_days: 90 },
     tier: { admin: isAdmin(auth), hr: isHr(auth), comp: canComp(auth), super_admin: !!auth.isSuperAdmin },
+    hiring: { access: hiringOn, can_create: !!canCreateOpening },
   });
 }
 
@@ -1346,14 +1358,14 @@ async function getTeamActivity(url, auth, env) {
 // podium_admin; role list is open metadata (no PII).
 // ────────────────────────────────────────────────────────────────────────────
 
-const PODIUM_PERM_KEYS = ['podium_view', 'podium_hr', 'podium_admin'];
+const PODIUM_PERM_KEYS = ['podium_view', 'podium_hr', 'podium_admin', 'podium_hiring'];
 
 // Keep only known keys as `true`; any elevated key implies podium_view so an admin
 // can't mint a role that 403s itself at the gate (RULE-PODIUM-001 corollary).
 function normalizePodiumPerms(permissions) {
   const out = {};
   for (const k of PODIUM_PERM_KEYS) if (permissions && permissions[k]) out[k] = true;
-  if (out.podium_hr || out.podium_admin) out.podium_view = true;
+  if (out.podium_hr || out.podium_admin || out.podium_hiring) out.podium_view = true;
   return out;
 }
 
@@ -3504,6 +3516,944 @@ async function gradeObjective(body, auth, env) {
   return ok(r.data?.[0]);
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// HIRING — C1 openings + C2 candidates / applications / documents.
+// Every action is in SELF_SERVE_GET/POST and self-scopes: a manager without a Podium role reaches
+// their OWN openings (owner / reporting manager / approver) and nothing else. The permission table
+// lives in src/hiring.js (unit-tested). Plan: docs/superpowers/plans/2026-11-11-podium-hiring-c1-c2.md
+// Salary numbers (band, current/expected CTC) never go into application_events reason/detail.
+// ────────────────────────────────────────────────────────────────────────────
+
+function errCode(code, message, status = 400) { return json({ ok: false, error: code, message }, status); }
+const isUuid = (x) => typeof x === 'string' && UUID_RE.test(x);
+const todayIso = () => nowIso().slice(0, 10);
+const numOrNull = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+const OPENING_EMBED =
+  'department:department_id(id,name),job_role:job_role_id(id,title),reporting_manager:reporting_manager_employee_id(id,employee_code,full_name,job_title),hiring_owner:hiring_owner_employee_id(id,employee_code,full_name,job_title)';
+
+// Founders = active, no manager, users_profile.role = 'super_admin' (EMP-001 / EMP-002 today).
+async function loadFounders(env) {
+  const er = await sb(`/rest/v1/employees?manager_id=is.null&status=eq.active&auth_user_id=not.is.null&select=id,auth_user_id,employee_code&order=employee_code.asc`, env);
+  const rows = er.data || [];
+  if (!rows.length) return [];
+  const pr = await sbStore(`/rest/v1/users_profile?id=in.(${rows.map(r => r.auth_user_id).join(',')})&role=eq.super_admin&select=id`, env);
+  const sa = new Set((pr.data || []).map(p => p.id));
+  return rows.filter(r => sa.has(r.auth_user_id)).map(r => r.id);
+}
+
+// Append-only timeline, batched. Best-effort like logCompAccess: the write already landed.
+async function hiringEvents(env, auth, me, rows) {
+  const list = (rows || []).filter(Boolean).map(r => ({
+    actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+    application_id: null, opening_id: null, candidate_id: null, from_status: null, to_status: null, reason: null, detail: null,
+    ...r,
+  }));
+  if (!list.length) return;
+  try { await sb(`/rest/v1/application_events`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(list) }); }
+  catch (_e) { /* best-effort */ }
+}
+
+// Openings (by id list, or all) + their pending/current budgets + the caller's roles on each.
+async function loadOpeningsWithRoles(auth, me, env, { ids = null, extra = '' } = {}) {
+  if (ids && !ids.length) return [];
+  const idf = ids ? `id=in.(${ids.join(',')})&` : '';
+  const or = await sb(`/rest/v1/openings?${idf}${extra}select=*,${OPENING_EMBED}&order=created_at.desc&limit=2000`, env);
+  if (!or.ok) throw new Error(`db_error: ${JSON.stringify(or.data)}`);
+  const openings = or.data || [];
+  if (!openings.length) return [];
+  const br = await sb(`/rest/v1/opening_budgets?opening_id=in.(${openings.map(o => o.id).join(',')})&status=in.(pending,approved)&select=*`, env);
+  const budgets = br.data || [];
+  const byOpening = {};
+  for (const b of budgets) (byOpening[b.opening_id] ||= []).push(b);
+  return openings.map(o => ({ o, budgets: byOpening[o.id] || [], roles: openingRoles(auth, me, o, byOpening[o.id] || []) }));
+}
+
+async function loadOneOpening(auth, me, env, id) {
+  if (!isUuid(id)) return null;
+  return (await loadOpeningsWithRoles(auth, me, env, { ids: [id] }))[0] || null;
+}
+
+// Nav access: podium_hiring, HR, ≥1 active direct report, or a seat on any opening's chain.
+async function hiringAccess(auth, me, env) {
+  if (hasPerm(auth, 'podium_hiring') || isHr(auth)) return true;
+  if (!me) return false;
+  const [dr, op, bu] = await Promise.all([
+    sb(`/rest/v1/employees?manager_id=eq.${me.id}&status=eq.active&select=id&limit=1`, env),
+    sb(`/rest/v1/openings?or=(hiring_owner_employee_id.eq.${me.id},reporting_manager_employee_id.eq.${me.id})&select=id&limit=1`, env),
+    sb(`/rest/v1/opening_budgets?approver_employee_id=eq.${me.id}&status=in.(pending,approved)&select=id&limit=1`, env),
+  ]);
+  return !!(dr.data?.length || op.data?.length || bu.data?.length);
+}
+
+// Pickers for the hiring forms. Hiring managers are mostly self-only Podium users (no podium_view),
+// so they cannot call getEmployees/getJobRoles/getDepartments. This returns ONLY the directory-public
+// subset (name, code, title, department) and role metadata — never bands or salary numbers.
+async function getHiringLookups(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  if (!(await hiringAccess(auth, me, env))) return err('forbidden', 403);
+  const [er, dr, rr, canCreate] = await Promise.all([
+    sb(`/rest/v1/employees?status=neq.exited&select=id,employee_code,full_name,job_title,department_id&order=full_name.asc&limit=2000`, env),
+    sb(`/rest/v1/departments?active=eq.true&select=id,name&order=name.asc&limit=500`, env),
+    sb(`/rest/v1/job_roles?active=eq.true&select=id,role_code,title,department_id,job_description,salary_band_max&order=title.asc&limit=1000`, env),
+    hasPerm(auth, 'podium_hiring') ? Promise.resolve(true) : hasActiveReports(me, env),
+  ]);
+  if (!er.ok || !dr.ok || !rr.ok) return err('db_error', 500);
+  return ok({
+    me: me ? { id: me.id } : null,
+    can_create: !!canCreate,
+    employees: er.data || [],
+    departments: dr.data || [],
+    job_roles: (rr.data || []).map(r => ({
+      id: r.id, role_code: r.role_code, title: r.title, department_id: r.department_id,
+      has_jd: !!(r.job_description && String(r.job_description).trim()),
+      has_band: r.salary_band_max != null,
+    })),
+  });
+}
+
+async function hasActiveReports(me, env) {
+  if (!me) return false;
+  const r = await sb(`/rest/v1/employees?manager_id=eq.${me.id}&status=eq.active&select=id&limit=1`, env);
+  return !!r.data?.length;
+}
+
+function bandOf(b) { return b ? { band_min: numOrNull(b.band_min), band_max: numOrNull(b.band_max) } : null; }
+function budgetStatus(x) {
+  if (x.budgets.some(b => b.status === 'pending')) return 'pending';
+  if (x.o.current_budget_id) return 'approved';
+  return 'none';
+}
+function cleanSearch(s) { return encodeURIComponent(String(s || '').trim().replace(/[,()*]/g, ' ').trim()); }
+
+// ── Reads ────────────────────────────────────────────────────────────────────
+
+async function getOpenings(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const status = url.searchParams.get('status');
+  const search = (url.searchParams.get('search') || '').trim();
+  const f = [];
+  if (status && status !== 'all') {
+    if (!OPENING_STATUSES.includes(status)) return err('bad status', 400);
+    f.push(`status=eq.${status}`);
+  }
+  if (search) { const s = cleanSearch(search); f.push(`or=(designation.ilike.*${s}*,opening_code.ilike.*${s}*)`); }
+  const all = await loadOpeningsWithRoles(auth, me, env, { extra: f.length ? f.join('&') + '&' : '' });
+  const visible = all.filter(x => canSeeOpening(x.roles));
+  const counts = {};
+  if (visible.length) {
+    const ar = await sb(`/rest/v1/applications?opening_id=in.(${visible.map(x => x.o.id).join(',')})&select=opening_id,status`, env);
+    for (const a of (ar.data || [])) { const c = (counts[a.opening_id] ||= {}); c[a.status] = (c[a.status] || 0) + 1; }
+  }
+  const rows = visible.map(x => {
+    const sal = canSeeSalary(x.roles);
+    const cur = x.budgets.find(b => b.id === x.o.current_budget_id);
+    const pend = x.budgets.find(b => b.status === 'pending');
+    return {
+      id: x.o.id, opening_code: x.o.opening_code, designation: x.o.designation, status: x.o.status,
+      department: x.o.department, job_role: x.o.job_role,
+      reporting_manager: x.o.reporting_manager, hiring_owner: x.o.hiring_owner,
+      location_city: x.o.location_city, employment_type: x.o.employment_type,
+      headcount: x.o.headcount, target_join_date: x.o.target_join_date, created_at: x.o.created_at,
+      has_jd: !!x.o.current_jd_id, budget_status: budgetStatus(x),
+      application_counts: counts[x.o.id] || {},
+      ...(sal ? { band: bandOf(cur), pending_band: bandOf(pend) } : {}),
+      can_see_salary: sal,
+    };
+  });
+  return ok({ openings: rows });
+}
+
+async function getOpening(url, auth, env) {
+  const id = url.searchParams.get('id');
+  if (!isUuid(id)) return err('id required', 400);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, id);
+  if (!x) return err('not_found', 404);
+  if (!canSeeOpening(x.roles)) return err('forbidden', 403);
+  const sal = canSeeSalary(x.roles);
+  const [jr, br, ar, evr, founders] = await Promise.all([
+    sb(`/rest/v1/opening_jds?opening_id=eq.${id}&select=*&order=version.desc`, env),
+    sb(`/rest/v1/opening_budgets?opening_id=eq.${id}&select=*,approver:approver_employee_id(id,full_name),requester:requested_by_employee_id(id,full_name)&order=version.desc`, env),
+    sb(`/rest/v1/applications?opening_id=eq.${id}&select=*,candidate:candidate_id(id,candidate_code,full_name)&order=created_at.desc`, env),
+    sb(`/rest/v1/application_events?opening_id=eq.${id}&select=*&order=created_at.desc&limit=100`, env),
+    loadFounders(env),
+  ]);
+  if (!jr.ok || !br.ok || !ar.ok) return err('db_error', 500);
+  const jds = jr.data || [];
+  const budgets = (br.data || []).map(b => (sal ? { ...b, band_min: numOrNull(b.band_min), band_max: numOrNull(b.band_max) }
+    : (({ band_min, band_max, ...rest }) => rest)(b)));
+  const applications = (ar.data || []).map(a => {
+    const base = { id: a.id, candidate: a.candidate, candidate_id: a.candidate_id, status: a.status, source: a.source,
+      source_detail: a.source_detail, notice_period_days: a.notice_period_days, outcome_reason: a.outcome_reason,
+      moved_to_application_id: a.moved_to_application_id, created_at: a.created_at, closed_at: a.closed_at };
+    return sal ? { ...base, current_ctc: numOrNull(a.current_ctc), expected_ctc: numOrNull(a.expected_ctc) } : base;
+  });
+  // Approver: the pending request's snapshot, else who a request made now would go to.
+  const pend = (br.data || []).find(b => b.status === 'pending');
+  const approverId = pend ? pend.approver_employee_id : resolveApprover(edges, founders, x.o.reporting_manager_employee_id, me?.id || null);
+  let approver = pend?.approver || null;
+  if (!approver && approverId) {
+    const ap = await sb(`/rest/v1/employees?id=eq.${approverId}&select=id,employee_code,full_name,job_title&limit=1`, env);
+    approver = ap.data?.[0] || null;
+  }
+  const showsSalary = sal && (budgets.length > 0 || applications.some(a => a.current_ctc != null || a.expected_ctc != null));
+  if (showsSalary) await logCompAccess(auth, 'getOpening', null, x.o.opening_code, env, { opening_id: id });
+  const { current_jd_id } = x.o;
+  return ok({
+    opening: x.o,
+    my_roles: { ...x.roles, can_edit: canEditOpening(x.roles), can_manage_apps: canManageApps(x.roles),
+      can_see_salary: sal, can_change_chain: canChangeChain(x.roles),
+      is_founder: !!me && founders.includes(me.id) },
+    jd: jds.find(j => j.id === current_jd_id) || null,
+    jd_versions: jds,
+    budgets,
+    applications,
+    events: evr.data || [],
+    approver,
+  });
+}
+
+async function getJdDownloadUrl(url, auth, env) {
+  const jdId = url.searchParams.get('jd_id');
+  if (!isUuid(jdId)) return err('jd_id required', 400);
+  const jr = await sb(`/rest/v1/opening_jds?id=eq.${jdId}&select=*&limit=1`, env);
+  const jd = jr.data?.[0];
+  if (!jd) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  const x = await loadOneOpening(auth, callerEmployee(edges, auth.userId), env, jd.opening_id);
+  if (!x || !canSeeOpening(x.roles)) return err('forbidden', 403);
+  if (!jd.storage_path) return err('no_file', 400);
+  return signDownload(jd.storage_path, jd.file_name, jd.mime_type, env);
+}
+
+async function signDownload(path, fileName, mime, env) {
+  const seg = String(path).split('/').map(encodeURIComponent).join('/');
+  const sr = await storageFetch(`/object/sign/${DOC_BUCKET}/${seg}`, env, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresIn: 120 }),
+  });
+  if (!sr.ok || !sr.data?.signedURL) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  return ok({ url: `${env.SUPABASE_URL}/storage/v1${sr.data.signedURL}`, file_name: fileName, mime_type: mime });
+}
+
+async function signUpload(path, env) {
+  const sr = await storageFetch(`/object/upload/sign/${DOC_BUCKET}/${path}`, env, { method: 'POST' });
+  if (!sr.ok || !sr.data?.url) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
+  return ok({ storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null, signed_url: sr.data.url });
+}
+
+// A candidate's openings, with the caller's roles on each. allAccess = HR / podium_hiring.
+async function candidateScope(auth, me, env, candidateId) {
+  const ar = await sb(`/rest/v1/applications?candidate_id=eq.${candidateId}&select=*&order=created_at.desc`, env);
+  if (!ar.ok) throw new Error('db_error');
+  const apps = ar.data || [];
+  const opIds = [...new Set(apps.map(a => a.opening_id))];
+  const ops = await loadOpeningsWithRoles(auth, me, env, { ids: opIds });
+  const byId = Object.fromEntries(ops.map(x => [x.o.id, x]));
+  const visible = ops.filter(x => canSeeOpening(x.roles));
+  const allAccess = isHr(auth) || hasPerm(auth, 'podium_hiring');
+  return { apps, byId, visible, rolesList: visible.map(x => x.roles), allAccess, canSee: allAccess || visible.length > 0 };
+}
+
+async function getCandidates(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const status = url.searchParams.get('status');
+  const openingId = url.searchParams.get('opening_id');
+  const search = (url.searchParams.get('search') || '').trim();
+  if (status && status !== 'all' && !ACTIVE_APP_STATUSES.includes(status) && !TERMINAL_APP_STATUSES.includes(status)) return err('bad status', 400);
+  if (openingId && !isUuid(openingId)) return err('bad opening_id', 400);
+  const allAccess = isHr(auth) || hasPerm(auth, 'podium_hiring');
+  const ops = await loadOpeningsWithRoles(auth, me, env);
+  const visible = ops.filter(x => canSeeOpening(x.roles));
+  const opById = Object.fromEntries(visible.map(x => [x.o.id, x.o]));
+  let opIds = visible.map(x => x.o.id);
+  if (openingId) opIds = opIds.filter(i => i === openingId);
+  if (!opIds.length && !(allAccess && !openingId && !(status && status !== 'all'))) return ok({ candidates: [] });
+  const af = [];
+  if (opIds.length) af.push(`opening_id=in.(${opIds.join(',')})`);
+  if (status && status !== 'all') af.push(`status=eq.${status}`);
+  const ar = opIds.length
+    ? await sb(`/rest/v1/applications?${af.join('&')}&select=id,candidate_id,opening_id,status,created_at&order=created_at.desc&limit=5000`, env)
+    : { ok: true, data: [] };
+  if (!ar.ok) return err('db_error', 500);
+  const latest = {};
+  for (const a of (ar.data || [])) if (!latest[a.candidate_id]) latest[a.candidate_id] = a; // ordered newest first
+  const filtered = !!(openingId || (status && status !== 'all'));
+  const cf = [];
+  if (!(allAccess && !filtered)) {
+    const ids = Object.keys(latest);
+    if (!ids.length) return ok({ candidates: [] });
+    cf.push(`id=in.(${ids.join(',')})`);
+  }
+  if (search) { const s = cleanSearch(search); cf.push(`or=(full_name.ilike.*${s}*,email.ilike.*${s}*,phone.ilike.*${s}*,candidate_code.ilike.*${s}*)`); }
+  const cr = await sb(`/rest/v1/candidates?${cf.length ? cf.join('&') + '&' : ''}select=id,candidate_code,full_name,email,phone,location,current_title,current_employer,created_at&order=created_at.desc&limit=1000`, env);
+  if (!cr.ok) return err('db_error', 500);
+  const rows = (cr.data || []).map(c => {
+    const a = latest[c.id];
+    const o = a ? opById[a.opening_id] : null;
+    return { ...c, latest_application: a ? { id: a.id, status: a.status, opening_id: a.opening_id,
+      opening_code: o?.opening_code || null, designation: o?.designation || null, created_at: a.created_at } : null };
+  });
+  return ok({ candidates: rows });
+}
+
+async function getCandidate(url, auth, env) {
+  const id = url.searchParams.get('id');
+  if (!isUuid(id)) return err('id required', 400);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const cr = await sb(`/rest/v1/candidates?id=eq.${id}&select=*&limit=1`, env);
+  const cand = cr.data?.[0];
+  if (!cand) return err('not_found', 404);
+  const sc = await candidateScope(auth, me, env, id);
+  if (!sc.canSee) return err('forbidden', 403);
+  const [dr, evr] = await Promise.all([
+    sb(`/rest/v1/candidate_documents?candidate_id=eq.${id}&select=*&order=uploaded_at.desc`, env),
+    sb(`/rest/v1/application_events?candidate_id=eq.${id}&select=*&order=created_at.desc&limit=200`, env),
+  ]);
+  let salaryShown = false;
+  const applications = sc.apps.filter(a => canSeeOpening(sc.byId[a.opening_id]?.roles)).map(a => {
+    const x = sc.byId[a.opening_id];
+    const sal = canSeeSalary(x.roles);
+    const { current_ctc, expected_ctc, ...rest } = a;
+    const out = { ...rest, opening: { id: x.o.id, opening_code: x.o.opening_code, designation: x.o.designation, status: x.o.status, has_jd: !!x.o.current_jd_id },
+      can_manage: canManageApps(x.roles), can_see_salary: sal,
+      allowed_transitions: APP_TRANSITIONS[a.status] || [] };
+    if (sal) {
+      out.current_ctc = numOrNull(current_ctc); out.expected_ctc = numOrNull(expected_ctc);
+      if (out.current_ctc != null || out.expected_ctc != null) salaryShown = true;
+    }
+    return out;
+  });
+  const hr = isHr(auth);
+  const documents = (dr.data || []).filter(d => canSeeCandidateDoc(d.doc_type, sc.rolesList, hr));
+  if (documents.some(d => docTier(d.doc_type) === 'salary')) salaryShown = true;
+  // Timeline: candidate-level rows + rows on openings the caller can see (no cross-opening leak).
+  const visIds = new Set(sc.visible.map(x => x.o.id));
+  const events = (evr.data || []).filter(e => !e.opening_id || visIds.has(e.opening_id));
+  if (salaryShown) await logCompAccess(auth, 'getCandidate', null, cand.candidate_code, env, { candidate_id: id });
+  const { email_norm, phone_norm, ...person } = cand;
+  return ok({
+    candidate: person, applications, documents, events,
+    can_edit: hr || sc.visible.some(x => canManageApps(x.roles)),
+    can_upload_types: CANDIDATE_DOC_TYPES.filter(t => canSeeCandidateDoc(t, sc.rolesList, hr)),
+  });
+}
+
+async function getCandidateDocumentUrl(url, auth, env) {
+  const id = url.searchParams.get('id');
+  if (!isUuid(id)) return err('id required', 400);
+  const dr = await sb(`/rest/v1/candidate_documents?id=eq.${id}&select=*&limit=1`, env);
+  const doc = dr.data?.[0];
+  if (!doc) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  const sc = await candidateScope(auth, callerEmployee(edges, auth.userId), env, doc.candidate_id);
+  if (!canSeeCandidateDoc(doc.doc_type, sc.rolesList, isHr(auth))) return err('forbidden', 403);
+  if (docTier(doc.doc_type) === 'salary') {
+    const cr = await sb(`/rest/v1/candidates?id=eq.${doc.candidate_id}&select=candidate_code&limit=1`, env);
+    await logCompAccess(auth, 'getCandidateDocumentUrl', null, cr.data?.[0]?.candidate_code || null, env, { document_id: id, doc_type: doc.doc_type });
+  }
+  return signDownload(doc.storage_path, doc.file_name, doc.mime_type, env);
+}
+
+async function findCandidateDuplicates(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  if (!(await hiringAccess(auth, me, env))) return err('forbidden', 403);
+  const e = normEmailKey(url.searchParams.get('email'));
+  const p = normPhoneKey(url.searchParams.get('phone'));
+  const ors = [];
+  if (e) ors.push(`email_norm.eq.${encodeURIComponent(e.replace(/[,()]/g, ''))}`);
+  if (p && p.length >= 6) ors.push(`phone_norm.eq.${p}`);
+  if (!ors.length) return ok({ count: 0, matches: [] });
+  const cr = await sb(`/rest/v1/candidates?or=(${ors.join(',')})&select=id,candidate_code,full_name,email,phone&order=created_at.desc&limit=5`, env);
+  if (!cr.ok) return err('db_error', 500);
+  const hits = cr.data || [];
+  if (!hits.length) return ok({ count: 0, matches: [] });
+  const ar = await sb(`/rest/v1/applications?candidate_id=in.(${hits.map(h => h.id).join(',')})&select=candidate_id,opening_id`, env);
+  const apps = ar.data || [];
+  const allAccess = isHr(auth) || hasPerm(auth, 'podium_hiring');
+  let visOps = new Set();
+  if (!allAccess) {
+    const ops = await loadOpeningsWithRoles(auth, me, env, { ids: [...new Set(apps.map(a => a.opening_id))] });
+    visOps = new Set(ops.filter(x => canSeeOpening(x.roles)).map(x => x.o.id));
+  }
+  const appCount = {};
+  for (const a of apps) appCount[a.candidate_id] = (appCount[a.candidate_id] || 0) + 1;
+  const matches = hits
+    .filter(h => allAccess || apps.some(a => a.candidate_id === h.id && visOps.has(a.opening_id)))
+    .map(h => ({ ...h, applications_count: appCount[h.id] || 0 }));
+  // Others only ever learn THAT a match exists (count), never who.
+  return ok({ count: hits.length, matches });
+}
+
+// ── Writes: openings ──────────────────────────────────────────────────────────
+
+async function mintHiringCode(env, name) {
+  const r = await sb(`/rest/v1/rpc/next_hiring_seq`, env, { method: 'POST', body: JSON.stringify({ p_name: name }) });
+  if (!r.ok) return null;
+  const v = Number(Array.isArray(r.data) ? r.data[0] : r.data);
+  if (!Number.isFinite(v)) return null;
+  return name === 'podium_opening' ? openingCode(v) : candidateCode(v);
+}
+
+const OPENING_FIELDS = ['job_role_id', 'designation', 'department_id', 'location_city', 'location_state',
+  'employment_type', 'headcount', 'target_join_date', 'notes'];
+
+function cleanOpeningPatch(d) {
+  const p = pickFields(d, OPENING_FIELDS);
+  for (const k of ['job_role_id', 'department_id']) if (k in p) { if (p[k] === '' || p[k] == null) p[k] = null; else if (!isUuid(p[k])) return { error: `bad ${k}` }; }
+  if ('designation' in p) { p.designation = String(p.designation || '').trim(); if (!p.designation) return { error: 'designation required' }; }
+  if ('headcount' in p) { p.headcount = Math.round(Number(p.headcount)); if (!(p.headcount >= 1 && p.headcount <= 100)) return { error: 'headcount must be 1-100' }; }
+  if ('employment_type' in p && !['full_time', 'intern'].includes(p.employment_type)) return { error: 'bad employment_type' };
+  if ('target_join_date' in p && !p.target_join_date) p.target_join_date = null;
+  for (const k of ['location_city', 'location_state']) if (k in p && !String(p[k] || '').trim()) delete p[k];
+  return { patch: p };
+}
+
+async function activeEmployeeIds(ids, env) {
+  const list = [...new Set(ids.filter(isUuid))];
+  if (!list.length) return new Set();
+  const r = await sb(`/rest/v1/employees?id=in.(${list.join(',')})&status=neq.exited&select=id`, env);
+  return new Set((r.data || []).map(e => e.id));
+}
+
+async function createOpening(body, auth, env) {
+  const d = body.data || body;
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const hiring = hasPerm(auth, 'podium_hiring');
+  if (!hiring && !(await hasActiveReports(me, env))) return err('forbidden — needs podium_hiring or direct reports', 403);
+  const ownerId = d.hiring_owner_employee_id || me?.id || null;
+  if (!hiring && ownerId !== me?.id) return err('only podium_hiring may name another hiring owner', 403);
+  const rmId = d.reporting_manager_employee_id;
+  if (!isUuid(rmId)) return err('reporting_manager_employee_id required', 400);
+  if (!isUuid(ownerId)) return err('hiring_owner_employee_id required', 400);
+  const live = await activeEmployeeIds([rmId, ownerId], env);
+  if (!live.has(rmId) || !live.has(ownerId)) return err('reporting manager / hiring owner must be current employees', 400);
+  const cp = cleanOpeningPatch(d);
+  if (cp.error) return err(cp.error, 400);
+  if (!cp.patch.designation) return err('designation required', 400);
+
+  let role = null;
+  if (d.band_from_role || d.use_role_jd) {
+    if (!isUuid(cp.patch.job_role_id)) return err('job_role_id required for band_from_role / use_role_jd', 400);
+    role = (await sb(`/rest/v1/job_roles?id=eq.${cp.patch.job_role_id}&select=salary_band_min,salary_band_max,job_description&limit=1`, env)).data?.[0];
+    if (!role) return err('job role not found', 400);
+  }
+  const band = d.band_from_role ? parseBand(role.salary_band_min, role.salary_band_max) : parseBand(d.band_min, d.band_max);
+  if (band.error) return err(d.band_from_role ? `role band unusable: ${band.error}` : band.error, 400);
+  const jdText = d.use_role_jd ? String(role.job_description || '').trim() : String(d.jd_text || '').trim();
+  if (d.use_role_jd && !jdText) return err('the job role has no JD text', 400);
+
+  const founders = await loadFounders(env);
+  const approver = resolveApprover(edges, founders, rmId, me?.id || null);
+  if (!approver) return err('no_approver — could not resolve a budget approver', 500);
+  const code = await mintHiringCode(env, 'podium_opening');
+  if (!code) return err('code_mint_failed', 500);
+
+  const ins = await sb(`/rest/v1/openings`, env, { method: 'POST', body: JSON.stringify([{
+    ...cp.patch, opening_code: code, reporting_manager_employee_id: rmId, hiring_owner_employee_id: ownerId,
+    status: jdText ? 'open' : 'draft', created_by: auth.userId,
+  }]) });
+  if (!ins.ok) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
+  const opening = ins.data?.[0];
+  const [bi, ji] = await Promise.all([
+    sb(`/rest/v1/opening_budgets`, env, { method: 'POST', body: JSON.stringify([{
+      opening_id: opening.id, version: 1, ...band, status: 'pending',
+      requested_by: auth.userId, requested_by_employee_id: me?.id || null, approver_employee_id: approver,
+    }]) }),
+    jdText ? sb(`/rest/v1/opening_jds`, env, { method: 'POST', body: JSON.stringify([{
+      opening_id: opening.id, version: 1, source: d.use_role_jd ? 'job_role' : 'text', jd_text: jdText, created_by: auth.userId,
+    }]) }) : Promise.resolve(null),
+  ]);
+  if (!bi.ok) return err(`budget_failed: ${JSON.stringify(bi.data)}`, 400);
+  let out = opening;
+  if (ji) {
+    if (!ji.ok) return err(`jd_failed: ${JSON.stringify(ji.data)}`, 400);
+    const up = await sb(`/rest/v1/openings?id=eq.${opening.id}`, env, { method: 'PATCH', body: JSON.stringify({ current_jd_id: ji.data[0].id }) });
+    out = up.data?.[0] || opening;
+  }
+  await hiringEvents(env, auth, me, [{ opening_id: opening.id, event_type: 'opening_created', to_status: out.status,
+    detail: { jd: !!jdText, band_from_role: !!d.band_from_role, approver_employee_id: approver } }]);
+  return ok(out);
+}
+
+// Cancel a pending band and re-request it (same numbers) to whoever resolves now.
+async function rerequestPendingBand(opening, newRmId, edges, env) {
+  const pr = await sb(`/rest/v1/opening_budgets?opening_id=eq.${opening.id}&status=eq.pending&select=*&limit=1`, env);
+  const pend = pr.data?.[0];
+  if (!pend) return null;
+  const vr = await sb(`/rest/v1/opening_budgets?opening_id=eq.${opening.id}&select=version&order=version.desc&limit=1`, env);
+  const founders = await loadFounders(env);
+  const approver = resolveApprover(edges, founders, newRmId, pend.requested_by_employee_id || null);
+  if (!approver) return 'no_approver';
+  const c = await sb(`/rest/v1/opening_budgets?id=eq.${pend.id}`, env, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled', decided_at: nowIso(), decision_note: 'chain changed — re-requested' }) });
+  if (!c.ok) return 'cancel_failed';
+  const n = await sb(`/rest/v1/opening_budgets`, env, { method: 'POST', body: JSON.stringify([{
+    opening_id: opening.id, version: Number(vr.data?.[0]?.version || 0) + 1, band_min: pend.band_min, band_max: pend.band_max,
+    status: 'pending', requested_by: pend.requested_by, requested_by_employee_id: pend.requested_by_employee_id, approver_employee_id: approver,
+  }]) });
+  if (!n.ok) return 'rerequest_failed';
+  return null;
+}
+
+async function updateOpening(body, auth, env) {
+  const d = body.data || body;
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, d.id);
+  if (!x) return err('not_found', 404);
+  if (!canEditOpening(x.roles)) return err('forbidden', 403);
+  const cp = cleanOpeningPatch(d);
+  if (cp.error) return err(cp.error, 400);
+  const patch = cp.patch;
+  const chain = {};
+  for (const k of ['reporting_manager_employee_id', 'hiring_owner_employee_id']) {
+    if (k in d && d[k] !== x.o[k]) chain[k] = d[k];
+  }
+  if (Object.keys(chain).length) {
+    if (!canChangeChain(x.roles)) return err('forbidden — chain changes need podium_hiring', 403);
+    const live = await activeEmployeeIds(Object.values(chain), env);
+    if (!Object.values(chain).every(v => live.has(v))) return err('chain members must be current employees', 400);
+    Object.assign(patch, chain);
+  }
+  if (!Object.keys(patch).length) return err('no_patch', 400);
+  const r = await sb(`/rest/v1/openings?id=eq.${x.o.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  const events = Object.keys(cp.patch).length ? [{ opening_id: x.o.id, event_type: 'opening_updated', detail: { fields: Object.keys(cp.patch) } }] : [];
+  if (Object.keys(chain).length) {
+    const from = Object.fromEntries(Object.keys(chain).map(k => [k, x.o[k]]));
+    events.push({ opening_id: x.o.id, event_type: 'chain_changed', detail: { from, to: chain } });
+    if ('reporting_manager_employee_id' in chain) {
+      const e = await rerequestPendingBand(x.o, chain.reporting_manager_employee_id, edges, env);
+      if (e) { await hiringEvents(env, auth, me, events); return err(`chain changed but band re-request failed: ${e}`, 500); }
+      events.push({ opening_id: x.o.id, event_type: 'band_rerequested', detail: { reason: 'chain_changed' } });
+    }
+  }
+  await hiringEvents(env, auth, me, events);
+  return ok(r.data?.[0]);
+}
+
+async function setOpeningStatus(body, auth, env) {
+  const d = body.data || body;
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, d.id);
+  if (!x) return err('not_found', 404);
+  if (!canEditOpening(x.roles)) return err('forbidden', 403);
+  const to = d.status;
+  if (!['open', 'on_hold', 'filled', 'cancelled'].includes(to)) return err('bad status', 400);
+  const from = x.o.status;
+  if (from === to) return ok(x.o);
+  if (to === 'open' && jdGate(x.o)) return errCode('jd_required', JD_REQUIRED_MSG, 409);
+  if (['filled', 'cancelled'].includes(from) && !hasPerm(auth, 'podium_hiring')) return err('forbidden — reopening needs podium_hiring', 403);
+  if (['filled', 'cancelled'].includes(to)) {
+    const ar = await sb(`/rest/v1/applications?opening_id=eq.${x.o.id}&status=in.(${ACTIVE_APP_STATUSES.join(',')})&select=id&limit=1`, env);
+    if (ar.data?.length) return errCode('resolve_applications_first', 'Close or move the active applications first', 409);
+  }
+  const r = await sb(`/rest/v1/openings?id=eq.${x.o.id}`, env, { method: 'PATCH', body: JSON.stringify({ status: to }) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await hiringEvents(env, auth, me, [{ opening_id: x.o.id, event_type: 'opening_status', from_status: from, to_status: to, reason: d.reason || null }]);
+  return ok(r.data?.[0]);
+}
+
+async function addOpeningJd(body, auth, env) {
+  const d = body.data || body;
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, d.opening_id);
+  if (!x) return err('not_found', 404);
+  if (!canEditOpening(x.roles)) return err('forbidden', 403);
+  let row;
+  if (d.storage_path) {
+    if (!String(d.storage_path).startsWith(`openings/${x.o.id}/jd/`)) return err('bad storage_path', 400);
+    const fe = fileOk(d.file_name || d.storage_path, JD_EXTS, d.file_size);
+    if (fe) return err(fe, 400);
+    row = { source: 'file', storage_path: d.storage_path, file_name: d.file_name || null, mime_type: d.mime_type || null,
+      file_size: d.file_size != null ? Math.round(Number(d.file_size)) : null, jd_text: String(d.jd_text || '').trim() || null };
+  } else if (d.use_role_jd) {
+    if (!x.o.job_role_id) return err('the opening has no job role', 400);
+    const role = (await sb(`/rest/v1/job_roles?id=eq.${x.o.job_role_id}&select=job_description&limit=1`, env)).data?.[0];
+    const t = String(role?.job_description || '').trim();
+    if (!t) return err('the job role has no JD text', 400);
+    row = { source: 'job_role', jd_text: t };
+  } else {
+    const t = String(d.jd_text || '').trim();
+    if (!t) return err('jd_text, storage_path or use_role_jd required', 400);
+    row = { source: 'text', jd_text: t };
+  }
+  const vr = await sb(`/rest/v1/opening_jds?opening_id=eq.${x.o.id}&select=version&order=version.desc&limit=1`, env);
+  const version = Number(vr.data?.[0]?.version || 0) + 1;
+  const ins = await sb(`/rest/v1/opening_jds`, env, { method: 'POST', body: JSON.stringify([{ ...row, opening_id: x.o.id, version, created_by: auth.userId }]) });
+  if (!ins.ok) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
+  const jd = ins.data[0];
+  // First JD on a draft opens it; never reopens on_hold / filled / cancelled.
+  const patch = { current_jd_id: jd.id, ...(x.o.status === 'draft' ? { status: 'open' } : {}) };
+  const up = await sb(`/rest/v1/openings?id=eq.${x.o.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!up.ok) return err(`db_error: ${JSON.stringify(up.data)}`, 400);
+  const evs = [{ opening_id: x.o.id, event_type: 'jd_added', detail: { version, source: row.source } }];
+  if (patch.status) evs.push({ opening_id: x.o.id, event_type: 'opening_status', from_status: 'draft', to_status: 'open', reason: 'JD added' });
+  await hiringEvents(env, auth, me, evs);
+  return ok({ jd, opening: up.data?.[0] });
+}
+
+async function createJdUploadUrl(body, auth, env) {
+  const d = body.data || body;
+  const edges = await loadOrgEdges(env);
+  const x = await loadOneOpening(auth, callerEmployee(edges, auth.userId), env, d.opening_id);
+  if (!x) return err('not_found', 404);
+  if (!canEditOpening(x.roles)) return err('forbidden', 403);
+  if (!d.file_name) return err('file_name required', 400);
+  const fe = fileOk(d.file_name, JD_EXTS, d.file_size);
+  if (fe) return err(fe === 'bad_file_type' ? 'JD must be a PDF or DOCX' : fe, 400);
+  return signUpload(`openings/${x.o.id}/jd/${Date.now()}_${safeSeg(d.file_name)}`, env);
+}
+
+async function requestBandChange(body, auth, env) {
+  const d = body.data || body;
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, d.opening_id);
+  if (!x) return err('not_found', 404);
+  if (!canEditOpening(x.roles)) return err('forbidden', 403);
+  const band = parseBand(d.band_min, d.band_max);
+  if (band.error) return err(band.error, 400);
+  const [founders, vr] = await Promise.all([
+    loadFounders(env),
+    sb(`/rest/v1/opening_budgets?opening_id=eq.${x.o.id}&select=version&order=version.desc&limit=1`, env),
+  ]);
+  const approver = resolveApprover(edges, founders, x.o.reporting_manager_employee_id, me?.id || null);
+  if (!approver) return err('no_approver — could not resolve a budget approver', 500);
+  const pend = x.budgets.find(b => b.status === 'pending');
+  if (pend) {
+    const c = await sb(`/rest/v1/opening_budgets?id=eq.${pend.id}`, env, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled', decided_at: nowIso(), decision_note: 'replaced by a newer request' }) });
+    if (!c.ok) return err(`db_error: ${JSON.stringify(c.data)}`, 400);
+  }
+  const ins = await sb(`/rest/v1/opening_budgets`, env, { method: 'POST', body: JSON.stringify([{
+    opening_id: x.o.id, version: Number(vr.data?.[0]?.version || 0) + 1, ...band, status: 'pending',
+    requested_by: auth.userId, requested_by_employee_id: me?.id || null, approver_employee_id: approver,
+    decision_note: null,
+  }]) });
+  if (!ins.ok) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
+  // The request note is free text that may quote numbers — kept on the budget row only, never the timeline.
+  await hiringEvents(env, auth, me, [{ opening_id: x.o.id, event_type: 'band_requested',
+    detail: { version: ins.data[0].version, approver_employee_id: approver, replaced_pending: !!pend } }]);
+  return ok(ins.data[0]);
+}
+
+async function decideBand(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.budget_id)) return err('budget_id required', 400);
+  if (!['approve', 'reject'].includes(d.decision)) return err("decision must be 'approve' or 'reject'", 400);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const br = await sb(`/rest/v1/opening_budgets?id=eq.${d.budget_id}&select=*&limit=1`, env);
+  const b = br.data?.[0];
+  if (!b) return err('not_found', 404);
+  if (b.status !== 'pending') return errCode('not_pending', 'This band request is no longer pending', 409);
+  const founders = await loadFounders(env);
+  const isFounder = !!auth.isSuperAdmin && !!me && founders.includes(me.id);
+  const bad = b.requested_by === auth.userId ? 'no_self_approval' : checkBandDecider(me?.id || null, isFounder, b);
+  if (bad === 'no_self_approval') return errCode('no_self_approval', 'You cannot approve your own band request', 403);
+  if (bad) return err('forbidden — only the approver can decide this band', 403);
+  const decided = { decided_by: auth.userId, decided_by_employee_id: me.id, decided_at: nowIso(), decision_note: d.note || null };
+  const r = await sb(`/rest/v1/opening_budgets?id=eq.${b.id}&status=eq.pending`, env, { method: 'PATCH',
+    body: JSON.stringify({ ...decided, status: d.decision === 'approve' ? 'approved' : 'rejected' }) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (!r.data?.length) return errCode('not_pending', 'This band request is no longer pending', 409);
+  if (d.decision === 'approve') {
+    // The previous approved version is superseded only once this one has landed.
+    const sup = await sb(`/rest/v1/opening_budgets?opening_id=eq.${b.opening_id}&status=eq.approved&id=neq.${b.id}`, env, { method: 'PATCH', body: JSON.stringify({ status: 'superseded' }) });
+    if (!sup.ok) return err(`db_error: ${JSON.stringify(sup.data)}`, 400);
+    const o = await sb(`/rest/v1/openings?id=eq.${b.opening_id}`, env, { method: 'PATCH', body: JSON.stringify({ current_budget_id: b.id }) });
+    if (!o.ok) return err(`db_error: ${JSON.stringify(o.data)}`, 400);
+  }
+  await hiringEvents(env, auth, me, [{ opening_id: b.opening_id, event_type: d.decision === 'approve' ? 'band_approved' : 'band_rejected',
+    detail: { version: b.version, as_founder: isFounder && b.approver_employee_id !== me.id } }]);
+  return ok(r.data?.[0]);
+}
+
+// ── Writes: candidates + applications ─────────────────────────────────────────
+
+const CANDIDATE_FIELDS = ['full_name', 'email', 'phone', 'location', 'current_employer', 'current_title',
+  'total_experience_years', 'skills', 'education', 'linkedin_url', 'notes'];
+const APP_FIELDS = ['source', 'referrer_employee_id', 'source_detail', 'notice_period_days'];
+const CTC_FIELDS = ['current_ctc', 'expected_ctc'];
+
+function cleanCandidate(d) {
+  const p = pickFields(d, CANDIDATE_FIELDS);
+  if ('full_name' in p) { p.full_name = String(p.full_name || '').trim(); if (!p.full_name) return { error: 'full_name required' }; }
+  if ('total_experience_years' in p) {
+    const n = numOrNull(p.total_experience_years);
+    if (n != null && !(n >= 0 && n <= 60)) return { error: 'total_experience_years must be 0-60' };
+    p.total_experience_years = n == null ? null : Math.round(n * 10) / 10;
+  }
+  if ('skills' in p) {
+    const s = Array.isArray(p.skills) ? p.skills : String(p.skills || '').split(',');
+    p.skills = s.map(v => String(v).trim()).filter(Boolean).slice(0, 50);
+  }
+  for (const k of ['email', 'phone', 'location', 'current_employer', 'current_title', 'education', 'linkedin_url', 'notes']) {
+    if (k in p) p[k] = String(p[k] ?? '').trim() || null;
+  }
+  return { patch: p };
+}
+
+// Application fields; CTC kept only when the caller may see salary on that opening (else dropped).
+function cleanApplication(d, salaryOk) {
+  const p = pickFields(d, salaryOk ? [...APP_FIELDS, ...CTC_FIELDS] : APP_FIELDS);
+  if ('source' in p && !APP_SOURCES.includes(p.source)) return { error: 'bad source' };
+  if ('referrer_employee_id' in p) { if (!p.referrer_employee_id) p.referrer_employee_id = null; else if (!isUuid(p.referrer_employee_id)) return { error: 'bad referrer_employee_id' }; }
+  if ('source_detail' in p) p.source_detail = String(p.source_detail ?? '').trim() || null;
+  if ('notice_period_days' in p) {
+    const n = numOrNull(p.notice_period_days);
+    if (n != null && !(n >= 0 && n <= 365)) return { error: 'notice_period_days must be 0-365' };
+    p.notice_period_days = n == null ? null : Math.round(n);
+  }
+  for (const k of CTC_FIELDS) if (k in p) {
+    const n = numOrNull(p[k]);
+    if (n != null && !(n >= 0)) return { error: `bad ${k}` };
+    p[k] = n == null ? null : Math.round(n);
+  }
+  return { patch: p };
+}
+
+// The opening must exist, be manageable by the caller, carry a JD and be open.
+async function intakeOpening(auth, me, env, openingId) {
+  const x = await loadOneOpening(auth, me, env, openingId);
+  if (!x) return { res: err('opening not found', 404) };
+  if (!canManageApps(x.roles)) return { res: err('forbidden', 403) };
+  if (jdGate(x.o)) return { res: errCode('jd_required', JD_REQUIRED_MSG, 409) };
+  if (x.o.status !== 'open') return { res: errCode('opening_not_open', 'The opening is not open', 409) };
+  return { x };
+}
+
+async function createCandidate(body, auth, env) {
+  const d = body.data || body;
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const { x, res } = await intakeOpening(auth, me, env, d.opening_id);
+  if (res) return res;
+  const cc = cleanCandidate(d);
+  if (cc.error) return err(cc.error, 400);
+  if (!cc.patch.full_name) return err('full_name required', 400);
+  const ca = cleanApplication(d, canSeeSalary(x.roles));
+  if (ca.error) return err(ca.error, 400);
+  const code = await mintHiringCode(env, 'podium_candidate');
+  if (!code) return err('code_mint_failed', 500);
+  const ci = await sb(`/rest/v1/candidates`, env, { method: 'POST', body: JSON.stringify([{ ...cc.patch, candidate_code: code, created_by: auth.userId }]) });
+  if (!ci.ok) return err(`db_error: ${JSON.stringify(ci.data)}`, 400);
+  const cand = ci.data[0];
+  const ai = await sb(`/rest/v1/applications`, env, { method: 'POST', body: JSON.stringify([{
+    ...ca.patch, candidate_id: cand.id, opening_id: x.o.id, status: 'new', created_by: auth.userId,
+  }]) });
+  if (!ai.ok) return err(`application_failed: ${JSON.stringify(ai.data)}`, 400);
+  const app = ai.data[0];
+  await hiringEvents(env, auth, me, [
+    { candidate_id: cand.id, event_type: 'candidate_created' },
+    { candidate_id: cand.id, opening_id: x.o.id, application_id: app.id, event_type: 'application_created', to_status: 'new', detail: { source: app.source } },
+  ]);
+  const { email_norm, phone_norm, ...person } = cand;
+  return ok({ candidate: person, application: { id: app.id, status: app.status, opening_id: app.opening_id } });
+}
+
+async function addApplication(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.candidate_id)) return err('candidate_id required', 400);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const { x, res } = await intakeOpening(auth, me, env, d.opening_id);
+  if (res) return res;
+  // Attaching someone you can't already see would hand you their profile — HR / podium_hiring only.
+  const sc = await candidateScope(auth, me, env, d.candidate_id);
+  if (!sc.canSee) return err('forbidden — ask HR / hiring to add this person to your opening', 403);
+  const ca = cleanApplication(d, canSeeSalary(x.roles));
+  if (ca.error) return err(ca.error, 400);
+  const ai = await sb(`/rest/v1/applications`, env, { method: 'POST', body: JSON.stringify([{
+    ...ca.patch, candidate_id: d.candidate_id, opening_id: x.o.id, status: 'new', created_by: auth.userId,
+  }]) });
+  if (ai.status === 409) return errCode('already_active', 'This person already has an active application on this opening', 409);
+  if (!ai.ok) return err(`db_error: ${JSON.stringify(ai.data)}`, 400);
+  const app = ai.data[0];
+  // A new active application lifts any retention clock.
+  await sb(`/rest/v1/candidates?id=eq.${d.candidate_id}&retain_until=not.is.null`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ retain_until: null }) });
+  await hiringEvents(env, auth, me, [{ candidate_id: d.candidate_id, opening_id: x.o.id, application_id: app.id,
+    event_type: 'application_created', to_status: 'new', detail: { source: app.source } }]);
+  return ok({ id: app.id, status: app.status, opening_id: app.opening_id, candidate_id: app.candidate_id });
+}
+
+async function updateCandidate(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.id)) return err('id required', 400);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const sc = await candidateScope(auth, me, env, d.id);
+  if (!(isHr(auth) || sc.visible.some(x => canManageApps(x.roles)))) return err('forbidden', 403);
+  const cc = cleanCandidate(d);
+  if (cc.error) return err(cc.error, 400);
+  if (!Object.keys(cc.patch).length) return err('no_patch', 400);
+  const r = await sb(`/rest/v1/candidates?id=eq.${d.id}`, env, { method: 'PATCH', body: JSON.stringify(cc.patch) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (!r.data?.length) return err('not_found', 404);
+  await hiringEvents(env, auth, me, [{ candidate_id: d.id, event_type: 'candidate_updated', detail: { fields: Object.keys(cc.patch) } }]);
+  const { email_norm, phone_norm, ...person } = r.data[0];
+  return ok(person);
+}
+
+async function loadApplication(env, id) {
+  if (!isUuid(id)) return null;
+  return (await sb(`/rest/v1/applications?id=eq.${id}&select=*&limit=1`, env)).data?.[0] || null;
+}
+
+async function updateApplication(body, auth, env) {
+  const d = body.data || body;
+  const app = await loadApplication(env, d.id);
+  if (!app) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, app.opening_id);
+  if (!x || !canManageApps(x.roles)) return err('forbidden', 403);
+  const ca = cleanApplication(d, canSeeSalary(x.roles));
+  if (ca.error) return err(ca.error, 400);
+  if (!Object.keys(ca.patch).length) return err('no_patch', 400);
+  const r = await sb(`/rest/v1/applications?id=eq.${app.id}`, env, { method: 'PATCH', body: JSON.stringify(ca.patch) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  // Field NAMES only — never the CTC values.
+  await hiringEvents(env, auth, me, [{ candidate_id: app.candidate_id, opening_id: app.opening_id, application_id: app.id,
+    event_type: 'application_updated', detail: { fields: Object.keys(ca.patch) } }]);
+  return ok({ id: app.id, updated: Object.keys(ca.patch) });
+}
+
+// After an application closes: no other active one and none joined → start the 12-month clock.
+async function maybeStartRetention(candidateId, env) {
+  const [ar, cr] = await Promise.all([
+    sb(`/rest/v1/applications?candidate_id=eq.${candidateId}&status=in.(${[...ACTIVE_APP_STATUSES, 'joined'].join(',')})&select=id&limit=1`, env),
+    sb(`/rest/v1/candidates?id=eq.${candidateId}&select=talent_pool&limit=1`, env),
+  ]);
+  if (ar.data?.length || cr.data?.[0]?.talent_pool) return;
+  await sb(`/rest/v1/candidates?id=eq.${candidateId}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ retain_until: retainUntil(todayIso()) }) });
+}
+
+async function setApplicationStatus(body, auth, env) {
+  const d = body.data || body;
+  const app = await loadApplication(env, d.id);
+  if (!app) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, app.opening_id);
+  if (!x || !canManageApps(x.roles)) return err('forbidden', 403);
+  if (jdGate(x.o)) return errCode('jd_required', JD_REQUIRED_MSG, 409);
+  const bad = checkTransition(app.status, d.status, d.reason);
+  if (bad === 'reason_required') return errCode('reason_required', 'A reason is required to reject or withdraw', 400);
+  if (bad) return errCode('invalid_transition', `Cannot move ${app.status} → ${d.status} here`, 409);
+  const reason = String(d.reason || '').trim() || null;
+  const patch = { status: d.status, ...(reason ? { outcome_reason: reason } : {}),
+    ...(isTerminalStatus(d.status) ? { closed_at: nowIso() } : {}) };
+  // Guarded on the status we read so two racing moves can't both land.
+  const r = await sb(`/rest/v1/applications?id=eq.${app.id}&status=eq.${app.status}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (!r.data?.length) return errCode('stale', 'The application changed — reload and retry', 409);
+  if (isTerminalStatus(d.status)) await maybeStartRetention(app.candidate_id, env);
+  await hiringEvents(env, auth, me, [{ candidate_id: app.candidate_id, opening_id: app.opening_id, application_id: app.id,
+    event_type: 'status_changed', from_status: app.status, to_status: d.status, reason }]);
+  return ok({ id: app.id, status: d.status });
+}
+
+async function moveApplication(body, auth, env) {
+  const d = body.data || body;
+  const reason = String(d.reason || '').trim();
+  if (!reason) return errCode('reason_required', 'A reason is required to move an application', 400);
+  const app = await loadApplication(env, d.id);
+  if (!app) return err('not_found', 404);
+  if (d.to_opening_id === app.opening_id) return err('already on that opening', 400);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const src = await loadOneOpening(auth, me, env, app.opening_id);
+  if (!src || !canManageApps(src.roles)) return err('forbidden', 403);
+  const { x: dst, res } = await intakeOpening(auth, me, env, d.to_opening_id);
+  if (res) return res;
+  if (checkTransition(app.status, 'withdrawn', reason)) return errCode('invalid_transition', `Cannot move an application that is ${app.status}`, 409);
+  // New first: if it collides (already active there), nothing has been closed yet. Salary fields NOT copied.
+  const ni = await sb(`/rest/v1/applications`, env, { method: 'POST', body: JSON.stringify([{
+    candidate_id: app.candidate_id, opening_id: dst.o.id, status: 'new', created_by: auth.userId,
+    source: app.source, referrer_employee_id: app.referrer_employee_id, source_detail: app.source_detail,
+    notice_period_days: app.notice_period_days,
+  }]) });
+  if (ni.status === 409) return errCode('already_active', 'This person already has an active application on that opening', 409);
+  if (!ni.ok) return err(`db_error: ${JSON.stringify(ni.data)}`, 400);
+  const nu = ni.data[0];
+  const r = await sb(`/rest/v1/applications?id=eq.${app.id}&status=eq.${app.status}`, env, { method: 'PATCH', body: JSON.stringify({
+    status: 'withdrawn', outcome_reason: `moved to ${dst.o.opening_code}`, moved_to_application_id: nu.id, closed_at: nowIso(),
+  }) });
+  if (!r.ok || !r.data?.length) return err(`move_close_failed: ${JSON.stringify(r.data)}`, 500);
+  await hiringEvents(env, auth, me, [
+    { candidate_id: app.candidate_id, opening_id: app.opening_id, application_id: app.id, event_type: 'application_moved',
+      from_status: app.status, to_status: 'withdrawn', reason: `moved to ${dst.o.opening_code}`, detail: { to_application_id: nu.id } },
+    { candidate_id: app.candidate_id, opening_id: dst.o.id, application_id: nu.id, event_type: 'application_created',
+      to_status: 'new', reason, detail: { moved_from_opening: src.o.opening_code } },
+  ]);
+  return ok({ from: { id: app.id, status: 'withdrawn' }, to: { id: nu.id, status: 'new', opening_id: dst.o.id } });
+}
+
+// ── Writes: candidate documents ───────────────────────────────────────────────
+
+async function createCandidateDocUploadUrl(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.candidate_id)) return err('candidate_id required', 400);
+  if (!CANDIDATE_DOC_TYPES.includes(d.doc_type)) return err('bad doc_type', 400);
+  if (!d.file_name) return err('file_name required', 400);
+  const fe = fileOk(d.file_name, CANDIDATE_DOC_EXTS, d.file_size);
+  if (fe) return err(fe, 400);
+  const edges = await loadOrgEdges(env);
+  const sc = await candidateScope(auth, callerEmployee(edges, auth.userId), env, d.candidate_id);
+  if (!canSeeCandidateDoc(d.doc_type, sc.rolesList, isHr(auth))) return err('forbidden', 403);
+  return signUpload(`candidates/${d.candidate_id}/${safeSeg(d.doc_type)}/${Date.now()}_${safeSeg(d.file_name)}`, env);
+}
+
+async function recordCandidateDocument(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.candidate_id)) return err('candidate_id required', 400);
+  if (!CANDIDATE_DOC_TYPES.includes(d.doc_type)) return err('bad doc_type', 400);
+  if (!d.storage_path || !String(d.storage_path).startsWith(`candidates/${d.candidate_id}/`)) return err('bad storage_path', 400);
+  const fe = fileOk(d.file_name || d.storage_path, CANDIDATE_DOC_EXTS, d.file_size);
+  if (fe) return err(fe, 400);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const sc = await candidateScope(auth, me, env, d.candidate_id);
+  if (!canSeeCandidateDoc(d.doc_type, sc.rolesList, isHr(auth))) return err('forbidden', 403);
+  if (d.application_id && !sc.apps.some(a => a.id === d.application_id)) return err('application_id is not this candidate\'s', 400);
+  const row = {
+    candidate_id: d.candidate_id, application_id: d.application_id || null, doc_type: d.doc_type,
+    title: d.title || null, storage_path: d.storage_path, file_name: d.file_name || null, mime_type: d.mime_type || null,
+    file_size: d.file_size != null ? Math.round(Number(d.file_size)) : null, notes: d.notes || null, uploaded_by: auth.userId,
+  };
+  const r = await sb(`/rest/v1/candidate_documents`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await hiringEvents(env, auth, me, [{ candidate_id: d.candidate_id, application_id: row.application_id, event_type: 'document_added', detail: { doc_type: d.doc_type } }]);
+  return ok(r.data?.[0]);
+}
+
+async function deleteCandidateDocument(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.id)) return err('id required', 400);
+  const dr = await sb(`/rest/v1/candidate_documents?id=eq.${d.id}&select=*&limit=1`, env);
+  const doc = dr.data?.[0];
+  if (!doc) return err('not_found', 404);
+  const recent = Date.now() - new Date(doc.uploaded_at).getTime() < 24 * 3600 * 1000;
+  if (!(isHr(auth) || (doc.uploaded_by === auth.userId && recent))) return err('forbidden — HR, or the uploader within 24h', 403);
+  const r = await sb(`/rest/v1/candidate_documents?id=eq.${d.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  const seg = String(doc.storage_path).split('/').map(encodeURIComponent).join('/');
+  await storageFetch(`/object/${DOC_BUCKET}/${seg}`, env, { method: 'DELETE' });
+  await hiringEvents(env, auth, callerEmployee(await loadOrgEdges(env), auth.userId), [{ candidate_id: doc.candidate_id,
+    application_id: doc.application_id, event_type: 'document_deleted', detail: { doc_type: doc.doc_type } }]);
+  return ok({ deleted: d.id });
+}
+
 const GET_ACTIONS = {
   getMe, getSettings,
   getEmployees, getEmployee,
@@ -3532,6 +4482,9 @@ const GET_ACTIONS = {
   getAnalyticsOrg, getAnalyticsComp, getAnalyticsPerf,
   // Phase 4 — OKRs
   getOkrConfig, getOkrCycle, getObjective, getMyOkrs, getTeamOkrs,
+  // Hiring C1/C2
+  getOpenings, getOpening, getJdDownloadUrl, getHiringLookups,
+  getCandidates, getCandidate, getCandidateDocumentUrl, findCandidateDuplicates,
 };
 
 const POST_ACTIONS = {
@@ -3565,6 +4518,10 @@ const POST_ACTIONS = {
   createObjective, updateObjective, deleteObjective,
   createKeyResult, updateKeyResult, deleteKeyResult,
   recordCheckin, gradeObjective,
+  // Hiring C1/C2
+  createOpening, updateOpening, setOpeningStatus, addOpeningJd, createJdUploadUrl, requestBandChange, decideBand,
+  createCandidate, addApplication, updateCandidate, updateApplication, setApplicationStatus, moveApplication,
+  createCandidateDocUploadUrl, recordCandidateDocument, deleteCandidateDocument,
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.
@@ -3589,6 +4546,10 @@ const SELF_SERVE_GET = new Set([
   // OKR participation — relationship-scoped inside each handler, not podium_view-gated.
   // (getObjective self-scopes via canSeeObjectiveRow; getMyOkrs/getTeamOkrs are chain-scoped.)
   'getMyOkrs', 'getObjective', 'getTeamOkrs',
+  // Hiring — every handler self-scopes via openingRoles (owner / reporting manager / approver /
+  // podium_hiring / HR), so a manager with no Podium role reaches only their own openings.
+  'getOpenings', 'getOpening', 'getJdDownloadUrl', 'getHiringLookups',
+  'getCandidates', 'getCandidate', 'getCandidateDocumentUrl', 'findCandidateDuplicates',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
@@ -3605,6 +4566,10 @@ const SELF_SERVE_POST = new Set([
   'createObjective', 'updateObjective', 'deleteObjective',
   'createKeyResult', 'updateKeyResult', 'deleteKeyResult',
   'recordCheckin', 'gradeObjective',
+  // Hiring — each handler self-scopes (see SELF_SERVE_GET).
+  'createOpening', 'updateOpening', 'setOpeningStatus', 'addOpeningJd', 'createJdUploadUrl', 'requestBandChange', 'decideBand',
+  'createCandidate', 'addApplication', 'updateCandidate', 'updateApplication', 'setApplicationStatus', 'moveApplication',
+  'createCandidateDocUploadUrl', 'recordCandidateDocument', 'deleteCandidateDocument',
 ]);
 
 async function handleGet(url, request, env) {

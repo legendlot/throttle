@@ -11,6 +11,7 @@ const PERM_SUMMARY = [
   { key: 'podium_view',  label: 'Viewer', desc: 'Read-only access to the directory, org chart and departments.', fg: 'var(--blue-soft)' },
   { key: 'podium_hr',    label: 'HR',     desc: 'Manage people, departments, roles and appraisal cycles.',        fg: 'var(--green-bright)' },
   { key: 'podium_admin', label: 'Admin',  desc: 'Full access including users, permissions and settings.',          fg: 'var(--yellow)' },
+  { key: 'podium_hiring', label: 'Hiring', desc: 'Create openings and see every opening and candidate. Salary numbers still follow the opening chain.', fg: 'var(--orange)' },
 ];
 
 function PermSummary({ roles, users }) {
@@ -41,7 +42,7 @@ function PermSummary({ roles, users }) {
   );
 }
 
-// Podium permission matrix — the 4 boolean keys, grouped. Define unlimited custom
+// Podium permission matrix — the 5 boolean keys, grouped. Define unlimited custom
 // roles from these toggles. Any elevated key implies podium_view (enforced both
 // here and server-side — RULE-PODIUM-001 corollary).
 const PERM_DEFS = [
@@ -54,11 +55,14 @@ const PERM_DEFS = [
   { group: 'Compensation', items: [
     { key: 'podium_comp', label: 'View & edit compensation and salary bands' },
   ] },
+  { group: 'Hiring', items: [
+    { key: 'podium_hiring', label: 'Hiring — openings + candidates' },
+  ] },
   { group: 'Admin', items: [
     { key: 'podium_admin', label: 'Manage Podium roles, assign users & change settings' },
   ] },
 ];
-const ELEVATED = ['podium_hr', 'podium_comp', 'podium_admin'];
+const ELEVATED = ['podium_hr', 'podium_comp', 'podium_admin', 'podium_hiring'];
 
 export default function RolesPage() {
   const { session, perms } = useAuth();
