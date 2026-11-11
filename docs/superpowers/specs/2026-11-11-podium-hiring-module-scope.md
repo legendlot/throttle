@@ -7,6 +7,8 @@
 > changes: candidate person vs application split; statutory calculator rules made effective-dated (PF ceiling
 > and Karnataka PT have changed since the letters were written); a full offer state machine; atomic joining;
 > candidate documents in their own table; retention + deletion; approval-bypass and self-approval closed.
+> **v3.1: the six open decisions settled (Afshaan: "yes, all six"); NEW O1 = offer email + candidate
+> acceptance link, modelled on Ignition's deal-contract link (S441). The old O4 upload link folds into it.**
 
 ## Goal
 
@@ -20,10 +22,9 @@ join; nothing is re-keyed.
 | C2 | Candidates + applications + HR documents; joining hand-off | Core | C1 | ↑ + 1 |
 | C3 | Offer letter: template, statutory calculator, revisions, approval, PDF, manual send | Core | C1, C2 | 2 sessions |
 | C4 | Bulk CV upload → candidates (Claude extraction, review-and-confirm) | Core | C2 + Anthropic API key | 1 session |
-| O1 | Send / draft the offer email from Gmail | Optional | C3 + Workspace scope | 1 session |
+| O1 | Offer email + acceptance link (accept / decline / question → confirmation email → joining documents) | Optional, **build right after C3** | C3 + Workspace scope | 2 sessions |
 | O2 | Interview rounds + feedback | Optional | C1, C2 | 1–2 sessions |
 | O3 | One-click Calendar scheduling (Podium link) | Optional | O2 + Workspace scope | 1 session |
-| O4 | Candidate document-upload link (replaces emailing ID/bank docs) | Optional, recommended | C2 | 1 session |
 
 Scope: **Fraternitas (white-collar) hires, including interns.** Blue-collar contract labour via Silverton is
 out of scope (hired and paid through the agency).
@@ -38,25 +39,17 @@ out of scope (hired and paid through the agency).
 3. Calendar invites carry a Podium link, not the CV file.
 4. One standard "Offer of Employment" letter, as used today.
 5. A JD is optional to create an opening, required before CVs, stage moves or interviews.
-
-## Decisions still needed (both reviews raised these)
-
-1. **Does the approver confirm an opening's band at creation (and any later increase)?** Without it, a band
-   typed in high skips approval. *Recommendation: yes — one click per opening; offers inside it then go
-   freely.* (Codex rates this MUST.)
-2. **Employee PF and Professional Tax inside "fixed pay".** Today's annexure counts the employee's own PF
-   and PT as part of fixed pay and shrinks the gross to fit. The letter also says the salary is "before all
-   customary payroll deductions", which those two are. Keep as is, or show fixed pay = gross + employer PF,
-   with employee PF/PT as deductions on the in-hand line? *Recommendation: the second — it's what the
-   letter says and what payroll does; check with Mahesh/Finance that RazorpayX is set up the same way.*
-3. **Interns:** the salary records already hold six stipend-based people. A second template ("Internship
-   Offer", stipend, no PF/PT/variable) — yes?
-4. **CC hr@legendoftoys.com on offer emails** (today's habit). Anyone reading hr@ sees the salary, which
-   sits outside the access rule in decision 1. Keep, or CC only the chain + you?
-5. **"No offer on record" at joining:** block the Directory-sync import, with an HR override that needs a
-   written reason (logged)? *Recommendation: yes.*
-6. **Retention for candidates who don't join:** delete their CV and documents after 12 months unless moved
-   to a talent pool? *Recommendation: 12 months.*
+6. **The approver confirms an opening's band at creation and on any increase** (one click); offers inside
+   it go freely.
+7. **Employee PF and PT are deductions, not part of fixed pay.** Fixed pay = gross + employer PF; the
+   annexure shows employee PF / PT / ESI on a separate "deductions → estimated in-hand" block. Finance to
+   confirm RazorpayX is set up the same way before go-live.
+8. **A second template for interns** ("Internship Offer": monthly stipend; no PF, PT or variable by default).
+9. **Offer emails CC the opening's chain + Afshaan, not hr@** (hr@ readers sit outside the salary rule).
+   Assumed from "yes, all six" — this one had no stated recommendation, so say if hr@ should stay.
+10. **A new joiner with no accepted Podium offer is blocked at Directory-sync import**; an HR override needs
+    a written reason and is logged.
+11. **Non-joiners' CVs and documents are deleted after 12 months** unless moved to a talent pool.
 
 ⚠️ **Outside Podium, today:** the EPF wage ceiling went from ₹15,000 to ₹25,000 on 17 Sep 2026, and
 Karnataka PT is now nil below ₹25,000/month gross, with ₹200/month and ₹300 in February (₹2,500 a year) above
@@ -140,7 +133,7 @@ text.
   - **Payslip, signed offer:** the salary-visible set only (the opening chain and the allow-list).
   - **ID, PAN, bank, address:** HR only, and the person themself once they're an employee (as today).
 - **Aadhaar:** ask only at the joining stage, never with the CV. Accept a masked copy or an alternative ID.
-  Never send it through CV extraction. Best handled by O4 instead of email.
+  Never send it through CV extraction. Collected through the O1 acceptance link, not email.
 - On joining, documents are copied into `podium.documents` under the new employee by the joining function
   (below). The candidate copies are then removed under the retention rule.
 
@@ -229,6 +222,9 @@ The rule set is data with `effective_from`. Each offer stores the rule-set versi
   not in the annexure.
 - **Wages check (Labour Codes):** Basic at 50% of fixed meets the 50% wage rule. Keep that rule as a
   validation, so a future template can't drop below it.
+- **Layout (decision 7):** earnings (Basic, HRA, Special, Travel, Telephone) = gross; + employer PF (+ employer ESI)
+  = fixed pay; + variable = total CTC. Below it, a deductions block: employee PF, employee ESI, PT → estimated monthly
+  in-hand. The pre-17-Sep fixtures keep the old layout (rule-set v0).
 - Rounding: compute at full precision, display to the rupee.
 - Regression fixtures: the three mailbox letters must still reproduce exactly under the **pre-17-Sep rule
   set**. New offers use the current one.
@@ -256,7 +252,7 @@ plus `withdrawn` (by LOT, any time before joining) and `superseded`.
 - Footer: `offer_ref` (OFR-2026-NNN).
 - Core includes **"Mark as sent"**: record who sent it, to whom, when, and attach the email, or upload the
   exact PDF sent. It also includes **"Record acceptance"**: the signed copy plus the date. Without O1, this
-  is how the lifecycle still works.
+  is how the lifecycle still works, and it stays as the fallback once O1 exists.
 
 ## C4 — Bulk CV upload
 
@@ -299,16 +295,84 @@ adding them later means rewriting data flows:
 
 ---
 
-## O1 — Send / draft from Gmail (Optional)
+## O1 — Offer email + acceptance link (Optional — build right after C3)
 
-- Sends from the **hiring owner's** Gmail via service-account impersonation (`gmail.compose` on domain-wide
-  delegation). The worker only impersonates the hiring owner or reporting manager of that opening, never
-  any address.
-- The email copies today's wording: congratulations, role and start date, "confirm with a signed copy",
-  and the joining-document ask (moved to O4 if built).
-- Recipients are checked against the salary rule (decision 4). The attachment and recipients are frozen.
-- A send intent is stored first, then reconciled with Gmail, so a timeout can't cause a double send.
-- A draft is not a send. Revisions are sent as a reply in the same thread.
+Modelled on Ignition's deal-contract link (S441, `systems/ignition.md` §S441), where a creator opens a link,
+accepts the contract and submits bank details with no login. The same shape works here: **one email from
+Podium carries the offer PDF and a personal link; the candidate accepts (or declines, or asks a question)
+on that page; Podium records it, emails the confirmation, then asks for the joining documents.**
+
+**1. Send.**
+- "Send offer" on a `ready` offer sends it from the **hiring owner's Gmail** (service-account impersonation,
+  `gmail.compose` + `gmail.send` on domain-wide delegation). The worker only ever impersonates the hiring
+  owner or reporting manager of that opening, never an arbitrary address.
+- To the candidate; CC the chain + Afshaan (decision 9).
+- The body uses today's wording (congratulations, role, start date), plus the button **"View and respond to
+  your offer"**. The PDF is attached too.
+- Each send creates a send intent first, then reconciles with Gmail, so a timeout can't double-send.
+- A draft is not a send.
+- A revision goes as a reply in the same Gmail thread, with a fresh link.
+
+**2. The link.**
+- `podium.legendoftoys.com/offer/?t=<token>`. The token is 32 random bytes; **only its SHA-256 hash is
+  stored**, never the link (as Ignition does).
+- One live link per offer revision. It expires at `valid_until`. Sending a new revision kills the old link.
+- Public API `/public/offer*` sits before the login gate and is rate-limited; the page is `noindex`.
+- **Reading is GET; every action is POST**, because mail scanners follow GET links and must never accept an
+  offer by accident.
+- A superseded, withdrawn or expired offer returns only a short notice ("This offer has been replaced —
+  check your latest email" / "This offer has expired — contact <hiring owner>"). Never the letter.
+- The page shows only that candidate's name, the role, the letter and the annexure. No other Podium data.
+
+**3. The candidate's response (the feedback loop).** Three choices:
+- **Accept.** They type their full name (it must match the name on the offer, ignoring case and spacing),
+  confirm the joining date, and tick "I have read and accept this offer". Podium then:
+  - records an **acceptance evidence row** (`offer_acceptances`): offer and revision, the issued PDF's
+    SHA-256, the typed name, the confirmed date, time, IP, user agent, and the token's hash;
+  - generates an **acceptance certificate page**, appends it to the issued PDF, and stores the result as the
+    `signed_offer` document;
+  - moves the offer to `accepted` and the application to `accepted`. The headcount check is atomic: if the
+    seat was filled meanwhile, the candidate sees "we'll be in touch" and the hiring owner is alerted,
+    instead of a second acceptance landing.
+- **Decline** — a reason (picklist: compensation, role, location, another offer, personal, other + free
+  text). The offer becomes `declined` and the reason feeds hiring analytics.
+- **I have a question / want to discuss** — free text, and optionally "a different joining date". Nothing
+  changes state. The hiring owner is notified (email + Podium home) and normally answers with a revision.
+  This is the negotiation loop: question → revision → a new link.
+
+**4. On acceptance — confirmation email.**
+- Sent automatically from the hiring owner's Gmail, in the same thread. To the candidate; CC the chain +
+  Afshaan.
+- Body: "Thank you — your acceptance of <role> is recorded", the joining date, what happens next, and the
+  accepted PDF with its certificate page attached.
+- Plus a Podium-home notification for the hiring owner and reporting manager.
+
+**5. Joining documents (Ignition's "bank details" step).**
+- Straight after accepting, the same page moves to step 2: upload into the private bucket the previous
+  payslips, PAN, a masked Aadhaar or an alternative ID, address proof, the relieving letter (when they have
+  it), a photo, and bank details (account, IFSC, a cancelled cheque).
+- The link stays valid for this step until the joining date + 7 days. They can return to it any time.
+- **Bank details:** stored service-role-only, column names aligned with `store.payment_payees` (as Ignition
+  does). Shown masked everywhere. Only the salary allow-list (Finance) can reveal the full number, logged,
+  because Finance enters it into RazorpayX.
+  - First submit is insert-or-ignore. A change needs HR to issue a one-time "allow update" (Ignition's
+    `allowBankUpdate` pattern).
+- Each upload ticks the joining checklist (C2). HR verifies each item (verifier + time).
+- **This replaces emailing Aadhaar and PAN to a thread with several people on CC.**
+
+**Why this counts as a legitimate record:**
+- **Legally:** an electronic acceptance is a valid contract under the IT Act 2000 (s.10A).
+- **Evidence:** the typed name, the timestamp, the IP and the hash of the exact PDF prove what was accepted,
+  by whom and when.
+- **Integrity:** the issued PDF is immutable, so the hash ties the acceptance to one document.
+- **Fallback and upgrade:** a scanned signed copy (C3 "Record acceptance") still works for anyone who
+  replies by email. Aadhaar eSign stays a good-to-have.
+
+**Build note:** copy Ignition's pieces, don't share them across workers. That means the pure-rules module
+(`ignitionops-worker/src/contract.js`), the `/public/*`-before-JWT routing, token-hash storage, the
+POST-only accept and the closed-state response. The Podium app's public `/offer` route sits outside the
+`(auth)` layout. Ignition's live proof (S441) covers send → accept → bank save; the bank-update path was
+only route-tested, so prove it live here.
 
 ## O2 — Interview rounds + feedback (Optional)
 
@@ -331,16 +395,6 @@ adding them later means rewriting data flows:
 - Podium stores the event and calendar ids and the timezone, and is idempotent. Reschedule and cancel
   sync both ways, and direct Calendar edits are reconciled on open.
 - The JD gate, opening status and interviewer scope are rechecked server-side.
-
-## O4 — Candidate document-upload link (Optional, recommended)
-
-- A single-use, expiring link (e.g. 7 days) lets the candidate upload the joining documents straight into
-  the private bucket. That covers the signed offer, payslips, a masked Aadhaar or alternative ID, PAN, bank
-  details and the relieving letter.
-- It removes the main privacy weakness in today's flow: Aadhaar and PAN emailed to a thread with four or
-  five people on CC.
-
----
 
 ## Good-to-haves (not scoped into a module yet)
 
@@ -370,10 +424,11 @@ adding them later means rewriting data flows:
 7. Approver snapshot + no self-approval.
 8. Rehire = reactivate the existing employee row.
 9. Bucket path layout and the retention/deletion model.
+10. Acceptance evidence (`offer_acceptances` + PDF hash + certificate page) and token-hash-only link storage.
 
 ## Build order
 
-C1 + C2 → C3 → C4 → then O4, O1, O2, O3 as picked. Each module gets a manual chapter when it goes live.
+C1 + C2 → C3 → O1 (acceptance link) → C4 → then O2, O3 as picked. Each module gets a manual chapter when it goes live.
 
 Sources for the statutory changes: EPF ceiling ₹25,000 from 17 Sep 2026
 ([CorpLaw Updates](https://www.corplawupdates.in/updates/epfo-wage-ceiling-rs-25000-cabinet-approval-2026),
