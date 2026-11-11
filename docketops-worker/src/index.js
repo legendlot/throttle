@@ -27,7 +27,8 @@
  * Spec: docs/superpowers/specs/2026-06-03-docket-design.md ; systems/docket.md
  */
 import { istDateStr, isExpired, isDueOn, istHM, lateFlag, buildRegister } from './register-core.mjs';
-import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT_ACTIONS } from './plan-core.mjs';
+import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT_ACTIONS,
+  linkError, effectiveLink, taskPlan, planLinkLabel, planDbError } from './plan-core.mjs';
 
 
 // ── CORS ──────────────────────────────────────────────────────────────────
@@ -195,10 +196,17 @@ async function canViewDashboard(auth, env) {
   return isDashboardViewer(auth.userId, env);
 }
 
-// Edit a task's core fields: admin, creator, owner, or assignee.
+// Edit a task's core fields: creator, owner or assignee — widened by the task's SPACE (spec §5.1 P0-a):
+// in General a docket_admin edits any task; in a PRIVATE space docket_admin adds nothing (RULE-DOCKET-003,
+// the gate beats admin) and the space's OWNER edits every task in it (members keep the baseline). The
+// space row comes from loadTaskFor / keepAccessible / knowSpaces (spaceOf); an unknown space widens
+// nothing — it is never taken for General.
 function canEditTask(auth, task) {
-  return isAdmin(auth)
-    || task.created_by_user_id === auth.userId
+  const space = spaceOf(auth, task);
+  if (space && space.is_default && isAdmin(auth)) return true;
+  if (space && !space.is_default && space.owner_user_id && space.owner_user_id === auth.userId) return true;
+  if (space && space.is_founders && isPlanAdmin(auth)) return true;   // both founders, not just its owner
+  return task.created_by_user_id === auth.userId
     || (auth.employeeId && task.owner_employee_id === auth.employeeId)
     || (auth.employeeId && task.assignee_employee_id === auth.employeeId);
 }
@@ -256,6 +264,7 @@ async function loadTaskFor(id, auth, env) {
   const space = await loadSpace(task.space_id, env);
   if (!space || !(await canAccessSpace(auth, space, env))) return null;
   TASK_SPACE.set(task, space);
+  noteSpaces(auth, [space]);
   return task;
 }
 // "Can see" for a task that came through loadTaskFor: General = the V1 baseline (canSeeTask); a private
@@ -270,13 +279,32 @@ async function keepAccessible(auth, tasks, env) {
   if (!tasks.length) return tasks;
   const spaceIds = uniq(tasks.map(t => t.space_id));
   const [sr, mr] = await Promise.all([
-    sbDocket(`/rest/v1/spaces?id=in.${inList(spaceIds)}&select=id,is_default,owner_user_id`, env),
+    sbDocket(`/rest/v1/spaces?id=in.${inList(spaceIds)}&select=${SPACE_COLS}`, env),
     sbDocket(`/rest/v1/space_members?space_id=in.${inList(spaceIds)}&user_id=eq.${enc(auth.userId)}&select=space_id`, env),
   ]);
   if (!sr.ok || !mr.ok) return [];   // fail closed
+  noteSpaces(auth, sr.data || []);
   const member = new Set((mr.data || []).map(m => m.space_id));
   const ok = new Set((sr.data || []).filter(sp => sp.is_default || sp.owner_user_id === auth.userId || member.has(sp.id)).map(sp => sp.id));
   return tasks.filter(t => ok.has(t.space_id));
+}
+// The space rows this request has already read, by id (canEditTask needs a task's space — spec §5.1
+// P0-a). Fed by loadTaskFor, keepAccessible and knowSpaces; one Map per request, on the auth object.
+const SPACE_COLS = 'id,name,is_default,is_private,owner_user_id,is_founders';
+function noteSpaces(auth, rows) {
+  const m = auth._spaceRows || (auth._spaceRows = new Map());
+  for (const s of rows || []) if (s && s.id) m.set(s.id, s);
+}
+function spaceOf(auth, task) {
+  return (task && (TASK_SPACE.get(task) || auth._spaceRows?.get(task.space_id))) || null;
+}
+// Read (once, batched) the spaces of these task rows that this request hasn't seen yet.
+async function knowSpaces(auth, tasks, env) {
+  const known = auth._spaceRows || new Map();
+  const ids = uniq((tasks || []).map(t => t.space_id)).filter(id => !known.has(id));
+  if (!ids.length) return;
+  const r = await sbIn(sbDocket, ids, l => `/rest/v1/spaces?id=in.${l}&select=${SPACE_COLS}`, env);
+  if (r.ok) noteSpaces(auth, r.data || []);
 }
 function isHttpUrl(u) { return typeof u === 'string' && /^https?:\/\//i.test(u.trim()); }
 
@@ -436,17 +464,18 @@ async function logSpace(env, spaceId, actor, action, note = null) {
 // Accessible spaces for the sidebar: General + owned/member private spaces (non-archived).
 async function accessibleSpaces(auth, env) {
   const [defRes, memberRes] = await Promise.all([
-    sbDocket(`/rest/v1/spaces?is_default=eq.true&archived_at=is.null&select=id,name,is_private,owner_user_id&limit=1`, env),
+    sbDocket(`/rest/v1/spaces?is_default=eq.true&archived_at=is.null&select=id,name,is_private,owner_user_id,is_founders&limit=1`, env),
     sbDocket(`/rest/v1/space_members?user_id=eq.${enc(auth.userId)}&select=space_id`, env),
   ]);
   const memberIds = (memberRes.ok ? memberRes.data : []).map(m => m.space_id);
   const orParts = [`owner_user_id.eq.${auth.userId}`];
   if (memberIds.length) orParts.push(`id.in.${inList(memberIds)}`);
   const ownedRes = await sbDocket(
-    `/rest/v1/spaces?is_private=eq.true&archived_at=is.null&or=(${orParts.join(',')})&select=id,name,is_private,owner_user_id&order=name.asc`, env);
+    `/rest/v1/spaces?is_private=eq.true&archived_at=is.null&or=(${orParts.join(',')})&select=id,name,is_private,owner_user_id,is_founders&order=name.asc`, env);
   const general = (defRes.ok && defRes.data) || [];
   const privates = (ownedRes.ok && ownedRes.data) || [];
-  return [...general, ...privates].map(s => ({ id: s.id, name: s.name, is_private: s.is_private, is_owner: s.owner_user_id === auth.userId }));
+  return [...general, ...privates].map(s => ({ id: s.id, name: s.name, is_private: s.is_private, is_owner: s.owner_user_id === auth.userId,
+    ...(s.is_founders ? { is_founders: true } : {}) }));
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -530,7 +559,8 @@ async function getSpaceMembers(url, auth, env) {
   if (!spaceId) return err('space_id required', 400);
   const space = await loadSpace(spaceId, env);
   if (!space) return err('space_not_found', 404);
-  if (!(await canAccessSpace(auth, space, env)) && !isAdmin(auth)) return err('forbidden_space', 403);
+  // Members and the owner only (spec §5.1 P0-a): a non-member admin gets counts from getAllSpaces, never names.
+  if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
   const mr = await sbDocket(`/rest/v1/space_members?space_id=eq.${enc(spaceId)}&select=user_id,added_at&order=added_at.asc`, env);
   const ids = uniq((mr.data || []).map(m => m.user_id));
   const up = ids.length ? await sbStore(`/rest/v1/users_profile?id=in.${inList(ids)}&select=id,full_name`, env) : { data: [] };
@@ -629,7 +659,8 @@ async function hydrateTasks(rows, auth, env) {
   const taskIds = uniq(rows.map(t => t.id));
   const userIds = uniq(rows.map(t => t.created_by_user_id));
   // Every id list goes through sbIn (≤150 per request) — a big list would overflow the URL.
-  const [deptRes, childRes, collabRes, docRes, commRes, creatorRes, linkRaw] = await Promise.all([
+  // F9 R2: the plan link (one batched projection call) and the rows' spaces (canEditTask) ride along.
+  const [deptRes, childRes, collabRes, docRes, commRes, creatorRes, linkRaw, planCtx] = await Promise.all([
     sbIn(sbPodium, deptIds, l => `/rest/v1/departments?id=in.${l}&select=id,name`, env),
     sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?parent_task_id=in.${l}&select=parent_task_id,status`, env),
     sbIn(sbDocket, taskIds, l => `/rest/v1/task_collaborators?task_id=in.${l}&select=task_id,employee_id`, env),
@@ -637,6 +668,8 @@ async function hydrateTasks(rows, auth, env) {
     sbIn(sbDocket, taskIds, l => `/rest/v1/task_comments?task_id=in.${l}&deleted_at=is.null&select=task_id`, env),
     sbIn(sbStore, userIds, l => `/rest/v1/users_profile?id=in.${l}&select=id,full_name`, env),
     rawLinks(taskIds, env),
+    planContext(rows, auth, env),
+    knowSpaces(auth, rows, env),
   ]);
   const linkN = linkCounts(linkRaw);
   // Employee names: owners + every collaborator (collaborator ids are only known after collabRes).
@@ -660,7 +693,7 @@ async function hydrateTasks(rows, auth, env) {
   const tally = (res) => { const m = {}; (res.data || []).forEach(r => { m[r.task_id] = (m[r.task_id] || 0) + 1; }); return m; };
   const docs = tally(docRes), comm = tally(commRes);
   return rows.map(t => ({
-    ...t,
+    ...withPlan(t, planCtx),
     department_name: deptName[t.department_id] || null,
     owner_name: empName[t.owner_employee_id] || null,
     creator_name: creatorName[t.created_by_user_id] || null,
@@ -854,6 +887,7 @@ async function getStaleTasks(url, auth, env) {
   // batched: the collaborator check is one in.() read, not one per parent). Otherwise null.
   const pr = await sbIn(sbDocket, parentIds, l => `/rest/v1/tasks?id=in.${l}&select=*`, env);
   const parents = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
+  await knowSpaces(auth, parents, env);   // canEditTask reads the parent's space (no-op: same spaces as the rows)
   const quick = (p) => canViewAll(auth) || canEditTask(auth, p) || (auth.departmentId && p.department_id === auth.departmentId);
   const needCollab = parents.filter(p => !quick(p)).map(p => p.id);
   const collabOk = new Set();
@@ -898,9 +932,12 @@ async function searchTasks(url, auth, env) {
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
   const rows = r.data || [];
   const empIds = uniq(rows.map(t => t.owner_employee_id));
-  const empRes = await sbIn(sbPodium, empIds, l => `/rest/v1/employees?id=in.${l}&select=id,full_name`, env);
+  const [empRes, planned] = await Promise.all([
+    sbIn(sbPodium, empIds, l => `/rest/v1/employees?id=in.${l}&select=id,full_name`, env),
+    hydratePlan(rows, auth, env),   // F9 R2: the plan chip, through the projection
+  ]);
   const name = {}; (empRes.data || []).forEach(e => { name[e.id] = e.full_name; });
-  return ok(rows.map(t => ({ ...t, owner_name: name[t.owner_employee_id] || null })));
+  return ok(planned.map(t => ({ ...t, owner_name: name[t.owner_employee_id] || null })));
 }
 
 async function getTask(url, auth, env) {
@@ -953,28 +990,40 @@ async function getTask(url, auth, env) {
   // F7: dependency links, and history rows whose value is a linked task's id rendered behind the gate.
   const depHist = (histRes.data || []).filter(h => h.field === 'dependency');
   const depIds = uniq(depHist.flatMap(h => [h.new_value, h.old_value]).filter(v => /^[0-9a-f-]{36}$/i.test(v || '')));
-  const [links, depCards] = await Promise.all([buildLinks(task.id, auth, env), taskCards(depIds, auth, env)]);
+  // F9 R2: the task's plan link and every plan id in its history, through ONE projection call. History
+  // stores the item id only (never a title); it is rendered here at the viewer's level.
+  const planHistIds = uniq((histRes.data || []).filter(h => h.field === 'plan_item_id')
+    .flatMap(h => [h.old_value, h.new_value]).filter(v => isUuid(v || '')));
+  const [links, depCards, planCtx] = await Promise.all([
+    buildLinks(task.id, auth, env), taskCards(depIds, auth, env), planContext([task], auth, env, planHistIds),
+  ]);
   const depLabel = v => (v && /^[0-9a-f-]{36}$/i.test(v)) ? cardLabel(depCards[v]) : v;
+  const planLabel = v => (isUuid(v || '') ? planLinkLabel(taskPlan(planCtx.links[v])) : null);
+  const planned = withPlan(task, planCtx);
+  // A sub-task shows its parent's link, so a top-level task's children all carry this one, inherited.
+  const childPlan = planned.plan && !planned.plan.inherited ? { ...planned.plan, inherited: true } : null;
   const prog = task.program_id
     ? (await sbDocket(`/rest/v1/programs?id=eq.${enc(task.program_id)}&select=id,name,color&limit=1`, env)).data?.[0]
     : null;
   return ok({
-    ...task,
+    ...planned,
     department_name: deptRes.data?.[0]?.name || null,
     owner_name: empName[task.owner_employee_id] || null,
     creator_name: userName[task.created_by_user_id] || null,
-    space: { id: space.id, name: space.name, is_private: space.is_private },
+    space: { id: space.id, name: space.name, is_private: space.is_private, is_founders: !!space.is_founders },
     program: prog || null,
     parent: parentRes.data?.[0] || null,
-    children,
+    children: children.map(c => ({ ...c, plan: childPlan })),
     child_count: children.length,
     child_done: children.filter(c => c.status === 'done').length,
     collaborators: (collabRes.data || []).map(c => ({ ...c, full_name: empName[c.employee_id] || null })),
     documents: docRes.data || [],
     comments: (commRes.data || []).map(c => ({ ...c, author_name: userName[c.author_user_id] || null })),
-    history: (histRes.data || []).map(h => ({
+    // A plan-link row whose both sides project to nothing for this viewer never existed for them (§5.3 none).
+    history: (histRes.data || []).filter(h => h.field !== 'plan_item_id' || planLabel(h.old_value) || planLabel(h.new_value)).map(h => ({
       ...h, actor_name: userName[h.actor_user_id] || null,
       ...(h.field === 'dependency' ? { old_value: depLabel(h.old_value), new_value: depLabel(h.new_value) } : {}),
+      ...(h.field === 'plan_item_id' ? { old_value: planLabel(h.old_value), new_value: planLabel(h.new_value) } : {}),
       // done-vs-abandoned of a blocker you can't open is not yours to know (hostile review #5).
       ...(h.event_type === 'unblocked' && !depCards[h.new_value]?.visible ? { note: null } : {}),
     })),
@@ -1029,6 +1078,7 @@ async function removeTaskLink(body, auth, env) {
   if (!link) return err('not_found', 404);
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList([link.from_task_id, link.to_task_id])}&select=*`, env);
   const ends = tr.ok ? (tr.data || []) : [];
+  await knowSpaces(auth, ends, env);   // canEditTask reads each end's space
   const cards = await taskCards(ends.map(t => t.id), auth, env);
   if (!ends.some(t => t.status !== 'abandoned' && canEditTask(auth, t) && cards[t.id]?.visible)) return err('forbidden', 403);
   const r = await sbDocket(`/rest/v1/rpc/remove_task_link`, env, { method: 'POST', body: JSON.stringify({ p_link_id: d.link_id, p_user: auth.userId }) });
@@ -1527,6 +1577,9 @@ async function createTaskCore(d, auth, env) {
 
   let parentId = d.parent_task_id || null;
   let spaceId = d.space_id || null;
+  // F9 R2: an optional plan link — top-level only (a sub-task follows its parent's).
+  const planItemId = d.plan_item_id || null;
+  if (planItemId && parentId) return planErr('subtask_follows_parent');
   if (parentId) {
     const parent = await loadTaskFor(parentId, auth, env);
     if (!parent || !(await seesTask(auth, parent, env))) return err('parent_not_found', 404);
@@ -1543,6 +1596,7 @@ async function createTaskCore(d, auth, env) {
   const space = await loadSpace(spaceId, env);
   if (!space) return err('space_not_found', 404);
   if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
+  if (planItemId) { const c = await checkLinkTarget(auth, planItemId, space, env); if (c.error) return c.error; }
   const task_no = await mintTaskNo(env);
   const ins = await sbDocket(`/rest/v1/tasks`, env, {
     method: 'POST',
@@ -1553,11 +1607,11 @@ async function createTaskCore(d, auth, env) {
       completed_at: initStatus === 'done' ? nowIso() : null,
       parent_task_id: parentId, created_by_user_id: auth.userId,
       deadline: d.deadline || null, custom_fields: d.custom_fields || {},
-      space_id: spaceId, program_id: d.program_id || null,
+      space_id: spaceId, program_id: d.program_id || null, plan_item_id: planItemId,
       is_recurring: isRecurring, recurrence: isRecurring ? d.recurrence : null,
     }]),
   });
-  if (!ins.ok || !ins.data?.[0]) return err('create_failed: ' + JSON.stringify(ins.data), 400);
+  if (!ins.ok || !ins.data?.[0]) return taskWriteErr('create_failed: ', ins);
   const task = ins.data[0];
 
   if (Array.isArray(d.collaborators) && d.collaborators.length) {
@@ -1574,6 +1628,8 @@ async function createTaskCore(d, auth, env) {
   // A deadline given at create is the immutable original (RULE-DOCKET-001) — log it like
   // updateTask's first set, so the activity feed and "deadline_set" counts see it (F2 quick-add).
   if (d.deadline && !isRecurring) await logHistory(env, task.id, auth.userId, 'deadline_set', { field: 'deadline', new: d.deadline });
+  // The link's history row stores the item id only (rendered through the projection at read time).
+  if (planItemId) await logHistory(env, task.id, auth.userId, 'plan_item_id_changed', { field: 'plan_item_id', new: planItemId });
   return ok({ id: task.id, task_no: task.task_no });
 }
 async function createTask(body, auth, env)    { return createTaskCore(body.data || body, auth, env); }
@@ -1873,7 +1929,10 @@ async function updateTask(body, auth, env) {
   const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
-  if (task.status === 'abandoned') return abandonedRO();
+  // An abandoned task is read-only — except that a plan admin may CLEAR its plan link, so one stale
+  // abandoned task can't block making a theme restricted forever (review R2 #5).
+  const clearOnly = d.plan_item_id === null && Object.keys(d).every(k => k === 'id' || k === 'plan_item_id' || k === 'action');
+  if (task.status === 'abandoned' && !(clearOnly && isPlanAdmin(auth))) return abandonedRO();
 
   const updates = {}; const changes = [];
   for (const f of EDITABLE) {
@@ -1886,13 +1945,26 @@ async function updateTask(body, auth, env) {
   let deadlineSet = false;
   if (d.deadline && !task.deadline) { updates.deadline = d.deadline; deadlineSet = true; }
   if (d.custom_fields !== undefined) updates.custom_fields = d.custom_fields;
+  // F9 R2: the plan link — touched ONLY when the request names plan_item_id, so a teammate editing other
+  // fields never disturbs a link (even one they see only at level L). null / '' clears (edit right alone);
+  // setting needs the item at F / O / T and live (checkLinkTarget).
+  let planChange = null;
+  if (d.plan_item_id !== undefined) {
+    const next = d.plan_item_id || null;
+    if (next !== (task.plan_item_id || null)) {
+      if (next && task.parent_task_id) return planErr('subtask_follows_parent');
+      if (next) { const c = await checkLinkTarget(auth, next, TASK_SPACE.get(task), env); if (c.error) return c.error; }
+      updates.plan_item_id = next; planChange = [task.plan_item_id || null, next];
+    }
+  }
   if (!Object.keys(updates).length) return ok({ id: task.id, unchanged: true });
   updates.updated_by = auth.userId; updates.updated_at = nowIso();
   const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, { method: 'PATCH', body: JSON.stringify(updates) });
-  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  if (!r.ok) return taskWriteErr('update_failed: ', r);
   for (const [f, oldV, newV] of changes) await logHistory(env, task.id, auth.userId, `${f}_changed`, { field: f, old: oldV, new: newV });
   if (deadlineSet) await logHistory(env, task.id, auth.userId, 'deadline_set', { field: 'deadline', new: d.deadline });
-  return ok({ id: task.id, updated: [...changes.map(c => c[0]), ...(deadlineSet ? ['deadline'] : [])] });
+  if (planChange) await logHistory(env, task.id, auth.userId, 'plan_item_id_changed', { field: 'plan_item_id', old: planChange[0], new: planChange[1] });
+  return ok({ id: task.id, updated: [...changes.map(c => c[0]), ...(deadlineSet ? ['deadline'] : []), ...(planChange ? ['plan_item_id'] : [])] });
 }
 
 const STATUSES = ['not_started','in_progress','done','blocked','abandoned'];
@@ -2112,16 +2184,26 @@ async function bulkMoveTasks(body, auth, env) {
   const skipped = ids.length - editable.length + orphanSubs;
   const targets = movable.filter(t => t.space_id !== d.space_id);
   if (!targets.length) return ok({ updated: 0, skipped, space_id: d.space_id });
+  // A4: leaving the Founders' space needs a plan admin (spaceOf: keepAccessible read these spaces).
+  if (!isPlanAdmin(auth) && targets.some(t => spaceOf(auth, t)?.is_founders)) return err('founders_move_out', 403);
   const targetIds = targets.map(t => t.id);
 
+  // Sub-tasks first (one level, one statement for the batch), checked; then the parents in one
+  // statement. If the R2 trigger refuses either, nothing is left half-moved (review R2 #10).
+  const kids = await sbDocket(`/rest/v1/tasks?parent_task_id=in.${inList(targetIds)}`, env, {
+    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ space_id: d.space_id }) });
+  if (!kids.ok) return taskWriteErr('update_failed: ', kids);
   const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(targetIds)}`, env, {
     method: 'PATCH', prefer: 'return=minimal',
     body: JSON.stringify({ space_id: d.space_id, updated_by: auth.userId, updated_at: nowIso() }) });
-  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
-  // Sub-tasks follow their parent (one level), same as moveTask. One extra subrequest for
-  // the whole batch, not one per task.
-  await sbDocket(`/rest/v1/tasks?parent_task_id=in.${inList(targetIds)}`, env, {
-    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ space_id: d.space_id }) });
+  if (!r.ok) {
+    for (const sid of uniq(targets.map(t => t.space_id))) {
+      const ps = targets.filter(t => t.space_id === sid).map(t => t.id);
+      await sbDocket(`/rest/v1/tasks?parent_task_id=in.${inList(ps)}`, env, {
+        method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ space_id: sid }) });
+    }
+    return taskWriteErr('update_failed: ', r);
+  }
   await logHistoryBatch(env, auth.userId, targets.map(t => ({
     task_id: t.id, event_type: 'space_changed', field: 'space_id', old: t.space_id, new: d.space_id })));
   return ok({ updated: targets.length, skipped, space_id: d.space_id });
@@ -2204,12 +2286,16 @@ async function setParent(body, auth, env) {
     const kids = await sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(task.id)}&select=id&limit=1`, env);
     if (kids.ok && kids.data?.length) return err('one_level_only: this task already has sub-tasks', 422);
   }
+  // F9 R2: a sub-task carries no link of its own (it follows its parent) — clear it in the same write.
+  const clearsLink = !!(newParent && task.plan_item_id);
   const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, {
-    method: 'PATCH', body: JSON.stringify({ parent_task_id: newParent, updated_by: auth.userId, updated_at: nowIso() }),
+    method: 'PATCH', body: JSON.stringify({ parent_task_id: newParent, ...(clearsLink ? { plan_item_id: null } : {}), updated_by: auth.userId, updated_at: nowIso() }),
   });
-  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  if (!r.ok) return taskWriteErr('update_failed: ', r);
   await logHistory(env, task.id, auth.userId, 'parent_changed', { field: 'parent_task_id', old: task.parent_task_id, new: newParent });
-  return ok({ id: task.id, parent_task_id: newParent });
+  if (clearsLink) await logHistory(env, task.id, auth.userId, 'plan_item_id_changed',
+    { field: 'plan_item_id', old: task.plan_item_id, note: 'cleared: a sub-task follows its parent’s plan link' });
+  return ok({ id: task.id, parent_task_id: newParent, ...(clearsLink ? { plan_item_id: null } : {}) });
 }
 
 // Move a task (and its sub-tasks) to another space. RULE-DOCKET-003.
@@ -2227,11 +2313,21 @@ async function moveTask(body, auth, env) {
   // A sub-task lives in its parent's space; moving one alone would put parent and child on two sides of
   // a space wall, and getTask's parent/children hydration would then read titles across it.
   if (task.parent_task_id) return err('subtask_moves_with_parent: move its parent task instead', 422);
-  await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
-    body: JSON.stringify({ space_id: d.space_id, updated_by: auth.userId, updated_at: nowIso() }) });
-  // sub-tasks travel with their parent (one level)
-  await sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(d.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
+  // A4: a task leaves the Founders' space only with a plan admin (it stays founders-only, linked or not).
+  if (TASK_SPACE.get(task)?.is_founders && !isPlanAdmin(auth)) return err('founders_move_out', 403);
+  // The R2 trigger refuses a move that would take a restricted-linked task out of the Founders' space.
+  // Sub-tasks first (one level), checked: if the trigger refuses them nothing has moved; if the parent
+  // is then refused, they go back. A parent never lands in a space without its children (review R2 #10).
+  const kids = await sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(d.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
     body: JSON.stringify({ space_id: d.space_id }) });
+  if (!kids.ok) return taskWriteErr('update_failed: ', kids);
+  const mv = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ space_id: d.space_id, updated_by: auth.userId, updated_at: nowIso() }) });
+  if (!mv.ok) {
+    await sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(d.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
+      body: JSON.stringify({ space_id: task.space_id }) });
+    return taskWriteErr('update_failed: ', mv);
+  }
   await logHistory(env, task.id, auth.userId, 'space_changed', { field: 'space_id', old: task.space_id, new: d.space_id });
   return ok({ id: task.id, space_id: d.space_id });
 }
@@ -2507,6 +2603,7 @@ async function renameSpace(body, auth, env) {
 async function archiveSpace(body, auth, env) {
   const d = body.data || body; if (!d.id) return err('id required', 400);
   const space = await loadSpace(d.id, env); const gate = await requireSpaceOwner(auth, space); if (gate) return gate;
+  if (space.is_founders) return err('founders_space_fixed', 403);   // nothing could un-archive it
   await sbDocket(`/rest/v1/spaces?id=eq.${enc(d.id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ archived_at: nowIso() }) });
   await logSpace(env, d.id, auth.userId, 'archived', null);
   return ok({ id: d.id, archived: true });
@@ -2514,6 +2611,8 @@ async function archiveSpace(body, auth, env) {
 async function addSpaceMember(body, auth, env) {
   const d = body.data || body; if (!d.space_id || !d.user_id) return err('space_id and user_id required', 400);
   const space = await loadSpace(d.space_id, env); const gate = await requireSpaceOwner(auth, space); if (gate) return gate;
+  // The Founders' space (§5.2): a plan admin adds, and only a plan admin joins.
+  if (space.is_founders && !(isPlanAdmin(auth) && await userIsPlanAdminStrict(d.user_id, env))) return err('founders_space', 403);
   await sbDocket(`/rest/v1/space_members?on_conflict=space_id,user_id`, env, { method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates',
     body: JSON.stringify({ space_id: d.space_id, user_id: d.user_id, added_by_user_id: auth.userId }) });
   await logSpace(env, d.space_id, auth.userId, 'member_added', d.user_id);
@@ -2534,6 +2633,7 @@ async function transferSpaceOwnership(body, auth, env) {
   if (space.is_default) return err('general_is_system', 422);
   if (!isSpaceOwner(auth, space)) return err('forbidden_space_owner', 403);
   if (!(await isSpaceMember(d.space_id, d.new_owner_user_id, env))) return err('new owner must be a member first', 422);
+  if (space.is_founders && !(await userIsPlanAdminStrict(d.new_owner_user_id, env))) return err('founders_space', 403);
   await sbDocket(`/rest/v1/spaces?id=eq.${enc(d.space_id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ owner_user_id: d.new_owner_user_id }) });
   await logSpace(env, d.space_id, auth.userId, 'ownership_transferred', d.new_owner_user_id);
   return ok({ space_id: d.space_id, owner_user_id: d.new_owner_user_id });
@@ -2558,13 +2658,17 @@ async function recoverSpace(body, auth, env) {
   const d = body.data || body; if (!d.space_id) return err('space_id required', 400);
   const space = await loadSpace(d.space_id, env);
   if (!space || space.is_default) return err('not_recoverable', 422);
+  // Admin recovery never applies to the Founders' space (§5.2) — not even the un-archive path.
+  if (space.is_founders) return err('founders_space_fixed', 403);
   if (!(await spaceOwnerGone(space.owner_user_id, env))) {
     if (!space.archived_at) return err('owner_still_active: only a space whose owner has left can be recovered — ask the owner to add you or transfer it', 409);
     await sbDocket(`/rest/v1/spaces?id=eq.${enc(d.space_id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ archived_at: null }) });
     await logSpace(env, d.space_id, auth.userId, 'unarchived', 'admin restore; owner unchanged');
     return ok({ space_id: d.space_id, owner_user_id: space.owner_user_id, unarchived: true });
   }
-  const newOwner = d.new_owner_user_id || auth.userId;
+  // The recovering admin becomes the owner. (A `new_owner_user_id` param was accepted unvalidated and no
+  // caller sends it — dropped, spec §5.1 P0-a; hand the space on afterwards with transferSpaceOwnership.)
+  const newOwner = auth.userId;
   await sbDocket(`/rest/v1/space_members?on_conflict=space_id,user_id`, env, { method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates',
     body: JSON.stringify({ space_id: d.space_id, user_id: newOwner, added_by_user_id: auth.userId }) });
   await sbDocket(`/rest/v1/spaces?id=eq.${enc(d.space_id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ owner_user_id: newOwner, archived_at: null }) });
@@ -2646,14 +2750,29 @@ async function getPlanItem(url, auth, env) {
   if (!item) return err('not_found', 404);
   const children = rows.filter(x => x.parent_id === id);
   const history = Array.isArray(h.data) ? h.data : [];
-  const [names, actors] = await Promise.all([
-    nameMap(sbPodium, 'employees', [item, ...children].map(x => x.owner_employee_id), env),
+  // R2: the tasks linked to this item (a milestone: and to its results), intersected with what the caller
+  // can open. Only level F learns how many are hidden ("+N in spaces you're not in", §5.3).
+  const linkIds = [id, ...(item.kind === 'milestone' ? children.map(c => c.id) : [])];
+  const tr = await sbIn(sbDocket, linkIds, l => `/rest/v1/tasks?plan_item_id=in.${l}&archived_at=is.null&select=*&order=created_at.asc`, env);
+  if (!tr.ok) return err('db_error', 500);
+  const linked = Array.isArray(tr.data) ? tr.data : [];
+  const visible = await visibleTaskRows(auth, linked, env);
+  const [names, actors, planned] = await Promise.all([
+    nameMap(sbPodium, 'employees', [item, ...children, ...visible].map(x => x.owner_employee_id), env),
     nameMap(sbStore, 'users_profile', history.map(x => x.actor_user_id), env),
+    hydratePlan(visible, auth, env),
   ]);
   return ok({
     item: withOwnerName(names)(item),
     children: children.map(withOwnerName(names)),
     history: history.map(({ actor_user_id, ...x }) => ({ ...x, actor_name: actors[actor_user_id] || null })),
+    tasks: planned.map(t => ({
+      id: t.id, task_no: t.task_no, title: t.title, status: t.status, priority: t.priority,
+      owner_name: t.owner_employee_id ? (names[t.owner_employee_id] || null) : null,
+      deadline: t.deadline, revised_deadline: t.revised_deadline,
+      space_name: spaceOf(auth, t)?.name || null, plan: t.plan,
+    })),
+    ...(item.level === 'F' ? { hidden_count: linked.length - visible.length } : {}),
     can_admin: isPlanAdmin(auth),
   });
 }
@@ -2662,7 +2781,12 @@ async function getPlanItem(url, auth, env) {
 // didn't pre-check surfaces as PostgREST's 4xx text.
 async function planRpc(fn, args, env) {
   const r = await sbDocket(`/rest/v1/rpc/${fn}`, env, { method: 'POST', body: JSON.stringify(args) });
-  if (!r.ok) return err(`plan_rejected: ${r.data?.message || r.status}`, r.status >= 500 ? 500 : 400);
+  if (!r.ok) {
+    // R2: making a theme restricted while linked tasks sit outside the Founders' space (the trigger lists them).
+    const m = planDbError(r.data);
+    if (m) return planErr(m.code, m.detail ? { detail: m.detail } : {});
+    return err(`plan_rejected: ${r.data?.message || r.status}`, r.status >= 500 ? 500 : 400);
+  }
   const res = r.data || {};
   if (!res.ok) {
     const code = res.code || 'plan_failed';
@@ -2697,6 +2821,91 @@ async function planItemAction(body, auth, env) {
   const bad = validateActPayload(d.op, payload);
   if (bad) return err(bad, 400);
   return planRpc('plan_act', { ...planArgs(auth), p_id: d.id, p_action: d.op, p_payload: payload }, env);
+}
+
+// ── F9 R2: tasks link up (spec §4.1 "Tasks point up", §5.3, migration 0018) ──────────────────────
+// A task carries `plan_item_id` (top-level only; a sub-task's effective link is its parent's). Every
+// response that returns tasks gets a `plan` object built from ONE batched docket.plan_links_for call
+// (levels F / O / T / L; `none` → no plan at all). No plan title leaves the worker any other way.
+const planErr = (code, extra = {}) => json({ ok: false, error: code, ...extra }, planErrStatus(code));
+// A refused task write: the R2 trigger / CHECK codes come back as themselves, anything else as before.
+function taskWriteErr(prefix, r) {
+  const m = planDbError(r.data);
+  return m ? planErr(m.code, m.detail ? { detail: m.detail } : {}) : err(prefix + JSON.stringify(r.data), 400);
+}
+async function planLinks(ids, auth, env) {
+  const out = {};
+  if (!ids.length) return out;
+  const r = await sbDocket(`/rest/v1/rpc/plan_links_for`, env, { method: 'POST', body: JSON.stringify({
+    p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth), p_ids: ids }) });
+  (r.ok && Array.isArray(r.data) ? r.data : []).forEach(l => { out[l.id] = l; });   // fail closed: no plan
+  return out;
+}
+// Own links for the rows (+ the parents of sub-tasks, + any row whose source didn't carry the column —
+// search_tasks), then the projection for every effective link and `extraIds` (history) in one call.
+async function planContext(rows, auth, env, extraIds = []) {
+  const own = {}, look = [];
+  for (const t of rows) {
+    if (Object.prototype.hasOwnProperty.call(t, 'plan_item_id')) own[t.id] = t.plan_item_id || null;
+    else if (!t.parent_task_id) look.push(t.id);
+  }
+  for (const pid of uniq(rows.map(t => t.parent_task_id))) if (!(pid in own)) look.push(pid);
+  if (look.length) {
+    const r = await sbIn(sbDocket, uniq(look), l => `/rest/v1/tasks?id=in.${l}&select=id,plan_item_id`, env);
+    (r.ok && Array.isArray(r.data) ? r.data : []).forEach(x => { own[x.id] = x.plan_item_id || null; });
+  }
+  const ids = uniq([...rows.map(t => effectiveLink(t, own).id), ...extraIds]);
+  return { own, links: await planLinks(ids, auth, env) };
+}
+// The raw plan_item_id only travels with a link the caller can see at some level (never for `none`).
+function withPlan(t, ctx) {
+  const e = effectiveLink(t, ctx.own);
+  const plan = e.id ? taskPlan(ctx.links[e.id], e.inherited) : null;
+  return { ...t, plan_item_id: !e.inherited && plan ? plan.id : null, plan };
+}
+async function hydratePlan(rows, auth, env) {
+  if (!rows.length) return rows;
+  const ctx = await planContext(rows, auth, env);
+  return rows.map(t => withPlan(t, ctx));
+}
+// Setting a link (spec §4.1 + §5.3): the caller already passed canEditTask; the item must be visible to
+// them at F / O / T (L and none read as not found) and live. A super admin sees a restricted item at F —
+// refuse a link from outside the Founders' space here rather than through the trigger.
+async function checkLinkTarget(auth, itemId, space, env) {
+  if (!isUuid(itemId)) return { error: err('bad_plan_item_id', 400) };
+  const links = await planLinks([itemId], auth, env);
+  const code = linkError(links[itemId]);
+  if (code) return { error: planErr(code) };
+  if (links[itemId].level === 'F' && !space?.is_founders) {
+    const r = await sbDocket(`/rest/v1/rpc/plan_restricted`, env, { method: 'POST', body: JSON.stringify({ p_id: itemId }) });
+    if (!r.ok) return { error: err('db_error', 500) };
+    if (r.data === true) return { error: planErr('restricted_needs_founders_space') };
+  }
+  return { link: links[itemId] };
+}
+// The rows the caller could open with getTask, batched (no per-row await): private spaces through
+// keepAccessible (flat — RULE-DOCKET-003), General through canSeeTask's rules with ONE collaborator read.
+async function visibleTaskRows(auth, rows, env) {
+  const inSpace = await keepAccessible(auth, rows, env);
+  const general = (t) => !!spaceOf(auth, t)?.is_default;
+  const quick = (t) => canViewAll(auth) || canEditTask(auth, t) || (auth.departmentId && t.department_id === auth.departmentId);
+  const need = inSpace.filter(t => general(t) && !quick(t)).map(t => t.id);
+  const collab = new Set();
+  if (need.length && auth.employeeId) {
+    const c = await sbIn(sbDocket, need, l => `/rest/v1/task_collaborators?task_id=in.${l}&employee_id=eq.${enc(auth.employeeId)}&select=task_id`, env);
+    ((c.ok && c.data) || []).forEach(x => collab.add(x.task_id));
+  }
+  return inSpace.filter(t => !general(t) || quick(t) || collab.has(t.id));
+}
+// A plan admin, read strictly: any failed read is "no" (the role guard's userIsPlanAdmin fails the other
+// way, because there "yes" blocks). Used where "yes" GRANTS — the Founders' space.
+async function userIsPlanAdminStrict(userId, env) {
+  if (!isUuid(userId || '')) return false;
+  const r = await sbStore(`/rest/v1/docket_user_roles?user_id=eq.${enc(userId)}&select=role_key&limit=1`, env);
+  const key = r.ok && r.data?.[0]?.role_key;
+  if (!key) return false;
+  const p = await sbStore(`/rest/v1/docket_roles?role_key=eq.${enc(key)}&select=permissions&limit=1`, env);
+  return !!(p.ok && normalizeDocketPerms(p.data?.[0]?.permissions).docket_plan_admin);
 }
 
 // ════════════════════════════════════════════════════════════════════════════

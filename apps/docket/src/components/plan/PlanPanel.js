@@ -4,9 +4,11 @@
 // Fixed right panel, no backdrop: the register stays usable behind it (the .tv-side pattern).
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Combobox, useToast } from '@throttle/ui';
-import { X, Lock, Check, History } from 'lucide-react';
+import { X, Lock, Check, History, ListChecks } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../lib/docketopsFetch.js';
 import { Button, Pill } from '../ui/index.js';
+import { StatusBadge } from '../StatusBadge.js';
+import { PlanChip } from './PlanPicker.js';
 import {
   planFlags, editableFields, planActionsFor, chipState, effectiveDue, isRedated, fmtPlanDate, fmtPlanStamp,
   planErrorText, historyText, KIND_LABEL, ACTION_LABEL,
@@ -284,6 +286,21 @@ function ItemView({ id, isSuper, employeeId, byId, ownerOpts, nameOf, session, s
             })}
           </div>
         )}
+
+        {/* R2: the tasks linked here (a milestone: and to its results) that you can open. Only a super
+            admin learns how many others exist ("+N in spaces you're not in"). */}
+        <div className="pl-kids">
+          <span className="pl-lbl"><ListChecks size={12} aria-hidden /> Tasks</span>
+          {(data.tasks || []).length === 0 && !data.hidden_count && <span className="pl-muted">No linked tasks you can see.</span>}
+          {(data.tasks || []).map(t => (
+            <a key={t.id} className="pl-kid" href={`/tasks/detail/?id=${t.id}`}>
+              <span className="pl-code">{t.task_no}</span><span className="pl-kid-t">{t.title}</span>
+              {it.kind === 'milestone' && t.plan?.kind === 'result' && <PlanChip plan={t.plan} />}
+              <StatusBadge status={t.status} />
+            </a>
+          ))}
+          {data.hidden_count > 0 && <span className="pl-muted">+{data.hidden_count} in spaces you’re not in</span>}
+        </div>
 
         <div className="pl-hist">
           <span className="pl-lbl"><History size={12} aria-hidden /> History</span>

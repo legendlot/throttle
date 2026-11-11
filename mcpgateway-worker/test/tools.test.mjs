@@ -14,6 +14,7 @@ test('every tool parse() returns { ok, value } on success (the shape the core pa
     odo_funnel: { report: 'history' }, odo_amazon: { report: 'geo' }, odo_inventory: { report: 'thresholds' }, odo_pnl: { report: 'product_costs' }, odo_lookup: { report: 'channels' },
     docket_tasks: { report: 'my_tasks' }, docket_create_task: { title: 'x' }, docket_update_task: { id: U, priority: 'P1' }, docket_set_status: { id: U, status: 'done' },
     docket_revise_deadline: { id: U, new_deadline: '2026-11-20', reason: 'r' }, docket_add_comment: { id: U, body: 'b' }, docket_abandon_task: { id: U, reason: 'r' },
+    docket_plan: { report: 'themes' },
     snorkel_procurement: { report: 'pos' }, snorkel_requests: { report: 'requests', mine: true }, snorkel_sales: { report: 'orders' }, snorkel_assets: { report: 'assets', category_id: 3 },
     garage_store: { report: 'stock', q: 'screw' }, redline_production: { report: 'dashboard' }, depot_dispatch: { report: 'pipeline' } };
   for (const t of TOOLS) {
@@ -421,4 +422,32 @@ test('ops reviews: query syntax cannot ride a text filter; stock needs a filter;
   assert.deepEqual(allowed('garage_store', { dashboard: 'view' }), []);            // flag key must be exactly true
   assert.deepEqual(allowed('garage_store', { dashboard: true, stock: 'none' }), ['alerts', 'bom', 'producibility']);
   assert.ok(allowed('garage_store', { stock: 'view' }).includes('stock'));        // level key: any value but 'none'
+});
+
+// ---- Docket F9 R2: plan links + docket_plan (2026-11-11)
+test('docket plan links: plan_item_id is whitelisted on create/update; null clears; not a bulk or new write', () => {
+  const c = findTool('docket_create_task'), u = findTool('docket_update_task');
+  assert.deepEqual(c.parse({ title: 'x', plan_item_id: U }, NOW).value, { title: 'x', plan_item_id: U, assign_self: true });
+  assert.equal(c.parse({ title: 'x', plan_item_id: 'M01' }, NOW).ok, false);   // ids only, never a code
+  assert.deepEqual(u.parse({ id: U, plan_item_id: null }, NOW).value, { id: U, plan_item_id: null });   // clears
+  assert.deepEqual(u.parse({ id: U, plan_item_id: U }, NOW).value, { id: U, plan_item_id: U });
+  assert.equal(u.parse({ id: U, title: null }, NOW).ok, false);   // null still means "not given" elsewhere → no field
+  assert.ok(u.inputSchema.properties.plan_item_id.type.includes('null'));
+  assert.equal(findTool('docket_plan').write, undefined);
+  assert.equal(findTool('docket_plan').annotations.readOnlyHint, true);
+});
+test('docket_plan: three reports → getPlan / getPlanItem as the person, ids dropped like task reads', async () => {
+  const t = findTool('docket_plan');
+  assert.deepEqual(Object.fromEntries(Object.entries(t.reports).map(([k, r]) => [k, r.action])), { themes: 'getPlan', items: 'getPlan', item: 'getPlanItem' });
+  assert.equal(t.parse({ report: 'item' }, NOW).ok, false);                  // id required
+  assert.equal(t.parse({ report: 'themes', id: U }, NOW).ok, false);         // not a param of themes
+  const seen = [];
+  const env = { DOCKETOPS: { fetch: async (u, init = {}) => { seen.push(new URL(u)); return new Response(JSON.stringify({ ok: true, data: {
+    items: [{ id: U, kind: 'theme', code: 'T01', title: 'Growth', level: 'T' }, { id: 'm', kind: 'milestone', code: 'M01', title: 'Mine', level: 'O' }],
+    item: { id: U }, history: [{ actor_user_id: 'secret-uid', actor_name: 'A' }] } }), { status: 200 }); } } };
+  const th = await t.run({ env, sbAccess: 'J', input: t.parse({ report: 'themes' }, NOW).value });
+  assert.deepEqual(th.data.result.themes.map(x => x.code), ['T01']);
+  const it = await t.run({ env, sbAccess: 'J', input: t.parse({ report: 'item', id: U }, NOW).value });
+  assert.doesNotMatch(JSON.stringify(it.data), /secret-uid/);
+  assert.deepEqual(Object.fromEntries(seen[1].searchParams), { action: 'getPlanItem', id: U });
 });

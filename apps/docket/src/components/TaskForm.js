@@ -4,15 +4,18 @@ import { X } from 'lucide-react';
 import { Combobox } from '@throttle/ui';
 import { DatePicker } from './DatePicker.js';
 import { PRIORITIES } from '../lib/tasks.js';
+import { planPickerOptions } from '../lib/plan.js';
 
 // Controlled create form. `departments` + `employees` are loaded by the parent.
 // onSubmit receives the assembled payload; parent calls createTask.
-export function TaskForm({ departments, employees, programs = [], parentTask, onCreateProgram, onSubmit, saving }) {
+// planItems: the caller's getPlan rows (F9 R2) — the Plan field; a sub-task has none (it follows its parent).
+export function TaskForm({ departments, employees, programs = [], planItems = [], parentTask, onCreateProgram, onSubmit, saving }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [departmentId, setDepartmentId] = useState(parentTask?.department_id || '');
   const [ownerId, setOwnerId] = useState('');
   const [programId, setProgramId] = useState('');
+  const [planItemId, setPlanItemId] = useState('');
   const [collaborators, setCollaborators] = useState([]); // [employee_id]
   const [collabPick, setCollabPick] = useState('');
   const [deadline, setDeadline] = useState('');
@@ -26,6 +29,7 @@ export function TaskForm({ departments, employees, programs = [], parentTask, on
   const empOpts = useMemo(() => (employees || []).map(e => ({ value: e.id, label: e.full_name })), [employees]);
   const prioOpts = PRIORITIES.map(p => ({ value: p.key, label: p.label }));
   const programOpts = useMemo(() => [{ value: '', label: '— No program —' }, ...(programs || []).map(p => ({ value: p.id, label: p.name }))], [programs]);
+  const planOpts = useMemo(() => planPickerOptions(planItems), [planItems]);
   const collabOpts = useMemo(() => (employees || []).filter(e => !collaborators.includes(e.id) && e.id !== ownerId).map(e => ({ value: e.id, label: e.full_name })), [employees, collaborators, ownerId]);
 
   async function pickProgram(v, opt) {
@@ -56,6 +60,7 @@ export function TaskForm({ departments, employees, programs = [], parentTask, on
       department_id: departmentId,
       owner_employee_id: ownerId,
       program_id: programId || null,
+      ...(!parentTask && planItemId ? { plan_item_id: planItemId } : {}),
       collaborators,
       deadline: new Date(deadline).toISOString(),
       priority,
@@ -103,6 +108,14 @@ export function TaskForm({ departments, employees, programs = [], parentTask, on
             placeholder={onCreateProgram ? 'Pick or type to create…' : 'Select program…'} allowClear={false} disabled={saving} style={comboStyle} />
         </div>
       </div>
+
+      {!parentTask && (
+        <div style={{ marginBottom: 12 }}>
+          <label className="tk-lbl">Plan</label>
+          <Combobox value={planItemId} options={planOpts} onChange={(v, opt) => { if (opt || !v) setPlanItemId(v || ''); }}
+            placeholder="Unplanned — search a theme, milestone or result…" allowClear disabled={saving} style={comboStyle} />
+        </div>
+      )}
 
       <div style={{ marginBottom: 12 }}>
         <label className="tk-lbl">Deadline * (cannot be changed after creation; revisions are tracked separately)</label>

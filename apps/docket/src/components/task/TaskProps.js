@@ -5,7 +5,8 @@
 // TaskView actions — the same docketops calls + payloads the old drawer made.
 import { useEffect, useState } from 'react';
 import { Combobox } from '@throttle/ui';
-import { CircleDot, User, Users, Calendar, Flag, Network, Layers, Hash, Clock, CheckCheck, Repeat, Plus, X, Check, Ban } from 'lucide-react';
+import { CircleDot, User, Users, Calendar, Flag, Network, Layers, Hash, Clock, CheckCheck, Repeat, Plus, X, Check, Ban, Target } from 'lucide-react';
+import { PlanPicker, PlanChip } from '../plan/PlanPicker.js';
 import { StatusBadge } from '../StatusBadge.js';
 import { DatePicker } from '../DatePicker.js';
 import { Avatar, OptionList, personColor, relDeadline, deadlineState, firstName } from '../primitives.js';
@@ -163,6 +164,19 @@ export function TaskProps({ task, canEdit, busy, edit, setEdit, refs, abandonMod
               onCreateOption={(text) => { actions.createProgramInline(text); close(); }} />
           </div>
         ))}
+      </Prop>
+
+      {/* F9 R2: the plan link. A sub-task shows its parent's (muted, read-only) — set it on the parent. */}
+      <Prop icon={Target} label="Plan">
+        {task.parent_task_id ? (
+          task.plan ? <span className="tv-static"><PlanChip plan={task.plan} /> <span className="tv-sub-inline">from the parent task</span></span> : <Empty>Follows the parent task</Empty>
+        ) : <>
+          <Trigger field="plan" label="Plan" {...{ refs, edit, setEdit, canEdit }}>
+            {task.plan ? <PlanChip plan={task.plan} /> : <Empty>Unplanned</Empty>}
+          </Trigger>
+          {canEdit && pop('plan', 320, <PlanPicker items={opts.planItems || []} value={task.plan_item_id || ''}
+            onPick={(v) => { actions.saveField('plan_item_id', v); close(); }} />)}
+        </>}
       </Prop>
 
       <Prop icon={Hash} label="Space">

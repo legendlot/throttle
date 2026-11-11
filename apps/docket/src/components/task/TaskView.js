@@ -38,6 +38,8 @@ import { DepsStrip, DepAddFlow } from './Dependencies.js';
 import { linkCount, sendDone, doneConfirmText, DECLINED } from '../../lib/deps.js';
 import { useCommandSource } from '../../lib/commandSources.js';
 import { readMode, writeMode, goFull, leaveFull, readReturn, readOrder, claimFull } from './taskViewMode.js';
+import { usePlanItems } from '../plan/PlanPicker.js';
+import { planErrorText } from '../../lib/plan.js';
 
 const MODE_META = {
   modal: { label: 'Modal', icon: SquareStack },
@@ -88,7 +90,8 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   const [depAnchor, setDepAnchor] = useState(null);   // F7 add flow: the ref it opens against, or null
   const [sections, setSections] = useState({});       // collapsed sections
   const [nav, setNav] = useState({ prev: null, next: null });
-  const refs = useMemo(() => ({ status: createRef(), owner: createRef(), collab: createRef(), deadline: createRef(), priority: createRef(), team: createRef(), program: createRef(), space: createRef() }), []);
+  const refs = useMemo(() => ({ status: createRef(), owner: createRef(), collab: createRef(), deadline: createRef(), priority: createRef(), team: createRef(), program: createRef(), plan: createRef(), space: createRef() }), []);
+  const planItems = usePlanItems(session);   // F9 R2: the Plan picker's items (getPlan, shared)
   const rootRef = useRef(null);
   const titleRef = useRef(null);
   const descRef = useRef(null);
@@ -172,7 +175,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   async function saveField(field, value) {
     setBusy(true);
     try { await docketopsPost('updateTask', { id: task.id, [field]: value || null }, session); await mutated(); }
-    catch (e) { showToast(e.message || 'Save failed', 'error'); load(true); }
+    catch (e) { showToast(planErrorText(e) || 'Save failed', 'error'); load(true); }
     finally { setBusy(false); }
   }
   async function setStatus(status) {
@@ -235,7 +238,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
     if (!v || v === task.space_id) return;
     setBusy(true);
     try { await docketopsPost('moveTask', { id: task.id, space_id: v }, session); await mutated(); showToast('Moved', 'success'); }
-    catch (e) { showToast(e.message || 'Failed', 'error'); }
+    catch (e) { showToast(planErrorText(e) || 'Failed', 'error'); }
     finally { setBusy(false); }
   }
   const actions = { saveField, setStatus, commitDeadline, doAbandon, addCollab, removeCollab, createProgramInline, moveToSpace };
@@ -247,7 +250,8 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
     programCellOpts: [{ value: '', label: '— No program —' }, ...programs.map(p => ({ value: p.id, label: p.name }))],
     spaceOpts: spaces.map(s => ({ value: s.id, label: s.name + (s.is_private ? '' : ' · open') })),
     collabOpts: task ? employees.filter(e => !(task.collaborators || []).some(c => c.employee_id === e.id) && e.id !== task.owner_employee_id).map(e => ({ value: e.id, label: e.full_name })) : [],
-  }), [departments, employees, programs, spaces, task]);
+    planItems,
+  }), [departments, employees, programs, spaces, task, planItems]);
   const revisions = (task?.history || []).filter(h => h.event_type === 'deadline_revised').length;
 
   // ⌘K "Add dependency" for the open task (CommandBar reads source 'taskView'). Opens the add

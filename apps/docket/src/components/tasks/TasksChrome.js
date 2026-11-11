@@ -188,6 +188,7 @@ export function TasksToolbar(p) {
 /* ---------------- Filter panel (inside the Filter popover) ---------------- */
 function FilterPanel({ status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId,
   priority, setPriority, programId, setProgramId, overdue, setOverdue, revised, setRevised, deps = '', setDeps,
+  planFilter = '', setPlanFilter, planOpts = [],
   teamOpts, empOpts, programOpts, filterCount, clearFilters, hideProgramFilter, hideOwnerFilter }) {
   const Sel = ({ label, value, set, any, options }) => (
     <label className="tk-fp-grp">
@@ -205,6 +206,8 @@ function FilterPanel({ status, setStatus, departmentId, setDepartmentId, employe
       {!hideOwnerFilter && <Sel label="Owner" value={employeeId} set={setEmployeeId} any="Anyone" options={empOpts} />}
       <Sel label="Priority" value={priority} set={setPriority} any="Any priority" options={PRIORITIES.map(p => ({ value: p.key, label: p.label }))} />
       {!hideProgramFilter && <Sel label="Program" value={programId} set={setProgramId} any="Any program" options={programOpts} />}
+      {/* F9 R2: by theme (incl. its milestones + results), milestone (incl. its results), result, or Unplanned. */}
+      {setPlanFilter && <Sel label="Plan" value={planFilter} set={setPlanFilter} any="Any plan" options={planOpts} />}
       <div className="tk-fp-grp">
         <span className="tk-fp-lbl">Quick</span>
         <div className="tk-fp-toggles">

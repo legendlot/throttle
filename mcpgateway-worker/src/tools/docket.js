@@ -28,6 +28,9 @@ const notAbandoned = t => (t.status === 'abandoned' ? 'this task is abandoned, s
 const TASK = { ...T.uuid, about: 'The task id (from a task list).' };
 const STATUS = T.oneOf('not_started', 'in_progress', 'done', 'blocked');
 const PRIORITY = T.oneOf('P0', 'P1', 'P2', 'P3');
+// F9 R2: a task's plan link. Docket decides who may set it (edit right on the task + the item visible to you
+// as its owner, a theme, or a super admin; live items only) — the gateway only shapes it.
+const PLAN_ITEM = { ...T.uuid, nullable: true, schema: { type: ['string', 'null'] } };
 const longText = max => ({ schema: { type: 'string', maxLength: max }, check: v => typeof v === 'string' && v.trim().length > 0 && v.length <= max ? { ok: true, value: v.trim() } : { ok: false, error: `must be non-empty text up to ${max} characters` } });
 const optText = max => ({ allowEmpty: true, schema: { type: 'string', maxLength: max }, check: v => typeof v === 'string' && v.length <= max ? { ok: true, value: v } : { ok: false, error: `must be text up to ${max} characters` } });
 
@@ -50,6 +53,8 @@ function writeTool({ name, title, description, action, params, required = [], de
       const data = {};
       for (const [k, p] of Object.entries(params)) {
         const v = a[k];
+        // `nullable` (plan_item_id): an explicit null is sent as null — it CLEARS the field.
+        if (v === null && p.nullable) { data[p.as || k] = null; continue; }
         // '' clears an optional text field (description, note) and is otherwise "not given" (Codex 2026-11-09).
         if (v === undefined || v === null || (v === '' && !p.allowEmpty)) { if (required.includes(k)) return { ok: false, error: `\`${k}\` is required` }; continue; }
         const c = p.check(v);
@@ -91,6 +96,20 @@ const docketTools = [
       people: { action: 'getEmployees', about: 'people you can assign tasks to (id, name, department)', params: {}, shape: d => ({ people: (Array.isArray(d) ? d : (d && (d.rows || d.employees)) || []).map(e => ({ id: e.id, name: e.full_name, department_id: e.department_id || null })) }) },
     },
   }),
+  // F9 R2 — the plan, read through Docket's own projection: a super admin sees everything; everyone else
+  // their own milestones + the results under them, and every open theme (code + title). Nothing restricted.
+  reportTool({
+    system: 'docket', name: 'docket_plan', title: 'Docket plan', binding: 'DOCKETOPS', dropKeys: DOCKET_DROP,
+    description: 'Read the Docket plan (themes → milestones → results) at your own level: themes you can link tasks to, the milestones and results you own, one item with its children and the linked tasks you can see. Use the ids as plan_item_id on docket_create_task / docket_update_task.',
+    paramAbout: { id: 'Plan item id (from report=items or themes).' },
+    reports: {
+      themes: { action: 'getPlan', about: 'the themes you can see (code, title, state)', params: {},
+        shape: d => ({ themes: ((d && d.items) || []).filter(x => x.kind === 'theme') }) },
+      items: { action: 'getPlan', about: 'every plan item you can see: themes, your milestones and the results under them', params: {},
+        shape: d => ({ items: (d && d.items) || [] }) },
+      item: { action: 'getPlanItem', about: 'one item: its fields, children, history and the linked tasks you can see', params: { id: T.uuid }, required: ['id'] },
+    },
+  }),
   writeTool({
     name: 'docket_create_task', title: 'Create a Docket task', action: 'createTask',
     description: 'Create a task. Only a title is required; by default it is put on your own list (assign_self). Give owner_employee_id (from docket_tasks report=people) to assign it to someone else.',
@@ -102,13 +121,14 @@ const docketTools = [
       owner_employee_id: { ...T.uuid, about: 'Owner (employee id). Omit to own it yourself.' },
       space_id: { ...T.uuid, about: 'Space id. Omit for the default space.' },
       program_id: { ...T.uuid, about: 'Program id.' },
+      plan_item_id: { ...PLAN_ITEM, about: 'Plan link: a theme, milestone or result id from docket_plan (proposed or agreed). Omit for an unplanned task.' },
     },
     required: ['title'],
     finalize: d => (d.owner_employee_id ? d : { ...d, assign_self: true }),
   }),
   writeTool({
     name: 'docket_update_task', title: 'Edit a Docket task', action: 'updateTask',
-    description: 'Change a task\'s title, description, priority, owner or program, or set a FIRST deadline on a task that has none (to move an existing deadline use docket_revise_deadline). Status changes use docket_set_status.',
+    description: 'Change a task\'s title, description, priority, owner, program or plan link, or set a FIRST deadline on a task that has none (to move an existing deadline use docket_revise_deadline). Status changes use docket_set_status. A sub-task follows its parent\'s plan link.',
     params: {
       id: TASK,
       title: { ...longText(200), about: 'New title.' },
@@ -117,6 +137,7 @@ const docketTools = [
       owner_employee_id: { ...T.uuid, about: 'New owner (employee id).' },
       program_id: { ...T.uuid, about: 'New program id.' },
       deadline: { ...T.date, about: 'First deadline, only if the task has none yet.' },
+      plan_item_id: { ...PLAN_ITEM, about: 'New plan link (an id from docket_plan), or null to make the task unplanned. Not on a sub-task.' },
     },
     required: ['id'],
     check: d => (Object.keys(d).length > 1 ? null : 'give at least one field to change besides `id`'),

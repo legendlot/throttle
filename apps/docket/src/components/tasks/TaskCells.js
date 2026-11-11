@@ -6,12 +6,13 @@
 //
 // An empty, editable cell shows a GhostCell (faint icon) that opens the same picker.
 import { useRef, useState } from 'react';
-import { Check, Ban, AlertTriangle, Flag, CalendarPlus } from 'lucide-react';
+import { Check, Ban, AlertTriangle, Flag, CalendarPlus, Target } from 'lucide-react';
 import { StatusBadge } from '../StatusBadge.js';
 import { DatePicker } from '../DatePicker.js';
 import { AnchoredPopover, OptionList, deadlineState, relDeadline, fmtShortDate } from '../primitives.js';
 import { Popover, GhostCell, Button } from '../ui/index.js';
 import { SETTABLE_STATUSES, STATUS_MAP, PRIORITY_MAP, effectiveDeadline } from '../../lib/tasks.js';
+import { PlanPicker, PlanChip } from '../plan/PlanPicker.js';
 
 export const stop = (e) => e.stopPropagation();
 // Spread on a popover body: keeps picks / typing inside it from reaching the row.
@@ -29,6 +30,26 @@ export function EditableSelect({ editable, value, options, searchable, onPick, c
         : <button ref={ref} type="button" className="tl-edit" aria-label={label} onClick={(e) => { stop(e); setOpen(o => !o); }}>{children}</button>}
       <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} width={width} align={align} {...contain}>
         <OptionList options={options} value={value} searchable={searchable} onPick={(v, o) => { onPick(v, o); setOpen(false); }} />
+      </Popover>
+    </>
+  );
+}
+
+/* ---------------- Plan cell (F9 R2): the link chip; a top-level row you can edit opens the picker ---------------- */
+// A sub-task row shows its parent's link, muted and read-only (it is set on the parent).
+export function PlanCell({ task, editable, items, onPick }) {
+  const ref = useRef(null);
+  const [open, setOpen] = useState(false);
+  const chip = <PlanChip plan={task.plan} />;
+  if (!editable) return task.plan ? <span className="tl-static">{chip}</span> : null;
+  const toggle = (e) => { stop(e); setOpen(o => !o); };
+  return (
+    <>
+      {task.plan
+        ? <button ref={ref} type="button" className="tl-edit" aria-label="Plan" onClick={toggle}>{chip}</button>
+        : <GhostCell ref={ref} icon={Target} label="Set plan" className="tl-ghost" onClick={toggle} />}
+      <Popover anchorRef={ref} open={open} onClose={() => setOpen(false)} width={320} {...contain}>
+        <PlanPicker items={items || []} value={task.plan_item_id || ''} onPick={(v) => { onPick(v); setOpen(false); }} />
       </Popover>
     </>
   );

@@ -11,7 +11,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { ChevronRight, Check, X, Plus, MoreHorizontal, Link2, MessageSquare, UserPlus, Users, Building2, Tag, ExternalLink, CornerDownRight, Ban, CircleCheck, CircleDashed } from 'lucide-react';
 import { Avatar, OptionList, personColor } from '../primitives.js';
 import { AvatarStack, GhostCell, Menu, MenuItem, MenuSeparator, Popover, Button } from '../ui/index.js';
-import { EditableSelect, StatusCircle, StatusCell, PriorityFlag, DeadlineCell, AbandonForm, stop, contain } from './TaskCells.js';
+import { EditableSelect, StatusCircle, StatusCell, PriorityFlag, DeadlineCell, AbandonForm, PlanCell, stop, contain } from './TaskCells.js';
 import { DepsBadge } from '../task/Dependencies.js';
 
 export const ROW_SELECTOR = '.tl-row[tabindex="0"]';
@@ -77,6 +77,8 @@ export const TaskRow = memo(function TaskRow({
             <span className="chip soft tl-chip"><span className="dot" style={{ background: task.program?.color || personColor(task.program?.id) }} /><span className="lbl">{task.program?.name}</span></span>
           </EditableSelect>
         );
+      case 'plan':
+        return <PlanCell task={task} editable={ed && !task.parent_task_id} items={opts.planItems} onPick={(v) => saveField(task, 'plan_item_id', v)} />;
       case 'space':
         return (
           <span className="chip soft tl-chip" title={task.space_name || 'General'}>

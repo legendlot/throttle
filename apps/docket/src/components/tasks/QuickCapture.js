@@ -9,16 +9,18 @@
 // The page passes the result to createInGroup(title, field, value, extras), so a chosen
 // value also wins over the group's prefill.
 import { createContext, useContext, useMemo, useRef, useState } from 'react';
-import { User, CalendarPlus, Flag, X } from 'lucide-react';
+import { User, CalendarPlus, Flag, Target, X } from 'lucide-react';
 import { Popover, Button } from '../ui/index.js';
 import { OptionList } from '../primitives.js';
 import { DatePicker } from '../DatePicker.js';
 import { contain } from './TaskCells.js';
 import { parseQuickAdd, fmtDeadlineLabel } from '../../lib/quickAdd.js';
 import { PRIORITY_MAP } from '../../lib/tasks.js';
+import { PlanPicker } from '../plan/PlanPicker.js';
 
-// people: the owner picker's employee list; ownerOpts / prioOpts: the cell pickers' options.
-const CaptureContext = createContext({ people: [], ownerOpts: [], prioOpts: [] });
+// people: the owner picker's employee list; ownerOpts / prioOpts: the cell pickers' options;
+// planItems: the caller's getPlan rows (F9 R2 Plan chip — picker only, no title token).
+const CaptureContext = createContext({ people: [], ownerOpts: [], prioOpts: [], planItems: [] });
 export const CaptureProvider = CaptureContext.Provider;
 
 export const QUICK_ADD_HINT = 'try @name, fri 5pm, !p1';
@@ -34,8 +36,8 @@ export const keepFocus = (e) => e.preventDefault();
 // Enter submits — but not while an IME is composing (Hindi / Japanese keyboards).
 export const isSubmitKey = (e) => e.key === 'Enter' && !e.nativeEvent?.isComposing;
 
-const KIND_LIST = ['owner', 'deadline', 'priority'];
-const FIELD = { owner: 'owner_employee_id', deadline: 'deadline', priority: 'priority' };
+const KIND_LIST = ['owner', 'deadline', 'priority', 'plan'];
+const FIELD = { owner: 'owner_employee_id', deadline: 'deadline', priority: 'priority', plan: 'plan_item_id' };
 
 export function useQuickCapture() {
   const { people } = useContext(CaptureContext);
@@ -65,7 +67,8 @@ export function useQuickCapture() {
   }
   function pick(kind, value) { setPicks(p => ({ ...p, [kind]: value || undefined })); }
   function reset() { setTitle(''); setPicks({}); setIgnore(new Set()); setOpenKind(null); }
-  // The create payload: the cleaned title + whichever of owner / deadline / priority is set.
+  // The create payload: the cleaned title + whichever of owner / deadline / priority / plan is set
+  // (plan is picked only — there is no title token for it).
   // Re-parsed NOW (the live parse is from the last keystroke): a parsed deadline that has
   // since slipped into the past re-resolves ("5pm" → tomorrow) or, if it can't, is dropped.
   function result() {
@@ -88,18 +91,22 @@ const KINDS = [
   { kind: 'owner', icon: User, empty: 'Owner' },
   { kind: 'deadline', icon: CalendarPlus, empty: 'Deadline' },
   { kind: 'priority', icon: Flag, empty: 'Priority' },
+  { kind: 'plan', icon: Target, empty: 'Plan' },
 ];
 
 export function CaptureChips({ qc, disabled }) {
+  const { planItems } = useContext(CaptureContext);
+  // No plan item visible to the caller (no themes yet) → no Plan chip.
+  const kinds = (planItems || []).length ? KINDS : KINDS.filter(k => k.kind !== 'plan');
   return (
     <span className="qc-chips" role="group" aria-label="Task details">
-      {KINDS.map(k => <Chip key={k.kind} qc={qc} {...k} disabled={disabled} />)}
+      {kinds.map(k => <Chip key={k.kind} qc={qc} {...k} disabled={disabled} />)}
     </span>
   );
 }
 
 function Chip({ qc, kind, icon: Icon, empty, disabled }) {
-  const { people, ownerOpts, prioOpts } = useContext(CaptureContext);
+  const { people, ownerOpts, prioOpts, planItems } = useContext(CaptureContext);
   const ref = useRef(null);
   const v = qc.valueOf(kind);
   const open = qc.openKind === kind;
@@ -108,6 +115,7 @@ function Chip({ qc, kind, icon: Icon, empty, disabled }) {
   if (v) {
     if (kind === 'owner') label = (v.token && v.source === 'parsed') ? v.token.label : (people.find(p => p.id === v.value)?.full_name || 'Owner');
     else if (kind === 'deadline') label = fmtDeadlineLabel(v.value);
+    else if (kind === 'plan') { const it = (planItems || []).find(p => p.id === v.value); label = it ? (it.code || it.title) : 'Plan'; }
     else label = PRIORITY_MAP[v.value]?.short || v.value;
   }
   const close = () => qc.setOpenKind(null);
@@ -124,7 +132,8 @@ function Chip({ qc, kind, icon: Icon, empty, disabled }) {
         <Icon size={12} strokeWidth={2} aria-hidden /><span className="qc-chip-l">{label}</span>
       </button>
       {v && <button type="button" className="qc-chip-x" disabled={disabled} onMouseDown={keepFocus} aria-label={`Remove ${empty.toLowerCase()}`} onClick={() => qc.clear(kind)}><X size={11} strokeWidth={2} aria-hidden /></button>}
-      <Popover anchorRef={ref} open={open} onClose={close} width={kind === 'deadline' ? 280 : 220} className={'qc-pop' + (kind === 'deadline' ? ' qc-pop-date' : '')} {...contain}>
+      <Popover anchorRef={ref} open={open} onClose={close} width={kind === 'deadline' ? 280 : kind === 'plan' ? 320 : 220} className={'qc-pop' + (kind === 'deadline' ? ' qc-pop-date' : '')} {...contain}>
+        {kind === 'plan' && <PlanPicker label="Plan" items={planItems || []} value={v?.value || ''} onPick={(val) => { qc.pick('plan', val); close(); ref.current?.focus(); }} />}
         {kind === 'owner' && <OptionList label="Owner" options={ownerOpts} value={v?.value || ''} searchable onPick={(val) => { qc.pick('owner', val); close(); ref.current?.focus(); }} />}
         {kind === 'priority' && <OptionList label="Priority" options={prioOpts} value={v?.value || ''} onPick={(val) => { qc.pick('priority', val); close(); ref.current?.focus(); }} />}
         {kind === 'deadline' && <>

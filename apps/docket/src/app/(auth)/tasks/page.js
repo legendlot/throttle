@@ -31,6 +31,8 @@ import { ROW_SELECTOR } from '../../../components/tasks/TaskRow.js';
 import { useTaskViewState, visibleColumns, COLUMNS } from '../../../components/tasks/useTaskViewState.js';
 import { Button, EmptyState } from '../../../components/ui/index.js';
 import { sendDone, doneConfirmText, bulkDoneConfirmText, DECLINED } from '../../../lib/deps.js';
+import { usePlanItems, usePlanById } from '../../../components/plan/PlanPicker.js';
+import { matchesPlanFilter, planFilterOptions, planErrorText } from '../../../lib/plan.js';
 
 const GROUP_OPTS = [
   { value: 'none', label: 'No grouping' }, { value: 'person', label: 'Owner' },
@@ -75,7 +77,7 @@ function TasksBoard() {
   const { filters: f, groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView, cardSize, chooseCardSize,
     showIds, toggleShowIds, subtaskMode, chooseSubtaskMode, cols, toggleColumn, moveColumn, resizeColumn, resetColumns,
     collapsed, toggleGroupCollapsed, setGroupsCollapsed } = view;
-  const { status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, q } = f;
+  const { status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, q, planFilter } = f;
 
   const [tasks, setTasks] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -124,9 +126,13 @@ function TasksBoard() {
   const empOpts = useMemo(() => employees.map(e => ({ value: e.id, label: e.full_name })), [employees]);
   const programOpts = useMemo(() => programs.map(p => ({ value: p.id, label: p.name })), [programs]);
   const programCellOpts = useMemo(() => [{ value: '', label: '— No program —' }, ...programOpts], [programOpts]);
-  const opts = useMemo(() => ({ teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts }), [teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts]);
+  // F9 R2: the caller's plan rows (getPlan) — the Plan column / chip pickers and the Plan filter.
+  const planItems = usePlanItems(session);
+  const planById = usePlanById(planItems);
+  const planOpts = useMemo(() => planFilterOptions(planItems), [planItems]);
+  const opts = useMemo(() => ({ teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts, planItems }), [teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts, planItems]);
   // F2 capture chips + @name tokens: the same people / options as the owner and priority cells.
-  const captureCtx = useMemo(() => ({ people: employees, ownerOpts: ownerCellOpts, prioOpts }), [employees, ownerCellOpts, prioOpts]);
+  const captureCtx = useMemo(() => ({ people: employees, ownerOpts: ownerCellOpts, prioOpts, planItems }), [employees, ownerCellOpts, prioOpts, planItems]);
 
   const currentSpace = useMemo(() => spaces.find(s => s.id === spaceId) || null, [spaces, spaceId]);
 
@@ -232,6 +238,9 @@ function TasksBoard() {
       ...(t.collaborators || []).map(c => c.full_name)].filter(Boolean).join(' ').toLowerCase();
     return tokens.every(tok => hay.includes(tok));
   }, [tokens]);
+  // The search box AND the Plan filter (client-side: the rows already carry `plan`). A sub-task row is
+  // tested on its inherited link.
+  const matchesRow = useCallback((t) => matchesQuery(t) && matchesPlanFilter(t, planFilter, planById), [matchesQuery, planFilter, planById]);
 
   /* ---------------- writes ---------------- */
   function patchRow(id, patch) { setTasks(ts => ts.map(t => (t.id === id ? { ...t, ...patch } : t))); }
@@ -254,8 +263,10 @@ function TasksBoard() {
         if (field === 'department_id') patch.department_name = deptMap[value] || null;
         if (field === 'program_id') patch.program = programs.find(p => p.id === value) || null;
         patchRow(task.id, patch);
+        // The plan chip is the worker's projection — re-read rather than guess it here.
+        if (field === 'plan_item_id') load();
       }
-    } catch (e) { showToast(e.message || 'Save failed', 'error'); load(); }
+    } catch (e) { showToast(planErrorText(e) || 'Save failed', 'error'); load(); }
   }
   async function abandonInline(task, reason) {
     if (!reason || !reason.trim()) return;
@@ -318,6 +329,7 @@ function TasksBoard() {
     if (x.owner_employee_id) { body.owner_employee_id = x.owner_employee_id; delete body.assign_self; }
     if (x.deadline) body.deadline = x.deadline;
     if (x.priority) body.priority = x.priority;
+    if (x.plan_item_id) body.plan_item_id = x.plan_item_id;   // F9 R2 Plan chip
     try {
       await docketopsPost('createTask', body, session);
       await load();
@@ -335,7 +347,7 @@ function TasksBoard() {
         : (!mineMode && !inProgramMode) ? 'Captured to The Grid'
         : `${where} — in The Grid until it has ${missing}`, 'success');
       return true;
-    } catch (e) { showToast(e.message || 'Create failed', 'error'); return false; }
+    } catch (e) { showToast(planErrorText(e) || 'Create failed', 'error'); return false; }
   }
 
   /* ---------------- stable actions for memoised rows ---------------- */
@@ -407,7 +419,7 @@ function TasksBoard() {
     else { setSortKey(key); setSortDir('asc'); }
   }, [sortKey, sortDir]);
 
-  const topLevel = useMemo(() => tasks.filter(t => !t.parent_task_id && matchesQuery(t)), [tasks, matchesQuery]);
+  const topLevel = useMemo(() => tasks.filter(t => !t.parent_task_id && matchesRow(t)), [tasks, matchesRow]);
   // "Archive done tasks" (per-person toggle): when ON, done top-level tasks leave the
   // active board into the collapsed Archived section; when OFF they stay on the board.
   const activeTop = useMemo(() => archiveDone ? topLevel.filter(t => t.status !== 'done') : topLevel, [topLevel, archiveDone]);
@@ -427,15 +439,15 @@ function TasksBoard() {
   // Subtasks "As separate tasks": sub-tasks become rows of their own (with a parent chip).
   const separate = subtaskMode === 'separate' && !mineMode;
   const childRows = useMemo(() => (separate
-    ? tasks.filter(t => t.parent_task_id && matchesQuery(t) && !(archiveDone && t.status === 'done')).sort(sortFn) : []),
-  [separate, tasks, matchesQuery, archiveDone, sortFn]);
+    ? tasks.filter(t => t.parent_task_id && matchesRow(t) && !(archiveDone && t.status === 'done')).sort(sortFn) : []),
+  [separate, tasks, matchesRow, archiveDone, sortFn]);
 
   // My-tasks mode (P7 home): flat list (incl. sub-tasks) from list_my_tasks — ONE array,
   // each row tagged `_relation` owner | collaborator | creator by the worker (owner wins,
   // then collaborator). Regrouped here, each task in exactly one group, by precedence:
   // "Today & overdue" (owned, open, effective deadline ≤ end of today IST — overdue first)
   // → "Assigned to me" (the rest I own) → "Collaborating" → "Raised by me".
-  const mineMatched = useMemo(() => (mineMode ? tasks.filter(matchesQuery) : []), [mineMode, tasks, matchesQuery]);
+  const mineMatched = useMemo(() => (mineMode ? tasks.filter(matchesRow) : []), [mineMode, tasks, matchesRow]);
   // Keyed on the IST date string, re-read on focus / tab-visible: a tab left open past
   // midnight IST regroups (yesterday's "today" tasks move to overdue-or-later correctly).
   const [istDay, setIstDay] = useState(istDateStr);
@@ -564,7 +576,7 @@ function TasksBoard() {
       showToast(`${verb} ${updated}${skipped ? ` · skipped ${skipped}` : ''}`, updated ? 'success' : 'info');
       clearSelection();
       await load();
-    } catch (e) { showToast(e.message || `${verb} failed`, 'error'); }
+    } catch (e) { showToast(planErrorText(e) || `${verb} failed`, 'error'); }
   }
   const applyBulkCollaborator = (employee_id, mode) =>
     runBulk('bulkSetCollaborator', { employee_id, mode }, mode === 'remove' ? 'Removed from' : 'Added to');
@@ -694,6 +706,7 @@ function TasksBoard() {
         filterOpen={filterOpen} setFilterOpen={setFilterOpen} filterCount={f.panelFilterCount}
         filter={{ status, setStatus: f.setStatus, departmentId, setDepartmentId: f.setDepartmentId, employeeId, setEmployeeId: f.setEmployeeId,
           priority, setPriority: f.setPriority, programId, setProgramId: f.setProgramId, overdue, setOverdue: f.setOverdue, revised, setRevised: f.setRevised, deps, setDeps: f.setDeps,
+          planFilter, setPlanFilter: f.setPlanFilter, planOpts,
           teamOpts, empOpts, programOpts, filterCount: f.panelFilterCount, clearFilters: f.clearPanelFilters, hideProgramFilter: inProgramMode, hideOwnerFilter: mineMode }}
         showMe={!mineMode} mine={mine} setMine={f.setMine}
         showArchive={!mineMode && !boardMode} archiveDone={archiveDone} toggleArchiveDone={toggleArchiveDone}

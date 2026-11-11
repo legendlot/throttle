@@ -107,3 +107,74 @@ test('text helpers', () => {
   assert.equal(historyText({ event: 'field_changed', new: { title: 'x', done_when: 'y' } }), 'Changed title, done-when');
   assert.equal(historyText({ event: 'owner_changed', new: { owner_employee_id: 'e' } }, { e: 'Asha' }), 'Owner → Asha');
 });
+
+// ── R2: tasks link up ────────────────────────────────────────────────────────
+const { planChain, planPickerOptions, planFilterOptions, matchesPlanFilter, planChip, UNPLANNED } = app;
+const PLAN = [
+  T({ id: 't1', code: 'T01', title: 'Growth', level: 'T' }),
+  T({ id: 't2', code: 'T02', title: 'Ops', sort: 20, level: 'T' }),
+  M({ id: 'm1', parent_id: 't1', code: 'M01', title: 'Launch', level: 'O' }),
+  M({ id: 'm9', parent_id: 't1', code: 'M09', title: 'Old', state: 'done', level: 'O', sort: 90 }),
+  R({ id: 'r2', parent_id: 'm1', code: 'M01.R2', title: 'Retail', level: 'O' }),
+  R({ id: 'rx', parent_id: 'm5', code: 'M05.R1', title: 'Mine elsewhere', level: 'O' }),
+];
+const BY = Object.fromEntries(PLAN.map(x => [x.id, x]));
+
+test('chain: theme title › milestone code › result code; an unseen parent is skipped', () => {
+  assert.equal(planChain(BY.t1, BY), 'Growth');
+  assert.equal(planChain(BY.m1, BY), 'Growth › M01');
+  assert.equal(planChain(BY.r2, BY), 'Growth › M01 › M01.R2');
+  assert.equal(planChain(BY.rx, BY), 'M05.R1');
+  assert.equal(planChain(null), '');
+});
+
+test('picker: Unplanned first, live items only, tree order, searchable by chain + title', () => {
+  const o = planPickerOptions(PLAN);
+  assert.deepEqual(o[0], { value: '', label: 'Unplanned' });
+  assert.deepEqual(o.slice(1).map(x => x.value), ['t1', 'm1', 'r2', 't2', 'rx']);   // m9 (done) gone; orphan last
+  assert.equal(o.find(x => x.value === 'r2').label, 'Growth › M01 › M01.R2 · Retail');
+  assert.equal(o.find(x => x.value === 't2').label, 'Ops');
+  // OptionList filters on label: a code, a theme and a title word all find the result
+  for (const q of ['m01.r2', 'growth', 'retail']) assert.ok(o.filter(x => x.label.toLowerCase().includes(q)).some(x => x.value === 'r2'), q);
+  assert.deepEqual(planPickerOptions([]), [{ value: '', label: 'Unplanned' }]);
+});
+
+test('filter: theme covers its milestones + results (incl. L links); milestone covers its results; Unplanned', () => {
+  const task = (plan) => ({ id: 'x', plan });
+  const onTheme = task({ id: 't1', kind: 'theme', level: 'T', theme_id: 't1' });
+  const onM1 = task({ id: 'm1', kind: 'milestone', level: 'O', theme_id: 't1' });
+  const onR2 = task({ id: 'r2', kind: 'result', level: 'O', theme_id: 't1' });
+  const onOther = task({ id: 'm7', kind: 'milestone', level: 'L', theme_id: 't1' });   // someone else's milestone
+  const onOps = task({ id: 'm3', kind: 'milestone', level: 'L', theme_id: 't2' });
+  const none = task(null);
+  const pick = (f) => [onTheme, onM1, onR2, onOther, onOps, none].map(t => matchesPlanFilter(t, f, BY));
+  assert.deepEqual(pick(''), [true, true, true, true, true, true]);
+  assert.deepEqual(pick('t1'), [true, true, true, true, false, false]);
+  assert.deepEqual(pick('m1'), [false, true, true, false, false, false]);
+  assert.deepEqual(pick('r2'), [false, false, true, false, false, false]);
+  assert.deepEqual(pick(UNPLANNED), [false, false, false, false, false, true]);
+  // an inherited link counts as the sub-task's own
+  assert.equal(matchesPlanFilter({ parent_task_id: 'p', plan: { id: 'r2', kind: 'result', theme_id: 't1', inherited: true } }, 'm1', BY), true);
+  assert.equal(planFilterOptions(PLAN)[0].value, UNPLANNED);
+  assert.ok(planFilterOptions(PLAN).some(x => x.value === 'm9'));   // done items still filterable
+});
+
+test('chip: code with the title on hover; L redacted; inherited muted; none nothing', () => {
+  assert.deepEqual(planChip({ id: 'm1', level: 'O', kind: 'milestone', code: 'M01', title: 'Launch' }),
+    { label: 'M01', title: 'M01 · Launch', muted: false, redacted: false });
+  assert.deepEqual(planChip({ id: 't1', level: 'T', kind: 'theme', code: 'T01', title: 'Growth', inherited: true }),
+    { label: 'T01', title: 'Growth — from the parent task', muted: true, redacted: false });
+  const l = planChip({ id: 'm7', level: 'L', kind: 'milestone', theme_title: 'Growth' });
+  assert.deepEqual(l, { label: 'Another owner’s milestone', title: 'Theme: Growth', muted: false, redacted: true });
+  assert.equal(planChip({ id: 'r', level: 'L', kind: 'result' }).label, 'Another owner’s result');
+  assert.equal(planChip({ level: 'none' }), null);
+  assert.equal(planChip(null), null);
+});
+
+test('R2 error codes read as words', () => {
+  assert.match(planErrorText(new Error('restricted_needs_founders_space')), /Founders’ space/);
+  const e = new Error('restricted_tasks_outside'); e.detail = { detail: 'DKT-4, DKT-9' };
+  assert.match(planErrorText(e), /DKT-4, DKT-9/);
+  assert.match(planErrorText(new Error('founders_move_out')), /super admin/);
+  assert.match(planErrorText(new Error('subtask_follows_parent')), /parent/);
+});

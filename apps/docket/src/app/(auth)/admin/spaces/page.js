@@ -8,6 +8,7 @@ import { docketopsGet, docketopsPost } from '../../../../lib/docketopsFetch.js';
 import { fmtDate } from '../../../../lib/format.js';
 import { Button, EmptyState } from '../../../../components/ui/index.js';
 import { AdminHead } from '../../../../components/AdminParts.js';
+import { planErrorText } from '../../../../lib/plan.js';
 
 /**
  * Admin-only space registry + break-glass recovery (RULE-DOCKET-003).
@@ -39,7 +40,7 @@ export default function AdminSpacesPage() {
       // Owner still here → the space is only un-archived back to them; you don't become a member.
       if (res?.unarchived) { showToast('Space restored to its owner', 'success'); load(); return; }
       showToast('Space recovered', 'success'); router.push('/tasks?space=' + s.id); }
-    catch (e) { showToast(e.message || 'Failed', 'error'); }
+    catch (e) { showToast(planErrorText(e) || 'Failed', 'error'); }   // founders_space: never recoverable
     finally { setBusyId(null); }
   }
 
@@ -69,7 +70,7 @@ export default function AdminSpacesPage() {
                     <td className="num">{s.is_default ? '—' : s.member_count}</td>
                     <td className="dt-created mono">{s.created_at ? fmtDate(s.created_at) : '—'}</td>
                     <td className="dt-act">
-                      {!s.is_default && (
+                      {!s.is_default && !s.is_founders && (
                         <Button size="sm" variant="ghost" icon={KeyRound} className="adm-recover" loading={busyId === s.id} onClick={() => recover(s)} title="Break-glass: become owner + member">Recover</Button>
                       )}
                     </td>

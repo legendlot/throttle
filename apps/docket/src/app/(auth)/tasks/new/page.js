@@ -6,6 +6,8 @@ import { Spinner, useToast } from '@throttle/ui';
 import { ArrowLeft } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../../lib/docketopsFetch.js';
 import { TaskForm } from '../../../../components/TaskForm.js';
+import { usePlanItems } from '../../../../components/plan/PlanPicker.js';
+import { planErrorText } from '../../../../lib/plan.js';
 
 function NewTaskInner() {
   const { session } = useAuth();
@@ -20,6 +22,7 @@ function NewTaskInner() {
   const [parentTask, setParentTask] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const planItems = usePlanItems(session);   // F9 R2: the Plan field
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -56,7 +59,7 @@ function NewTaskInner() {
       const res = await docketopsPost(action, payload, session);
       showToast(`Created ${res.task_no}`, 'success');
       router.push(`/tasks/detail/?id=${res.id}`);
-    } catch (e) { showToast(e.message || 'Create failed', 'error'); setSaving(false); }
+    } catch (e) { showToast(planErrorText(e) || 'Create failed', 'error'); setSaving(false); }
   }
 
   return (
@@ -69,7 +72,7 @@ function NewTaskInner() {
         <button className="btn btn-ghost" onClick={() => router.back()}><ArrowLeft size={13} /> Back</button>
       </div>
       {loading ? <Spinner /> : (
-        <TaskForm departments={departments} employees={employees} programs={programs} parentTask={parentTask} onCreateProgram={createProgram} onSubmit={submit} saving={saving} />
+        <TaskForm departments={departments} employees={employees} programs={programs} planItems={planItems} parentTask={parentTask} onCreateProgram={createProgram} onSubmit={submit} saving={saving} />
       )}
     </div>
   );

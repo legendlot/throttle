@@ -58,5 +58,7 @@ export async function docketopsPost(action, body = {}, session) {
   if (typeof window !== 'undefined' && !NO_COUNT_CHANGE.test(action)) {
     window.dispatchEvent(new Event('docket:counts-changed'));
   }
+  // F9 R2: the shared Plan pickers (components/plan/PlanPicker.js) re-read after any plan write.
+  if (typeof window !== 'undefined' && /PlanItem/.test(action)) window.dispatchEvent(new Event('docket:plan-changed'));
   return data.data;
 }

@@ -3,6 +3,7 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { Combobox } from '@throttle/ui';
 import { X, Lock, Trash2, UserPlus, Crown } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../lib/docketopsFetch.js';
+import { planErrorText } from '../lib/plan.js';
 
 /**
  * Owner-only space settings: rename, manage members, transfer ownership, archive.
@@ -36,7 +37,7 @@ export function SpaceSettings({ space, session, employees, showToast, onClose, o
     if (busy) return;
     setBusy(true);
     try { await docketopsPost(action, body, session); if (okMsg) showToast(okMsg, 'success'); onChanged && onChanged(); return true; }
-    catch (e) { showToast(e.message || 'Failed', 'error'); return false; }
+    catch (e) { showToast(planErrorText(e) || 'Failed', 'error'); return false; }   // founders_space (F9 R2)
     finally { setBusy(false); }
   }
   async function rename() { const n = name.trim(); if (!n || n === space.name) return; await call('renameSpace', { id: space.id, name: n }, 'Renamed'); }
@@ -90,7 +91,7 @@ export function SpaceSettings({ space, session, employees, showToast, onClose, o
         )}
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 18, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-          <button className="dk-press" style={dangerBtn} onClick={archive}><Trash2 size={13} /> Archive space</button>
+          {space.is_founders ? <span /> : <button className="dk-press" style={dangerBtn} onClick={archive}><Trash2 size={13} /> Archive space</button>}
           <button className="dk-press" style={ghostBtn} onClick={onClose}>Done</button>
         </div>
       </div>

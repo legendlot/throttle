@@ -18,6 +18,7 @@ import { SETTABLE_STATUSES, STATUS_MAP } from '../lib/tasks.js';
 import { Pill, Menu, MenuItem, AvatarStack, Button } from './ui/index.js';
 import { PriorityFlag, DeadlineCell } from './tasks/TaskCells.js';
 import { DepsBadge } from './task/Dependencies.js';
+import { PlanChip } from './plan/PlanPicker.js';
 import { useQuickCapture, CaptureChips, withHint, keepFocus, isSubmitKey } from './tasks/QuickCapture.js';
 
 const NONE = '__none__';
@@ -338,6 +339,8 @@ function KanbanCard({ task, axis, ctx, dragging, onDragStart, onDragEnd, onMove,
           {task.doc_count > 0 && <span className="kb-m" title="Documents"><Link2 size={11} aria-hidden />{task.doc_count}</span>}
           <span className="kb-id">{task.task_no}</span>
         </div>
+        {/* F9 R2: the plan link (set it in the card's task view). */}
+        {task.plan && <div className="kb-tags"><PlanChip plan={task.plan} /></div>}
         {/* Cross-space boards: which space (M and L, as before P4). */}
         {size === 'm' && showSpace && task.space_name && (
           <div className="kb-tags">{spaceTag}</div>

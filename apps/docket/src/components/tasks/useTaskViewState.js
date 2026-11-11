@@ -14,6 +14,7 @@ export const COLUMNS = {
   status:   { label: 'Status',        width: 124, min: 96,  fixed: true, sort: 'status' },
   team:     { label: 'Team',          width: 130, min: 72 },
   program:  { label: 'Program',       width: 130, min: 72 },
+  plan:     { label: 'Plan',          width: 120, min: 64 },   // F9 R2: the task's plan link (chip + picker)
   space:    { label: 'Space',         width: 130, min: 72, crossSpaceOnly: true },
   owner:    { label: 'Owner',         width: 72,  min: 56,  sort: 'owner_name' },
   collabs:  { label: 'Collaborators', width: 104, min: 64 },
@@ -21,7 +22,7 @@ export const COLUMNS = {
   deadline: { label: 'Deadline',      width: 144, min: 88,  sort: 'deadline' },
   meta:     { label: 'Activity',      width: 64,  min: 48 },
 };
-const DEFAULT_ORDER = ['status', 'team', 'program', 'space', 'owner', 'collabs', 'priority', 'deadline', 'meta'];
+const DEFAULT_ORDER = ['status', 'team', 'program', 'plan', 'space', 'owner', 'collabs', 'priority', 'deadline', 'meta'];
 // Program starts hidden (Columns menu turns it on): with every column on, a 1440 screen left
 // the title its 240px floor.
 const DEFAULT_COLS = { order: DEFAULT_ORDER, hidden: { program: true }, widths: {} };
@@ -50,17 +51,19 @@ export function useTaskViewState({ lensParam }) {
   // `lens=mine` (sidebar "My tasks") drives the mine filter; absent → off.
   useEffect(() => { setMine(lensParam === 'mine'); }, [lensParam]);
   const [q, setQ] = useState('');
+  // F9 R2: '' | 'unplanned' | a plan item id. Client-side (rows carry `plan`), so it is not a load param.
+  const [planFilter, setPlanFilter] = useState('');
 
-  const activeFilterCount = [status, departmentId, employeeId, priority, programId].filter(Boolean).length
+  const activeFilterCount = [status, departmentId, employeeId, priority, programId, planFilter].filter(Boolean).length
     + [overdue, revised, deps, mine].filter(Boolean).length;
   const clearFilters = useCallback(() => {
-    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId('');
+    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId(''); setPlanFilter('');
     setOverdue(false); setRevised(false); setDeps(''); setMine(false);
   }, []);
   // The Filter popover's own count + clear: Me mode is its own toolbar toggle (P2).
   const panelFilterCount = activeFilterCount - (mine ? 1 : 0);
   const clearPanelFilters = useCallback(() => {
-    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId('');
+    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId(''); setPlanFilter('');
     setOverdue(false); setRevised(false); setDeps('');
   }, []);
 
@@ -141,7 +144,7 @@ export function useTaskViewState({ lensParam }) {
 
   return {
     filters: { status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId, priority, setPriority,
-      programId, setProgramId, overdue, setOverdue, revised, setRevised, deps, setDeps, mine, setMine, q, setQ,
+      programId, setProgramId, planFilter, setPlanFilter, overdue, setOverdue, revised, setRevised, deps, setDeps, mine, setMine, q, setQ,
       activeFilterCount, clearFilters, panelFilterCount, clearPanelFilters },
     groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView,
     cardSize, chooseCardSize,

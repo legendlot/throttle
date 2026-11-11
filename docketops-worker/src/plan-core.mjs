@@ -150,8 +150,68 @@ const STATUS = {
   forbidden: 403, forbidden_field: 403,
   not_found: 404, parent_not_found: 404,
   duplicate_code: 409, bad_state: 409, live_children: 409, parent_not_agreed: 409, same_date: 409,
+  // R2 — task links
+  plan_item_not_found: 404, restricted_tasks_outside: 409,
+  plan_item_closed: 422, subtask_follows_parent: 422, restricted_needs_founders_space: 422,
 };
 export function planErrStatus(code) { return STATUS[code] || 400; }
+
+// ── R2: tasks link up (§4.1 "Tasks point up", §5.3) ──────────────────────────
+// The SQL twin is migrations/0018_task_plan_link.sql: tasks_plan_guard (live target, restricted ⇒
+// Founders' space), plan_items_confidential, plan_links_for (the levels). This is the worker's pre-check
+// and the label every surface renders; the database refuses anything else.
+export const LINK_STATES = ['proposed', 'agreed'];
+export const LINKABLE_LEVELS = ['F', 'O', 'T'];
+
+// May the caller point a task at this item? `link` = its plan_links_for row for the caller (or null).
+// L / none / unknown all read as "not found" — an L item is only known through someone else's task, and
+// none must not even exist. Returns an error code or null.
+export function linkError(link) {
+  if (!link || !LINKABLE_LEVELS.includes(link.level)) return 'plan_item_not_found';
+  if (!LINK_STATES.includes(link.state)) return 'plan_item_closed';
+  return null;
+}
+
+// The effective link of a task: its own, or (a sub-task) its parent's. `ownById` maps task id → its own
+// plan_item_id; a sub-task's own value is never read (the CHECK keeps it null).
+export function effectiveLink(task, ownById = {}) {
+  if (!task) return { id: null, inherited: false };
+  if (task.parent_task_id) return { id: ownById[task.parent_task_id] || null, inherited: true };
+  const own = Object.prototype.hasOwnProperty.call(ownById, task.id) ? ownById[task.id] : task.plan_item_id;
+  return { id: own || null, inherited: false };
+}
+
+// The `plan` object a task carries, built from its plan_links_for row. `none` (and no link) → null: a
+// restricted subtree below F leaves no trace, not even that the task is linked.
+export function taskPlan(link, inherited = false) {
+  if (!link || !link.level || link.level === 'none') return null;
+  const base = { id: link.id, level: link.level, kind: link.kind, theme_id: link.theme_id || null,
+    theme_code: link.theme_code || null, theme_title: link.theme_title || null, inherited: !!inherited };
+  // L: no id either — a shared hidden id would let an L viewer group tasks by sibling (review R2 #9).
+  if (link.level === 'L') return { ...base, id: null, code: null, title: null, state: null };
+  return { ...base, code: link.code || null, title: link.title || null, state: link.state || null };
+}
+
+const OTHER = { milestone: 'Another owner’s milestone', result: 'Another owner’s result', theme: 'Another owner’s theme' };
+// One line for a link (history rows, the connector): F/O/T "M01 · Title" (a theme: its title); L the
+// redacted label + its theme; nothing for none.
+export function planLinkLabel(plan) {
+  if (!plan || !plan.level || plan.level === 'none') return null;
+  if (plan.level === 'L') return (OTHER[plan.kind] || 'Another owner’s item') + (plan.theme_title ? ` (${plan.theme_title})` : '');
+  if (plan.kind === 'theme') return plan.title || plan.code || null;
+  return [plan.code, plan.title].filter(Boolean).join(' · ') || null;
+}
+
+// A PostgREST error body from the R2 triggers / CHECK → { code, detail } (or null when it isn't one).
+export function planDbError(body) {
+  const msg = String((body && (body.message || body.error)) || body || '');
+  if (/restricted_needs_founders_space/.test(msg)) return { code: 'restricted_needs_founders_space' };
+  if (/plan_item_closed/.test(msg)) return { code: 'plan_item_closed' };
+  if (/tasks_plan_link_top_level/.test(msg)) return { code: 'subtask_follows_parent' };
+  const m = /restricted_tasks_outside:\s*(.*)$/.exec(msg);
+  if (m) return { code: 'restricted_tasks_outside', detail: m[1].trim() };
+  return null;
+}
 
 // Effective due date (§4.1).
 export function effectiveDue(item) { return item?.revised_due_date || item?.due_date || null; }

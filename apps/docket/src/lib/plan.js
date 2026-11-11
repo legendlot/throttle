@@ -174,6 +174,16 @@ const ERR = {
   bad_date: 'Pick a valid date.',
   title_required: 'A title is required.',
   locked_field: 'That field is locked — use its action instead.',
+  // R2 — task links + the Founders' space
+  plan_item_not_found: 'That plan item isn’t one you can link to.',
+  plan_item_closed: 'That plan item is done or dropped — pick a live one.',
+  subtask_follows_parent: 'A sub-task follows its parent’s plan link — set it on the parent.',
+  restricted_needs_founders_space: 'That item is founders-only — the task has to live in the Founders’ space.',
+  restricted_tasks_outside: 'Linked tasks sit outside the Founders’ space — move them there first.',
+  founders_move_out: 'Only a super admin can move a task out of the Founders’ space.',
+  founders_space: 'Only a super admin can do that in the Founders’ space.',
+  founders_space_fixed: 'The Founders’ space can’t be archived or recovered.',
+  bad_plan_item_id: 'Pick a plan item from the list.',
 };
 export function planErrorText(e) {
   const code = e?.message || String(e || '');
@@ -181,7 +191,84 @@ export function planErrorText(e) {
     const names = { owner_employee_id: 'owner', due_date: 'due date', done_when: 'done-when' };
     return `Required: ${e.detail.fields.map(f => names[f] || f).join(', ')}.`;
   }
+  if (code === 'restricted_tasks_outside' && e?.detail?.detail) return `${ERR[code]} (${e.detail.detail})`;
   return ERR[code] || code || 'Something went wrong.';
+}
+
+// ── R2: tasks link up ────────────────────────────────────────────────────────
+// A task's `plan` comes from the worker's projection (docket.plan_links_for): { id, level F|O|T|L, kind,
+// code, title, state, theme_id, theme_code, theme_title, inherited }; L has no code / title / state, and a
+// restricted item below F never arrives at all. The picker reads getPlan (the caller's own F / O / T rows).
+export const LINK_STATES = ['proposed', 'agreed'];
+const SEP = ' › ';
+
+// "Growth › M01 › M01.R2" — the theme by title, then codes. A parent the caller can't see is skipped.
+export function planChain(item, byId = {}) {
+  if (!item) return '';
+  if (item.kind === 'theme') return item.title || item.code || '';
+  const parent = item.parent_id ? byId[item.parent_id] : null;
+  if (item.kind === 'milestone') return [parent?.title || parent?.code, item.code].filter(Boolean).join(SEP);
+  const theme = parent?.parent_id ? byId[parent.parent_id] : null;
+  return [theme?.title || theme?.code, parent?.code, item.code].filter(Boolean).join(SEP);
+}
+
+// Tree order: each theme, then its milestones, each followed by its results; items whose parent is out
+// of sight (a result you own under another owner's milestone) last.
+function treeOrder(items) {
+  const { themes, orphans } = buildPlanTree(items);
+  const out = [];
+  const walk = (n) => { out.push(n); (n.children || []).forEach(walk); };
+  themes.forEach(walk);
+  orphans.forEach(walk);
+  return out;
+}
+const optLabel = (it, byId) => (it.kind === 'theme' ? (it.title || it.code) : `${planChain(it, byId)} · ${it.title}`);
+
+// The Plan picker: "Unplanned" (= clear) + every LIVE item the caller can see (getPlan: super → all;
+// others → their own milestones/results + unrestricted themes). The label carries chain + title, so the
+// search box finds a code, a theme or a word of the title.
+export function planPickerOptions(items = []) {
+  const { byId } = buildPlanTree(items);
+  const live = treeOrder(items).filter(it => LINK_STATES.includes(it.state) && it.level !== 'L');
+  return [{ value: '', label: 'Unplanned' }, ...live.map(it => ({ value: it.id, label: optLabel(it, byId), kind: it.kind, depth: it.kind === 'theme' ? 0 : it.kind === 'milestone' ? 1 : 2 }))];
+}
+
+// The Plan filter: every item the caller can see (done ones too — a task may still point at one), plus
+// "Unplanned".
+export const UNPLANNED = 'unplanned';
+export function planFilterOptions(items = []) {
+  const { byId } = buildPlanTree(items);
+  return [{ value: UNPLANNED, label: 'Unplanned' }, ...treeOrder(items).map(it => ({ value: it.id, label: optLabel(it, byId) }))];
+}
+
+// Does a task pass the Plan filter? A theme matches every task under it (theme_id from the projection,
+// so an L-level link under that theme counts too); a milestone matches its results' tasks as well
+// (byId = the caller's getPlan rows); a result only its own. Unplanned = no (effective) link.
+export function matchesPlanFilter(task, filter, byId = {}) {
+  if (!filter) return true;
+  const p = task?.plan || null;
+  if (filter === UNPLANNED) return !p;
+  if (!p) return false;
+  const it = byId[filter];
+  if (!it) return p.id === filter;
+  if (it.kind === 'theme') return p.theme_id === filter || p.id === filter;
+  if (it.kind === 'milestone') return p.id === filter || (p.kind === 'result' && byId[p.id]?.parent_id === filter);
+  return p.id === filter;
+}
+
+// The chip a task row / card shows. F/O/T: the code (a theme: its code, else title), the title on hover;
+// L: "Another owner's milestone" + the theme on hover; an inherited link is muted. No plan → null.
+const OTHER = { milestone: 'Another owner’s milestone', result: 'Another owner’s result', theme: 'Another owner’s theme' };
+export function planChip(plan) {
+  if (!plan || !plan.level || plan.level === 'none') return null;
+  const from = plan.inherited ? ' — from the parent task' : '';
+  if (plan.level === 'L') {
+    return { label: OTHER[plan.kind] || 'Another owner’s item', title: (plan.theme_title ? `Theme: ${plan.theme_title}` : 'Plan item') + from,
+      muted: !!plan.inherited, redacted: true };
+  }
+  const label = plan.code || plan.title || 'Plan';
+  const title = (plan.kind === 'theme' ? (plan.title || plan.code) : [plan.code, plan.title].filter(Boolean).join(' · ')) + from;
+  return { label, title, muted: !!plan.inherited, redacted: false };
 }
 
 // One history row → a readable line.
