@@ -150,7 +150,8 @@ create index applications_candidate_idx on podium.applications(candidate_id);
 create unique index applications_one_active on podium.applications(candidate_id, opening_id)
   where status in ('new', 'screening', 'interviewing', 'offer', 'accepted', 'on_hold');
 
--- Append-only timeline. Salary values never go in reason text (worker-enforced).
+-- Append-only timeline. reason = a category code; free text only in detail.note, stripped on read for
+-- viewers off the opening's salary chain (worker-enforced).
 create table podium.application_events (
   id bigint generated always as identity primary key,
   application_id uuid references podium.applications(id) on delete cascade,

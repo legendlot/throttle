@@ -37,7 +37,6 @@ function OpeningDetailInner() {
 
   const o = data.opening || {};
   const r = data.my_roles || {};
-  const meEmp = brandUser?.employee_id || null;
   // The worker sends the derived gates on my_roles; the raw-role fallback mirrors its rules.
   const canEdit = r.can_edit != null ? !!r.can_edit : !!(r.hiring || r.owner);
   const canManageApps = r.can_manage_apps != null ? !!r.can_manage_apps : !!(r.hiring || r.owner || r.manager);
@@ -100,7 +99,7 @@ function OpeningDetailInner() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 14, alignItems: 'start' }}>
         <JdCard data={data} canEdit={canEdit} session={session} onChanged={load} />
         <div style={{ display: 'grid', gap: 14 }}>
-          <BandCard opening={o} budgets={budgets} roles={r} meEmp={meEmp} canEdit={canEdit} canSeeSalary={canSeeSalary} session={session} onChanged={load} />
+          <BandCard opening={o} budgets={budgets} canDecide={!!data.can_decide_pending} canEdit={canEdit} canSeeSalary={canSeeSalary} session={session} onChanged={load} />
           <TeamCard data={data} emps={emps} canEdit={canEdit} canChangeChain={canChangeChain} session={session} onChanged={load} />
         </div>
       </div>
@@ -185,15 +184,14 @@ function JdCard({ data, canEdit, session, onChanged }) {
 }
 
 // ── Band: approved + pending; approve/reject for the snapshotted approver; request a change ──
-function BandCard({ opening, budgets, roles, meEmp, canEdit, canSeeSalary, session, onChanged }) {
+function BandCard({ opening, budgets, canDecide, canEdit, canSeeSalary, session, onChanged }) {
   const { showToast } = useToast();
   const [req, setReq] = useState(null);       // { band_min, band_max, note } while requesting
   const [busy, setBusy] = useState(false);
   const approved = budgets.find(b => b.id === opening.current_budget_id) || budgets.find(b => b.status === 'approved') || null;
   const pending = budgets.find(b => b.status === 'pending') || null;
-  // Approve/Reject only for the snapshotted approver or a founder, never on your own request
-  // (DB + worker refuse it too).
-  const canDecide = !!(pending && (roles.approver || roles.is_founder) && !(meEmp && pending.requested_by_employee_id === meEmp));
+  // canDecide = the worker's can_decide_pending (snapshotted approver or a founder, never the requester) —
+  // the same rule decideBand enforces, so the buttons never show to someone the worker would refuse.
 
   async function decide(decision) {
     const note = window.prompt(decision === 'approve' ? 'Note (optional)' : 'Why is this band rejected?');

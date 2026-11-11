@@ -12,7 +12,7 @@ import {
   inp, comboInp, backBtn, primaryBtn, ghostBtn, iconBtn, muted,
 } from '../../../../components/HiringBits.js';
 import {
-  APP_STATUSES, OPENING_STATUSES, SOURCES, CANDIDATE_DOC_TYPES, CANDIDATE_DOC_ACCEPT, REASON_REQUIRED, ACTIVE_APP_STATUSES,
+  APP_STATUSES, OPENING_STATUSES, SOURCES, CANDIDATE_DOC_TYPES, CANDIDATE_DOC_ACCEPT, REASON_REQUIRED, ACTIVE_APP_STATUSES, OUTCOME_REASONS,
   allowedTransitions, hiringError, labelFrom, formatINR, numOrNull, listOf, fmtDateTime,
 } from '../../../../lib/hiring.js';
 
@@ -163,7 +163,8 @@ function ApplicationRow({ a, emps, openOpenings, session, onChanged }) {
   const router = useRouter();
   const { showToast } = useToast();
   const [next, setNext] = useState('');
-  const [reason, setReason] = useState('');
+  const [reason, setReason] = useState('');   // category code (OUTCOME_REASONS)
+  const [note, setNote] = useState('');       // free text — the worker shows it to the salary chain only
   const [edit, setEdit] = useState(null);
   const [move, setMove] = useState(null);     // { to_opening_id, reason }
   const [busy, setBusy] = useState(false);
@@ -176,11 +177,11 @@ function ApplicationRow({ a, emps, openOpenings, session, onChanged }) {
 
   async function applyStatus() {
     if (!next) return;
-    if (needsReason && !reason.trim()) { showToast('A reason is required', 'error'); return; }
+    if (needsReason && !reason) { showToast('Pick a reason', 'error'); return; }
     setBusy(true);
     try {
-      await podiumopsPost('setApplicationStatus', { id: a.id, status: next, reason: reason.trim() || null }, session);
-      showToast(`Moved to ${labelFrom(APP_STATUSES, next)}`, 'success'); setNext(''); setReason(''); onChanged();
+      await podiumopsPost('setApplicationStatus', { id: a.id, status: next, reason: needsReason ? reason : null, note: note.trim() || null }, session);
+      showToast(`Moved to ${labelFrom(APP_STATUSES, next)}`, 'success'); setNext(''); setReason(''); setNote(''); onChanged();
     } catch (e) { showToast(hiringError(e), 'error'); }
     finally { setBusy(false); }
   }
@@ -236,13 +237,19 @@ function ApplicationRow({ a, emps, openOpenings, session, onChanged }) {
         {canManage && active && !move && <button onClick={() => setMove({ to_opening_id: '', reason: '' })} style={iconBtn} title="Move to another opening"><ArrowRightLeft size={13} /></button>}
       </div>
 
-      {a.outcome_reason && !active && <div style={{ ...muted, marginTop: 4 }}>Reason: {a.outcome_reason}</div>}
+      {a.outcome_reason && !active && <div style={{ ...muted, marginTop: 4 }}>Reason: {labelFrom(OUTCOME_REASONS, a.outcome_reason)}</div>}
 
       {next && (
         <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <input style={{ ...inp, flex: '1 1 260px' }} value={reason} onChange={e => setReason(e.target.value)}
-            placeholder={needsReason ? 'Reason (required)' : 'Reason (optional)'} />
-          <button onClick={() => { setNext(''); setReason(''); }} style={ghostBtn} disabled={busy}>Cancel</button>
+          {needsReason && (
+            <select style={{ ...inp, width: 180 }} value={reason} onChange={e => setReason(e.target.value)}>
+              <option value="">Reason *</option>
+              {OUTCOME_REASONS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          )}
+          <input style={{ ...inp, flex: '1 1 260px' }} value={note} onChange={e => setNote(e.target.value)}
+            placeholder="Note (optional — only the opening's salary chain sees it)" />
+          <button onClick={() => { setNext(''); setReason(''); setNote(''); }} style={ghostBtn} disabled={busy}>Cancel</button>
           <button onClick={applyStatus} style={primaryBtn} disabled={busy}>{busy ? 'Saving…' : `Move to ${labelFrom(APP_STATUSES, next)}`}</button>
         </div>
       )}
@@ -282,7 +289,7 @@ function ApplicationRow({ a, emps, openOpenings, session, onChanged }) {
               <Combobox value={move.to_opening_id} onChange={v => setMove(s => ({ ...s, to_opening_id: v }))} inputStyle={comboInp} placeholder="Search openings…"
                 options={targets.map(o => ({ value: o.id, label: o.designation, hint: o.opening_code }))} />
             </F>
-            <F label="Reason *"><input style={inp} value={move.reason} onChange={e => setMove(s => ({ ...s, reason: e.target.value }))} /></F>
+            <F label="Why move? * (only the salary chain sees this)"><input style={inp} value={move.reason} onChange={e => setMove(s => ({ ...s, reason: e.target.value }))} /></F>
           </Row>
           <div style={{ ...muted, marginBottom: 8 }}>This application closes as withdrawn and a new one starts at New. Salary fields are not copied.</div>
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
@@ -314,7 +321,7 @@ function DocumentsCard({ candidate, docs, apps, isHr, anySalary, uploadTypes, ca
     if (!file) { showToast('Pick a file first', 'error'); return; }
     setBusy(true);
     try {
-      const meta = await signedUpload('createCandidateDocUploadUrl', { candidate_id: candidate.id, doc_type: docType }, file, session);
+      const meta = await signedUpload('createCandidateDocUploadUrl', { candidate_id: candidate.id, doc_type: docType, application_id: appId || null }, file, session);
       await podiumopsPost('recordCandidateDocument', {
         candidate_id: candidate.id, application_id: appId || null, doc_type: docType, title: title || file.name, ...meta,
       }, session);

@@ -29,7 +29,9 @@ import {
   ACTIVE_APP_STATUSES, TERMINAL_APP_STATUSES, isTerminalStatus, APP_TRANSITIONS, checkTransition, APP_SOURCES,
   OPENING_STATUSES, resolveApprover, checkBandDecider, openingRoles, canSeeOpening, canEditOpening, canManageApps,
   canSeeSalary, canChangeChain, CANDIDATE_DOC_TYPES, docTier, canSeeCandidateDoc, JD_REQUIRED_MSG, jdGate,
-  JD_EXTS, CANDIDATE_DOC_EXTS, fileOk, retainUntil, normEmailKey, normPhoneKey, openingCode, candidateCode, parseBand,
+  JD_EXTS, CANDIDATE_DOC_EXTS, fileOk, retainUntil, normEmailKey, normPhoneKey, parseBand,
+  canSeeDocRow, OUTCOME_REASON_CODES, redactReason, redactEvent, candidateEventsFor, checkFileSize,
+  candidateDocPath, jdPath, checkCandidateDocPath, checkJdPath, cleanSearch,
 } from './hiring.js';   // Hiring C1/C2 — the pure permission + transition rules, see test/hiring.test.mjs
 
 // ── CORS ────────────────────────────────────────────────────────────────────
@@ -633,6 +635,7 @@ async function getDocumentDownloadUrl(url, auth, env) {
   if (!doc) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
   if (!docAllowed(auth, edges, doc.employee_id, doc.doc_type)) return err('forbidden', 403);
+  if (!String(doc.storage_path).startsWith(`${doc.employee_id}/`)) return err('forbidden', 403);
 
   const seg = String(doc.storage_path).split('/').map(encodeURIComponent).join('/');
   const sr = await storageFetch(`/object/sign/${DOC_BUCKET}/${seg}`, env, {
@@ -991,6 +994,10 @@ async function recordDocument(body, auth, env) {
   if (!body.employee_id) return err('employee_id required', 400);
   if (!body.storage_path) return err('storage_path required', 400);
   if (!body.doc_type) return err('doc_type required', 400);
+  // Employee docs live under <employee_id>/ only — the bucket also holds hiring files (candidates/, openings/),
+  // whose visibility rules this endpoint does not run. Never let a row here alias one of those objects.
+  if (!isUuid(body.employee_id) || !String(body.storage_path).startsWith(`${body.employee_id}/`) || String(body.storage_path).includes('..'))
+    return err('storage_path must be under this employee', 400);
   const row = { employee_id: body.employee_id, uploaded_by: auth.userId, ...pickFields(body, DOC_FIELDS) };
   const r = await sb(`/rest/v1/documents`, env, { method: 'POST', body: JSON.stringify([row]) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
@@ -3521,7 +3528,9 @@ async function gradeObjective(body, auth, env) {
 // Every action is in SELF_SERVE_GET/POST and self-scopes: a manager without a Podium role reaches
 // their OWN openings (owner / reporting manager / approver) and nothing else. The permission table
 // lives in src/hiring.js (unit-tested). Plan: docs/superpowers/plans/2026-11-11-podium-hiring-c1-c2.md
-// Salary numbers (band, current/expected CTC) never go into application_events reason/detail.
+// Salary numbers (band, current/expected CTC) are never written into application_events. reason = a
+// category code; free text (which may quote a number) goes only in detail.note and every read strips it
+// for viewers off that opening's salary chain (redactEvent / candidateEventsFor in src/hiring.js).
 // ────────────────────────────────────────────────────────────────────────────
 
 function errCode(code, message, status = 400) { return json({ ok: false, error: code, message }, status); }
@@ -3624,7 +3633,6 @@ function budgetStatus(x) {
   if (x.o.current_budget_id) return 'approved';
   return 'none';
 }
-function cleanSearch(s) { return encodeURIComponent(String(s || '').trim().replace(/[,()*]/g, ' ').trim()); }
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
@@ -3662,6 +3670,9 @@ async function getOpenings(url, auth, env) {
       can_see_salary: sal,
     };
   });
+  // One audit row per list call that returned any band (RULE-PODIUM-002: every salary-bearing read is logged).
+  const banded = rows.filter(r => r.band || r.pending_band);
+  if (banded.length) await logCompAccess(auth, 'getOpenings', null, 'list', env, { openings: banded.length });
   return ok({ openings: rows });
 }
 
@@ -3683,17 +3694,19 @@ async function getOpening(url, auth, env) {
   ]);
   if (!jr.ok || !br.ok || !ar.ok) return err('db_error', 500);
   const jds = jr.data || [];
+  // Band numbers AND the free-text decision note are salary-chain only (a note can quote a number).
   const budgets = (br.data || []).map(b => (sal ? { ...b, band_min: numOrNull(b.band_min), band_max: numOrNull(b.band_max) }
-    : (({ band_min, band_max, ...rest }) => rest)(b)));
+    : (({ band_min, band_max, decision_note, ...rest }) => rest)(b)));
   const applications = (ar.data || []).map(a => {
     const base = { id: a.id, candidate: a.candidate, candidate_id: a.candidate_id, status: a.status, source: a.source,
-      source_detail: a.source_detail, notice_period_days: a.notice_period_days, outcome_reason: a.outcome_reason,
+      source_detail: a.source_detail, notice_period_days: a.notice_period_days, outcome_reason: redactReason(a.outcome_reason, sal),
       moved_to_application_id: a.moved_to_application_id, created_at: a.created_at, closed_at: a.closed_at };
     return sal ? { ...base, current_ctc: numOrNull(a.current_ctc), expected_ctc: numOrNull(a.expected_ctc) } : base;
   });
   // Approver: the pending request's snapshot, else who a request made now would go to.
   const pend = (br.data || []).find(b => b.status === 'pending');
-  const approverId = pend ? pend.approver_employee_id : resolveApprover(edges, founders, x.o.reporting_manager_employee_id, me?.id || null);
+  const approverId = pend ? pend.approver_employee_id
+    : resolveApprover(edges, founders, x.o.reporting_manager_employee_id, me?.id || null, x.o.hiring_owner_employee_id);
   let approver = pend?.approver || null;
   if (!approver && approverId) {
     const ap = await sb(`/rest/v1/employees?id=eq.${approverId}&select=id,employee_code,full_name,job_title&limit=1`, env);
@@ -3702,16 +3715,19 @@ async function getOpening(url, auth, env) {
   const showsSalary = sal && (budgets.length > 0 || applications.some(a => a.current_ctc != null || a.expected_ctc != null));
   if (showsSalary) await logCompAccess(auth, 'getOpening', null, x.o.opening_code, env, { opening_id: id });
   const { current_jd_id } = x.o;
+  // Same rule decideBand enforces: the snapshotted approver or a founder, never the requester.
+  const isFounder = !!auth.isSuperAdmin && !!me && founders.includes(me.id);
+  const canDecidePending = !!pend && pend.requested_by !== auth.userId && !checkBandDecider(me?.id || null, isFounder, pend);
   return ok({
     opening: x.o,
     my_roles: { ...x.roles, can_edit: canEditOpening(x.roles), can_manage_apps: canManageApps(x.roles),
-      can_see_salary: sal, can_change_chain: canChangeChain(x.roles),
-      is_founder: !!me && founders.includes(me.id) },
+      can_see_salary: sal, can_change_chain: canChangeChain(x.roles), is_founder: isFounder },
+    can_decide_pending: canDecidePending,
     jd: jds.find(j => j.id === current_jd_id) || null,
     jd_versions: jds,
     budgets,
     applications,
-    events: evr.data || [],
+    events: (evr.data || []).map(e => redactEvent(e, sal)),
     approver,
   });
 }
@@ -3755,7 +3771,14 @@ async function candidateScope(auth, me, env, candidateId) {
   const byId = Object.fromEntries(ops.map(x => [x.o.id, x]));
   const visible = ops.filter(x => canSeeOpening(x.roles));
   const allAccess = isHr(auth) || hasPerm(auth, 'podium_hiring');
-  return { apps, byId, visible, rolesList: visible.map(x => x.roles), allAccess, canSee: allAccess || visible.length > 0 };
+  // docCtx feeds canSeeDocRow / candidateEventsFor: a salary doc tied to an application is judged on
+  // THAT application's opening only.
+  const docCtx = {
+    rolesByOpening: Object.fromEntries(visible.map(x => [x.o.id, x.roles])),
+    appOpening: Object.fromEntries(apps.map(a => [a.id, a.opening_id])),
+    hr: isHr(auth),
+  };
+  return { apps, byId, visible, rolesList: visible.map(x => x.roles), docCtx, allAccess, canSee: allAccess || visible.length > 0 };
 }
 
 async function getCandidates(url, auth, env) {
@@ -3820,6 +3843,7 @@ async function getCandidate(url, auth, env) {
     const x = sc.byId[a.opening_id];
     const sal = canSeeSalary(x.roles);
     const { current_ctc, expected_ctc, ...rest } = a;
+    rest.outcome_reason = redactReason(a.outcome_reason, sal);
     const out = { ...rest, opening: { id: x.o.id, opening_code: x.o.opening_code, designation: x.o.designation, status: x.o.status, has_jd: !!x.o.current_jd_id },
       can_manage: canManageApps(x.roles), can_see_salary: sal,
       allowed_transitions: APP_TRANSITIONS[a.status] || [] };
@@ -3830,11 +3854,11 @@ async function getCandidate(url, auth, env) {
     return out;
   });
   const hr = isHr(auth);
-  const documents = (dr.data || []).filter(d => canSeeCandidateDoc(d.doc_type, sc.rolesList, hr));
+  const documents = (dr.data || []).filter(d => canSeeDocRow(d.doc_type, d.application_id, sc.docCtx));
   if (documents.some(d => docTier(d.doc_type) === 'salary')) salaryShown = true;
-  // Timeline: candidate-level rows + rows on openings the caller can see (no cross-opening leak).
-  const visIds = new Set(sc.visible.map(x => x.o.id));
-  const events = (evr.data || []).filter(e => !e.opening_id || visIds.has(e.opening_id));
+  // Timeline: rows on openings the caller can see, document rows only for doc types they can see,
+  // free-text notes/reasons only where they can see salary (candidateEventsFor, unit-tested).
+  const events = candidateEventsFor(evr.data || [], sc.docCtx);
   if (salaryShown) await logCompAccess(auth, 'getCandidate', null, cand.candidate_code, env, { candidate_id: id });
   const { email_norm, phone_norm, ...person } = cand;
   return ok({
@@ -3852,7 +3876,7 @@ async function getCandidateDocumentUrl(url, auth, env) {
   if (!doc) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
   const sc = await candidateScope(auth, callerEmployee(edges, auth.userId), env, doc.candidate_id);
-  if (!canSeeCandidateDoc(doc.doc_type, sc.rolesList, isHr(auth))) return err('forbidden', 403);
+  if (!canSeeDocRow(doc.doc_type, doc.application_id, sc.docCtx)) return err('forbidden', 403);
   if (docTier(doc.doc_type) === 'salary') {
     const cr = await sb(`/rest/v1/candidates?id=eq.${doc.candidate_id}&select=candidate_code&limit=1`, env);
     await logCompAccess(auth, 'getCandidateDocumentUrl', null, cr.data?.[0]?.candidate_code || null, env, { document_id: id, doc_type: doc.doc_type });
@@ -3893,13 +3917,14 @@ async function findCandidateDuplicates(url, auth, env) {
 
 // ── Writes: openings ──────────────────────────────────────────────────────────
 
-async function mintHiringCode(env, name) {
-  const r = await sb(`/rest/v1/rpc/next_hiring_seq`, env, { method: 'POST', body: JSON.stringify({ p_name: name }) });
-  if (!r.ok) return null;
-  const v = Number(Array.isArray(r.data) ? r.data[0] : r.data);
-  if (!Number.isFinite(v)) return null;
-  return name === 'podium_opening' ? openingCode(v) : candidateCode(v);
+// Multi-row writes run as ONE transaction in Postgres (migrations/0007_hiring_atomic_rpcs.sql). The
+// functions trust their caller: every authorization check stays in the handler, before the call.
+// Codes (OPN-NNN / CAN-NNNN) are minted inside them via podium.next_hiring_seq.
+async function hiringRpc(env, name, p) {
+  return sb(`/rest/v1/rpc/${name}`, env, { method: 'POST', body: JSON.stringify({ p }) });
 }
+// A function's own `raise exception '<code>'` comes back as PostgREST { message: '<code>' }.
+function rpcError(r) { return r && !r.ok ? (r.data?.message || null) : null; }
 
 const OPENING_FIELDS = ['job_role_id', 'designation', 'department_id', 'location_city', 'location_state',
   'employment_type', 'headcount', 'target_join_date', 'notes'];
@@ -3933,11 +3958,20 @@ async function createOpening(body, auth, env) {
   const rmId = d.reporting_manager_employee_id;
   if (!isUuid(rmId)) return err('reporting_manager_employee_id required', 400);
   if (!isUuid(ownerId)) return err('hiring_owner_employee_id required', 400);
+  // A manager hires into their own team only: the RM is them or someone in their reporting subtree.
+  if (!hiring && rmId !== me?.id && !descendantsOf(edges, me?.id).has(rmId)) {
+    return errCode('reporting_manager_not_in_team', 'The reporting manager must be you or someone in your team', 403);
+  }
   const live = await activeEmployeeIds([rmId, ownerId], env);
   if (!live.has(rmId) || !live.has(ownerId)) return err('reporting manager / hiring owner must be current employees', 400);
   const cp = cleanOpeningPatch(d);
   if (cp.error) return err(cp.error, 400);
   if (!cp.patch.designation) return err('designation required', 400);
+  // A role's band is allow-list data (projectJobRole hides it); copying it blind would let a manager
+  // mint an opening on a number they cannot see.
+  if (d.band_from_role && !canComp(auth)) {
+    return errCode('band_from_role_requires_comp', "Only the salary allow-list can use the role's band — enter a band instead", 403);
+  }
 
   let role = null;
   if (d.band_from_role || d.use_role_jd) {
@@ -3951,52 +3985,32 @@ async function createOpening(body, auth, env) {
   if (d.use_role_jd && !jdText) return err('the job role has no JD text', 400);
 
   const founders = await loadFounders(env);
-  const approver = resolveApprover(edges, founders, rmId, me?.id || null);
+  const approver = resolveApprover(edges, founders, rmId, me?.id || null, ownerId);
   if (!approver) return err('no_approver — could not resolve a budget approver', 500);
-  const code = await mintHiringCode(env, 'podium_opening');
-  if (!code) return err('code_mint_failed', 500);
 
-  const ins = await sb(`/rest/v1/openings`, env, { method: 'POST', body: JSON.stringify([{
-    ...cp.patch, opening_code: code, reporting_manager_employee_id: rmId, hiring_owner_employee_id: ownerId,
-    status: jdText ? 'open' : 'draft', created_by: auth.userId,
-  }]) });
-  if (!ins.ok) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
-  const opening = ins.data?.[0];
-  const [bi, ji] = await Promise.all([
-    sb(`/rest/v1/opening_budgets`, env, { method: 'POST', body: JSON.stringify([{
-      opening_id: opening.id, version: 1, ...band, status: 'pending',
-      requested_by: auth.userId, requested_by_employee_id: me?.id || null, approver_employee_id: approver,
-    }]) }),
-    jdText ? sb(`/rest/v1/opening_jds`, env, { method: 'POST', body: JSON.stringify([{
-      opening_id: opening.id, version: 1, source: d.use_role_jd ? 'job_role' : 'text', jd_text: jdText, created_by: auth.userId,
-    }]) }) : Promise.resolve(null),
-  ]);
-  if (!bi.ok) return err(`budget_failed: ${JSON.stringify(bi.data)}`, 400);
-  let out = opening;
-  if (ji) {
-    if (!ji.ok) return err(`jd_failed: ${JSON.stringify(ji.data)}`, 400);
-    const up = await sb(`/rest/v1/openings?id=eq.${opening.id}`, env, { method: 'PATCH', body: JSON.stringify({ current_jd_id: ji.data[0].id }) });
-    out = up.data?.[0] || opening;
-  }
-  await hiringEvents(env, auth, me, [{ opening_id: opening.id, event_type: 'opening_created', to_status: out.status,
-    detail: { jd: !!jdText, band_from_role: !!d.band_from_role, approver_employee_id: approver } }]);
-  return ok(out);
+  // Opening + budget v1 + JD v1 + event in one transaction (0007). Status is open only when the JD
+  // row lands in that same call.
+  const r = await hiringRpc(env, 'hiring_create_opening', {
+    opening: { ...cp.patch, reporting_manager_employee_id: rmId, hiring_owner_employee_id: ownerId },
+    band,
+    jd: jdText ? { source: d.use_role_jd ? 'job_role' : 'text', jd_text: jdText } : null,
+    approver_employee_id: approver,
+    actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+    event_detail: { jd: !!jdText, band_from_role: !!d.band_from_role, approver_employee_id: approver },
+  });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.opening);
 }
 
-// Cancel a pending band and re-request it (same numbers) to whoever resolves now.
-async function rerequestPendingBand(opening, newRmId, edges, env) {
-  const pr = await sb(`/rest/v1/opening_budgets?opening_id=eq.${opening.id}&status=eq.pending&select=*&limit=1`, env);
-  const pend = pr.data?.[0];
-  if (!pend) return null;
-  const vr = await sb(`/rest/v1/opening_budgets?opening_id=eq.${opening.id}&select=version&order=version.desc&limit=1`, env);
-  const founders = await loadFounders(env);
-  const approver = resolveApprover(edges, founders, newRmId, pend.requested_by_employee_id || null);
-  if (!approver) return 'no_approver';
-  const c = await sb(`/rest/v1/opening_budgets?id=eq.${pend.id}`, env, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled', decided_at: nowIso(), decision_note: 'chain changed — re-requested' }) });
+// Cancel a pending band and re-request it (same numbers) to `approver`, as `me` — whoever changed
+// the chain is the requester now (so they can never be its approver).
+async function rerequestPendingBand(openingId, pend, approver, me, auth, env) {
+  const vr = await sb(`/rest/v1/opening_budgets?opening_id=eq.${openingId}&select=version&order=version.desc&limit=1`, env);
+  const c = await sb(`/rest/v1/opening_budgets?id=eq.${pend.id}&status=eq.pending`, env, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled', decided_at: nowIso(), decision_note: 'chain changed — re-requested' }) });
   if (!c.ok) return 'cancel_failed';
   const n = await sb(`/rest/v1/opening_budgets`, env, { method: 'POST', body: JSON.stringify([{
-    opening_id: opening.id, version: Number(vr.data?.[0]?.version || 0) + 1, band_min: pend.band_min, band_max: pend.band_max,
-    status: 'pending', requested_by: pend.requested_by, requested_by_employee_id: pend.requested_by_employee_id, approver_employee_id: approver,
+    opening_id: openingId, version: Number(vr.data?.[0]?.version || 0) + 1, band_min: pend.band_min, band_max: pend.band_max,
+    status: 'pending', requested_by: auth.userId, requested_by_employee_id: me?.id || null, approver_employee_id: approver,
   }]) });
   if (!n.ok) return 'rerequest_failed';
   return null;
@@ -4016,10 +4030,25 @@ async function updateOpening(body, auth, env) {
   for (const k of ['reporting_manager_employee_id', 'hiring_owner_employee_id']) {
     if (k in d && d[k] !== x.o[k]) chain[k] = d[k];
   }
+  const pend = x.budgets.find(b => b.status === 'pending') || null;
+  let reApprover = null;
   if (Object.keys(chain).length) {
     if (!canChangeChain(x.roles)) return err('forbidden — chain changes need podium_hiring', 403);
     const live = await activeEmployeeIds(Object.values(chain), env);
     if (!Object.values(chain).every(v => live.has(v))) return err('chain members must be current employees', 400);
+    const founders = await loadFounders(env);
+    const isFounder = !!auth.isSuperAdmin && !!me && founders.includes(me.id);
+    // podium_hiring may not seat themselves on an opening's chain (it would hand them its salary view).
+    if (!isFounder && me && Object.values(chain).includes(me.id)) {
+      return errCode('no_self_chain', 'You cannot make yourself the hiring owner or reporting manager — ask a founder', 403);
+    }
+    if (pend) {
+      const rm = chain.reporting_manager_employee_id || x.o.reporting_manager_employee_id;
+      const owner = chain.hiring_owner_employee_id || x.o.hiring_owner_employee_id;
+      reApprover = resolveApprover(edges, founders, rm, me?.id || null, owner);
+      if (!reApprover) return err('no_approver — could not resolve a budget approver', 500);
+      if (reApprover === me?.id) return errCode('no_self_approval', 'This change would make you the approver of the pending band', 403);
+    }
     Object.assign(patch, chain);
   }
   if (!Object.keys(patch).length) return err('no_patch', 400);
@@ -4029,10 +4058,11 @@ async function updateOpening(body, auth, env) {
   if (Object.keys(chain).length) {
     const from = Object.fromEntries(Object.keys(chain).map(k => [k, x.o[k]]));
     events.push({ opening_id: x.o.id, event_type: 'chain_changed', detail: { from, to: chain } });
-    if ('reporting_manager_employee_id' in chain) {
-      const e = await rerequestPendingBand(x.o, chain.reporting_manager_employee_id, edges, env);
+    // Either seat changing can change who may approve (owner + RM are both skipped) → re-request.
+    if (pend) {
+      const e = await rerequestPendingBand(x.o.id, pend, reApprover, me, auth, env);
       if (e) { await hiringEvents(env, auth, me, events); return err(`chain changed but band re-request failed: ${e}`, 500); }
-      events.push({ opening_id: x.o.id, event_type: 'band_rerequested', detail: { reason: 'chain_changed' } });
+      events.push({ opening_id: x.o.id, event_type: 'band_rerequested', detail: { reason: 'chain_changed', approver_employee_id: reApprover } });
     }
   }
   await hiringEvents(env, auth, me, events);
@@ -4058,7 +4088,9 @@ async function setOpeningStatus(body, auth, env) {
   }
   const r = await sb(`/rest/v1/openings?id=eq.${x.o.id}`, env, { method: 'PATCH', body: JSON.stringify({ status: to }) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  await hiringEvents(env, auth, me, [{ opening_id: x.o.id, event_type: 'opening_status', from_status: from, to_status: to, reason: d.reason || null }]);
+  // Free text → detail.note (salary-chain only on read), never event.reason.
+  const note = String(d.reason || '').trim();
+  await hiringEvents(env, auth, me, [{ opening_id: x.o.id, event_type: 'opening_status', from_status: from, to_status: to, detail: note ? { note } : null }]);
   return ok(r.data?.[0]);
 }
 
@@ -4071,11 +4103,12 @@ async function addOpeningJd(body, auth, env) {
   if (!canEditOpening(x.roles)) return err('forbidden', 403);
   let row;
   if (d.storage_path) {
-    if (!String(d.storage_path).startsWith(`openings/${x.o.id}/jd/`)) return err('bad storage_path', 400);
-    const fe = fileOk(d.file_name || d.storage_path, JD_EXTS, d.file_size);
+    // Exactly the shape createJdUploadUrl mints for THIS opening — no traversal, no other opening's file.
+    if (checkJdPath(d.storage_path, x.o.id)) return err('bad storage_path', 400);
+    const fe = fileOk(d.file_name || d.storage_path, JD_EXTS, d.file_size) || checkFileSize(d.file_size);
     if (fe) return err(fe, 400);
     row = { source: 'file', storage_path: d.storage_path, file_name: d.file_name || null, mime_type: d.mime_type || null,
-      file_size: d.file_size != null ? Math.round(Number(d.file_size)) : null, jd_text: String(d.jd_text || '').trim() || null };
+      file_size: Number(d.file_size), jd_text: String(d.jd_text || '').trim() || null };
   } else if (d.use_role_jd) {
     if (!x.o.job_role_id) return err('the opening has no job role', 400);
     const role = (await sb(`/rest/v1/job_roles?id=eq.${x.o.job_role_id}&select=job_description&limit=1`, env)).data?.[0];
@@ -4111,7 +4144,7 @@ async function createJdUploadUrl(body, auth, env) {
   if (!d.file_name) return err('file_name required', 400);
   const fe = fileOk(d.file_name, JD_EXTS, d.file_size);
   if (fe) return err(fe === 'bad_file_type' ? 'JD must be a PDF or DOCX' : fe, 400);
-  return signUpload(`openings/${x.o.id}/jd/${Date.now()}_${safeSeg(d.file_name)}`, env);
+  return signUpload(jdPath(x.o.id, d.file_name), env);
 }
 
 async function requestBandChange(body, auth, env) {
@@ -4127,7 +4160,7 @@ async function requestBandChange(body, auth, env) {
     loadFounders(env),
     sb(`/rest/v1/opening_budgets?opening_id=eq.${x.o.id}&select=version&order=version.desc&limit=1`, env),
   ]);
-  const approver = resolveApprover(edges, founders, x.o.reporting_manager_employee_id, me?.id || null);
+  const approver = resolveApprover(edges, founders, x.o.reporting_manager_employee_id, me?.id || null, x.o.hiring_owner_employee_id);
   if (!approver) return err('no_approver — could not resolve a budget approver', 500);
   const pend = x.budgets.find(b => b.status === 'pending');
   if (pend) {
@@ -4140,9 +4173,11 @@ async function requestBandChange(body, auth, env) {
     decision_note: null,
   }]) });
   if (!ins.ok) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
-  // The request note is free text that may quote numbers — kept on the budget row only, never the timeline.
+  // The request note is free text that may quote numbers → detail.note, which every read strips for
+  // viewers without salary on this opening (redactEvent).
+  const note = String(d.note || '').trim();
   await hiringEvents(env, auth, me, [{ opening_id: x.o.id, event_type: 'band_requested',
-    detail: { version: ins.data[0].version, approver_employee_id: approver, replaced_pending: !!pend } }]);
+    detail: { version: ins.data[0].version, approver_employee_id: approver, replaced_pending: !!pend, ...(note ? { note } : {}) } }]);
   return ok(ins.data[0]);
 }
 
@@ -4161,21 +4196,18 @@ async function decideBand(body, auth, env) {
   const bad = b.requested_by === auth.userId ? 'no_self_approval' : checkBandDecider(me?.id || null, isFounder, b);
   if (bad === 'no_self_approval') return errCode('no_self_approval', 'You cannot approve your own band request', 403);
   if (bad) return err('forbidden — only the approver can decide this band', 403);
-  const decided = { decided_by: auth.userId, decided_by_employee_id: me.id, decided_at: nowIso(), decision_note: d.note || null };
-  const r = await sb(`/rest/v1/opening_budgets?id=eq.${b.id}&status=eq.pending`, env, { method: 'PATCH',
-    body: JSON.stringify({ ...decided, status: d.decision === 'approve' ? 'approved' : 'rejected' }) });
+  // Decide + supersede the previous approved version + repoint the opening + event, one transaction (0007).
+  const r = await hiringRpc(env, 'hiring_decide_band', {
+    budget_id: b.id, decision: d.decision, note: String(d.note || '').trim() || null,
+    actor_user_id: auth.userId, actor_employee_id: me.id,
+    event_detail: { version: b.version, as_founder: isFounder && b.approver_employee_id !== me.id },
+  });
+  if (rpcError(r) === 'not_pending') return errCode('not_pending', 'This band request is no longer pending', 409);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  if (!r.data?.length) return errCode('not_pending', 'This band request is no longer pending', 409);
-  if (d.decision === 'approve') {
-    // The previous approved version is superseded only once this one has landed.
-    const sup = await sb(`/rest/v1/opening_budgets?opening_id=eq.${b.opening_id}&status=eq.approved&id=neq.${b.id}`, env, { method: 'PATCH', body: JSON.stringify({ status: 'superseded' }) });
-    if (!sup.ok) return err(`db_error: ${JSON.stringify(sup.data)}`, 400);
-    const o = await sb(`/rest/v1/openings?id=eq.${b.opening_id}`, env, { method: 'PATCH', body: JSON.stringify({ current_budget_id: b.id }) });
-    if (!o.ok) return err(`db_error: ${JSON.stringify(o.data)}`, 400);
-  }
-  await hiringEvents(env, auth, me, [{ opening_id: b.opening_id, event_type: d.decision === 'approve' ? 'band_approved' : 'band_rejected',
-    detail: { version: b.version, as_founder: isFounder && b.approver_employee_id !== me.id } }]);
-  return ok(r.data?.[0]);
+  // Deciding a band does not grant salary visibility (a founder override may not be on the chain):
+  // return decision metadata only; the client reloads the opening, which applies canSeeSalary.
+  const nb = r.data?.budget || {};
+  return ok({ id: nb.id, opening_id: nb.opening_id, version: nb.version, status: nb.status, decided_at: nb.decided_at });
 }
 
 // ── Writes: candidates + applications ─────────────────────────────────────────
@@ -4243,21 +4275,14 @@ async function createCandidate(body, auth, env) {
   if (!cc.patch.full_name) return err('full_name required', 400);
   const ca = cleanApplication(d, canSeeSalary(x.roles));
   if (ca.error) return err(ca.error, 400);
-  const code = await mintHiringCode(env, 'podium_candidate');
-  if (!code) return err('code_mint_failed', 500);
-  const ci = await sb(`/rest/v1/candidates`, env, { method: 'POST', body: JSON.stringify([{ ...cc.patch, candidate_code: code, created_by: auth.userId }]) });
-  if (!ci.ok) return err(`db_error: ${JSON.stringify(ci.data)}`, 400);
-  const cand = ci.data[0];
-  const ai = await sb(`/rest/v1/applications`, env, { method: 'POST', body: JSON.stringify([{
-    ...ca.patch, candidate_id: cand.id, opening_id: x.o.id, status: 'new', created_by: auth.userId,
-  }]) });
-  if (!ai.ok) return err(`application_failed: ${JSON.stringify(ai.data)}`, 400);
-  const app = ai.data[0];
-  await hiringEvents(env, auth, me, [
-    { candidate_id: cand.id, event_type: 'candidate_created' },
-    { candidate_id: cand.id, opening_id: x.o.id, application_id: app.id, event_type: 'application_created', to_status: 'new', detail: { source: app.source } },
-  ]);
-  const { email_norm, phone_norm, ...person } = cand;
+  // Person + application `new` + both events in one transaction (0007); CAN-NNNN minted inside.
+  const r = await hiringRpc(env, 'hiring_create_candidate', {
+    opening_id: x.o.id, candidate: cc.patch, application: ca.patch,
+    actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+  });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  const { email_norm, phone_norm, ...person } = r.data?.candidate || {};
+  const app = r.data?.application || {};
   return ok({ candidate: person, application: { id: app.id, status: app.status, opening_id: app.opening_id } });
 }
 
@@ -4347,10 +4372,13 @@ async function setApplicationStatus(body, auth, env) {
   const x = await loadOneOpening(auth, me, env, app.opening_id);
   if (!x || !canManageApps(x.roles)) return err('forbidden', 403);
   if (jdGate(x.o)) return errCode('jd_required', JD_REQUIRED_MSG, 409);
+  // reason = a category code (OUTCOME_REASON_CODES); free text = d.note → event detail.note only.
   const bad = checkTransition(app.status, d.status, d.reason);
   if (bad === 'reason_required') return errCode('reason_required', 'A reason is required to reject or withdraw', 400);
+  if (bad === 'bad_reason') return errCode('bad_reason', `reason must be one of: ${OUTCOME_REASON_CODES.join(', ')}`, 400);
   if (bad) return errCode('invalid_transition', `Cannot move ${app.status} → ${d.status} here`, 409);
   const reason = String(d.reason || '').trim() || null;
+  const note = String(d.note || '').trim() || null;
   const patch = { status: d.status, ...(reason ? { outcome_reason: reason } : {}),
     ...(isTerminalStatus(d.status) ? { closed_at: nowIso() } : {}) };
   // Guarded on the status we read so two racing moves can't both land.
@@ -4359,14 +4387,16 @@ async function setApplicationStatus(body, auth, env) {
   if (!r.data?.length) return errCode('stale', 'The application changed — reload and retry', 409);
   if (isTerminalStatus(d.status)) await maybeStartRetention(app.candidate_id, env);
   await hiringEvents(env, auth, me, [{ candidate_id: app.candidate_id, opening_id: app.opening_id, application_id: app.id,
-    event_type: 'status_changed', from_status: app.status, to_status: d.status, reason }]);
+    event_type: 'status_changed', from_status: app.status, to_status: d.status, reason, detail: note ? { note } : null }]);
   return ok({ id: app.id, status: d.status });
 }
 
 async function moveApplication(body, auth, env) {
   const d = body.data || body;
-  const reason = String(d.reason || '').trim();
-  if (!reason) return errCode('reason_required', 'A reason is required to move an application', 400);
+  // The free-text "why" is a note (salary-chain only on read); the closed row's outcome_reason is the
+  // system string "moved to OPN-x".
+  const note = String(d.reason || '').trim();
+  if (!note) return errCode('reason_required', 'A reason is required to move an application', 400);
   const app = await loadApplication(env, d.id);
   if (!app) return err('not_found', 404);
   if (d.to_opening_id === app.opening_id) return err('already on that opening', 400);
@@ -4376,27 +4406,18 @@ async function moveApplication(body, auth, env) {
   if (!src || !canManageApps(src.roles)) return err('forbidden', 403);
   const { x: dst, res } = await intakeOpening(auth, me, env, d.to_opening_id);
   if (res) return res;
-  if (checkTransition(app.status, 'withdrawn', reason)) return errCode('invalid_transition', `Cannot move an application that is ${app.status}`, 409);
-  // New first: if it collides (already active there), nothing has been closed yet. Salary fields NOT copied.
-  const ni = await sb(`/rest/v1/applications`, env, { method: 'POST', body: JSON.stringify([{
-    candidate_id: app.candidate_id, opening_id: dst.o.id, status: 'new', created_by: auth.userId,
-    source: app.source, referrer_employee_id: app.referrer_employee_id, source_detail: app.source_detail,
-    notice_period_days: app.notice_period_days,
-  }]) });
-  if (ni.status === 409) return errCode('already_active', 'This person already has an active application on that opening', 409);
-  if (!ni.ok) return err(`db_error: ${JSON.stringify(ni.data)}`, 400);
-  const nu = ni.data[0];
-  const r = await sb(`/rest/v1/applications?id=eq.${app.id}&status=eq.${app.status}`, env, { method: 'PATCH', body: JSON.stringify({
-    status: 'withdrawn', outcome_reason: `moved to ${dst.o.opening_code}`, moved_to_application_id: nu.id, closed_at: nowIso(),
-  }) });
-  if (!r.ok || !r.data?.length) return err(`move_close_failed: ${JSON.stringify(r.data)}`, 500);
-  await hiringEvents(env, auth, me, [
-    { candidate_id: app.candidate_id, opening_id: app.opening_id, application_id: app.id, event_type: 'application_moved',
-      from_status: app.status, to_status: 'withdrawn', reason: `moved to ${dst.o.opening_code}`, detail: { to_application_id: nu.id } },
-    { candidate_id: app.candidate_id, opening_id: dst.o.id, application_id: nu.id, event_type: 'application_created',
-      to_status: 'new', reason, detail: { moved_from_opening: src.o.opening_code } },
-  ]);
-  return ok({ from: { id: app.id, status: 'withdrawn' }, to: { id: nu.id, status: 'new', opening_id: dst.o.id } });
+  if (!(APP_TRANSITIONS[app.status] || []).includes('withdrawn')) return errCode('invalid_transition', `Cannot move an application that is ${app.status}`, 409);
+  // New application + close the old one (guarded on the status read here) + both events, one
+  // transaction (0007). Salary fields are NOT copied.
+  const r = await hiringRpc(env, 'hiring_move_application', {
+    application_id: app.id, expected_status: app.status, to_opening_id: dst.o.id,
+    outcome_reason: `moved to ${dst.o.opening_code}`, from_opening_code: src.o.opening_code, note,
+    actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+  });
+  if (r.status === 409 || r.data?.code === '23505') return errCode('already_active', 'This person already has an active application on that opening', 409);
+  if (rpcError(r) === 'stale') return errCode('stale', 'The application changed — reload and retry', 409);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok({ from: { id: app.id, status: 'withdrawn' }, to: { id: r.data?.to_application_id, status: 'new', opening_id: dst.o.id } });
 }
 
 // ── Writes: candidate documents ───────────────────────────────────────────────
@@ -4406,33 +4427,39 @@ async function createCandidateDocUploadUrl(body, auth, env) {
   if (!isUuid(d.candidate_id)) return err('candidate_id required', 400);
   if (!CANDIDATE_DOC_TYPES.includes(d.doc_type)) return err('bad doc_type', 400);
   if (!d.file_name) return err('file_name required', 400);
+  if (d.application_id && !isUuid(d.application_id)) return err('bad application_id', 400);
   const fe = fileOk(d.file_name, CANDIDATE_DOC_EXTS, d.file_size);
   if (fe) return err(fe, 400);
   const edges = await loadOrgEdges(env);
   const sc = await candidateScope(auth, callerEmployee(edges, auth.userId), env, d.candidate_id);
-  if (!canSeeCandidateDoc(d.doc_type, sc.rolesList, isHr(auth))) return err('forbidden', 403);
-  return signUpload(`candidates/${d.candidate_id}/${safeSeg(d.doc_type)}/${Date.now()}_${safeSeg(d.file_name)}`, env);
+  if (d.application_id && !sc.apps.some(a => a.id === d.application_id)) return err('application_id is not this candidate\'s', 400);
+  if (!canSeeDocRow(d.doc_type, d.application_id || null, sc.docCtx)) return err('forbidden', 403);
+  return signUpload(candidateDocPath(d.candidate_id, d.doc_type, d.file_name), env);
 }
 
 async function recordCandidateDocument(body, auth, env) {
   const d = body.data || body;
   if (!isUuid(d.candidate_id)) return err('candidate_id required', 400);
   if (!CANDIDATE_DOC_TYPES.includes(d.doc_type)) return err('bad doc_type', 400);
-  if (!d.storage_path || !String(d.storage_path).startsWith(`candidates/${d.candidate_id}/`)) return err('bad storage_path', 400);
-  const fe = fileOk(d.file_name || d.storage_path, CANDIDATE_DOC_EXTS, d.file_size);
-  if (fe) return err(fe, 400);
+  // Exactly candidates/<this candidate>/<this doc_type>/<ts>_<safe name> — the shape the mint returns.
+  // A looser prefix check let a row point at another candidate's object via '..'.
+  if (checkCandidateDocPath(d.storage_path, d.candidate_id, d.doc_type)) return err('bad storage_path', 400);
+  const fe = fileOk(d.file_name || d.storage_path, CANDIDATE_DOC_EXTS) || checkFileSize(d.file_size);
+  if (fe) return err(fe === 'bad_file_size' ? 'file_size must be a positive integer up to 15 MB' : fe, 400);
+  if (d.application_id && !isUuid(d.application_id)) return err('bad application_id', 400);
   const edges = await loadOrgEdges(env);
   const me = callerEmployee(edges, auth.userId);
   const sc = await candidateScope(auth, me, env, d.candidate_id);
-  if (!canSeeCandidateDoc(d.doc_type, sc.rolesList, isHr(auth))) return err('forbidden', 403);
   if (d.application_id && !sc.apps.some(a => a.id === d.application_id)) return err('application_id is not this candidate\'s', 400);
+  if (!canSeeDocRow(d.doc_type, d.application_id || null, sc.docCtx)) return err('forbidden', 403);
   const row = {
     candidate_id: d.candidate_id, application_id: d.application_id || null, doc_type: d.doc_type,
     title: d.title || null, storage_path: d.storage_path, file_name: d.file_name || null, mime_type: d.mime_type || null,
-    file_size: d.file_size != null ? Math.round(Number(d.file_size)) : null, notes: d.notes || null, uploaded_by: auth.userId,
+    file_size: Number(d.file_size), notes: d.notes || null, uploaded_by: auth.userId,
   };
   const r = await sb(`/rest/v1/candidate_documents`, env, { method: 'POST', body: JSON.stringify([row]) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  // No opening_id: the row is candidate-level and every read filters it by doc type (candidateEventsFor).
   await hiringEvents(env, auth, me, [{ candidate_id: d.candidate_id, application_id: row.application_id, event_type: 'document_added', detail: { doc_type: d.doc_type } }]);
   return ok(r.data?.[0]);
 }

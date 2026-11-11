@@ -25,10 +25,13 @@ export const APP_TRANSITIONS = {
 };
 export const REASON_REQUIRED = ['rejected', 'withdrawn'];
 
-// null when allowed, else an error code.
+// null when allowed, else an error code. `reason` is a category code (OUTCOME_REASON_CODES, below) —
+// required for rejected / withdrawn, optional otherwise; free text travels separately as a note.
 export function checkTransition(from, to, reason) {
   if (!(APP_TRANSITIONS[from] || []).includes(to)) return 'invalid_transition';
-  if (REASON_REQUIRED.includes(to) && !String(reason || '').trim()) return 'reason_required';
+  const r = String(reason ?? '').trim();
+  if (REASON_REQUIRED.includes(to) && !r) return 'reason_required';
+  if (r && !OUTCOME_REASON_CODES.includes(r)) return 'bad_reason';
   return null;
 }
 
@@ -36,19 +39,19 @@ export const APP_SOURCES = ['referral', 'linkedin', 'naukri', 'campus', 'walk_in
 export const OPENING_STATUSES = ['draft', 'open', 'on_hold', 'filled', 'cancelled'];
 
 // ── Approver resolution ──────────────────────────────────────────────────────
-// a = the reporting manager's own manager. RM has none (a founder) → a founder other than the RM.
-// a would be the requester → a founder other than the requester (preferring one who is not the RM
-// either). `founders` = active, manager_id IS NULL, users_profile.role = 'super_admin', in a stable
-// order (employee_code). Returns an employee id or null.
-export function resolveApprover(edges, founders, reportingManagerId, requesterEmpId) {
+// Nobody approves a band on an opening they sit on (decisions.md §S445-Hiring): the requester, the
+// hiring owner and the reporting manager are all skipped. a = the RM's own manager; if there is none
+// or a is one of those three → the first founder who is none of them. Degenerate founder-only chains
+// (e.g. one founder requests with the other as RM) fall to a founder ≠ the requester, because the
+// requester is the one hard rule (the DB check refuses self-approval). `founders` = active,
+// manager_id IS NULL, users_profile.role = 'super_admin', ordered by employee_code. → id or null.
+export function resolveApprover(edges, founders, reportingManagerId, requesterEmpId, ownerEmpId = null) {
   const fs = (founders || []).filter(Boolean);
+  const skip = new Set([reportingManagerId, requesterEmpId, ownerEmpId].filter(Boolean));
   const rm = (edges || []).find(e => e.id === reportingManagerId);
-  let a = rm?.manager_id || null;
-  if (!a) a = fs.find(f => f !== reportingManagerId) || null;
-  if (a && requesterEmpId && a === requesterEmpId) {
-    a = fs.find(f => f !== requesterEmpId && f !== reportingManagerId) || fs.find(f => f !== requesterEmpId) || null;
-  }
-  return a;
+  const a = rm?.manager_id || null;
+  if (a && !skip.has(a)) return a;
+  return fs.find(f => !skip.has(f)) || fs.find(f => f !== requesterEmpId) || null;
 }
 
 // Who may decide a pending band: the snapshotted approver, or a founder — never its requester.
@@ -105,6 +108,66 @@ export function canSeeCandidateDoc(docType, rolesList, hr) {
   return !!hr || rs.some(canSeeOpening);
 }
 
+// One document row. ctx = { rolesByOpening: {openingId: roles} for the openings the caller can SEE,
+// appOpening: {applicationId: openingId}, hr }. A salary-tier doc tied to an application is visible
+// only to the salary chain of THAT application's opening; untied, to the salary chain of any.
+export function canSeeDocRow(docType, applicationId, ctx) {
+  const byOp = ctx?.rolesByOpening || {};
+  if (docTier(docType) === 'salary' && applicationId) {
+    return canSeeSalary(byOp[(ctx?.appOpening || {})[applicationId]]);
+  }
+  return canSeeCandidateDoc(docType, Object.values(byOp), !!ctx?.hr);
+}
+
+// ── Reasons + notes ──────────────────────────────────────────────────────────
+// Reject / withdraw reasons are a category code (applications.outcome_reason, event.reason); any free
+// text goes to application_events.detail.note. Free text can quote a salary, so it is shown only to
+// viewers who can see salary on that opening; the code is shown to everyone who sees the row.
+export const OUTCOME_REASON_CODES = ['not_a_fit', 'skills', 'experience', 'compensation', 'location', 'notice_period',
+  'candidate_withdrew', 'no_response', 'duplicate', 'other'];
+// System-written reasons that carry no free text.
+const SYSTEM_REASON_RE = /^(moved to OPN-\d+|JD added)$/;
+export function isSafeReason(r) { return r == null || OUTCOME_REASON_CODES.includes(r) || SYSTEM_REASON_RE.test(String(r)); }
+export function redactReason(r, salaryOk) { return salaryOk || isSafeReason(r) ? (r ?? null) : null; }
+export function redactEvent(ev, salaryOk) {
+  if (salaryOk || !ev) return ev;
+  const out = { ...ev, reason: redactReason(ev.reason, false) };
+  if (ev.detail && typeof ev.detail === 'object' && 'note' in ev.detail) {
+    const { note, ...rest } = ev.detail;
+    out.detail = rest;
+  }
+  return out;
+}
+
+// A candidate's timeline for one viewer (ctx as canSeeDocRow). Opening-scoped rows → that opening must be
+// visible (redacted by its salary gate). Document rows → the viewer must be able to see that doc type
+// (and never learn a hidden doc's id). Application-only rows → via the application's opening. Bare
+// candidate rows (created/updated) → shown, notes stripped unless salary on any opening.
+export function candidateEventsFor(events, ctx) {
+  const byOp = ctx?.rolesByOpening || {};
+  const appOp = ctx?.appOpening || {};
+  const anySal = Object.values(byOp).some(canSeeSalary);
+  const out = [];
+  for (const ev of events || []) {
+    const opId = ev.opening_id || null;
+    const docType = ev.detail && typeof ev.detail === 'object' ? ev.detail.doc_type : null;
+    if (opId) {
+      if (!byOp[opId]) continue;
+      out.push(redactEvent(ev, canSeeSalary(byOp[opId])));
+    } else if (docType) {
+      if (!canSeeDocRow(docType, ev.application_id || null, ctx)) continue;
+      out.push(redactEvent(ev, anySal));
+    } else if (ev.application_id) {
+      const r = byOp[appOp[ev.application_id]];
+      if (!r) continue;
+      out.push(redactEvent(ev, canSeeSalary(r)));
+    } else {
+      out.push(redactEvent(ev, anySal));
+    }
+  }
+  return out;
+}
+
 // ── Gates + small helpers ────────────────────────────────────────────────────
 export const JD_REQUIRED_MSG = 'Add the JD to this opening first';
 export function jdGate(opening) { return opening?.current_jd_id ? null : 'jd_required'; }
@@ -122,6 +185,52 @@ export function fileOk(name, exts, size) {
   return null;
 }
 
+// Recorded file sizes: a positive integer ≤ 15 MB, required (the client sends file.size).
+export function checkFileSize(size) {
+  const n = typeof size === 'string' && /^\d+$/.test(size.trim()) ? Number(size) : size;
+  if (!Number.isInteger(n) || n < 1 || n > MAX_FILE_BYTES) return 'bad_file_size';
+  return null;
+}
+
+// ── Storage paths ────────────────────────────────────────────────────────────
+// The worker mints these; the record call must hand back EXACTLY that shape, or a caller could point
+// a row at another candidate's / opening's object (path traversal). Names are reduced to
+// [A-Za-z0-9._-] with no '..' run, so a minted path always passes its own check.
+const UUID_PAT = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const UUID_ONLY = new RegExp(`^${UUID_PAT}$`, 'i');
+const NAME_PAT = '\\d+_[A-Za-z0-9._-]+';
+export function safeFileName(name) {
+  const base = String(name || '').split(/[\\/]/).pop();
+  const s = base.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/\.{2,}/g, '.').replace(/^[._-]+/, '').slice(-120);
+  return s || 'file';
+}
+function badSegments(path) {
+  const p = String(path || '');
+  return /%2e/i.test(p) || p.split('/').some(seg => seg === '' || seg === '.' || seg === '..' || seg.includes('..'));
+}
+export function candidateDocPath(candidateId, docType, fileName, ts = Date.now()) {
+  return `candidates/${candidateId}/${docType}/${Math.trunc(ts)}_${safeFileName(fileName)}`;
+}
+export function jdPath(openingId, fileName, ts = Date.now()) {
+  return `openings/${openingId}/jd/${Math.trunc(ts)}_${safeFileName(fileName)}`;
+}
+// null when the path is exactly what candidateDocPath would mint for this candidate + doc type.
+export function checkCandidateDocPath(path, candidateId, docType) {
+  if (!UUID_ONLY.test(String(candidateId || '')) || !CANDIDATE_DOC_TYPES.includes(docType)) return 'bad_storage_path';
+  if (typeof path !== 'string' || badSegments(path)) return 'bad_storage_path';
+  const re = new RegExp(`^candidates/${candidateId}/${docType}/${NAME_PAT}$`);
+  return re.test(path) ? null : 'bad_storage_path';
+}
+export function checkJdPath(path, openingId) {
+  if (!UUID_ONLY.test(String(openingId || ''))) return 'bad_storage_path';
+  if (typeof path !== 'string' || badSegments(path)) return 'bad_storage_path';
+  const re = new RegExp(`^openings/${openingId}/jd/${NAME_PAT}$`);
+  return re.test(path) ? null : 'bad_storage_path';
+}
+
+// PostgREST or=() / ilike value: drop the filter grammar characters before encoding.
+export function cleanSearch(s) { return encodeURIComponent(String(s || '').trim().replace(/[,()*"\\]/g, ' ').trim()); }
+
 // Retention: 12 months from the day the last application closes without a join.
 export function retainUntil(todayIso) {
   const d = new Date(String(todayIso).slice(0, 10) + 'T00:00:00Z');
@@ -137,8 +246,9 @@ export function candidateCode(n) { return `CAN-${String(n).padStart(4, '0')}`; }
 
 // Band input → { band_min, band_max } or an error code. PostgREST numerics come back as strings.
 export function parseBand(min, max) {
+  const blank = (v) => v === null || v === undefined || String(v).trim() === '';
+  if (blank(min) || blank(max)) return { error: 'band_required' };
   const a = Number(min), b = Number(max);
-  if (min === null || min === undefined || min === '' || max === null || max === undefined || max === '') return { error: 'band_required' };
   if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0) return { error: 'bad_band' };
   if (b < a) return { error: 'band_max_below_min' };
   return { band_min: Math.round(a), band_max: Math.round(b) };

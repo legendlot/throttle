@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { supabase } from '@throttle/db';
 import { FileText, UploadCloud, Briefcase } from 'lucide-react';
 import { podiumopsPost } from '../lib/podiumopsFetch.js';
-import { TONES, fmtDateTime, labelFrom, APP_STATUSES, MAX_UPLOAD_BYTES, JD_ACCEPT } from '../lib/hiring.js';
+import { TONES, fmtDateTime, labelFrom, APP_STATUSES, OUTCOME_REASONS, MAX_UPLOAD_BYTES, JD_ACCEPT } from '../lib/hiring.js';
 
 const DOC_BUCKET = 'podium-documents';
 
@@ -52,7 +52,8 @@ export function Note({ children, tone = 'warn' }) {
   return <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: m.bg, color: m.fg, border: `1px solid ${m.bd}`, borderRadius: 'var(--radius-sm)', padding: '8px 12px', fontSize: 12, marginBottom: 12 }}>{children}</div>;
 }
 
-// Timeline of application_events. Reasons never carry CTC/band numbers (worker rule).
+// Timeline of application_events. `reason` is a category code; `detail.note` (free text) arrives only
+// for viewers on the opening's salary chain — the worker strips it for everyone else.
 export function Timeline({ events }) {
   const rows = events || [];
   if (rows.length === 0) return <div style={muted}>No activity yet.</div>;
@@ -63,7 +64,8 @@ export function Timeline({ events }) {
           <span style={{ color: 'var(--text-3)', fontSize: 11, minWidth: 130, flex: 'none' }}>{fmtDateTime(ev.created_at)}</span>
           <span style={{ flex: 1, minWidth: 0 }}>
             <span style={{ fontWeight: 600 }}>{eventLabel(ev)}</span>
-            {ev.reason && <span style={{ color: 'var(--text-2)' }}> — {ev.reason}</span>}
+            {ev.reason && <span style={{ color: 'var(--text-2)' }}> — {labelFrom(OUTCOME_REASONS, ev.reason)}</span>}
+            {ev.detail?.note && <span style={{ color: 'var(--text-2)' }}> · “{ev.detail.note}”</span>}
             {(ev.actor_name || ev.actor?.full_name) && <span style={{ color: 'var(--text-3)' }}> · {ev.actor_name || ev.actor.full_name}</span>}
           </span>
         </div>

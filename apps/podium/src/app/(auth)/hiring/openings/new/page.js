@@ -17,6 +17,8 @@ export default function NewOpeningPage() {
   const [emps, setEmps] = useState([]);
   const [busy, setBusy] = useState(false);
   const isHiring = !!brandUser?.permissions?.podium_hiring;
+  // A role's band is allow-list data; the worker refuses band_from_role without it (403).
+  const canUseRoleBand = !!brandUser?.tier?.comp;
   const [f, setF] = useState({
     job_role_id: '', designation: '', department_id: '',
     reporting_manager_employee_id: '', hiring_owner_employee_id: '',
@@ -57,7 +59,7 @@ export default function NewOpeningPage() {
   async function save() {
     if (!f.designation.trim()) { showToast('Designation is required', 'error'); return; }
     if (!f.reporting_manager_employee_id) { showToast('Reporting manager is required', 'error'); return; }
-    const useRoleBand = f.band_mode === 'role';
+    const useRoleBand = canUseRoleBand && f.band_mode === 'role';
     const bmin = numOrNull(f.band_min), bmax = numOrNull(f.band_max);
     if (useRoleBand && !f.job_role_id) { showToast("Pick a job role to use the role's band", 'error'); return; }
     if (!useRoleBand && (bmin == null || bmax == null)) { showToast('Band min and max are required', 'error'); return; }
@@ -148,11 +150,13 @@ export default function NewOpeningPage() {
         <Card title="Salary band — annual total CTC (INR) *">
           <div style={{ display: 'flex', gap: 14, marginBottom: 10, fontSize: 13 }}>
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="radio" checked={f.band_mode === 'manual'} onChange={() => set('band_mode', 'manual')} /> Enter a band</label>
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', opacity: f.job_role_id ? 1 : 0.5 }}>
-              <input type="radio" disabled={!f.job_role_id} checked={f.band_mode === 'role'} onChange={() => set('band_mode', 'role')} /> Use the role's band
-            </label>
+            {canUseRoleBand && (
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', opacity: f.job_role_id ? 1 : 0.5 }}>
+                <input type="radio" disabled={!f.job_role_id} checked={f.band_mode === 'role'} onChange={() => set('band_mode', 'role')} /> Use the role's band
+              </label>
+            )}
           </div>
-          {f.band_mode === 'manual' ? (
+          {!(canUseRoleBand && f.band_mode === 'role') ? (
             <Row>
               <F label="Band min"><input style={inp} inputMode="numeric" value={f.band_min} onChange={e => set('band_min', e.target.value)} placeholder="e.g. 600000" /></F>
               <F label="Band max"><input style={inp} inputMode="numeric" value={f.band_max} onChange={e => set('band_max', e.target.value)} placeholder="e.g. 900000" /></F>

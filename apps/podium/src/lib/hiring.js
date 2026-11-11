@@ -43,6 +43,20 @@ export const APP_TRANSITIONS = {
   on_hold:      ['new', 'screening', 'interviewing', 'rejected', 'withdrawn'],
 };
 export const REASON_REQUIRED = ['rejected', 'withdrawn'];
+// Reject / withdraw reasons are a category (shown to everyone who sees the application); any free text
+// is a note the worker shows only to the opening's salary chain. Mirrors OUTCOME_REASON_CODES in the worker.
+export const OUTCOME_REASONS = [
+  { id: 'not_a_fit',          label: 'Not a fit' },
+  { id: 'skills',             label: 'Skills' },
+  { id: 'experience',         label: 'Experience' },
+  { id: 'compensation',       label: 'Compensation' },
+  { id: 'location',           label: 'Location' },
+  { id: 'notice_period',      label: 'Notice period' },
+  { id: 'candidate_withdrew', label: 'Candidate withdrew' },
+  { id: 'no_response',        label: 'No response' },
+  { id: 'duplicate',          label: 'Duplicate' },
+  { id: 'other',              label: 'Other' },
+];
 export function allowedTransitions(status) { return APP_TRANSITIONS[status] || []; }
 
 export const BUDGET_STATUSES = [
@@ -105,6 +119,10 @@ const ERROR_COPY = {
   not_pending: 'That band request has already been decided',
   stale: 'This changed since you loaded it — refresh and try again',
   forbidden: 'You do not have access to do that',
+  bad_reason: 'Pick a reason from the list',
+  no_self_chain: 'You cannot put yourself on this opening — ask a founder',
+  reporting_manager_not_in_team: 'The reporting manager must be you or someone in your team',
+  band_from_role_requires_comp: "Only the salary allow-list can use the role's band — enter a band instead",
 };
 export function hiringError(e, fallback = 'Something went wrong') {
   const msg = (e && e.message) || '';
