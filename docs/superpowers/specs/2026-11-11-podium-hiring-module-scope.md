@@ -1,260 +1,383 @@
 # Podium — Hiring module (scope)
 
-> 2026-11-11 · status **SCOPE v2 — not built** · owner Afshaan · system Podium (`podiumops` + `apps/podium`)
-> v2 (same day) folds in Afshaan's answers: openings with salary bands move into Core; over-band offers need
-> the manager above; hiring managers see their own candidates' numbers; calendar invites carry a Podium link;
-> one standard letter, reverse-engineered from the letters in Afshaan's mailbox (§C3).
-> v2.1: an opening carries a JD — optional to create, required before CVs, stage moves or interviews (§C1).
+> 2026-11-11 · status **SCOPE v3 — not built** · owner Afshaan · system Podium (`podiumops` + `apps/podium`)
+> v2: Afshaan's answers (openings + bands in Core, over-band → manager above, hiring chain sees its own
+> numbers, calendar = Podium link, one standard letter from the mailbox letters). v2.1: JD gate.
+> **v3: merged review — Codex (gpt-6-astra, 25 findings) + a self-review against the live schema.** Biggest
+> changes: candidate person vs application split; statutory calculator rules made effective-dated (PF ceiling
+> and Karnataka PT have changed since the letters were written); a full offer state machine; atomic joining;
+> candidate documents in their own table; retention + deletion; approval-bypass and self-approval closed.
 
 ## Goal
 
-Every hire's paper trail lives in Podium from opening to joining day, and **no offer letter leaves
-LOT unless Podium generated and recorded it.** The candidate record becomes the employee's HR record
-when they join; nothing is re-keyed.
+Every hire's paper trail lives in Podium from opening to joining day, and **no offer letter leaves LOT
+unless Podium generated and recorded it.** The application becomes the employee's HR record when they
+join; nothing is re-keyed.
 
 | # | Module | Tier | Depends on | Size |
 |---|---|---|---|---|
-| C1 | Openings: role, reporting manager, salary band | Core | — | 1 session (with C2) |
-| C2 | Candidate record + HR documents, assigned to an opening | Core | C1 | ↑ |
-| C3 | Offer letter: standard template, salary calculator, revisions, over-band approval, PDF | Core | C1, C2 | 2 sessions |
-| C4 | Bulk CV upload → candidate profiles | Core | C2 + an Anthropic API key | 1 session |
-| O1 | Send / draft the offer email from Podium | Optional | C3 + a Workspace scope | 1 session |
-| O2 | Interview rounds + feedback per round | Optional | C1, C2 | 1–2 sessions |
-| O3 | One-click interview scheduling on Google Calendar (Podium link to the CV) | Optional | O2 + a Workspace scope | 1 session |
+| C1 | Openings: role, JD, reporting manager, approved band, headcount | Core | — | 1 session (with C2) |
+| C2 | Candidates + applications + HR documents; joining hand-off | Core | C1 | ↑ + 1 |
+| C3 | Offer letter: template, statutory calculator, revisions, approval, PDF, manual send | Core | C1, C2 | 2 sessions |
+| C4 | Bulk CV upload → candidates (Claude extraction, review-and-confirm) | Core | C2 + Anthropic API key | 1 session |
+| O1 | Send / draft the offer email from Gmail | Optional | C3 + Workspace scope | 1 session |
+| O2 | Interview rounds + feedback | Optional | C1, C2 | 1–2 sessions |
+| O3 | One-click Calendar scheduling (Podium link) | Optional | O2 + Workspace scope | 1 session |
+| O4 | Candidate document-upload link (replaces emailing ID/bank docs) | Optional, recommended | C2 | 1 session |
+
+Scope: **Fraternitas (white-collar) hires, including interns.** Blue-collar contract labour via Silverton is
+out of scope (hired and paid through the agency).
+
+---
+
+## Decided by Afshaan (2026-11-11)
+
+1. The opening's chain — hiring owner, reporting manager, approver — sees salary numbers for **that opening
+   only**. (Amends RULE-PODIUM-002 for hiring records; employee salaries stay allow-list-only.)
+2. Within the approved band → no approval. Above it → the manager above (in practice Vinay or Afshaan).
+3. Calendar invites carry a Podium link, not the CV file.
+4. One standard "Offer of Employment" letter, as used today.
+5. A JD is optional to create an opening, required before CVs, stage moves or interviews.
+
+## Decisions still needed (both reviews raised these)
+
+1. **Does the approver confirm an opening's band at creation (and any later increase)?** Without it, a band
+   typed in high skips approval. *Recommendation: yes — one click per opening; offers inside it then go
+   freely.* (Codex rates this MUST.)
+2. **Employee PF and Professional Tax inside "fixed pay".** Today's annexure counts the employee's own PF
+   and PT as part of fixed pay and shrinks the gross to fit. The letter also says the salary is "before all
+   customary payroll deductions", which those two are. Keep as is, or show fixed pay = gross + employer PF,
+   with employee PF/PT as deductions on the in-hand line? *Recommendation: the second — it's what the
+   letter says and what payroll does; check with Mahesh/Finance that RazorpayX is set up the same way.*
+3. **Interns:** the salary records already hold six stipend-based people. A second template ("Internship
+   Offer", stipend, no PF/PT/variable) — yes?
+4. **CC hr@legendoftoys.com on offer emails** (today's habit). Anyone reading hr@ sees the salary, which
+   sits outside the access rule in decision 1. Keep, or CC only the chain + you?
+5. **"No offer on record" at joining:** block the Directory-sync import, with an HR override that needs a
+   written reason (logged)? *Recommendation: yes.*
+6. **Retention for candidates who don't join:** delete their CV and documents after 12 months unless moved
+   to a talent pool? *Recommendation: 12 months.*
+
+⚠️ **Outside Podium, today:** the EPF wage ceiling went from ₹15,000 to ₹25,000 on 17 Sep 2026, and
+Karnataka PT is now nil below ₹25,000/month gross, with ₹200/month and ₹300 in February (₹2,500 a year) above
+it. The letters in the mailbox use ₹1,800/month PF and ₹2,400 a year of PT. Any offer issued from the old
+Google Doc since 17 Sep may be out of date. Worth Finance checking now, before Podium exists.
 
 ---
 
 ## What already exists (reuse, don't rebuild)
 
-- `podium.documents` + the private `podium-documents` bucket, signed-URL-only (RULE-PODIUM-003).
-- `podium.job_roles` (title, JD, salary band) — an opening starts from a job role and inherits its band.
-- `podium.employees.manager_id` — the solid-line chain decides who approves (C3).
-- `podium.compensation_events` — an accepted offer becomes the employee's `initial` event on joining.
-- `podium.comp_access_log` — every salary read outside the allow-list is logged here.
-- The appraisal letter print view (`/appraisals/letter`) — the pattern for the offer-letter render.
-- The Google service account with domain-wide delegation (`GOOGLE_SA_JSON`, already on podiumops).
-- Google Directory sync's review-and-confirm import — the joining step hooks into it (C2 "Joining").
+- Private `podium-documents` bucket, signed-URL-only (RULE-PODIUM-003).
+- `podium.job_roles` (title, JD text, band), `employees.manager_id` (approver chain).
+- `podium.compensation_events` — **the component keys the payouts screen reads are a fixed contract**:
+  `monthly_fixed`, `monthly_variable`, `fixed_yearly`, `variable_yearly`, `gross_yearly`, `bonus_type`,
+  `designation` (present on all 52 seeded events; `getPayoutPeriodSheet` reads them). The joining event must
+  write exactly these keys, plus the full annexure under `annexure`. `new_ctc` = total CTC.
+- `podium.comp_access_log` — keep logging allow-list reads too; extend it to hiring records.
+- Appraisal letter print view; Directory sync (review-and-confirm, read-only preview — RULE-PODIUM-007);
+  the auth-linking triggers (RULE-PODIUM-004, S393); the Google service account with domain-wide delegation.
 
 ---
 
-## C1 — Openings (Core)
+## C1 — Openings
 
-The person hiring creates an **opening** and places it under a reporting manager; CVs are then
-assigned to it.
+`openings`: `opening_code` (OPN-NNN), `job_role_id`, designation (editable — letters use designations that
+differ from the role name), department, `reporting_manager_employee_id`, `hiring_owner_employee_id`
+(defaults to the creator), location (city + **state**, which drives PT), employment type (full-time /
+intern), legal entity (Fraternitas), headcount, target joining date, notes, status.
 
-`openings`: `opening_code` (OPN-NNN), `job_role_id`, designation (defaults to the role title, editable —
-letters use designations like "Assistant Store Manager" that differ from the role name), department,
-**reporting manager** (`reporting_manager_employee_id`), **hiring owner** (`hiring_owner_employee_id` —
-the person running it, e.g. Finance or the team lead; defaults to the creator), location, headcount,
-**salary band** (fixed-pay min / max, annual; variable target optional), target joining date, **JD** (below), status
-`draft / open / on_hold / filled / cancelled`, notes.
+**JD.** File (PDF/DOCX → bucket, versioned) or text; "Use the role's JD" fills it in one click. JD versions
+are kept, never deleted once candidates exist, and each interview records the JD version it ran against.
 
-- Band pre-fills from the job role's band and can be changed.
-- **JD — optional to create, required to hire against.** An opening can be saved with every other field
-  filled and no JD; it sits as `draft` ("JD needed"). The JD is an attached file (PDF/DOCX, stored in the
-  private bucket under the opening, `jd_storage_path`) or pasted text (`jd_text`); if the job role already
-  carries a JD, "Use the role's JD" fills it in one click. Adding a JD moves the opening to `open`.
-- **The JD gate** (enforced in the worker, not just hidden in the UI): until the opening has a JD you
-  cannot attach a CV / add a candidate to it (single or bulk, C4), move any of its candidates to another
-  stage, or schedule an interview (O3). Each blocked action says "Add the JD to this opening first" with a
-  link to do it. Removing the JD later is not allowed once the opening has candidates (replace it instead;
-  the old version is kept).
-- The hiring chain and interviewers see the JD on the opening and on each candidate page, so every round
-  interviews against the same document.
-- **Approver** = the reporting manager's own manager (one step up the solid `manager_id` chain), computed
-  and shown on the opening. In practice this resolves to Vinay or Afshaan. If the reporting manager is a
-  founder, the other founder approves. Either founder can always approve.
-- Screens: `/hiring/openings` (list + counts per opening: candidates, offers out, accepted, headcount left) ·
-  opening detail (band, approver, its candidates by status).
+**Band.** `band_min` / `band_max` on **total CTC** (the number the letter leads with); pre-filled from the
+job role server-side without exposing the role registry's other bands. Stored as versioned rows
+(`opening_budgets`: version, band, who set it, approved_by/at). Each offer freezes the budget version it
+was checked against.
 
-## C2 — Candidate record + HR documents (Core)
+**Approver** = the reporting manager's manager (one step up the solid line), **snapshotted** on each
+approval request.
+- The approver can never be the person asking. If the computed approver is the requester (e.g. a founder
+  hiring for their own report), it goes to the other founder.
+- If the approver has exited or the chain changed, the request re-resolves and an unsent approval for the
+  old approver is cancelled (RULE-PODIUM-010 pattern).
 
-- `candidates`: `candidate_code` (CAN-NNNN, immutable), `opening_id`, full name, personal email, phone,
-  location, source (referral / LinkedIn / Naukri / campus / walk-in / agency / other) + referrer, current
-  employer + title, total experience, current CTC, expected CTC, notice period, `status`,
-  `rejection_reason`, notes, `employee_id` (set on joining).
-- `status`: `new → screening → interviewing → offer → accepted → joined`, plus `rejected` / `declined` /
-  `withdrawn` / `on_hold`. Every change writes a `candidate_events` row (who, when, from→to, note).
-- A candidate can be **moved to another opening** (logged) — common when someone fits a different role.
-  The target opening must have a JD (C1 gate).
-- `documents` gains a nullable `candidate_id`; a CHECK requires `employee_id` or `candidate_id`. New
-  `doc_type`s: `cv`, `id_proof` (Aadhaar), `pan`, `address_proof`, `education`, `experience_letter`,
-  `relieving_letter`, `payslip`, `bank`, `photo`, `signed_offer`, `other`.
-- **Joining checklist** on the profile, matching what LOT asks for today in the offer email: signed offer,
-  previous salary slips, Aadhaar, PAN (+ bank, relieving letter, photo).
-- Screens: `/hiring` (all candidates: status chips, opening/manager filters, search) · `/hiring/detail`
-  (tabs: Profile · Documents · Offers · Timeline).
+**Status:** `draft` (no JD, or band not yet approved) → `open` → `on_hold` → `filled` / `cancelled`.
+- `on_hold`: no new candidates, no offers sent. Existing work stays visible.
+- To close or cancel, live applications must first be resolved or moved; open offers must be withdrawn.
+- Adding or replacing a JD never reopens a held or closed opening.
 
-**Joining (hand-off to the employee record).** Podium never creates an employee without a work login.
-1. Candidate is `accepted` with an accepted offer.
-2. IT creates their Workspace account as today.
-3. Directory sync's preview **matches the new joiner to the accepted candidate** (HR confirms the pairing);
-   on import it creates the employee with department, role, reporting manager and joining date from the
-   offer; re-points the candidate's documents to the new `employee_id`; writes the `initial`
-   `compensation_events` row from the accepted offer (dated to the joining date); marks the candidate
-   `joined` and decrements the opening's headcount (→ `filled` at zero).
-4. A new joiner in the sync with **no accepted Podium offer** is flagged "No offer on record" — this is
-   how "no offer goes without Podium" is enforced, not just stated.
+**Headcount.** Track approved, offers accepted, and joined. Podium blocks accepting more offers than the
+remaining headcount and warns when offers out exceed it. A no-show or withdrawal releases the seat.
 
-**Who sees what.**
-- New permission key **`podium_hiring`** (+ preset role "Hiring"): create openings, see all openings and
-  candidates.
-- Without the key, a person sees openings where they are the **hiring owner**, the **reporting manager**,
-  or the **approver**, and those openings' candidates.
-- **Salary numbers** (band, current/expected CTC, offers) are visible to: the hiring owner, the reporting
-  manager and the approver *for that opening only*, plus the salary allow-list. `podium_hiring` alone does
-  **not** show numbers. Every read by someone outside the allow-list writes a `comp_access_log` row.
-  → This is a recorded amendment to RULE-PODIUM-002 (Afshaan, 2026-11-11): offer salaries are scoped to
-  the opening's chain; employee salaries stay allow-list-only.
+**JD gate** (enforced in the worker): no CV/candidate, no stage move, no interview until the opening has a JD.
 
----
+## C2 — Candidates, applications, documents, joining
 
-## C3 — Offer letter (Core)
+**Person vs application — the decision that is hardest to change later.**
+- `candidates` = the person: `candidate_code` (CAN-NNNN), name, normalised personal email + phone, location,
+  current employer/title, experience, skills, education, `employee_id` once joined.
+- `applications` = person × opening: source + referrer, current CTC, expected CTC, notice period, `status`,
+  outcome reason, created_by. Offers, interviews, events and feedback hang off the **application**.
+- Re-applying later, or two openings at once, is just a new application. "Moving" a candidate closes one
+  application and opens another, and offers stay with the opening they were made for.
+- Duplicate suggestions match on email or phone; HR can merge two people (logged). A unique index blocks
+  two active applications for the same person on the same opening.
 
-### The standard letter (taken from the letters in Afshaan's mailbox)
+**Application status:** `new → screening → interviewing → offer → accepted → joined`, plus `rejected`,
+`declined`, `withdrawn`, `no_show` and `on_hold`. Each transition has a named actor and precondition: JD
+present, opening open, and an accepted offer before `accepted`. Every change writes an
+`application_events` row (actor, time, from→to, reason, request id). Salary values never go in the timeline
+text.
 
-LOT sends one letter type, **"Offer of Employment"**, written today as a Google Doc copy by whoever is
-hiring (Mahesh, Piyush, Kirti, Karan, Mohit, Afshaan). There is no separate joining letter; the letter
-refers to an employment agreement, which stays outside Podium for now. Structure, page 1:
+**Documents — own table, not `podium.documents`.**
+- New `candidate_documents` table. The live `getDocuments` / `getDocumentDownloadUrl` visibility code keys
+  on `employee_id`, so mixing candidates into it risks the employee-document rules.
+- Bucket path `candidates/<candidate_id>/…`, owner-bound signed uploads, and type and size checks.
+- `doc_type`: `cv`, `jd` (on openings), `payslip`, `signed_offer`, `id_proof`, `pan`, `address_proof`,
+  `education`, `experience_letter`, `relieving_letter`, `bank`, `photo`, `other`.
+- Who sees which documents (enforced on both the metadata and the signed URL):
+  - **CV, education, experience:** the opening chain, `podium_hiring` and assigned interviewers.
+  - **Payslip, signed offer:** the salary-visible set only (the opening chain and the allow-list).
+  - **ID, PAN, bank, address:** HR only, and the person themself once they're an employee (as today).
+- **Aadhaar:** ask only at the joining stage, never with the CV. Accept a masked copy or an alternative ID.
+  Never send it through CV extraction. Best handled by O4 instead of email.
+- On joining, documents are copied into `podium.documents` under the new employee by the joining function
+  (below). The candidate copies are then removed under the retention rule.
 
-- **Letterhead:** Fraternitas Ventures Private Limited, the Kalyanagar address, and the **signatory's
-  phone number**.
-- "Offer of Employment", date, "Dear {name},".
-- Reference to discussions; offer to join Fraternitas Ventures Private Limited (Legend of Toys).
-- Fixed salary per annum, "before all customary payroll deductions", paid monthly; plus **variable *or*
-  incentive pay** of up to X per annum, **paid half-yearly**.
-- Start date "on or before …", designation, optional department, location (Bangalore).
-- Standard confidentiality / non-compete paragraph; other terms per the employment agreement.
-- Probation sentence (2 or 3 months; sometimes omitted).
-- Confirm by sending a signed copy over email. "Let's build together!" Regards, signatory. Optional
-  signature line.
+**Who can do what (worker-enforced; table to be finalised in the build plan).**
 
-Page 2, **Annexure I: CTC Break Up** (Annual / Monthly).
-
-Today's letters vary in date format, rupee format ("4,32,000" vs "570000/-") and wording ("before … or
-before"). Podium standardises these; the text is otherwise kept as is.
-
-### Salary calculator
-
-Input: **annual fixed pay** (F), variable/incentive amount (V) and its label, and a **PF on/off** switch.
-
-| Line | Rule |
+| Action | Who |
 |---|---|
-| Basic | 50% of F |
-| HRA | 50% of Basic |
-| Travel reimbursement | F ÷ 15 |
-| Telephone reimbursement | F ÷ 60 |
-| Employer's PF | ₹1,800/month (12% of the ₹15,000 wage ceiling); 0 if PF off |
-| Employee's PF | ₹1,800/month; 0 if PF off |
-| Professional Tax | ₹200/month |
-| Special allowance | the balance: F − all of the above |
-| Gross total | Basic + HRA + Special + Travel + Telephone |
-| Total fixed | F |
-| Variable / Incentive | V |
-| Total CTC | F + V |
+| Create opening | `podium_hiring`, or anyone with direct reports (becomes hiring owner) |
+| Edit opening / JD / band (band increase → re-approval) | hiring owner, `podium_hiring` |
+| See opening + applications | hiring owner, reporting manager, approver, `podium_hiring`, interviewers (assigned applications only) |
+| See salary numbers (band, current/expected CTC, offers, payslips) | hiring owner, reporting manager, approver (their opening only) + allow-list |
+| Add/move candidates, change status | hiring owner, reporting manager, `podium_hiring` |
+| Create / revise / send offer | hiring owner, reporting manager |
+| Approve | the snapshotted approver only (never the requester) |
+| Edit templates | allow-list + `podium_admin` |
 
-Computed at full precision, rounded to the rupee only for display (monthly = annual ÷ 12). **Checked
-2026-11-11: this reproduces all three letters read (Jul–Aug 2026; one with PF off) to the rupee.**
-The rules are stored on the template as data, so a change to the structure is an edit in Podium, not a
-code change. Optional footnote toggle: "Medical insurance premium will be over and above your CTC".
+- Nobody can assign themselves into another opening's chain to gain salary access. Chain changes need
+  `podium_hiring` and are logged.
+- These are added to the worker's self-scoped gate lists, so a manager without a Podium role still reaches
+  their own openings, and only those.
 
-⚠️ For your eye, not changed: the annexure puts **both** employer's and employee's PF inside fixed pay, so
-employee PF lowers the gross shown rather than being deducted from it. Podium copies today's structure
-exactly; say if you want that revisited.
+**After joining:** offers and salary-bearing hiring records follow the employee salary rules (allow-list +
+own pay). The hiring chain's access ends at `joined`.
 
-### Templates
+**Joining hand-off (atomic).**
+1. The application is `accepted` with exactly one accepted offer revision. IT creates the Workspace account.
+2. In the Directory-sync preview, HR **pairs the new Workspace account to the accepted application**.
+   Personal emails won't match work emails, so this is an explicit pairing stored with the Google user id,
+   never a name match.
+3. Confirming runs one database function (idempotent, all-or-nothing). It:
+   - creates the employee, or **reactivates the existing exited employee row for a rehire** (employee codes
+     are immutable);
+   - copies the documents;
+   - writes one `initial` compensation event, using the components contract above and dated to the actual
+     start date;
+   - updates headcount and marks the application `joined`.
+4. Being "provisioned" is not the same as "joined": HR confirms the **actual start date**. A no-show releases
+   the seat.
+5. A new joiner with no accepted Podium offer is blocked, subject to decision 5 above.
+6. If the salary vault is ever turned off, the event is written without salary figures (as the vault does
+   today).
 
-`offer_templates`: the letter body with merge fields, the salary rules above, the letterhead, versioned —
-an edit creates a new version and every offer stores the version it used, so an old letter re-renders
-exactly as sent. **One standard template** to start; more can be added later.
+## C3 — Offer letter
 
-Merge fields: `{{candidate_name}}`, `{{issue_date}}`, `{{fixed_annual}}`, `{{variable_label}}` (variable /
-incentive), `{{variable_annual}}`, `{{variable_frequency}}` (half-yearly), `{{start_date}}`,
-`{{designation}}`, `{{department}}` (optional), `{{location}}`, `{{probation_months}}` (optional),
-`{{signatory_name}}`, `{{signatory_phone}}`, `{{annexure}}`, `{{offer_ref}}`.
+### Template (from the letters in Afshaan's mailbox)
 
-### Offers, revisions and approval
+One letter type, **"Offer of Employment"**, written today as a Google Doc copy by whoever is hiring.
 
-`offers`: candidate, opening, `revision_no`, inputs (F, V, label, PF switch, start date, designation,
-probation, signatory), the computed annexure and rendered letter (both frozen), PDF in the private bucket,
-`offer_ref` (OFR-2026-NNN, in the footer), status
-`draft → pending_approval → approved → sent → accepted / declined / expired`, plus `superseded`.
+- **Page 1:**
+  - letterhead: Fraternitas, the address, the signatory's phone;
+  - date and greeting;
+  - fixed salary per annum "before all customary payroll deductions", paid monthly, plus variable or
+    incentive pay of up to X per annum, paid half-yearly;
+  - start date "on or before", designation, optional department, location;
+  - confidentiality / non-compete paragraph, and a reference to the employment agreement;
+  - probation (2 or 3 months, sometimes omitted);
+  - "confirm by sending a signed copy over email", signatory.
+- **Page 2:** Annexure I, the CTC breakdown (annual / monthly).
 
-- **Within band → no approval.** The hiring owner or reporting manager generates and sends it.
-- **Above the band max** (fixed pay, or total CTC if the opening sets a CTC cap) → `pending_approval`; the
-  approver (C1) gets it on their Podium home and approves or rejects with a note. The approval is stored on
-  the offer.
-- **Negotiation = a new revision** with a reason ("candidate countered", "added joining bonus"); the
-  previous revision becomes `superseded`. Sent revisions are immutable. The Offers tab shows the
-  revisions side by side with the changes highlighted. (Revised offers already happen — two of the
-  mailbox threads carry an "updated" or "revised" letter.)
-- **Extras** as line items: joining bonus (with clawback months), retention bonus, relocation, devices,
-  other — each marked inside or outside CTC. Anything outside the standard annexure prints as an extra
-  annexure row or paragraph. These count toward the band check when inside CTC.
-- **Acceptance:** upload the signed copy (`signed_offer`) and mark accepted. The accepted revision is
-  what joining uses.
+`offer_templates`: body with merge fields, the salary **rule set**, letterhead/entity, version. An edit
+creates a new version, and offers pin the version they used.
+- Entity and location are fields, not hard-coded.
+- Signatories come from an **authorised-signatory list** (name, phone, who may sign).
+- Merge fields: candidate name, issue date, fixed annual, variable label + annual + frequency, start date,
+  designation, department, location, probation, signatory name + phone, annexure, offer ref, valid until.
+- A second template for interns, if decision 3 is yes.
 
-PDF: an HTML print view on the letterhead (like the appraisal letter), stored in the private bucket.
+⚠️ Legal note (SHOULD): post-employment non-competes are generally unenforceable in India (Contract Act s.27).
+Worth a one-time legal read of the paragraph and of the clawback wording before it is locked into a template.
+
+### Statutory calculator — effective-dated rules, not constants
+
+The rule set is data with `effective_from`. Each offer stores the rule-set version it used.
+- **Basic** 50% of fixed pay; **HRA** 50% of Basic; **Travel** fixed ÷ 15; **Telephone** fixed ÷ 60.
+  These are LOT policy, read from the letters.
+- **Special allowance** = the balance. A negative balance is rejected.
+- **EPF:** 12% of PF wages, capped at the ceiling. The ceiling is **₹25,000/month from 17 Sep 2026** (was
+  ₹15,000), so up to ₹3,000/month. Employer and employee shares are shown separately.
+- **Not opting in to PF** replaces the plain on/off switch. It needs a reason and only applies where the
+  person is eligible to opt out: not already an EPF member, and wages above the ceiling.
+- **ESI:** applies when gross is ≤ ₹21,000/month. Employer 3.25% goes in employer cost; employee 0.75% is a
+  deduction. Rare at LOT's pay levels, but the intern template can hit it.
+- **Professional Tax by work state.** Karnataka: nil below ₹25,000/month gross; above that ₹200/month and
+  ₹300 in February (₹2,500/yr). The annexure shows the real monthly figures.
+- **Gratuity:** state on the letter whether it is inside or outside CTC. Today's letters are silent; it is
+  not in the annexure.
+- **Wages check (Labour Codes):** Basic at 50% of fixed meets the 50% wage rule. Keep that rule as a
+  validation, so a future template can't drop below it.
+- Rounding: compute at full precision, display to the rupee.
+- Regression fixtures: the three mailbox letters must still reproduce exactly under the **pre-17-Sep rule
+  set**. New offers use the current one.
+
+### Offer state machine
+
+`draft → (pending_approval → approved | approval_rejected) → ready → sent → accepted | declined | expired`,
+plus `withdrawn` (by LOT, any time before joining) and `superseded`.
+
+- **In band** goes from draft straight to `ready`. **Above band** goes through approval.
+- **Inside the band check:** total CTC plus any joining or retention bonus. *Any* one-time cash extra needs
+  the approver, whether or not it sits "outside CTC" — that closes the extras loophole. Below band min: no
+  approval, but flagged.
+- **Changing approved terms voids the approval.**
+- `valid_until` (default 7 days) sets `expired`. A late acceptance needs a fresh send.
+- A **new revision supersedes the old one only when it is sent.** Until then, the old one stays live.
+- Each signed document binds to one revision. Only one accepted revision per application.
+- A change after acceptance (e.g. joining date) is an **amendment revision** that needs re-acceptance.
+  Declined, then re-offered, is a new revision on the same application.
+
+### PDF and sending (Core, without O1)
+
+- The PDF is rendered **server-side** (Cloudflare Browser Rendering, or equivalent) from the frozen HTML,
+  stored with a SHA-256 hash. The issued file is the record, not a re-render.
+- Footer: `offer_ref` (OFR-2026-NNN).
+- Core includes **"Mark as sent"**: record who sent it, to whom, when, and attach the email, or upload the
+  exact PDF sent. It also includes **"Record acceptance"**: the signed copy plus the date. Without O1, this
+  is how the lifecycle still works.
+
+## C4 — Bulk CV upload
+
+1. Pick an opening that has a JD, then drop 1–100 CVs (PDF/DOCX/scans; size and type limits).
+2. Files land in a **staging area** (`cv_imports` batch + per-file rows). An abandoned batch is purged after
+   7 days.
+3. Per-file jobs are resumable and idempotent (hash of the file), with bounded concurrency and retry with
+   backoff.
+4. Extraction uses the Claude API (`claude-haiku-5-5`; Sonnet on low confidence).
+   - **CV text is untrusted input.** Output is schema-validated, and salary or experience claims carry the
+     quoted source line.
+   - No inferred sensitive attributes (age, religion, etc.).
+   - Model and prompt version are recorded, and so are HR's corrections.
+5. Review-and-confirm grid: duplicates flagged by email/phone, manual entry if extraction fails. Confirmed
+   rows → candidate + application + CV document.
+6. Needs an `ANTHROPIC_API_KEY`. Commercial API terms don't train on inputs. Confirm the retention terms
+   once, at key creation.
+
+## Privacy (DPDP readiness)
+
+The DPDP Act's core duties commence on a phased schedule (not all in force today). Build to them now, since
+adding them later means rewriting data flows:
+- **Notice:** record each candidate's source, and the notice version shown or sent, with a line in the offer
+  and outreach emails. Referral and agency CVs record who supplied them.
+- **Retention:** non-joiners are deleted after the agreed period (decision 6) unless moved to a talent pool,
+  which needs its own consent flag.
+- **Deletion is real:** bucket files, staging, extracted text and rows go, leaving a minimal audit stub
+  (code, dates, outcome).
+- **Erasure on request:** a verified flow handled by HR.
+
+## Audit
+
+- Keep today's `comp_access_log` coverage, including allow-list reads.
+- Extend it to opening, application and offer reads that carry salary, including PDF downloads and exports.
+- Append-only events for:
+  - budget changes, chain changes and approvals;
+  - revisions, sends, acceptances and withdrawals;
+  - document uploads, downloads and deletes;
+  - merges, deletions and Directory pairings.
 
 ---
 
-## C4 — Bulk CV upload → candidate profiles (Core)
+## O1 — Send / draft from Gmail (Optional)
 
-1. On an opening that has a JD (C1 gate; `/hiring/import` asks you to pick one), drop 1–100 CVs (PDF,
-   DOCX, scans).
-2. Each file goes to the private bucket; the worker sends it to the Claude API (`claude-haiku-5-5`;
-   Sonnet only if Haiku misreads) and gets back: name, email, phone, location, current employer/title,
-   total experience, skills, education, CTC and notice period if stated. One file per request, driven
-   by the browser, so 100 CVs never hit a worker timeout.
-3. **Review-and-confirm** grid: editable rows, duplicates flagged against existing candidates and
-   employees by email/phone, low-confidence fields highlighted. Nothing is written until confirmed.
-   Confirmed rows become candidates on that opening with the CV as their first document.
-
-Needs an `ANTHROPIC_API_KEY` on podiumops (you create it in the Anthropic console).
-
----
-
-## O1 — Send / draft the offer email from Podium (Optional)
-
-"Create draft" / "Send" on an approved offer. Sends from the **hiring owner's own Gmail** through the
-service account (impersonation), so replies come back to them. The email copies what LOT sends today:
-- To the candidate; **CC hr@legendoftoys.com, Afshaan, and the reporting manager** (configurable).
-- Body from an editable email template: congratulations, role and start date, "confirm by sending a signed
-  copy over email", and the joining-document ask (previous salary slips, Aadhaar, PAN).
-- PDF attached. A **revision is sent as a reply in the same Gmail thread**, as happens today.
-- Podium stores the Gmail message + thread id on the offer and moves it to `sent`.
-- Setup: add `gmail.compose` to the service account's domain-wide delegation (Workspace Admin, your login).
+- Sends from the **hiring owner's** Gmail via service-account impersonation (`gmail.compose` on domain-wide
+  delegation). The worker only impersonates the hiring owner or reporting manager of that opening, never
+  any address.
+- The email copies today's wording: congratulations, role and start date, "confirm with a signed copy",
+  and the joining-document ask (moved to O4 if built).
+- Recipients are checked against the salary rule (decision 4). The attachment and recipients are frozen.
+- A send intent is stored first, then reconciled with Gmail, so a timeout can't cause a double send.
+- A draft is not a send. Revisions are sent as a reply in the same thread.
 
 ## O2 — Interview rounds + feedback (Optional)
 
-(Openings moved into Core, so this is now only the interview layer.)
-- Each opening has a **round plan** (e.g. HR screen → Technical → Founder) with default interviewers and a
-  short scorecard per round.
-- Candidates move through rounds on a board (columns = rounds).
-- `interviews`: candidate × round, time, interviewers, mode, status (scheduled / done / no-show / cancelled).
-- `interview_feedback`: per interviewer — 1–5 rating, recommendation (strong no → strong yes), scorecard
-  scores, notes. **Hidden from other interviewers until they submit their own.** Round verdict: advance /
-  reject / hold.
-- Interviewers see only their assigned candidates and the CV — never salary numbers.
+- **Rounds:** each opening has a round plan, with default interviewers and a scorecard per round.
+- **Interviews:** one per application and round, recording the time, interviewers, mode, status and the JD
+  version.
+- **Feedback:** a 1–5 rating, a recommendation, scorecard scores and notes. It is **hidden from other
+  interviewers until they submit their own**, with a due date of 24h after the interview and a reminder.
+- **Round verdict:** advance / reject / hold.
+- **What interviewers see:** their assigned applications and the CV. No salary fields, no payslips. A CV
+  that mentions its own CTC is accepted as is; no redaction.
 
-## O3 — One-click interview scheduling (Optional, after O2)
+## O3 — One-click Calendar scheduling (Optional)
 
-Pick date + time + duration → "Schedule" (blocked until the opening has a JD). Podium creates a Google Calendar event on the organiser's
-calendar with the interviewers as guests, a Meet link, the round name, and **a link to the candidate's
-Podium page** (sign-in required; the CV never leaves the private bucket). Reschedule/cancel in Podium
-updates the event. Candidate not invited unless toggled. Setup: add `calendar.events` to domain-wide
-delegation. (Attaching the CV file itself would need Drive; parked until the link has been tried.)
+- Creates a Calendar event (`calendar.events`) on the organiser's calendar. The organiser must be in the
+  opening's chain or an assigned interviewer. The event has a Meet link and a **Podium link** for internal
+  guests.
+- The **candidate gets a separate invite** with only the time and the Meet link, and no internal link.
+- Guests can't modify the event or invite others.
+- Podium stores the event and calendar ids and the timezone, and is idempotent. Reschedule and cancel
+  sync both ways, and direct Calendar edits are reconciled on open.
+- The JD gate, opening status and interviewer scope are rechecked server-side.
+
+## O4 — Candidate document-upload link (Optional, recommended)
+
+- A single-use, expiring link (e.g. 7 days) lets the candidate upload the joining documents straight into
+  the private bucket. That covers the signed offer, payslips, a masked Aadhaar or alternative ID, PAN, bank
+  details and the relieving letter.
+- It removes the main privacy weakness in today's flow: Aadhaar and PAN emailed to a thread with four or
+  five people on CC.
 
 ---
 
-## Still open
+## Good-to-haves (not scoped into a module yet)
 
-1. **Does the band on an opening need approval when it's set?** As scoped, the person creating the opening
-   sets the band and only over-band offers go up. That means a band typed in high skips approval.
-   Recommendation: the approver confirms the opening's band once when it's created (one click); every offer
-   inside it then goes out without asking.
+- **Nudges:** pending approvals, feedback owed, offers expiring and joinings due, as a Slack DM or email to
+  the owner. Without these, approvals sit.
+- **Next action + owner + due date** on each application. An "aging" view of who has been stuck in a stage
+  longer than N days.
+- **Hiring analytics:** time-to-hire, offer acceptance rate, source effectiveness, funnel per opening. The
+  event log already captures what's needed.
+- **Referral bonus tracking:** referrer, payout after N months, linked to `payouts`.
+- **Regret email template** for rejected candidates.
+- **Pre-joining checklist completion:** each item gets a verifier and a time (documents verified, background
+  or reference check, employment agreement signed).
+- **Onboarding hand-off after joining:** laptop, email, ID card, RazorpayX setup, UAN.
+- **E-sign** (Aadhaar eSign / Leegality) instead of scanned signatures.
+- **Cutover:** at launch, load the hires already in flight as openings and applications, so the "No offer on
+  record" rule doesn't block them.
+
+## Hard to change later — settle in the build plan, before the first migration
+
+1. Person vs application split (C2).
+2. Candidate documents in their own table, plus the copy-on-joining rule (C2).
+3. The components keys written into `compensation_events` (the payouts contract).
+4. Effective-dated statutory rule sets, and offers pinning rule-set + template + budget versions.
+5. Band on total CTC, and versioned opening budgets.
+6. Issued PDF + hash as the record (server-side rendering choice).
+7. Approver snapshot + no self-approval.
+8. Rehire = reactivate the existing employee row.
+9. Bucket path layout and the retention/deletion model.
 
 ## Build order
 
-C1 + C2 together → C3 → C4 → then O1, O2, O3 as picked. Each ships behind `podium_hiring` and gets a
-manual chapter when it goes live.
+C1 + C2 → C3 → C4 → then O4, O1, O2, O3 as picked. Each module gets a manual chapter when it goes live.
+
+Sources for the statutory changes: EPF ceiling ₹25,000 from 17 Sep 2026
+([CorpLaw Updates](https://www.corplawupdates.in/updates/epfo-wage-ceiling-rs-25000-cabinet-approval-2026),
+[EPFO FAQ](https://www.sgcms.com/regulatory-updates/wp-content/uploads/2026/09/EPFO_Wage_Ceiling_FAQs.pdf)) —
+confirm against the gazette (S.O. 5109(E)) before go-live. Karnataka PT
+([Commercial Taxes FAQ](https://ptax.karnataka.gov.in/ptemployer/FAQ),
+[Feb-2026 ₹300 advisory](https://ascent-hr.com/en-ae/?p=37390)). ESI ([ESIC](https://esic.gov.in/attachments/esistatedirectoratefile/ef84365f31f15306ddb397902d675858.pdf)).
