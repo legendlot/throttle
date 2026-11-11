@@ -7,8 +7,10 @@ import { docketopsGet, docketopsPost } from '../../../../lib/docketopsFetch.js';
 import { Button, IconButton, EmptyState } from '../../../../components/ui/index.js';
 import { AdminHead, Switch } from '../../../../components/AdminParts.js';
 
-// Docket permission matrix — 2 boolean keys. Define unlimited custom roles from
-// these toggles. docket_admin implies docket_view_all (enforced here + server-side).
+// Docket permission matrix — 3 boolean keys. Define unlimited custom roles from
+// these toggles. docket_plan_admin implies docket_admin, which implies docket_view_all
+// (enforced here + server-side). Only a super admin can grant, edit or remove a role
+// carrying docket_plan_admin (worker: forbidden_super_admin, spec §5.1 A5).
 const PERM_DEFS = [
   { group: 'Visibility', items: [
     { key: 'docket_view_all', label: 'See all org tasks + the review dashboard' },
@@ -16,12 +18,17 @@ const PERM_DEFS = [
   { group: 'Admin', items: [
     { key: 'docket_admin', label: 'Manage roles, assign users & edit/abandon any task' },
   ] },
+  { group: 'Plan', items: [
+    { key: 'docket_plan_admin', label: 'Super admin — the plan register: themes, milestones, targets' },
+  ] },
 ];
-const ELEVATED = ['docket_admin'];
+const ELEVATED = ['docket_admin', 'docket_plan_admin'];
+const carriesPlan = (p) => !!p?.docket_plan_admin;
 
 export default function RolesPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const isPlanAdmin = !!perms?.docket_plan_admin;
   const [roles, setRoles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list');
@@ -31,6 +38,7 @@ export default function RolesPage() {
   const [label, setLabel] = useState('');
   const [desc, setDesc] = useState('');
   const [perm, setPerm] = useState({});
+  const [editCarries, setEditCarries] = useState(false);   // the role being edited carries super admin
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -44,16 +52,20 @@ export default function RolesPage() {
   }, [session, showToast]);
   useEffect(() => { load(); }, [load]);
 
-  function startNew() { setEditKey(null); setEditIsSystem(false); setRoleKey(''); setLabel(''); setDesc(''); setPerm({}); setView('form'); }
-  function startEdit(r) { setEditKey(r.role_key); setEditIsSystem(!!r.is_system); setRoleKey(r.role_key); setLabel(r.label || ''); setDesc(r.description || ''); setPerm(r.permissions || {}); setView('form'); }
+  function startNew() { setEditKey(null); setEditIsSystem(false); setEditCarries(false); setRoleKey(''); setLabel(''); setDesc(''); setPerm({}); setView('form'); }
+  function startEdit(r) { setEditKey(r.role_key); setEditIsSystem(!!r.is_system); setEditCarries(carriesPlan(r.permissions)); setRoleKey(r.role_key); setLabel(r.label || ''); setDesc(r.description || ''); setPerm(r.permissions || {}); setView('form'); }
   function toggle(k) {
     setPerm((p) => {
       const next = { ...p, [k]: !p[k] };
+      if (k === 'docket_plan_admin' && next[k]) next.docket_admin = true; // super admin implies admin
       if (ELEVATED.includes(k) && next[k]) next.docket_view_all = true; // footgun guard
       return next;
     });
   }
   const viewForced = ELEVATED.some((k) => perm[k]);
+  const adminForced = !!perm.docket_plan_admin;
+  // Mirrors the worker's guard: a non-super-admin can't touch a role that carries the key.
+  const locked = editCarries && !isPlanAdmin;
 
   async function save() {
     if (!label.trim()) { showToast('Label required', 'error'); return; }
@@ -106,8 +118,8 @@ export default function RolesPage() {
                         </div>
                       </div>
                       <div className="adm-item-acts">
-                        <Button size="sm" onClick={() => startEdit(r)}>Edit</Button>
-                        {!r.is_system && <Button size="sm" variant="danger" onClick={() => del(r)}>Delete</Button>}
+                        {(!carriesPlan(r.permissions) || isPlanAdmin) && <Button size="sm" onClick={() => startEdit(r)}>Edit</Button>}
+                        {!r.is_system && (!carriesPlan(r.permissions) || isPlanAdmin) && <Button size="sm" variant="danger" onClick={() => del(r)}>Delete</Button>}
                       </div>
                     </li>
                   );
@@ -130,19 +142,21 @@ export default function RolesPage() {
             <label className="adm-field"><span className="adm-lbl">Description</span><input className="adm-input" value={desc} onChange={(e) => setDesc(e.target.value)} disabled={saving} /></label>
 
             {editIsSystem && <div className="adm-note"><ShieldCheck size={14} /> System role: permissions are fixed. Label &amp; description only.</div>}
+            {locked && <div className="adm-note"><Lock size={14} /> This role carries super admin — only a super admin can change it.</div>}
 
             {PERM_DEFS.map((g) => (
               <div key={g.group} className="adm-field">
                 <span className="adm-lbl">{g.group}</span>
                 {g.items.map((it) => {
-                  const forced = it.key === 'docket_view_all' && viewForced;
+                  const forced = (it.key === 'docket_view_all' && viewForced) || (it.key === 'docket_admin' && adminForced);
                   const on = !!perm[it.key];
-                  const disabled = saving || editIsSystem || forced;
+                  const disabled = saving || editIsSystem || forced || locked || (it.key === 'docket_plan_admin' && !isPlanAdmin);
                   return (
                     <div key={it.key} className="adm-row">
                       <span className="adm-row-l">
                         {it.label} <span className="adm-mono">· {it.key}</span>
-                        {forced && <span className="adm-row-hint"> (required by admin)</span>}
+                        {forced && <span className="adm-row-hint"> (required by {it.key === 'docket_admin' || perm.docket_plan_admin ? 'super admin' : 'admin'})</span>}
+                        {it.key === 'docket_plan_admin' && !isPlanAdmin && <span className="adm-row-hint"> (only a super admin can grant this)</span>}
                       </span>
                       <Switch on={on} label={it.label} onClick={() => toggle(it.key)} disabled={disabled} />
                     </div>
@@ -153,7 +167,7 @@ export default function RolesPage() {
           </div>
           <div className="adm-card-foot">
             <Button variant="ghost" onClick={() => setView('list')} disabled={saving}>Cancel</Button>
-            <Button variant="primary" onClick={save} loading={saving}>{editKey ? 'Save role' : 'Create role'}</Button>
+            <Button variant="primary" onClick={save} loading={saving} disabled={locked}>{editKey ? 'Save role' : 'Create role'}</Button>
           </div>
         </section>
       )}

@@ -14,6 +14,9 @@
  * (mirrors Podium RULE-PODIUM-006 / Snorkel RULE-SNORKEL-002):
  *   - docket_admin    : role/user mgmt + see all + edit/abandon any task
  *   - docket_view_all : org-wide task visibility + review dashboard
+ *   - docket_plan_admin : SUPER ADMIN (F9) — the plan register (themes, milestones, targets) and every
+ *                       plan action; implies docket_admin + docket_view_all. Only a super admin can
+ *                       grant, edit or revoke a role carrying it (spec §5.1 A5). Never implied BY admin.
  *   (dashboard is ALSO shareable independently of view_all: a persistent
  *    docket.settings.dashboard_public flag + per-person docket.dashboard_viewers
  *    grants — admin-managed in /admin/roles. RULE-DOCKET-006.)
@@ -24,6 +27,7 @@
  * Spec: docs/superpowers/specs/2026-06-03-docket-design.md ; systems/docket.md
  */
 import { istDateStr, isExpired, isDueOn, istHM, lateFlag, buildRegister } from './register-core.mjs';
+import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT_ACTIONS } from './plan-core.mjs';
 
 
 // ── CORS ──────────────────────────────────────────────────────────────────
@@ -140,7 +144,9 @@ async function verifyJWT(authHeader, env) {
   if (docketRole) {
     const prRes = await sbStore(
       `/rest/v1/docket_roles?role_key=eq.${enc(docketRole)}&select=permissions&limit=1`, env);
-    permissions = (prRes.ok && prRes.data?.[0]?.permissions) || {};
+    // Normalised here so the implications (plan_admin → admin → view_all) hold on every path,
+    // getMe included — the app reads perms straight from getMe.
+    permissions = normalizeDocketPerms((prRes.ok && prRes.data?.[0]?.permissions) || {});
   }
 
   // Resolve the caller's podium employee (for default owner + department scoping).
@@ -157,13 +163,15 @@ async function verifyJWT(authHeader, env) {
 }
 
 // ── Permission helpers ──────────────────────────────────────────────────────
-const DOCKET_PERM_KEYS = ['docket_admin', 'docket_view_all'];
+const DOCKET_PERM_KEYS = ['docket_plan_admin', 'docket_admin', 'docket_view_all'];
 function normalizeDocketPerms(permissions) {
   const out = {};
   for (const k of DOCKET_PERM_KEYS) if (permissions && permissions[k]) out[k] = true;
+  if (out.docket_plan_admin) out.docket_admin = true; // super admin implies admin
   if (out.docket_admin) out.docket_view_all = true; // footgun guard
   return out;
 }
+function isPlanAdmin(auth) { return !!auth.permissions?.docket_plan_admin; }
 function isAdmin(auth)    { return !!auth.permissions?.docket_admin; }
 function canViewAll(auth) { return !!(auth.permissions?.docket_admin || auth.permissions?.docket_view_all); }
 function requireAdmin(auth) { return isAdmin(auth) ? null : err('forbidden_docket_admin', 403); }
@@ -2334,10 +2342,25 @@ async function deleteComment(body, auth, env) {
 }
 
 // ── Permission layer (admin) — mirrors Podium ───────────────────────────────
+// Spec §5.1 A5: a role carrying docket_plan_admin is created, edited, deleted or assigned only by a
+// super admin, and only a super admin can change the role of someone who holds one.
+const SUPER_ADMIN_ONLY = () => err('forbidden_super_admin', 403);
+async function roleIsPlanAdmin(roleKey, env) {
+  if (!roleKey) return false;
+  const r = await sbStore(`/rest/v1/docket_roles?role_key=eq.${enc(roleKey)}&select=permissions&limit=1`, env);
+  if (!r.ok) return true; // fail CLOSED: can't prove it isn't super → treat as super (guard blocks)
+  return !!normalizeDocketPerms(r.data?.[0]?.permissions).docket_plan_admin;
+}
+async function userIsPlanAdmin(userId, env) {
+  const r = await sbStore(`/rest/v1/docket_user_roles?user_id=eq.${enc(userId)}&select=role_key&limit=1`, env);
+  if (!r.ok) return true; // fail CLOSED
+  return roleIsPlanAdmin(r.data?.[0]?.role_key, env);
+}
 async function createDocketRole(body, auth, env) {
   const gate = requireAdmin(auth); if (gate) return gate;
   const d = body.data || body;
   if (!d.role_key || !d.label) return err('role_key and label required', 400);
+  if (normalizeDocketPerms(d.permissions).docket_plan_admin && !isPlanAdmin(auth)) return SUPER_ADMIN_ONLY();
   const key = String(d.role_key).trim().toLowerCase().replace(/\s+/g, '_');
   const r = await sbStore(`/rest/v1/docket_roles`, env, {
     method: 'POST',
@@ -2351,8 +2374,12 @@ async function updateDocketRole(body, auth, env) {
   const gate = requireAdmin(auth); if (gate) return gate;
   const d = body.data || body;
   if (!d.role_key) return err('role_key required', 400);
-  const cur = await sbStore(`/rest/v1/docket_roles?role_key=eq.${enc(d.role_key)}&select=is_system&limit=1`, env);
+  const cur = await sbStore(`/rest/v1/docket_roles?role_key=eq.${enc(d.role_key)}&select=is_system,permissions&limit=1`, env);
+  if (!cur.ok) return err('db_error', 503); // fail closed: never PATCH a role we couldn't read
   const isSys = !!(cur.ok && cur.data?.[0]?.is_system);
+  const carries = !!normalizeDocketPerms(cur.ok && cur.data?.[0]?.permissions).docket_plan_admin;
+  const adds = d.permissions !== undefined && !!normalizeDocketPerms(d.permissions).docket_plan_admin;
+  if ((carries || adds) && !isPlanAdmin(auth)) return SUPER_ADMIN_ONLY();
   const updates = { updated_at: nowIso() };
   if (d.label !== undefined)       updates.label = d.label;
   if (d.description !== undefined) updates.description = d.description;
@@ -2366,7 +2393,9 @@ async function deleteDocketRole(body, auth, env) {
   const d = body.data || body;
   if (!d.role_key) return err('role_key required', 400);
   const chk = await sbStore(`/rest/v1/docket_roles?role_key=eq.${enc(d.role_key)}&select=is_system&limit=1`, env);
-  if (chk.ok && chk.data?.[0]?.is_system) return err('cannot delete a system role', 400);
+  if (!chk.ok) return err('db_error', 503); // fail closed
+  if (chk.data?.[0]?.is_system) return err('cannot delete a system role', 400);
+  if (!isPlanAdmin(auth) && await roleIsPlanAdmin(d.role_key, env)) return SUPER_ADMIN_ONLY();
   const assigned = await sbStore(`/rest/v1/docket_user_roles?role_key=eq.${enc(d.role_key)}&limit=1`, env);
   if (assigned.ok && assigned.data?.length) return err('cannot delete a role with assigned users', 400);
   const r = await sbStore(`/rest/v1/docket_roles?role_key=eq.${enc(d.role_key)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
@@ -2377,6 +2406,11 @@ async function assignDocketRole(body, auth, env) {
   const gate = requireAdmin(auth); if (gate) return gate;
   const d = body.data || body;
   if (!d.user_id) return err('user_id required', 400);
+  // Granting super admin, or changing/removing a super admin's role: super admins only.
+  if (!isPlanAdmin(auth)) {
+    const [grants, demotes] = await Promise.all([roleIsPlanAdmin(d.role_key, env), userIsPlanAdmin(d.user_id, env)]);
+    if (grants || demotes) return SUPER_ADMIN_ONLY();
+  }
   if (!d.role_key) {
     await sbStore(`/rest/v1/docket_user_roles?user_id=eq.${enc(d.user_id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
     return ok({ user_id: d.user_id, role_key: null });
@@ -2571,6 +2605,100 @@ async function deleteScratchNote(body, auth, env) {
   return ok({ deleted: d.id });
 }
 
+// ── Plan layer (F9 R1 — spec 2026-11-11-docket-plan-layer.md) ─────────────────
+// Every read goes through docket.plan_items_for (the §5.3 projection: F / O / T, done in SQL) and
+// every write through a transactional docket.plan_* RPC that also writes plan_item_history. The SQL
+// enforces the §4.3 matrix; plan-core.mjs mirrors it for affordances. p_is_super = docket_plan_admin.
+const PLAN_ITEM_KEYS = ['kind', 'parent_id', 'title', 'code', 'owner_employee_id', 'department_id', 'target_text',
+  'done_when', 'measure', 'due_date', 'restricted', 'sort', 'state'];
+function planArgs(auth) {
+  return { p_actor: auth.userId, p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth) };
+}
+async function planRows(auth, env) {
+  return sbDocket(`/rest/v1/rpc/plan_items_for`, env, { method: 'POST', body: JSON.stringify({
+    p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth) }) });
+}
+async function nameMap(sb, table, ids, env) {
+  const r = await sbIn(sb, uniq(ids), (l) => `/rest/v1/${table}?id=in.${l}&select=id,full_name`, env);
+  const m = {}; (r.ok ? r.data || [] : []).forEach(x => { m[x.id] = x.full_name; });
+  return m;
+}
+const withOwnerName = (names) => (x) => ({ ...x, owner_name: x.owner_employee_id ? (names[x.owner_employee_id] || null) : null });
+
+async function getPlan(url, auth, env) {
+  const r = await planRows(auth, env);
+  if (!r.ok) return err('db_error', 500);
+  const rows = Array.isArray(r.data) ? r.data : [];
+  const names = await nameMap(sbPodium, 'employees', rows.map(x => x.owner_employee_id), env);
+  return ok({ items: rows.map(withOwnerName(names)), can_admin: isPlanAdmin(auth), employee_id: auth.employeeId });
+}
+async function getPlanItem(url, auth, env) {
+  const id = url.searchParams.get('id');
+  if (!isUuid(id)) return err('bad_id', 400);
+  const [r, h] = await Promise.all([
+    planRows(auth, env),
+    sbDocket(`/rest/v1/rpc/plan_history_for`, env, { method: 'POST', body: JSON.stringify({
+      p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth), p_id: id }) }),
+  ]);
+  if (!r.ok || !h.ok) return err('db_error', 500);
+  const rows = Array.isArray(r.data) ? r.data : [];
+  const item = rows.find(x => x.id === id);
+  if (!item) return err('not_found', 404);
+  const children = rows.filter(x => x.parent_id === id);
+  const history = Array.isArray(h.data) ? h.data : [];
+  const [names, actors] = await Promise.all([
+    nameMap(sbPodium, 'employees', [item, ...children].map(x => x.owner_employee_id), env),
+    nameMap(sbStore, 'users_profile', history.map(x => x.actor_user_id), env),
+  ]);
+  return ok({
+    item: withOwnerName(names)(item),
+    children: children.map(withOwnerName(names)),
+    history: history.map(({ actor_user_id, ...x }) => ({ ...x, actor_name: actors[actor_user_id] || null })),
+    can_admin: isPlanAdmin(auth),
+  });
+}
+
+// RPC → response. {ok:false, code} → the code's 4xx (plan-core planErrStatus); a constraint the RPC
+// didn't pre-check surfaces as PostgREST's 4xx text.
+async function planRpc(fn, args, env) {
+  const r = await sbDocket(`/rest/v1/rpc/${fn}`, env, { method: 'POST', body: JSON.stringify(args) });
+  if (!r.ok) return err(`plan_rejected: ${r.data?.message || r.status}`, r.status >= 500 ? 500 : 400);
+  const res = r.data || {};
+  if (!res.ok) {
+    const code = res.code || 'plan_failed';
+    return json({ ok: false, error: code, ...(res.fields ? { fields: res.fields } : {}), ...(res.field ? { field: res.field } : {}) }, planErrStatus(code));
+  }
+  const { ok: _ok, ...data } = res;
+  return ok(data);
+}
+async function createPlanItem(body, auth, env) {
+  const d = body.data || body.item || {};
+  const item = {};
+  for (const k of PLAN_ITEM_KEYS) if (d[k] !== undefined) item[k] = d[k];
+  const bad = validatePlanFields(item);
+  if (bad) return err(bad, 400);
+  return planRpc('plan_create', { ...planArgs(auth), p_item: item }, env);
+}
+async function updatePlanItem(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.id)) return err('bad_id', 400);
+  const patch = d.patch;
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch) || !Object.keys(patch).length) return err('bad_patch', 400);
+  const bad = validatePlanFields(patch);
+  if (bad) return err(bad, 400);
+  return planRpc('plan_update', { ...planArgs(auth), p_id: d.id, p_patch: patch }, env);
+}
+// body: { id, op: agree | redate | drop | done | reopen, payload } (`action` is the worker's own key).
+async function planItemAction(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.id)) return err('bad_id', 400);
+  if (!PLAN_ACT_ACTIONS.includes(d.op)) return err('bad_action', 400);
+  const payload = (d.payload && typeof d.payload === 'object') ? d.payload : {};
+  const bad = validateActPayload(d.op, payload);
+  if (bad) return err(bad, 400);
+  return planRpc('plan_act', { ...planArgs(auth), p_id: d.id, p_action: d.op, p_payload: payload }, env);
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Dispatch
 // ════════════════════════════════════════════════════════════════════════════
@@ -2581,6 +2709,7 @@ const GET_ACTIONS = {
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,
+  getPlan, getPlanItem,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,
@@ -2598,6 +2727,7 @@ const POST_ACTIONS = {
   createScratchNote, updateScratchNote, deleteScratchNote,
   createDocketRole, updateDocketRole, deleteDocketRole, assignDocketRole,
   setDashboardPublic, addDashboardViewer, removeDashboardViewer,
+  createPlanItem, updatePlanItem, planItemAction,
 };
 
 async function handleGet(url, request, env) {

@@ -18,7 +18,7 @@
 // another space) takes it — the best match leads. Once they arrow or hover, it is held by key
 // and a late reply never moves it (if their row drops out of the results, it returns to the top).
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Hash, Lock, Flag,
+import { Search, Target, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Hash, Lock, Flag,
   SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info, Loader2, OctagonMinus } from 'lucide-react';
 import { fuzzyMatch, dktQuery, rankGroups, scoreTask, serverFloor } from '../lib/fuzzy.js';
 import { docketopsGet } from '../lib/docketopsFetch.js';
@@ -132,6 +132,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
     const items = [];
     const add = (it) => items.push({ ...it, lc: it.label.toLowerCase(), lcSub: (it.sub || '').toLowerCase() });
     const navItems = [
+      { key: 'nav:plan', label: 'Plan', icon: Target, route: '/plan' },
       { key: 'nav:tasks', label: 'Tasks', icon: ListTodo, route: '/tasks' },
       { key: 'nav:mine', label: 'My tasks', icon: UserCheck, route: '/tasks?lens=mine' },
       { key: 'nav:checklist', label: 'Checklist', icon: ListChecks, route: '/checklist' },

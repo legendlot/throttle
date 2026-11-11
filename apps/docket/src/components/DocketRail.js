@@ -4,11 +4,12 @@
 // tile is the yellow-soft one. Bottom: Admin (docket_admin) + the avatar menu.
 // Hidden ≤767px — the bottom tab bar (DocketTabBar) is its mobile twin.
 import { useRef, useState } from 'react';
-import { ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Keyboard, LogOut } from 'lucide-react';
+import { Target, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Keyboard, LogOut } from 'lucide-react';
 import { Tooltip, Menu, MenuItem, MenuLabel, MenuSeparator } from './ui/index.js';
 import { personColor } from './primitives.js';
 
 export const RAIL_ITEMS = [
+  { key: 'plan',       label: 'Plan',       route: '/plan',            icon: Target },   // F9: everyone (register for super admins, own milestones otherwise)
   { key: 'tasks',      label: 'Tasks',      route: '/tasks',           icon: ListTodo },
   { key: 'mine',       label: 'My tasks',   route: '/tasks?lens=mine', icon: UserCheck },
   { key: 'checklist',  label: 'Checklist',  route: '/checklist',       icon: ListChecks },

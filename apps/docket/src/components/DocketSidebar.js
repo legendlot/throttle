@@ -11,7 +11,7 @@
 //
 // ≤767px the same element becomes a slide-over (CSS: `.dks.mobile-open`).
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { ChevronDown, Plus, Lock, MoreHorizontal, SlidersHorizontal, Check } from 'lucide-react';
+import { ChevronDown, Plus, Lock, MoreHorizontal, SlidersHorizontal, Check, Target } from 'lucide-react';
 import { IconButton, Button, Menu, MenuItem, MenuLabel } from './ui/index.js';
 import { personColor } from './primitives.js';
 import { ADMIN_ITEMS } from '../lib/nav.js';
@@ -124,6 +124,8 @@ export function DocketSidebar({
     <aside className={cls} inert={inert} aria-label="Tasks">
       <div className="dks-title">Tasks</div>
       <div className="dks-scroll">
+        {/* Plan (F9): the plan register / My milestones — top of the sidebar, for everyone. */}
+        <Row label="Plan" lead={<Target size={13} strokeWidth={2} aria-hidden />} active={path === '/plan'} onClick={go('/plan')} />
         {/* Programs (S138): cross-space jump-to — every task tagged to the program, in any
             space you can access. Only programs you have visible tasks in are listed (counts). */}
         {(programs.length > 0 || onNewProgram) && shown('programs', programActive) && <div className="dks-section">

@@ -21,7 +21,7 @@ export const ADMIN_ITEMS = [
 // `search` is a URLSearchParams-like (.get). Returns:
 //   path      normalised pathname
 //   activeKey the sidebar row key ('/tasks', '/tasks?space=<id>', '/tasks?program=<id>', '/tasks?lens=mine', or the path)
-//   railKey   'tasks' | 'mine' | 'checklist' | 'scratchpad' | 'dashboard' | 'manual' | 'admin' | ''
+//   railKey   'plan' | 'tasks' | 'mine' | 'checklist' | 'scratchpad' | 'dashboard' | 'manual' | 'admin' | ''
 //   crumbs    [{ label, href?, lock? }] — the last one is the current page
 //   showCount whether the page publishes a task count (the board views)
 //   spaceId   the real ?space id ('' for none / 'new')
@@ -62,6 +62,7 @@ export function routeModel(pathname, search, { spaces = [], programs = [] } = {}
   const base = { path, spaceId, activeKey: path, showCount: false };
   if (path.startsWith('/tasks/detail')) return { ...base, railKey: 'tasks', crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: 'Task' }] };
   if (path.startsWith('/tasks/new'))    return { ...base, railKey: 'tasks', crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: 'New task' }] };
+  if (path === '/plan')       return { ...base, railKey: 'plan',       crumbs: [{ label: 'Plan' }] };
   if (path === '/checklist')  return { ...base, railKey: 'checklist',  crumbs: [{ label: 'Checklist' }] };
   if (path === '/scratchpad') return { ...base, railKey: 'scratchpad', crumbs: [{ label: 'Scratchpad' }] };
   if (path === '/manual')     return { ...base, railKey: 'manual',     crumbs: [{ label: 'Manual' }] };

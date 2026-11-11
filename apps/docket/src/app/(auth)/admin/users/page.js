@@ -31,6 +31,9 @@ export default function UsersPage() {
   }, [session]);
   useEffect(() => { load(); }, [load]);
 
+  const isPlanAdmin = !!perms?.docket_plan_admin;
+  const planRoleKeys = new Set(roles.filter((r) => r.permissions?.docket_plan_admin).map((r) => r.role_key));
+
   async function assign(userId, roleKey) {
     setSavingId(userId);
     try {
@@ -70,9 +73,10 @@ export default function UsersPage() {
                     <td>{u.docket_role ? <span className="adm-key">{u.docket_role}</span> : <span className="adm-item-sub">baseline</span>}</td>
                     <td className="ctr dt-status"><span className="pill-on">Active</span></td>
                     <td className="dt-assign">
-                      <select value={u.docket_role || ''} disabled={savingId === u.id} onChange={(e) => assign(u.id, e.target.value)} className="adm-select" aria-label={`Docket role for ${u.full_name || 'user'}`}>
+                      {/* Super admin roles: only a super admin grants them or changes a super admin's role (worker enforces, §5.1 A5). */}
+                      <select value={u.docket_role || ''} disabled={savingId === u.id || (!isPlanAdmin && planRoleKeys.has(u.docket_role))} onChange={(e) => assign(u.id, e.target.value)} className="adm-select" aria-label={`Docket role for ${u.full_name || 'user'}`}>
                         <option value="">— none (baseline) —</option>
-                        {roles.map((r) => <option key={r.role_key} value={r.role_key}>{r.label}</option>)}
+                        {roles.map((r) => <option key={r.role_key} value={r.role_key} disabled={!isPlanAdmin && planRoleKeys.has(r.role_key)}>{r.label}</option>)}
                       </select>
                     </td>
                   </tr>
