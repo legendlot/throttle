@@ -207,6 +207,7 @@ hand-off date; the task status is the hand-off status.
 ### 5.1 Today's holes — closed first, in P0
 
 Codex's review found that today's Docket would not keep a founders-only space private. Verified in source:
+**A1–A3 SHIPPED 2026-11-11** (throttle `d65bf607`, migration 0016; also write-by-id gating and sub-task moves) — A4 (move-out of the Founders' space) and A5–A6 remain for P0-a.
 
 | # | Hole | Fix (P0-a) |
 |---|---|---|
