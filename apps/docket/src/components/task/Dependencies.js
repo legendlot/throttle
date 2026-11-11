@@ -219,11 +219,18 @@ export function DepsBadge({ task, getSession, editable, onOpen, onChanged }) {
     try { setErr(''); setLinks(await docketopsGet('getTaskLinks', { id: task.id }, getSession?.())); }
     catch (e) { setErr(e.message || 'Could not load the links'); }
   }
+  const openRef = useRef(false);
+  openRef.current = open;
   useEffect(() => { if (open) { setLinks(null); read(); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   function close() { setOpen(false); if (dirty.current) { dirty.current = false; onChanged?.(); } }
   async function unlink(it) {
     setBusyId(it.link_id);
-    try { await docketopsPost('removeTaskLink', { link_id: it.link_id }, getSession?.()); dirty.current = true; await read(); }
+    try {
+      await docketopsPost('removeTaskLink', { link_id: it.link_id }, getSession?.());
+      // The POST takes ~2s; if the popover was closed meanwhile, close() saw nothing dirty — refresh now.
+      if (!openRef.current) { onChanged?.(); return; }
+      dirty.current = true; await read();
+    }
     catch (e) { showToast(linkErrorMessage(e), 'error'); }
     finally { setBusyId(null); }
   }
