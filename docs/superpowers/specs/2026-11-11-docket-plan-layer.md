@@ -487,7 +487,7 @@ this build** — themes and milestones are entered by the founders, item by item
 |---|---|
 | **R1 — the container** ✅ SHIPPED 2026-11-11 (`44444e8e`) | Super admin (`docket_plan_admin`, Afshaan + Vinay) + role-grant guard (A5) · `plan_items` + `plan_item_history`, all writes via transactional RPCs · create/edit themes, milestones, results; agree / redate / drop / done / reopen (§4.3 minus split) · `/plan` register (super admins: everything; others: "My milestones" + results under them) · projection levels F / O / T (§5.3) · `restricted` themes invisible below F |
 | **R2 — tasks link up** ✅ SHIPPED 2026-11-11 (`ead8c9df`) | `tasks.plan_item_id` + Plan field (drawer, quick capture, Grid, Board) + chips + filters + Unplanned · level L redaction in hydration/search/connector · Founders' space + confidentiality triggers + A4 · connector `docket_plan` read + `plan_item_id` |
-| R3 — lifecycle depth | split (§4.3.1) · done-when/measure + ⚠ no data source · proposals + queue (§4.5) |
+| **R3 — lifecycle depth** ✅ SHIPPED 2026-11-12 (`227507a5`) | split (§4.3.1) · done-when/measure + ⚠ no data source · proposals + queue (§4.5) |
 | R4 — weeks | week-ending group-by + Week filter (all views) · three-week view + warnings (§7.2) |
 | R5 — the score | transactional deadline RPC · `week_commitments` cohort · `week_score()` · connector `score` |
 | R6 — review | review pack (provisional/final) + staleness + export + snapshots · Saturday founders' page · level R (Associates) |
