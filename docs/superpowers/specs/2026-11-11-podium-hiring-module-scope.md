@@ -10,6 +10,9 @@
 > **v3.1: the six open decisions settled (Afshaan: "yes, all six"); NEW O1 = offer email + candidate
 > acceptance link, modelled on Ignition's deal-contract link (S441). The old O4 upload link folds into it.
 > v3.2: corrections — hr@ is CC'd on every offer; CTC includes PF + PT (shown as deductions → in-hand).**
+> **v4 (2026-11-11, later): C1+C2 and C3 are LIVE. The lifecycle extends past hiring — J1 (Podium creates the
+> Workspace account + employee; replaces the Directory-pairing hand-off), J2 (onboarding for joiners and a
+> one-time profile completion for existing staff), X1 (exits + no-dues). See "Employee lifecycle" below.**
 
 ## Goal
 
@@ -162,7 +165,10 @@ text.
 **After joining:** offers and salary-bearing hiring records follow the employee salary rules (allow-list +
 own pay). The hiring chain's access ends at `joined`.
 
-**Joining hand-off (atomic).**
+**Joining hand-off (atomic).** ⚠️ **v4: superseded by J1** — Podium creates the Workspace account, so there
+is nothing to pair. Steps 3–6 below (one idempotent DB function: employee or rehire-reactivate, documents copied,
+`initial` compensation event via the components contract, headcount, application `joined`; actual start date
+confirmed by HR) still hold and move into J1 unchanged.
 1. The application is `accepted` with exactly one accepted offer revision. IT creates the Workspace account.
 2. In the Directory-sync preview, HR **pairs the new Workspace account to the accepted application**.
    Personal emails won't match work emails, so this is an explicit pairing stored with the Google user id,
@@ -416,6 +422,137 @@ only route-tested, so prove it live here.
 - **Cutover:** at launch, load the hires already in flight as openings and applications, so the "No offer on
   record" rule doesn't block them.
 
+## Employee lifecycle — J1 account creation · J2 onboarding · X1 exits (v4)
+
+**Why.** Podium should be where a person's employment starts and ends, not a mirror of Google updated by hand.
+Measured 2026-11-11:
+- **Joiners:** IT creates the Google account, then HR runs Directory sync (`/people` → preview → confirm;
+  RULE-PODIUM-007; `podiumops-worker/src/index.js` ~1566-1690). Podium's Google token is
+  **read-only** (`admin.directory.user.readonly`, index.js ~208). No write scope is used anywhere in the fleet.
+- **Exits:** manual `updateEmployee` → exited, or the sync's "suspended in Google / no Google account" review
+  item (index.js ~1678-1686). Reports are reassigned on exit (RULE-PODIUM-010). There is no checklist, and no
+  Snorkel asset check. **4 of 19 exits have no reason**, including the two most recent (EMP-004, EMP-031).
+  **3 have dates derived from the final payslip**, not HR-confirmed.
+- **Onboarding:** none. The register gaps (DOB 19 · PAN 15 · DOJ 8 · job_title 8 blank of 62, 2026-09-21) are
+  deferred by decision: **"the fix is a JOINER CHECKLIST"** (`reference/decisions.md`, S396). J2 is that.
+- **No-dues checklist:** not found in Drive, Gmail or Slack (searched 2026-11-11). Afshaan to share it, or X1
+  ships the draft below.
+
+### J1 — Podium creates the work account + the employee (replaces the Directory pairing)
+
+- **Trigger:** an application with an `accepted` offer → HR clicks **"Create work account"**.
+- **Address:** Podium proposes it per the naming convention (decision L1) and checks availability with
+  `users.get`. HR can edit it. Collisions get a suffix suggestion, never an automatic one.
+- **One action, in this order:**
+  1. Admin SDK `users.insert`: name, primary email, org unit (from the department, decision L2), random temp
+     password with `changePasswordAtNextLogin`.
+  2. The J1 joining function (the old hand-off steps 3–6): employee row with `google_user_id` + `work_email`
+     set from birth, or a rehire reactivation; documents copied; `initial` compensation event (components
+     contract); headcount; application `joined` when HR confirms the actual start date.
+  3. The temp credentials are shown **once** to HR, to hand over on day one, and never stored. They are not
+     emailed: the personal-email route waits for O1's mail plumbing.
+- **Idempotent and recoverable.** If the Google call succeeds but the DB step fails, a retry finds the user by
+  email and links it, never creating a second account. The pending account is stored before the call.
+- **Directory sync stays as reconciliation only:** anything created in Google outside Podium shows as
+  **"created outside Podium"** for HR to adopt or ignore. That is the RULE-PODIUM-007 preview, repurposed.
+- **Identity rule kept:** an employee row only ever exists with a real Workspace login (memory "never
+  auto-create employees" → intent preserved: the row is born with the account, by an explicit human action).
+- **Gate (Afshaan, Admin console — a security setting, his to do):** add
+  `https://www.googleapis.com/auth/admin.directory.user` (write) to the existing service account's
+  domain-wide delegation. That scope can create **and suspend** any user, so:
+  - only HR + founders get the button (decision L3);
+  - every call is logged (actor, action, target email, result) in a `podium.google_admin_log`;
+  - the worker uses the write scope only in these handlers. Reads keep the readonly token.
+- **Amends RULE-PODIUM-007** (sync was read-only by rule) — record the amendment in `decisions.md` when built.
+- **Also lands here:** "no accepted Podium offer → blocked" (decision 10). A Google account can't be created
+  for anyone without one. An HR override needs a written reason and is logged.
+
+### J2 — Onboarding (joiners) + profile completion (everyone, once)
+
+- **Joiner self-serve** (`/onboarding`, opened by the new Google login, no Podium role needed — self-scoped like
+  My Performance):
+  - **Profile:** DOB, gender, blood group, PAN, address, personal email/phone, emergency contact, bank account +
+    IFSC, PF UAN, ESIC no., previous employer's taxable salary + TDS for the FY. **These are exactly the
+    XPayroll onboarding sheet's fields** (Drive "XPayroll-Onboarding-v1-2"), so payroll setup is one export.
+  - **Documents:** ID proof, PAN, address proof, education, previous relieving letter, photo. Candidate documents
+    (CV, signed offer) carry over from hiring. Bank / ID / PAN are HR-only visibility, as candidate docs today.
+  - **Acknowledgements:** policies the employee reads and accepts (list = decision L4), timestamped.
+- **Owner tasks** (each a checklist line with an owner and a due date relative to the start date):
+  - IT: laptop issued as a **Snorkel asset assignment** (custodian = the employee — so X1 can check it back);
+    app access (LOT apps: Podium role / users_profile).
+  - Manager: first-week plan, probation goals (links to the existing OKR objects), buddy.
+  - HR: payroll set up (XPayroll export done), PF/ESI registration, probation end date set (from the offer's
+    probation months), welcome email.
+- **Templates:** the checklist is a versioned template per employment type (full-time / intern). Lines are
+  added in admin, not code.
+- **Completion:**
+  - an onboarding is complete when every required line is done;
+  - HR sees a board of joiners × lines, with overdue lines highlighted;
+  - nothing blocks payroll in Podium — this records, it doesn't gate RazorpayX.
+- **Everyone, once ("profile completion"):** the same self-serve profile + documents for the current actives.
+  - HR launches it as a campaign.
+  - Each employee sees "Complete your profile" on their Podium home until done.
+  - HR sees per-field completion.
+  - This closes the S396 register gaps at the source; afterwards the profile stays editable by the employee
+    with HR approval on PAN/bank changes.
+
+### X1 — Exits + no-dues (the exit is recorded because it can only happen in Podium)
+
+**1. Start.** Either the employee clicks **Resign**, or the manager/HR starts the exit. Both capture:
+- a reason code: resignation / termination / absconding / end of internship / end of contract / other;
+- the notice date;
+- the last working day (LWD) — from the notice period, overridable by HR with a reason;
+- whether the person is eligible for rehire, recorded privately.
+
+The employee status becomes `notice` (a new status; still active for everything else).
+
+**2. No-dues checklist**, auto-built. Each line has an owner who signs it off, with a note and optional evidence:
+
+| Line | Owner | Source / check |
+|---|---|---|
+| Assets returned | Store / IT | **Live from Snorkel** — every asset with `custodian_user_id` = the employee's auth user. The line can't be cleared while any remain assigned. |
+| Google account | automatic | Suspended on LWD (decision L5); Drive ownership transferred to the manager (Data Transfer API — needs the `admin.datatransfer` scope; optional, decision L6) |
+| LOT app access | automatic | `users_profile` / Podium roles revoked on LWD |
+| Other tools (Slack, Shopify, Amazon/Flipkart seller, bank portals …) | IT | manual ticks; list = decision L4 |
+| Advances / reimbursements / imprest | Finance | open items listed from Snorkel payment requests where the requester is the employee |
+| Handover | Manager | free text + link; reports reassigned (RULE-PODIUM-010) |
+| Full & final | Finance / HR | recorded: amount, date, payslip/F&F statement upload. Computed in RazorpayX, not Podium (decision L7) |
+| Relieving + experience letters | HR | generated from versioned templates, using the offer-letter engine (pdf-lib, hash stored) and issued after F&F |
+| Exit interview | HR | optional, short form |
+
+**3. Close.** The exit closes only when every required line is cleared. Then:
+- status `exited`, `date_exited` = LWD, reason required (the DB enforces it);
+- comp access ends;
+- the employee's documents follow retention rules.
+
+There is **no other path to `exited`** — the manual `updateEmployee` → exited route is removed, so an exit
+can't be recorded without its record.
+
+**4. Exits started outside Podium.** The Directory-sync "suspended in Google but active in Podium" item becomes
+a red alert: "an exit was started outside Podium — start the exit here". It never auto-exits.
+
+**5. Backfill.** The 4 exits with no reason and the 3 payslip-derived dates get a one-time HR review screen. No
+guessing.
+
+### Decisions needed (Afshaan)
+
+- **L1** Email format: `firstname@` or `firstname.lastname@` (collision rule).
+- **L2** Org unit per department, or a flat OU.
+- **L3** Who can create accounts (HR + founders proposed).
+- **L4** The policy acknowledgement list and the "other tools" exit list.
+- **L5** Google suspension: automatic at the end of LWD, or an HR click on the day.
+- **L6** Drive transfer to the manager: yes/no. This needs the extra `admin.datatransfer` scope.
+- **L7** F&F: record only (proposed; RazorpayX computes) or compute in Podium.
+- **L8** The no-dues checklist: share the current one, or adopt the draft above.
+
+### Lifecycle — hard to change later
+
+- `google_user_id` + `work_email` set at creation and immutable after.
+- One exit record per employment, with a reason code; a rehire = a new employment on the same employee row.
+- `notice` as a real status.
+- Asset custody keyed on the auth user that Snorkel uses.
+- The write-scope audit log from day one.
+
 ## Hard to change later — settle in the build plan, before the first migration
 
 1. Person vs application split (C2).
@@ -431,7 +568,9 @@ only route-tested, so prove it live here.
 
 ## Build order
 
-C1 + C2 → C3 → O1 (acceptance link) → C4 → then O2, O3 as picked. Each module gets a manual chapter when it goes live.
+~~C1 + C2 → C3~~ (live 2026-11-11) → **J1** (account + employee; needs the Admin-console scope first) → **X1**
+(exits + no-dues — stops unrecorded exits) → **J2** (onboarding + profile completion) → O1 (acceptance link) →
+C4 → then O2, O3 as picked. Each module gets a manual chapter when it goes live.
 
 Sources for the statutory changes: EPF ceiling ₹25,000 from 17 Sep 2026
 ([CorpLaw Updates](https://www.corplawupdates.in/updates/epfo-wage-ceiling-rs-25000-cabinet-approval-2026),
