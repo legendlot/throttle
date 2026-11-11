@@ -4,7 +4,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { computeAnnexure, bandCheck, needsApproval, componentsContract, stateCode, variableLineLabel } from '../src/offer-calc.js';
+import { computeAnnexure, bandCheck, needsApproval, componentsContract, stateCode, variableLineLabel, BONUS_TYPES } from '../src/offer-calc.js';
+import { VARIABLE_FREQUENCIES } from '../src/hiring.js';
 
 const sql = readFileSync(new URL('../migrations/0008_hiring_offers.sql', import.meta.url), 'utf8');
 function seededRules(code) {
@@ -169,6 +170,15 @@ test('componentsContract: the payouts keys, fixed', () => {
   assert.equal(m.bonus_type, 'Monthly');
   const s = componentsContract(computeAnnexure({ mode: 'stipend', stipend_monthly: 15000, internship_months: 6 }, R26), { designation: 'Intern' });
   assert.equal(s.monthly_fixed, 15000);
-  assert.equal(s.stipend_monthly, 15000);
+  assert.equal(s.monthly_stipend, 15000, 'monthly_stipend — the live intern key');
+  assert.equal('stipend_monthly' in s, false);
   assert.equal(s.bonus_type, null);
+});
+
+test('componentsContract: only the bonus types the payouts reader handles', () => {
+  assert.deepEqual(Object.values(BONUS_TYPES).sort(), ['Half-Yearly', 'Monthly']);
+  for (const f of VARIABLE_FREQUENCIES) assert.ok(BONUS_TYPES[f], `${f} maps to a payouts bonus_type`);
+  assert.deepEqual(VARIABLE_FREQUENCIES, ['half-yearly', 'monthly']);
+  const a = computeAnnexure(sal({ fixed_annual: 450000, variable_annual: 50000 }), R25);
+  assert.equal(componentsContract(a, { variable_frequency: 'quarterly' }).bonus_type, null, 'never an unknown type');
 });

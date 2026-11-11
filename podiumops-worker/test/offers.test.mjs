@@ -6,7 +6,11 @@ import {
   canManageOffers, offerRoles, canSeeSalary, canSeeOpening, cleanOfferTerms, offerPdfPath, offerDocPath, checkOfferDocPath,
   offerView, istToday, addDaysIso, isIsoDate, OFFER_LIVE_STATUSES, OFFER_WITHDRAWABLE, OFFER_OPEN_STATUSES,
   docTier, canSeeDocRow, CANDIDATE_DOC_TYPES,
+  offerTermsCanonical, SUPERSEDE_ON_SEND, isLatestSent, canSendOffer, needsNoLiveOffer, canMoveFrom, offerDbErrorCode,
+  APP_TRANSITIONS, ACTIVE_APP_STATUSES,
 } from '../src/hiring.js';
+import { readFileSync } from 'node:fs';
+const SQL = readFileSync(new URL('../migrations/0008_hiring_offers.sql', import.meta.url), 'utf8');
 
 const CID = '11111111-2222-4333-8444-555555555555';
 const AID = '99999999-8888-4777-8666-555555555555';
@@ -74,7 +78,8 @@ test('cleanOfferTerms: request over defaults; stipend mode zeroes the salary fie
 });
 
 test('offer storage paths: minted shape passes its own check, anything else fails', () => {
-  assert.equal(offerPdfPath(AID, 'OFR-2026-001', 2), `offers/${AID}/OFR-2026-001-r2.pdf`);
+  assert.equal(offerPdfPath(AID, 'OFR-2026-001', 2, 'abcdef0123456789'), `offers/${AID}/OFR-2026-001-r2-abcdef01.pdf`, 'hash-suffixed: a stale render never overwrites');
+  assert.doesNotMatch(SQL + readFileSync(new URL('../src/index.js', import.meta.url), 'utf8'), /x-upsert/, 'no upsert anywhere');
   const p = offerDocPath(CID, 'OFR-2026-001', 2, 'signed', 1700000000000);
   assert.equal(p, `candidates/${CID}/offers/OFR-2026-001-r2-signed-1700000000000.pdf`);
   assert.equal(checkOfferDocPath(p, CID, 'OFR-2026-001', 2, 'signed'), null);
@@ -119,4 +124,85 @@ test('IST dates', () => {
   assert.equal(addDaysIso('2026-12-28', 7), '2027-01-04');
   assert.equal(isIsoDate('2026-02-29'), false);
   assert.equal(isIsoDate('2028-02-29'), true);
+});
+
+// ── Review fixes ─────────────────────────────────────────────────────────────
+const ROW = { template_id: 't1', rule_set_id: 'r1', mode: 'salary', fixed_annual: 450000, variable_annual: 50000,
+  variable_label: 'variable pay', variable_frequency: 'half-yearly', joining_bonus: 0, retention_bonus: 0, stipend_monthly: null,
+  internship_months: null, total_ctc: 500000, pf_opt_out: false, pf_opt_out_reason: null, designation: 'A', department_name: null,
+  location: 'B', start_date: '2026-12-01', probation_months: 3, signatory_id: 's1', annexure: { lines: [{ key: 'basic', annual: 1 }], totals: { b: 1, a: 2 } } };
+
+test('terms canonical: PostgREST strings = worker numbers; any term change changes it; non-terms do not', () => {
+  const db = { ...ROW, fixed_annual: '450000', variable_annual: '50000', total_ctc: '500000', joining_bonus: '0', retention_bonus: '0',
+    annexure: { totals: { a: 2, b: 1 }, lines: [{ annual: 1, key: 'basic' }] }, status: 'ready', updated_at: 'x', pdf_path: 'p', band_check: 'in_band' };
+  assert.equal(offerTermsCanonical(db), offerTermsCanonical(ROW), 'key order / numeric strings / status fields ignored');
+  for (const [k, v] of [['fixed_annual', 450001], ['joining_bonus', 1], ['signatory_id', 's2'], ['start_date', '2026-12-02'],
+    ['template_id', 't2'], ['pf_opt_out', true], ['annexure', { lines: [] }], ['designation', 'B']]) {
+    assert.notEqual(offerTermsCanonical({ ...ROW, [k]: v }), offerTermsCanonical(ROW), k);
+  }
+});
+
+test('the transition RPC guards freeze / approve / issue / send / accept on the terms hash and the latest sent', () => {
+  const fn = SQL.slice(SQL.indexOf('function podium.hiring_offer_transition'), SQL.indexOf('function podium.hiring_expire_offers'));
+  assert.match(fn, /v_to in \('pending_approval', 'approved', 'ready', 'sent', 'accepted'\)\s+and v_o\.terms_hash is distinct from nullif\(p->>'expected_terms_hash', ''\) then\s+raise exception 'stale'/);
+  assert.match(fn, /raise exception 'not_latest'/);
+  assert.match(fn, /sent_at = case when v_to = 'sent' then coalesce\(v_s\.sent_at, now\(\)\)/, 'the DB stamps sent_at, so not_latest cannot be dodged');
+  assert.match(fn, /approved_terms_hash = case when v_to = 'approved' then v_o\.terms_hash/, 'approval binds to the row\'s hash, set by the DB');
+  assert.match(SQL, /coalesce\(band_check in \('in_band', 'below_band'\), false\)\s+or coalesce\(approved_terms_hash = terms_hash, false\)\)/, 'table check: nothing above band issued unapproved (NULL-safe)');
+});
+
+test('send supersedes ready / sent / expired siblings (worker constant = 0008)', () => {
+  assert.deepEqual(SUPERSEDE_ON_SEND, ['ready', 'sent', 'expired']);
+  const m = SQL.match(/if v_to = 'sent' then[\s\S]*?status in \(([^)]*)\)/);
+  assert.deepEqual(m[1].split(',').map(x => x.trim().replace(/'/g, '')), SUPERSEDE_ON_SEND);
+});
+
+test('only the latest sent revision can be accepted', () => {
+  const offers = [{ id: 'r1', revision: 1, sent_at: 't' }, { id: 'r2', revision: 2, sent_at: 't' }, { id: 'r3', revision: 3, sent_at: null }];
+  assert.equal(isLatestSent(offers, 'r2'), true);
+  assert.equal(isLatestSent(offers, 'r1'), false, 'an expired older revision after a newer send');
+  assert.equal(isLatestSent(offers, 'r3'), false, 'never sent');
+  assert.equal(isLatestSent([{ id: 'a', revision: '10', sent_at: 't' }, { id: 'b', revision: '9', sent_at: 't' }], 'a'), true, 'numeric strings');
+});
+
+test('canSendOffer: in / below band, or approved for exactly these terms', () => {
+  assert.equal(canSendOffer({ status: 'ready', band_check: 'in_band' }), true);
+  assert.equal(canSendOffer({ status: 'ready', band_check: 'below_band' }), true);
+  assert.equal(canSendOffer({ status: 'ready', band_check: 'above_band', terms_hash: 'h', approved_terms_hash: 'h' }), true);
+  assert.equal(canSendOffer({ status: 'ready', band_check: 'above_band', terms_hash: 'h2', approved_terms_hash: 'h' }), false);
+  assert.equal(canSendOffer({ status: 'ready', band_check: 'extras', terms_hash: 'h', approved_terms_hash: null }), false);
+  assert.equal(canSendOffer({ status: 'ready', band_check: 'extras', terms_hash: null, approved_terms_hash: null }), false);
+  assert.equal(canSendOffer({ status: 'approved', band_check: 'in_band' }), false);
+});
+
+test('every manual close / hold checks for a live offer; nothing at offer / accepted moves', () => {
+  for (const to of ['rejected', 'withdrawn', 'on_hold', 'declined', 'no_show', 'joined']) assert.equal(needsNoLiveOffer(to), true, to);
+  for (const to of ['screening', 'interviewing', 'new']) assert.equal(needsNoLiveOffer(to), false, to);
+  for (const targets of Object.values(APP_TRANSITIONS)) for (const t of targets) {
+    if (!ACTIVE_APP_STATUSES.includes(t) || t === 'on_hold') assert.equal(needsNoLiveOffer(t), true, `manual →${t} is checked`);
+  }
+  assert.equal(canMoveFrom('offer'), false);
+  assert.equal(canMoveFrom('accepted'), false);
+  assert.equal(canMoveFrom('interviewing'), true);
+});
+
+test('offer DB errors map by constraint name and never echo a row', () => {
+  const dup = (c) => ({ code: '23505', message: `duplicate key value violates unique constraint "${c}"`, details: 'Key (x)=(450000)' });
+  assert.deepEqual(offerDbErrorCode(dup('offers_one_accepted')), { code: 'already_accepted', status: 409 });
+  assert.deepEqual(offerDbErrorCode(dup('offers_one_open_draft')), { code: 'draft_exists', status: 409 });
+  assert.deepEqual(offerDbErrorCode(dup('candidate_documents_storage_path_key')), { code: 'doc_already_recorded', status: 409 });
+  assert.deepEqual(offerDbErrorCode(dup('offers_pdf_path_key')), { code: 'pdf_path_in_use', status: 409 });
+  assert.deepEqual(offerDbErrorCode(dup('something_else')), { code: 'conflict', status: 409 });
+  assert.deepEqual(offerDbErrorCode({ message: 'stale' }), { code: 'stale', status: 409 });
+  assert.deepEqual(offerDbErrorCode({ message: 'not_latest' }), { code: 'not_latest', status: 409 });
+  assert.deepEqual(offerDbErrorCode({ code: '23514', message: 'violates check constraint "offers_check6"' }), { code: 'offer_check_failed', status: 409 });
+  assert.equal(offerDbErrorCode({ code: '42P01', message: 'x' }), null);
+  // The index names the mapping keys on exist in 0008 / 0006.
+  assert.match(SQL, /create unique index offers_one_accepted /);
+  assert.match(SQL, /create unique index offers_one_open_draft /);
+  assert.match(SQL, /pdf_path text unique/);
+});
+
+test('signatories are seeded without a title (letters sign with the name only)', () => {
+  assert.match(SQL, /select e\.id, e\.full_name, nullif\(btrim\(e\.phone\), ''\), null\s+from podium\.employees/);
 });

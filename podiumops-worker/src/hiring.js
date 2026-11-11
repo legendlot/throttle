@@ -275,7 +275,8 @@ export const OFFER_WITHDRAWABLE = [...OFFER_LIVE_STATUSES, 'expired'];
 export const OFFER_APP_STATUSES = ['interviewing', 'offer', 'accepted'];
 export const OFFER_TEMPLATE_KEYS = ['employment', 'internship'];
 export const VARIABLE_LABELS = ['variable pay', 'incentive pay'];
-export const VARIABLE_FREQUENCIES = ['half-yearly', 'monthly', 'quarterly', 'annual'];
+// Only what the payouts reader understands (bonus_type Half-Yearly / Monthly) — see componentsContract.
+export const VARIABLE_FREQUENCIES = ['half-yearly', 'monthly'];
 export const OFFER_DOC_KINDS = ['sent_evidence', 'signed'];
 
 // Create / revise / send = the opening's hiring owner or reporting manager (spec permission table) —
@@ -371,8 +372,9 @@ export function cleanOfferTerms(d, mode, defaults = {}) {
 
 // Storage: the issued PDF, and the two uploads an offer takes (the evidence of sending, the signed copy).
 const REF_PAT = 'OFR-\\d{4}-\\d{3,}';
-export function offerPdfPath(applicationId, offerRef, revision) {
-  return `offers/${applicationId}/${offerRef}-r${Number(revision)}.pdf`;
+// Hash-suffixed and written WITHOUT upsert: a slow, stale render can never overwrite the issued file.
+export function offerPdfPath(applicationId, offerRef, revision, sha256) {
+  return `offers/${applicationId}/${offerRef}-r${Number(revision)}-${String(sha256 || '').slice(0, 8)}.pdf`;
 }
 export function offerDocPath(candidateId, offerRef, revision, kind, ts = Date.now()) {
   return `candidates/${candidateId}/offers/${offerRef}-r${Number(revision)}-${kind}-${Math.trunc(ts)}.pdf`;
@@ -397,4 +399,72 @@ export function offerView(o, salaryOk) {
   const out = { ...o };
   for (const k of OFFER_NUM_KEYS) out[k] = o[k] === null || o[k] === undefined || o[k] === '' ? null : Number(o[k]);
   return out;
+}
+
+// ── Offer integrity (review fixes) ───────────────────────────────────────────
+// The terms that drive the letter. terms_hash = SHA-256 of offerTermsCanonical(row); the transition RPC
+// refuses a freeze / approve / issue / send / accept step whose expected_terms_hash is not the row's.
+const TERMS_HASH_KEYS = ['template_id', 'rule_set_id', 'mode', 'fixed_annual', 'variable_annual', 'variable_label',
+  'variable_frequency', 'joining_bonus', 'retention_bonus', 'stipend_monthly', 'internship_months', 'total_ctc',
+  'pf_opt_out', 'pf_opt_out_reason', 'designation', 'department_name', 'location', 'start_date', 'probation_months',
+  'signatory_id', 'annexure'];
+const TERMS_NUM_KEYS = new Set(['fixed_annual', 'variable_annual', 'joining_bonus', 'retention_bonus', 'stipend_monthly',
+  'internship_months', 'total_ctc', 'probation_months']);
+function stable(v) {
+  if (Array.isArray(v)) return `[${v.map(stable).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}`;
+  return JSON.stringify(v === undefined ? null : v);
+}
+// Same terms → same string, whether the row came from the worker (numbers) or PostgREST (numeric strings).
+export function offerTermsCanonical(row) {
+  const o = {};
+  for (const k of TERMS_HASH_KEYS) {
+    const v = row?.[k];
+    o[k] = v === undefined || v === null || v === '' ? null
+      : TERMS_NUM_KEYS.has(k) ? Number(v) : k === 'pf_opt_out' ? !!v : v;
+  }
+  return stable(o);
+}
+
+// On send, these other revisions of the application are superseded (an older expired one too, so it can't
+// be accepted late after a newer one went out). Mirrors hiring_offer_transition in 0008.
+export const SUPERSEDE_ON_SEND = ['ready', 'sent', 'expired'];
+
+// Only the newest revision that was ever sent can be accepted.
+export function isLatestSent(offers, offerId) {
+  const sent = (offers || []).filter(o => o.sent_at).sort((a, b) => Number(b.revision) - Number(a.revision));
+  return !!sent.length && sent[0].id === offerId;
+}
+
+// May this ready revision go out? In / below band, or approved for exactly these terms.
+export function canSendOffer(o) {
+  if (o?.status !== 'ready') return false;
+  if (o.band_check === 'in_band' || o.band_check === 'below_band') return true;
+  return !!o.terms_hash && o.approved_terms_hash === o.terms_hash;
+}
+
+// Manual moves that close or park an application must not strand a live offer revision.
+export const CLOSE_OR_HOLD_STATUSES = ['rejected', 'withdrawn', 'on_hold', 'declined'];
+export const needsNoLiveOffer = (to) => CLOSE_OR_HOLD_STATUSES.includes(to) || TERMINAL_APP_STATUSES.includes(to);
+// Moving to another opening is never allowed once an offer stage is reached (offers stay with their opening).
+export const canMoveFrom = (status) => !['offer', 'accepted'].includes(status);
+
+// A DB error from an offer write → { code, status }. 23505 is split by constraint name so each unique
+// index gets its own message; RPC raises ('stale', 'not_latest') pass through. Never echoes row values.
+export function offerDbErrorCode(data) {
+  const d = data && typeof data === 'object' ? data : {};
+  const msg = String(d.message || '');
+  if (msg === 'stale') return { code: 'stale', status: 409 };
+  if (msg === 'not_latest') return { code: 'not_latest', status: 409 };
+  if (d.code === '23505') {
+    const m = msg.match(/constraint "([^"]+)"/);
+    const c = m ? m[1] : '';
+    if (c === 'offers_one_accepted') return { code: 'already_accepted', status: 409 };
+    if (c === 'offers_one_open_draft') return { code: 'draft_exists', status: 409 };
+    if (c === 'candidate_documents_storage_path_key') return { code: 'doc_already_recorded', status: 409 };
+    if (c === 'offers_pdf_path_key') return { code: 'pdf_path_in_use', status: 409 };
+    return { code: 'conflict', status: 409 };
+  }
+  if (d.code === '23514') return { code: 'offer_check_failed', status: 409 };
+  return null;
 }

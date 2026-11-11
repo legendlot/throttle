@@ -143,3 +143,9 @@ test('offerFields never carries a figure the offer does not', () => {
   assert.equal(f.has_probation, true);
   assert.equal(f.revision, '2');
 });
+
+test('closing prints the signatory title only when one is set', () => {
+  const v = renderOfferText({ template: EMP, offer: OFFER, annexure: null, signatory: { ...SIG, title: null }, candidate: CAND });
+  assert.equal(v.closing.title, null);
+  assert.equal(renderOfferText({ template: EMP, offer: OFFER, annexure: null, signatory: { ...SIG, title: 'Director' }, candidate: CAND }).closing.title, 'Director');
+});

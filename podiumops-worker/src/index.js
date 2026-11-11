@@ -36,6 +36,7 @@ import {
   canManageOffers, offerRoles, cleanOfferTerms, offerPdfPath, offerDocPath, checkOfferDocPath, offerView,
   istToday, addDaysIso, isIsoDate, OFFER_OPEN_STATUSES, OFFER_EDITABLE_STATUSES, OFFER_LIVE_STATUSES, OFFER_WITHDRAWABLE,
   OFFER_APP_STATUSES, OFFER_TEMPLATE_KEYS, OFFER_DOC_KINDS,
+  offerTermsCanonical, isLatestSent, canSendOffer, needsNoLiveOffer, canMoveFrom, offerDbErrorCode,
 } from './hiring.js';   // Hiring C1/C2/C3 — the pure permission + transition rules, see test/hiring.test.mjs + offers.test.mjs
 import { computeAnnexure, bandCheck, needsApproval } from './offer-calc.js';   // C3 CTC calculator (test/offer-calc.test.mjs)
 import {
@@ -4380,8 +4381,8 @@ async function setApplicationStatus(body, auth, env) {
   if (bad === 'reason_required') return errCode('reason_required', 'A reason is required to reject or withdraw', 400);
   if (bad === 'bad_reason') return errCode('bad_reason', `reason must be one of: ${OUTCOME_REASON_CODES.join(', ')}`, 400);
   if (bad) return errCode('invalid_transition', `Cannot move ${app.status} → ${d.status} here`, 409);
-  // Closing an application that is at offer / accepted: its live offer revision is withdrawn / declined first.
-  if (['offer', 'accepted'].includes(app.status) && await hasLiveOffer(env, app.id)) {
+  // Any manual close or hold (from any status): a live offer revision is withdrawn / declined first.
+  if (needsNoLiveOffer(d.status) && await hasLiveOffer(env, app.id)) {
     return errCode('close_offers_first', OFFER_COPY.close_offers_first, 409);
   }
   const reason = String(d.reason || '').trim() || null;
@@ -4414,7 +4415,9 @@ async function moveApplication(body, auth, env) {
   const { x: dst, res } = await intakeOpening(auth, me, env, d.to_opening_id);
   if (res) return res;
   if (!(APP_TRANSITIONS[app.status] || []).includes('withdrawn')) return errCode('invalid_transition', `Cannot move an application that is ${app.status}`, 409);
-  // Offers stay with the opening they were made for — close the live one before moving.
+  // Offers stay with the opening they were made for: nothing at offer / accepted moves, and no live
+  // revision (e.g. a draft while interviewing) is stranded.
+  if (!canMoveFrom(app.status)) return errCode('close_offers_first', 'An application at the offer stage cannot be moved — close it here and add the person to the other opening', 409);
   if (await hasLiveOffer(env, app.id)) return errCode('close_offers_first', OFFER_COPY.close_offers_first, 409);
   // New application + close the old one (guarded on the status read here) + both events, one
   // transaction (0007). Salary fields are NOT copied.
@@ -4481,11 +4484,20 @@ async function deleteCandidateDocument(body, auth, env) {
   if (!doc) return err('not_found', 404);
   const recent = Date.now() - new Date(doc.uploaded_at).getTime() < 24 * 3600 * 1000;
   if (!(isHr(auth) || (doc.uploaded_by === auth.userId && recent))) return err('forbidden — HR, or the uploader within 24h', 403);
+  // …and only a document the caller can SEE (the list / URL rule) — HR off a salary chain can't delete a payslip.
+  const edges = await loadOrgEdges(env);
+  const [sc, ref] = await Promise.all([
+    candidateScope(auth, callerEmployee(edges, auth.userId), env, doc.candidate_id),
+    sb(`/rest/v1/offers?or=(acceptance_doc_id.eq.${doc.id},sent_evidence_doc_id.eq.${doc.id})&select=id&limit=1`, env),
+  ]);
+  if (!canSeeDocRow(doc.doc_type, doc.application_id, sc.docCtx)) return err('forbidden', 403);
+  if (ref.data?.length) return errCode('doc_in_use', OFFER_COPY.doc_in_use, 409);
   const r = await sb(`/rest/v1/candidate_documents?id=eq.${d.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (r.data?.code === '23503') return errCode('doc_in_use', OFFER_COPY.doc_in_use, 409);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   const seg = String(doc.storage_path).split('/').map(encodeURIComponent).join('/');
   await storageFetch(`/object/${DOC_BUCKET}/${seg}`, env, { method: 'DELETE' });
-  await hiringEvents(env, auth, callerEmployee(await loadOrgEdges(env), auth.userId), [{ candidate_id: doc.candidate_id,
+  await hiringEvents(env, auth, callerEmployee(edges, auth.userId), [{ candidate_id: doc.candidate_id,
     application_id: doc.application_id, event_type: 'document_deleted', detail: { doc_type: doc.doc_type } }]);
   return ok({ deleted: d.id });
 }
@@ -4517,13 +4529,27 @@ const OFFER_COPY = {
   offer_expired: 'The acceptance date is after the offer\'s validity — send a fresh revision',
   close_offers_first: 'Withdraw or close this application\'s live offer first',
   pdf_store_failed: 'The PDF could not be stored — try again',
+  stale: 'This offer changed — reload and retry',
+  not_latest: 'A newer revision of this offer has been sent — only the latest sent revision can be accepted',
+  not_approved_for_terms: 'This offer is outside the band and has not been approved for these exact terms',
+  already_accepted: 'Another revision of this offer is already accepted',
+  doc_already_recorded: 'That file is already recorded',
+  pdf_path_in_use: 'That PDF is already recorded against another revision',
+  conflict: 'This conflicts with an existing record — reload and retry',
+  offer_check_failed: 'The offer failed a consistency check — reload and retry',
+  doc_in_use: 'This document is the evidence for an offer revision and cannot be deleted',
 };
 const offerErr = (code, status = 422) => errCode(code, OFFER_COPY[code] || code.replace(/_/g, ' '), status);
-// PostgREST error → code + message only. `details` would carry the failing row (figures).
+// PostgREST error → a mapped code (offerDbErrorCode: unique indexes by name, RPC raises), else code +
+// message only. `details` would carry the failing row (figures) and is never echoed.
 function offerDbError(r) {
+  const m = offerDbErrorCode(r?.data);
+  if (m) return offerErr(m.code, m.status);
   const d = r?.data && typeof r.data === 'object' ? r.data : {};
   return err(`db_error: ${[d.code, d.message].filter(Boolean).join(' ') || r?.status}`, 400);
 }
+// terms_hash for a row about to be written (create / draft edit).
+async function termsHash(row) { return sha256Hex(new TextEncoder().encode(offerTermsCanonical(row))); }
 
 async function loadOffer(env, id) {
   if (!isUuid(id)) return null;
@@ -4605,14 +4631,11 @@ async function offerTransition(env, auth, me, o, expected, to, extra = {}) {
   return hiringRpc(env, 'hiring_offer_transition', {
     offer_id: o.id, expected_status: expected, to_status: to, set: extra.set || {}, evidence_doc: extra.evidence_doc || null,
     acceptance_doc: extra.acceptance_doc || null, app_status: extra.app_status || null, event_type: extra.event_type || null,
-    event_note: extra.event_note || null, actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+    event_note: extra.event_note || null, expected_terms_hash: o.terms_hash || null,
+    actor_user_id: auth.userId, actor_employee_id: me?.id || null,
   });
 }
-function transitionFailed(r) {
-  if (rpcError(r) === 'stale') return errCode('stale', 'This offer changed — reload and retry', 409);
-  if (r.data?.code === '23505') return errCode('already_accepted', 'Another revision of this offer is already accepted', 409);
-  return offerDbError(r);
-}
+const transitionFailed = (r) => offerDbError(r);
 
 // Default CC for "Mark as sent" (decision 9): hr@ + the opening's chain + Afshaan. Recorded, not sent (O1 sends).
 async function offerDefaultCc(env, x) {
@@ -4640,13 +4663,15 @@ async function issueOffer(env, auth, me, o, from, set = {}) {
   try { bytes = await renderOfferPdf({ template, offer, annexure: o.annexure, signatory, candidate }); }
   catch (e) { if (e?.code === 'template_error') return errCode('template_error', e.message, 422); throw e; }
   const sha = await sha256Hex(bytes);
-  const path = offerPdfPath(o.application_id, o.offer_ref, o.revision);
-  // Upsert: the path is per revision and only ever written before `ready`; the transition guard below
-  // lets exactly one writer through, and the same inputs render the same bytes.
+  // Hash-suffixed path, NO upsert: an object is never overwritten. The same bytes already stored (a retry)
+  // is fine; different bytes get a different path, and the transition below binds the row to THIS file
+  // only if the terms it was rendered from are still the row's (expected_terms_hash).
+  const path = offerPdfPath(o.application_id, o.offer_ref, o.revision, sha);
   const up = await storageFetch(`/object/${DOC_BUCKET}/${path}`, env, {
-    method: 'POST', headers: { 'Content-Type': 'application/pdf', 'x-upsert': 'true' }, body: bytes,
+    method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: bytes,
   });
-  if (!up.ok) return offerErr('pdf_store_failed', 502);
+  const dup = !up.ok && (up.status === 409 || /duplicate|already exists/i.test(JSON.stringify(up.data || '')));
+  if (!up.ok && !dup) return offerErr('pdf_store_failed', 502);
   const r = await offerTransition(env, auth, me, o, from, 'ready', {
     set: { ...set, issue_date: issue, valid_until: offer.valid_until, pdf_path: path, pdf_sha256: sha, rendered_at: nowIso() },
     event_type: 'offer_ready',
@@ -4688,7 +4713,7 @@ async function getOfferSetup(url, auth, env) {
 }
 
 // POST, no write: the annexure + band check + letter text for terms being typed (debounced by the form).
-// Not comp-logged per keystroke: the caller already holds salary on the opening and supplied the figures.
+// Salary-bearing (band relation, annexure) → one comp_access_log row per request (plan §0.10).
 async function previewOffer(body, auth, env) {
   const d = body.data || body;
   const c = await offerAppCtx(auth, env, d.application_id);
@@ -4707,6 +4732,7 @@ async function previewOffer(body, auth, env) {
   ]);
   if (!tpl) return offerErr('template_missing');
   if (!rs) return offerErr('rule_set_missing');
+  await logCompAccess(auth, 'previewOffer', null, x.o.opening_code, env, { application_id: app.id });
   const budget = currentBudget(x);
   const b = buildOffer(ct.terms, mode, x.o, rs, budget, key);
   if (b.error) return offerErr(b.error);
@@ -4824,11 +4850,11 @@ async function createOffer(body, auth, env) {
   const b = buildOffer(ct.terms, mode, x.o, rs, currentBudget(x), key);
   if (b.error) return offerErr(b.error);
   // Ref minted (revision 1) or reused + next revision + offer_created event, one transaction (0008).
+  const row = { ...b.row, application_id: app.id, opening_id: x.o.id, candidate_id: app.candidate_id, template_id: tpl.id };
+  row.terms_hash = await termsHash(row);
   const r = await hiringRpc(env, 'hiring_create_offer', {
-    offer: { ...b.row, application_id: app.id, opening_id: x.o.id, candidate_id: app.candidate_id, template_id: tpl.id },
-    year: istToday().slice(0, 4), actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+    offer: row, year: istToday().slice(0, 4), actor_user_id: auth.userId, actor_employee_id: me?.id || null,
   });
-  if (r.data?.code === '23505') return offerErr('draft_exists', 409);
   if (!r.ok) return offerDbError(r);
   return ok({ offer: offerView(r.data?.offer, true), warnings: b.annexure.warnings, amendment: app.status === 'accepted' });
 }
@@ -4855,7 +4881,9 @@ async function updateOfferDraft(body, auth, env) {
   const b = buildOffer(ct.terms, o.mode, x.o, rs, currentBudget(x), key);
   if (b.error) return offerErr(b.error);
   const patch = { ...b.row, template_id: tpl.id, status: 'draft', approver_employee_id: null, requested_by_employee_id: null,
-    decided_by_employee_id: null, decided_at: null };
+    decided_by_employee_id: null, decided_at: null, approved_terms_hash: null };
+  // New terms → new hash: any submit / approve / render in flight for the old terms now fails 'stale'.
+  patch.terms_hash = await termsHash(patch);
   const r = await sb(`/rest/v1/offers?id=eq.${o.id}&status=in.(${OFFER_EDITABLE_STATUSES.join(',')})`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   if (!r.ok) return offerDbError(r);
   if (!r.data?.length) return errCode('stale', 'This offer changed — reload and retry', 409);
@@ -4909,6 +4937,13 @@ async function decideOffer(body, auth, env) {
   if (bad) return err('forbidden — only the approver can decide this offer', 403);
   const note = String(d.note || '').trim() || null;
   const set = { decided_by_employee_id: me.id, decided_at: nowIso(), decision_note: note };
+  if (d.decision === 'approve') {
+    // Approving issues the letter at once: the application must still be live and the opening open.
+    const [app, x] = await Promise.all([loadApplication(env, o.application_id), loadOneOpening(auth, me, env, o.opening_id)]);
+    if (!OFFER_APP_STATUSES.includes(app?.status)) return offerErr('application_not_ready', 409);
+    if (!x) return err('not_found', 404);
+    const gate = offerOpeningGate(x); if (gate) return gate;
+  }
   if (d.decision === 'reject') {
     const r = await offerTransition(env, auth, me, o, 'pending_approval', 'approval_rejected', { set, event_type: 'offer_rejected', event_note: note });
     if (!r.ok) return transitionFailed(r);
@@ -4933,6 +4968,7 @@ async function markOfferSent(body, auth, env) {
   const { o, x, me } = c;
   if (!canManageOffers(x.roles)) return err('forbidden', 403);
   if (o.status !== 'ready') return errCode('invalid_transition', `Only a ready offer can be marked as sent (this one is ${o.status})`, 409);
+  if (!canSendOffer(o)) return offerErr('not_approved_for_terms', 409);
   const gate = offerOpeningGate(x); if (gate) return gate;
   const app = await loadApplication(env, o.application_id);
   if (!OFFER_APP_STATUSES.includes(app?.status)) return offerErr('application_not_ready', 409);
@@ -4988,8 +5024,13 @@ async function recordOfferAcceptance(body, auth, env) {
   if (o.valid_until && d.accepted_at > o.valid_until) return offerErr('offer_expired', 409);
   if (checkOfferDocPath(d.signed_storage_path, o.candidate_id, o.offer_ref, o.revision, 'signed')) return err('signed copy required (bad storage_path)', 400);
   if (checkFileSize(d.file_size)) return err('file_size must be a positive integer up to 15 MB', 400);
-  const app = await loadApplication(env, o.application_id);
+  const [app, sib] = await Promise.all([
+    loadApplication(env, o.application_id),
+    sb(`/rest/v1/offers?application_id=eq.${o.application_id}&select=id,revision,sent_at`, env),
+  ]);
   if (!['offer', 'accepted'].includes(app?.status)) return offerErr('application_not_ready', 409);
+  // Only the newest revision ever sent can be accepted (the RPC enforces it again under lock).
+  if (!isLatestSent(sib.data || [], o.id)) return offerErr('not_latest', 409);
   const r = await offerTransition(env, auth, me, o, ['sent', 'expired'], 'accepted', {
     set: { accepted_at: d.accepted_at },
     acceptance_doc: { storage_path: d.signed_storage_path, file_name: d.file_name || null, mime_type: d.mime_type || 'application/pdf',

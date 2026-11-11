@@ -133,9 +133,10 @@ create table podium.offer_signatories (
 create unique index offer_signatories_employee on podium.offer_signatories(employee_id) where employee_id is not null;
 
 -- Seeded by name from the directory; phone = employees.phone as recorded (never invented — a missing
--- phone stays null and the letterhead simply omits it). A name not found is skipped.
+-- phone stays null and the letterhead simply omits it). A name not found is skipped. title stays null:
+-- the letters sign with the name only (the renderer prints a title line only when one is set).
 insert into podium.offer_signatories (employee_id, display_name, phone, title)
-select e.id, e.full_name, nullif(btrim(e.phone), ''), e.job_title
+select e.id, e.full_name, nullif(btrim(e.phone), ''), null
   from podium.employees e
  where e.full_name in ('Mahesh Jain', 'Piyush Gupta', 'Afshaan Siddiqui') and e.status <> 'exited';
 
@@ -199,6 +200,11 @@ create table podium.offers (
   acceptance_doc_id uuid references podium.candidate_documents(id),
   declined_at timestamptz,
   outcome_note text,
+  -- SHA-256 of the terms that drive the letter (worker: offerTermsCanonical). Set on every create / draft
+  -- edit; status steps that freeze or issue terms must name it (hiring_offer_transition: expected_terms_hash).
+  terms_hash text not null,
+  -- = terms_hash at the moment of approval (set by the transition RPC, never by the caller).
+  approved_terms_hash text,
   created_by uuid,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -209,7 +215,11 @@ create table podium.offers (
   check (mode <> 'salary' or fixed_annual is not null),
   check (mode <> 'stipend' or (stipend_monthly is not null and internship_months is not null)),
   -- The issued file is the record: anything past 'ready' carries its stored PDF + hash.
-  check (status not in ('ready', 'sent', 'accepted') or (pdf_path is not null and pdf_sha256 is not null))
+  check (status not in ('ready', 'sent', 'accepted') or (pdf_path is not null and pdf_sha256 is not null)),
+  -- Nothing above band / with extras is issued unless approved for THESE terms. coalesce: a CHECK that
+  -- evaluates to NULL passes, so a null band_check / approved_terms_hash must count as "no".
+  check (status not in ('ready', 'sent', 'accepted') or coalesce(band_check in ('in_band', 'below_band'), false)
+         or coalesce(approved_terms_hash = terms_hash, false))
 );
 create index offers_application_idx on podium.offers(application_id, revision);
 create index offers_opening_idx on podium.offers(opening_id, status);
@@ -270,14 +280,14 @@ begin
   insert into podium.offers (application_id, opening_id, candidate_id, offer_ref, revision, template_id, rule_set_id,
     budget_id, mode, fixed_annual, variable_annual, variable_label, variable_frequency, joining_bonus, retention_bonus,
     stipend_monthly, internship_months, total_ctc, pf_opt_out, pf_opt_out_reason, designation, department_name,
-    location, start_date, probation_months, signatory_id, inputs, annexure, band_check, status, created_by)
+    location, start_date, probation_months, signatory_id, inputs, annexure, band_check, terms_hash, status, created_by)
   values (v_in.application_id, v_in.opening_id, v_in.candidate_id, v_ref, v_rev, v_in.template_id, v_in.rule_set_id,
     v_in.budget_id, v_in.mode, v_in.fixed_annual, coalesce(v_in.variable_annual, 0),
     coalesce(v_in.variable_label, 'variable pay'), coalesce(v_in.variable_frequency, 'half-yearly'),
     coalesce(v_in.joining_bonus, 0), coalesce(v_in.retention_bonus, 0), v_in.stipend_monthly, v_in.internship_months,
     v_in.total_ctc, coalesce(v_in.pf_opt_out, false), v_in.pf_opt_out_reason, v_in.designation, v_in.department_name,
     v_in.location, v_in.start_date, v_in.probation_months, v_in.signatory_id, v_in.inputs, v_in.annexure,
-    v_in.band_check, 'draft', v_actor)
+    v_in.band_check, v_in.terms_hash, 'draft', v_actor)
   returning * into v_o;
 
   insert into podium.application_events (candidate_id, opening_id, application_id, actor_user_id, actor_employee_id,
@@ -293,8 +303,10 @@ end $$;
 --       listed below are applied), evidence_doc: null | {storage_path, file_name, mime_type, file_size, title},
 --       acceptance_doc: null | {…same}, app_status: null | 'offer' | 'accepted', event_type,
 --       event_note (free text → detail.note, stripped on read off the salary chain), actor_user_id, actor_employee_id }
--- raise 'stale' when the offer is not in expected_status. Side effects (§0.8 + spec):
---   to 'sent'     → supersede the application's other ready/sent revisions (supersedes only when sent);
+-- raise 'stale' when the offer is not in expected_status, or (for → pending_approval / approved / ready / sent /
+-- accepted) when terms_hash ≠ p.expected_terms_hash; raise 'not_latest' when accepting a revision older than one
+-- already sent. Side effects (§0.8 + spec):
+--   to 'sent'     → supersede the application's other ready/sent/expired revisions (supersedes only when sent);
 --   to 'accepted' → supersede the application's previously accepted revision (an amendment);
 --   app_status    → application interviewing→offer, or offer→accepted (never backwards), + status event.
 create or replace function podium.hiring_offer_transition(p jsonb)
@@ -319,6 +331,17 @@ begin
    where id = (p->>'offer_id')::uuid and status = any(v_expected) for update;
   if not found then raise exception 'stale'; end if;
   v_from := v_o.status;
+  -- Steps that freeze, approve or issue terms are bound to the exact terms the caller checked and rendered:
+  -- a draft edit landing in between changes terms_hash → 'stale' (no approval bypass, no stale PDF).
+  if v_to in ('pending_approval', 'approved', 'ready', 'sent', 'accepted')
+     and v_o.terms_hash is distinct from nullif(p->>'expected_terms_hash', '') then
+    raise exception 'stale';
+  end if;
+  -- Only the latest SENT revision can be accepted (an older one was superseded or is history).
+  if v_to = 'accepted' and exists (select 1 from podium.offers x where x.application_id = v_o.application_id
+       and x.revision > v_o.revision and x.sent_at is not null) then
+    raise exception 'not_latest';
+  end if;
 
   -- Overlay the allowed columns from p.set onto the current row.
   v_s := jsonb_populate_record(v_o, coalesce(p->'set', '{}'::jsonb));
@@ -345,7 +368,7 @@ begin
   if v_to = 'sent' then
     with s as (
       update podium.offers set status = 'superseded'
-       where application_id = v_o.application_id and id <> v_o.id and status in ('ready', 'sent')
+       where application_id = v_o.application_id and id <> v_o.id and status in ('ready', 'sent', 'expired')
       returning id)
     select coalesce(array_agg(id), '{}') into v_sup from s;
   elsif v_to = 'accepted' then
@@ -363,10 +386,11 @@ begin
     decided_by_employee_id = v_s.decided_by_employee_id, decided_at = v_s.decided_at, decision_note = v_s.decision_note,
     issue_date = v_s.issue_date, valid_until = v_s.valid_until,
     pdf_path = v_s.pdf_path, pdf_sha256 = v_s.pdf_sha256, rendered_at = v_s.rendered_at,
-    sent_at = v_s.sent_at, sent_by = v_s.sent_by, sent_to = v_s.sent_to, sent_cc = v_s.sent_cc,
+    sent_at = case when v_to = 'sent' then coalesce(v_s.sent_at, now()) else v_s.sent_at end, sent_by = v_s.sent_by, sent_to = v_s.sent_to, sent_cc = v_s.sent_cc,
     sent_evidence_doc_id = v_s.sent_evidence_doc_id,
     accepted_at = v_s.accepted_at, acceptance_doc_id = v_s.acceptance_doc_id,
-    declined_at = v_s.declined_at, outcome_note = v_s.outcome_note
+    declined_at = v_s.declined_at, outcome_note = v_s.outcome_note,
+    approved_terms_hash = case when v_to = 'approved' then v_o.terms_hash else v_o.approved_terms_hash end
   where id = v_o.id
   returning * into v_o;
 

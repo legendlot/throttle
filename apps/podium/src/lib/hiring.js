@@ -147,6 +147,13 @@ const ERROR_COPY = {
   pdf_store_failed: 'The PDF could not be stored — try again',
   template_error: 'The template has an unknown merge field or an unclosed section',
   no_pdf: 'This revision has not been issued yet',
+  not_latest: 'A newer revision has been sent — only the latest sent revision can be accepted',
+  not_approved_for_terms: 'This offer is outside the band and not approved for these exact terms',
+  doc_in_use: 'This document is the evidence for an offer and cannot be deleted',
+  doc_already_recorded: 'That file is already recorded',
+  pdf_path_in_use: 'That PDF is already recorded against another revision',
+  conflict: 'This conflicts with an existing record — reload and retry',
+  offer_check_failed: 'The offer failed a consistency check — reload and retry',
   bad_fixed_annual: 'Enter the fixed salary (annual, whole rupees)',
   bad_variable_annual: 'Enter the variable pay as whole rupees',
   bad_stipend_monthly: 'Enter the monthly stipend',
@@ -235,11 +242,10 @@ export const VARIABLE_LABELS = [
   { id: 'variable pay',  label: 'Variable pay' },
   { id: 'incentive pay', label: 'Incentive pay' },
 ];
+// Only the two the payouts reader handles (mirrors VARIABLE_FREQUENCIES in the worker).
 export const VARIABLE_FREQUENCIES = [
   { id: 'half-yearly', label: 'Half-yearly' },
   { id: 'monthly',     label: 'Monthly' },
-  { id: 'quarterly',   label: 'Quarterly' },
-  { id: 'annual',      label: 'Annual' },
 ];
 export const OFFER_TEMPLATE_KEYS = [
   { id: 'employment', label: 'Offer of Employment' },

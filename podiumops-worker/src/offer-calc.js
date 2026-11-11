@@ -175,14 +175,16 @@ export const needsApproval = (check) => check === 'above_band' || check === 'ext
 
 // The compensation_events.components keys the payouts screen reads (a FIXED contract — see the spec's
 // "What already exists"). C3b writes this at joining; built now so the contract is pinned by a test.
-// Half-yearly variable → monthly_variable 0 (payouts pay variable_yearly / 2), as the live rows do.
-const BONUS_TYPES = { 'half-yearly': 'Half-Yearly', monthly: 'Monthly', quarterly: 'Quarterly', annual: 'Annual' };
+// Half-yearly variable → monthly_variable 0 (payouts pay variable_yearly / 2), as the live rows do. Only the
+// two bonus types the payouts reader handles exist (hiring.js VARIABLE_FREQUENCIES is limited to match).
+// Interns: the stipend key is monthly_stipend (the majority of live intern rows).
+export const BONUS_TYPES = { 'half-yearly': 'Half-Yearly', monthly: 'Monthly' };
 export function componentsContract(annexure, offer) {
   if (annexure?.mode === 'stipend') {
     const s = Number(annexure.totals.stipend_monthly);
     return {
       monthly_fixed: s, monthly_variable: 0, fixed_yearly: s * 12, variable_yearly: 0, gross_yearly: s * 12,
-      bonus_type: null, designation: offer?.designation || null, stipend_monthly: s, annexure,
+      bonus_type: null, designation: offer?.designation || null, monthly_stipend: s, annexure,
     };
   }
   const F = Number(annexure.totals.total_fixed);
