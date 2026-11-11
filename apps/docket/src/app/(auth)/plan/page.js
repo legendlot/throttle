@@ -5,16 +5,20 @@
 //   · everyone else: MY MILESTONES — the milestones they own (under their theme's title) + results.
 // What each row shows is decided by the worker's projection (levels F / O / T, in SQL); which buttons
 // appear comes from lib/plan.js, the same matrix the database enforces.
+// R3: ⚠ No data source on live milestones/results, split items greyed with "Split → M47, M48", and
+// proposals — a Propose button for everyone, "My proposals", and the founders' Proposed queue.
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, Lock, ChevronUp, ChevronDown, Target, Flag } from 'lucide-react';
+import { Plus, Lock, ChevronUp, ChevronDown, Target, Flag, Lightbulb } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { Button, IconButton, Pill, EmptyState } from '../../../components/ui/index.js';
 import { PlanPanel } from '../../../components/plan/PlanPanel.js';
+import { NoSourceChip } from '../../../components/plan/MeasureFields.js';
+import { ProposalSections } from '../../../components/plan/Proposals.js';
 import {
   buildPlanTree, myMilestoneGroups, chipState, effectiveDue, isRedated, fmtPlanDate, oneLine, moveSort,
-  canAddResult, planErrorText,
+  canAddResult, planErrorText, noDataSource, splitIntoCodes,
 } from '../../../lib/plan.js';
 
 export default function PlanPage() {
@@ -22,14 +26,21 @@ export default function PlanPage() {
   const { showToast } = useToast();
   const [data, setData] = useState(null);       // { items, can_admin, employee_id }
   const [employees, setEmployees] = useState([]);
-  const [target, setTarget] = useState(null);   // { mode: 'new', kind, parent } | { mode: 'view', id }
+  const [target, setTarget] = useState(null);   // { mode: 'new', kind, parent } | { mode: 'view', id } | { mode: 'propose' } | { mode: 'proposal', proposal }
   const [moving, setMoving] = useState(false);
+  const [proposals, setProposals] = useState([]);
 
+  const loadProposals = useCallback(async () => {
+    if (!session) return;
+    try { const r = await docketopsGet('getProposals', {}, session); setProposals(r?.proposals || []); }
+    catch { /* the register still works; the sections just stay empty */ }
+  }, [session]);
   const load = useCallback(async () => {
     if (!session) return;
+    loadProposals();
     try { setData(await docketopsGet('getPlan', {}, session)); }
     catch (e) { setData({ error: planErrorText(e) }); }
-  }, [session, showToast]);
+  }, [session, showToast, loadProposals]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     if (!session) return;
@@ -41,6 +52,8 @@ export default function PlanPage() {
   const me = data?.employee_id || null;
   const tree = useMemo(() => buildPlanTree(items), [items]);
   const mine = useMemo(() => myMilestoneGroups(items, me), [items, me]);
+  const metrics = data?.metrics || [];
+  const themes = useMemo(() => tree.themes.filter(t => t.state === 'agreed'), [tree]);
 
   const open = useCallback((id) => setTarget({ mode: 'view', id }), []);
   const add = (kind, parent = null) => setTarget({ mode: 'new', kind, parent });
@@ -62,7 +75,9 @@ export default function PlanPage() {
   if (data.error) return <div className="pl"><EmptyState icon={Target} title="Couldn’t load the plan" body={data.error}
     action={<Button size="sm" onClick={() => { setData(null); load(); }}>Retry</Button>} /></div>;
 
-  const rowProps = { onOpen: open, isSuper, me, moving };
+  const rowProps = { onOpen: open, isSuper, me, moving, metrics, items };
+  const propose = () => setTarget({ mode: 'propose' });
+  const openProposal = (p) => setTarget({ mode: 'proposal', proposal: p });
 
   return (
     <div className="pl">
@@ -73,8 +88,13 @@ export default function PlanPage() {
             ? 'Themes → milestones → results. Click any row to edit it, agree it, re-date it or close it.'
             : 'The milestones you own, under their theme, with the results you’ve committed to.'}</p>
         </div>
-        {isSuper && <Button variant="primary" icon={Plus} onClick={() => add('theme')}>Theme</Button>}
+        <div className="pl-head-acts">
+          <Button variant={isSuper ? 'neutral' : 'primary'} icon={Lightbulb} onClick={propose}>Propose</Button>
+          {isSuper && <Button variant="primary" icon={Plus} onClick={() => add('theme')}>Theme</Button>}
+        </div>
       </div>
+
+      <ProposalSections proposals={proposals} isSuper={isSuper} onOpen={openProposal} />
 
       {isSuper ? (
         tree.themes.length === 0
@@ -92,7 +112,8 @@ export default function PlanPage() {
       ) : (
         mine.groups.length === 0 && mine.otherResults.length === 0
           ? <EmptyState icon={Target} title="You don’t own any milestones yet"
-              body="When the founders give you a milestone, it appears here with its results." />
+              body="When the founders give you a milestone, it appears here with its results. Something missing from the plan? Propose it."
+              action={<Button variant="primary" icon={Lightbulb} onClick={propose}>Propose</Button>} />
           : <>
             {mine.groups.map(g => (
               <section key={g.theme.id} className="pl-theme">
@@ -111,7 +132,7 @@ export default function PlanPage() {
 
       {target && (
         <PlanPanel target={target} isSuper={isSuper} employeeId={me} byId={tree.byId} employees={employees}
-          session={session} onClose={close} onChanged={load} onOpen={open} />
+          metrics={metrics} themes={themes} session={session} onClose={close} onChanged={load} onOpen={open} />
       )}
     </div>
   );
@@ -119,7 +140,7 @@ export default function PlanPage() {
 
 function MilestoneList({ milestones, rowProps, onMove, onAdd }) {
   return milestones.map(m => (
-    <div key={m.id} className={'pl-ms' + (m.state === 'dropped' ? ' pl-dim' : '')}>
+    <div key={m.id} className={'pl-ms' + (m.state === 'dropped' || m.state === 'split' ? ' pl-dim' : '')}>
       <PlanRow item={m} depth={1} {...rowProps} siblings={milestones} onMove={onMove}
         extra={canAddResult(m, { isSuper: rowProps.isSuper, employeeId: rowProps.me })
           && <Button size="sm" variant="ghost" icon={Plus} onClick={() => onAdd('result', m)}>Result</Button>} />
@@ -128,21 +149,25 @@ function MilestoneList({ milestones, rowProps, onMove, onAdd }) {
   ));
 }
 
-function PlanRow({ item, depth = 0, onOpen, isSuper, siblings, onMove, moving, extra }) {
+function PlanRow({ item, depth = 0, onOpen, isSuper, siblings, onMove, moving, extra, metrics, items }) {
   const chip = chipState(item);
+  const splitInto = splitIntoCodes(item, items);
   const due = effectiveDue(item);
   const sub = item.kind !== 'theme' ? oneLine(item.done_when) : '';
   const go = () => onOpen(item.id);
   return (
-    <div className={`pl-row pl-${item.kind}`} style={{ paddingLeft: 10 + depth * 22 }} role="button" tabIndex={0}
+    <div className={`pl-row pl-${item.kind}` + (item.state === 'split' ? ' pl-dim' : '')} style={{ paddingLeft: 10 + depth * 22 }} role="button" tabIndex={0}
       onClick={go} onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); go(); } }}>
       <div className="pl-row-main">
         <div className="pl-row-l1">
           <span className="pl-code">{item.code}</span>
           <span className="pl-row-t">{item.title}</span>
           {item.restricted && <Lock size={12} className="pl-lock" aria-label="Restricted" />}
+          {noDataSource(item, metrics) && <NoSourceChip />}
         </div>
-        {sub && <div className="pl-row-sub">{sub}</div>}
+        {item.state === 'split'
+          ? <div className="pl-row-sub">Split{splitInto.length ? ` → ${splitInto.join(', ')}` : ''}</div>
+          : sub && <div className="pl-row-sub">{sub}</div>}
       </div>
       <span className="pl-owner">{item.owner_name || (item.kind === 'theme' && item.level === 'F' ? 'Both founders' : '')}</span>
       {item.kind !== 'theme' && (

@@ -1820,3 +1820,23 @@ textarea.tk-input { resize: vertical; line-height: 1.55; }
 .tv-sub-inline { font-size: 11.5px; color: var(--text-4); margin-left: 4px; }
 a.pl-kid { text-decoration: none; color: inherit; }
 @media (max-width: 767px) { .tl-row > .tl-c-plan { display: none; } }
+
+/* F9 R3 — measured from + ⚠ No data source, split, proposals. */
+.pl-head-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.pl-nosrc { flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 600; white-space: nowrap;
+  color: var(--st-blocked); background: var(--st-blocked-bg); border-radius: 4px; padding: 1px 5px; }
+.pl-measure { display: flex; flex-direction: column; gap: 6px; }
+.pl-link { background: none; border: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; font-family: var(--f-mono); }
+.pl-link:hover { text-decoration: underline; }
+.pl-split-note { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.pl-split-part { display: flex; flex-direction: column; gap: 6px; border: none; margin: 0; padding: 10px 0 0; border-top: 1px solid var(--border); }
+.pl-split-part legend { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 0; }
+.pl-split-map { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
+.pl-split-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.pl-split-row .pl-input { width: 46%; flex-shrink: 0; }
+.pl-warn { color: var(--st-blocked); }
+.pl-count { display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; border-radius: 9px; font-size: 11px; text-align: center;
+  color: var(--bg); background: var(--accent); }
+.pl-theme-t svg { vertical-align: -2px; margin-right: 4px; color: var(--accent); }
+.pl-row.pl-prop { cursor: default; }
+.pl-row.pl-prop[role="button"] { cursor: pointer; }

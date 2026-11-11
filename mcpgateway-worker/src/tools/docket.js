@@ -12,7 +12,8 @@ import { T, reportTool } from './build.js';
 import { getAs, postAs, scrub, capPayload } from '../workers.js';
 
 // LOT user ids carried by task rows; the names ride alongside (creator_name, author_name, actor_name).
-const DOCKET_DROP = ['auth_user_id', 'created_by_user_id', 'updated_by', 'abandoned_by', 'author_user_id', 'actor_user_id', 'added_by'];
+const DOCKET_DROP = ['auth_user_id', 'created_by_user_id', 'updated_by', 'abandoned_by', 'author_user_id', 'actor_user_id', 'added_by',
+  'proposer_user_id', 'decided_by'];   // F9 R3 proposals (docketops already strips them; belt and braces)
 
 // The Docket app makes an abandoned task read-only (TaskView `canEdit = _can_edit && status !== 'abandoned'`,
 // decisions 2026-11-09), but docketops' single-task endpoints don't enforce it, so the gateway does: these
@@ -35,13 +36,13 @@ const longText = max => ({ schema: { type: 'string', maxLength: max }, check: v 
 const optText = max => ({ allowEmpty: true, schema: { type: 'string', maxLength: max }, check: v => typeof v === 'string' && v.length <= max ? { ok: true, value: v } : { ok: false, error: `must be text up to ${max} characters` } });
 
 // A single-action write tool. params: { name: { ...type, about } }; required: names.
-function writeTool({ name, title, description, action, params, required = [], destructive = false, finalize, check, guard }) {
+function writeTool({ name, title, description, action, params, required = [], destructive = false, finalize, check, guard, recorded = 'recorded in the task\'s history.' }) {
   const props = {};
   for (const [k, p] of Object.entries(params)) props[k] = { ...p.schema, description: p.about || '' };
   return {
     system: 'docket',
     name, title,
-    description: `${description} Changes Docket data as you; recorded in the task's history.`,
+    description: `${description} Changes Docket data as you; ${recorded}`,
     inputSchema: { type: 'object', properties: props, required, additionalProperties: false },
     annotations: { readOnlyHint: false, destructiveHint: destructive, idempotentHint: false, openWorldHint: false },
     needsSession: true,
@@ -108,7 +109,26 @@ const docketTools = [
       items: { action: 'getPlan', about: 'every plan item you can see: themes, your milestones and the results under them', params: {},
         shape: d => ({ items: (d && d.items) || [] }) },
       item: { action: 'getPlanItem', about: 'one item: its fields, children, history and the linked tasks you can see', params: { id: T.uuid }, required: ['id'] },
+      // F9 R3: a super admin gets the founders' queue (waiting first, then the last 30 days' decisions);
+      // everyone else only their own proposals and the outcome — Docket decides which (plan_proposals_for).
+      proposals: { action: 'getProposals', about: 'proposals: your own and their outcome (a super admin: the whole Proposed queue)', params: {},
+        shape: d => ({ proposals: (d && d.proposals) || [] }) },
     },
+  }),
+  // F9 R3 — anyone can propose something for the plan (spec §4.5). It lands in the founders' queue; nothing
+  // is created on the plan until a founder accepts it.
+  writeTool({
+    name: 'docket_propose', title: 'Propose a Docket plan item', action: 'proposePlanItem',
+    description: 'Propose something that should be on the Docket plan and is not: a milestone to deliver, or a risk. It goes to the founders\' Proposed queue; you see whether it was accepted or declined (with their reason) via docket_plan report=proposals. Optionally suggest a theme (an id from docket_plan report=themes) and a date.',
+    recorded: 'it is a proposal, so nothing on the plan changes until a founder accepts it.',
+    params: {
+      title: { ...longText(200), about: 'What should be on the plan.' },
+      why: { ...longText(2000), about: 'Why it matters (the founders read this when deciding).' },
+      kind_hint: { ...T.oneOf('milestone', 'risk'), about: 'milestone (something to deliver, the default) or risk (something that could go wrong).' },
+      suggested_theme_id: { ...T.uuid, about: 'Optional: the theme it belongs under (from docket_plan report=themes).' },
+      suggested_date: { ...T.date, about: 'Optional: by when, YYYY-MM-DD.' },
+    },
+    required: ['title', 'why'],
   }),
   writeTool({
     name: 'docket_create_task', title: 'Create a Docket task', action: 'createTask',

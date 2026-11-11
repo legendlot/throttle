@@ -1,32 +1,42 @@
 'use client';
 // /plan side panel (F9 R1): create an item, or open one to edit its fields, run the lifecycle actions
 // the matrix allows (lib/plan.js — the database enforces the same matrix) and read its history.
+// R3: "Done when · measured from" + the ⚠ No data source chip, Split (super admins), and the proposal
+// forms (propose — anyone; decide — super admins).
 // Fixed right panel, no backdrop: the register stays usable behind it (the .tv-side pattern).
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Combobox, useToast } from '@throttle/ui';
-import { X, Lock, Check, History, ListChecks } from 'lucide-react';
+import { X, Lock, Check, History, ListChecks, Scissors } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../lib/docketopsFetch.js';
 import { Button, Pill } from '../ui/index.js';
 import { StatusBadge } from '../StatusBadge.js';
 import { PlanChip } from './PlanPicker.js';
+import { MeasureFields, NoSourceChip } from './MeasureFields.js';
+import { SplitForm } from './SplitForm.js';
+import { ProposeForm, ProposalView } from './Proposals.js';
 import {
   planFlags, editableFields, planActionsFor, chipState, effectiveDue, isRedated, fmtPlanDate, fmtPlanStamp,
-  planErrorText, historyText, KIND_LABEL, ACTION_LABEL,
+  planErrorText, historyText, KIND_LABEL, ACTION_LABEL, canSplit, noDataSource, measureDraft, measureFromDraft,
+  sameMeasure, measureText,
 } from '../../lib/plan.js';
 
 const EDIT_KEYS = ['title', 'code', 'owner_employee_id', 'done_when', 'target_text', 'due_date', 'restricted'];
 const draftOf = (it) => ({
   title: it.title || '', code: it.code || '', owner_employee_id: it.owner_employee_id || '',
   done_when: it.done_when || '', target_text: it.target_text || '', due_date: it.due_date || '',
-  restricted: !!it.restricted,
+  restricted: !!it.restricted, measure: measureDraft(it.measure),
 });
-// Only the keys that changed; '' clears.
+// Only the keys that changed; '' clears. A half-picked measure (a system, no metric) is left out.
 function patchOf(item, draft, editable) {
   const base = draftOf(item);
   const out = {};
   for (const k of EDIT_KEYS) {
     if (!editable.includes(k) || draft[k] === base[k]) continue;
     out[k] = typeof draft[k] === 'string' ? (draft[k].trim() === '' ? null : draft[k].trim()) : draft[k];
+  }
+  if (editable.includes('measure')) {
+    const m = measureFromDraft(draft.measure);
+    if (m !== undefined && !sameMeasure(m, item.measure)) out.measure = m;
   }
   return out;
 }
@@ -42,7 +52,7 @@ function Field({ label, children, hint }) {
 }
 function ReadValue({ children }) { return <div className="pl-read">{children || <span className="pl-muted">—</span>}</div>; }
 
-export function PlanPanel({ target, isSuper, employeeId, byId, employees, session, onClose, onChanged, onOpen }) {
+export function PlanPanel({ target, isSuper, employeeId, byId, employees, metrics, themes, session, onClose, onChanged, onOpen }) {
   const { showToast } = useToast();
   const ownerOpts = useMemo(() => (employees || []).map(e => ({ value: e.id, label: e.full_name })), [employees]);
   const nameOf = useMemo(() => Object.fromEntries((employees || []).map(e => [e.id, e.full_name])), [employees]);
@@ -60,12 +70,18 @@ export function PlanPanel({ target, isSuper, employeeId, byId, employees, sessio
 
   return (
     <aside className="pl-panel" aria-label="Plan item">
-      {target.mode === 'new'
+      {target.mode === 'propose'
+        ? <ProposeForm themes={themes || []} session={session} showToast={showToast} onClose={onClose}
+            onDone={() => { onChanged(); onClose(); }} />
+        : target.mode === 'proposal'
+        ? <ProposalView key={target.proposal.id} proposal={target.proposal} themes={themes || []} ownerOpts={ownerOpts} session={session}
+            showToast={showToast} onClose={onClose} onDone={(itemId) => { onChanged(); if (itemId) onOpen(itemId); else onClose(); }} />
+        : target.mode === 'new'
         ? <NewItem key={`new-${target.kind}-${target.parent?.id || ''}`} target={target} isSuper={isSuper} ownerOpts={ownerOpts}
-            session={session} showToast={showToast} onClose={onClose}
+            metrics={metrics} session={session} showToast={showToast} onClose={onClose}
             onCreated={(id) => { onChanged(); onOpen(id); }} />
         : <ItemView key={target.id} id={target.id} isSuper={isSuper} employeeId={employeeId} byId={byId} ownerOpts={ownerOpts}
-            nameOf={nameOf} session={session} showToast={showToast} onClose={onClose} onChanged={onChanged} onOpen={onOpen} />}
+            metrics={metrics} nameOf={nameOf} session={session} showToast={showToast} onClose={onClose} onChanged={onChanged} onOpen={onOpen} />}
     </aside>
   );
 }
@@ -82,9 +98,10 @@ function Head({ kind, code, onClose, children }) {
 }
 
 // ── create ───────────────────────────────────────────────────────────────────
-function NewItem({ target, isSuper, ownerOpts, session, showToast, onClose, onCreated }) {
+function NewItem({ target, isSuper, ownerOpts, metrics, session, showToast, onClose, onCreated }) {
   const { kind, parent } = target;
-  const [d, setD] = useState({ title: '', code: '', owner_employee_id: '', done_when: '', due_date: '', target_text: '', restricted: false, agreeNow: true });
+  const [d, setD] = useState({ title: '', code: '', owner_employee_id: '', done_when: '', due_date: '', target_text: '', restricted: false, agreeNow: true,
+    measure: measureDraft(null) });
   const [busy, setBusy] = useState(false);
   const set = (p) => setD(x => ({ ...x, ...p }));
   const dated = kind !== 'theme';
@@ -99,6 +116,7 @@ function NewItem({ target, isSuper, ownerOpts, session, showToast, onClose, onCr
     if (isSuper && d.target_text.trim()) data.target_text = d.target_text.trim();
     if (isSuper && kind === 'theme' && d.restricted) data.restricted = true;
     if (kind === 'milestone') data.state = d.agreeNow ? 'agreed' : 'proposed';
+    if (dated && measureFromDraft(d.measure)) data.measure = measureFromDraft(d.measure);
     setBusy(true);
     try {
       const res = await docketopsPost('createPlanItem', { data }, session);
@@ -120,6 +138,8 @@ function NewItem({ target, isSuper, ownerOpts, session, showToast, onClose, onCr
         </Field>
         {dated && <Field label={kind === 'result' || d.agreeNow ? 'Done when *' : 'Done when'}>
           <textarea className="pl-input pl-ta" value={d.done_when} onChange={e => set({ done_when: e.target.value })} /></Field>}
+        {dated && <Field label="Done when · measured from" hint="Not measured, manual, or a metric no system records yet shows ⚠ No data source.">
+          <MeasureFields value={d.measure} metrics={metrics} onChange={m => set({ measure: m })} /></Field>}
         {dated && <Field label={kind === 'result' || d.agreeNow ? 'Due date *' : 'Due date'}>
           <input type="date" className="pl-input" value={d.due_date} onChange={e => set({ due_date: e.target.value })} /></Field>}
         {isSuper && <Field label="Target"><textarea className="pl-input pl-ta" value={d.target_text} onChange={e => set({ target_text: e.target.value })} /></Field>}
@@ -135,14 +155,14 @@ function NewItem({ target, isSuper, ownerOpts, session, showToast, onClose, onCr
       </div>
       <div className="pl-panel-foot">
         <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <Button variant="primary" icon={Check} loading={busy} disabled={!d.title.trim()} onClick={create}>Create {KIND_LABEL[kind].toLowerCase()}</Button>
+        <Button variant="primary" icon={Check} loading={busy} disabled={!d.title.trim() || (dated && measureFromDraft(d.measure) === undefined)} onClick={create}>Create {KIND_LABEL[kind].toLowerCase()}</Button>
       </div>
     </>
   );
 }
 
 // ── open an item ─────────────────────────────────────────────────────────────
-function ItemView({ id, isSuper, employeeId, byId, ownerOpts, nameOf, session, showToast, onClose, onChanged, onOpen }) {
+function ItemView({ id, isSuper, employeeId, byId, ownerOpts, metrics, nameOf, session, showToast, onClose, onChanged, onOpen }) {
   const [data, setData] = useState(null);
   const [draft, setDraft] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -162,6 +182,7 @@ function ItemView({ id, isSuper, employeeId, byId, ownerOpts, nameOf, session, s
   const flags = planFlags(it, { isSuper, employeeId, byId: { ...byId, [it.id]: it } });
   const editable = editableFields(it, flags);
   const actions = planActionsFor(it, flags);
+  const splittable = canSplit(it, flags);
   const patch = patchOf(it, draft, editable);
   const dirty = Object.keys(patch).length > 0;
   const can = (k) => editable.includes(k);
@@ -202,8 +223,17 @@ function ItemView({ id, isSuper, employeeId, byId, ownerOpts, nameOf, session, s
       <Head kind={it.kind} code={it.code} onClose={onClose}>
         <Pill tone="status" color={chip.color}>{chip.label}</Pill>
         {it.restricted && <Lock size={13} className="pl-lock" aria-label="Restricted" />}
+        {noDataSource(it, metrics) && <NoSourceChip />}
       </Head>
       <div className="pl-panel-body">
+        {it.state === 'split' && (
+          <p className="pl-hint pl-split-note"><Scissors size={12} aria-hidden /> Split{(data.split_into || []).length > 0
+            ? <> into {data.split_into.map((c, i) => <span key={c.id}>{i > 0 && ', '}<button type="button" className="pl-link" onClick={() => onOpen(c.id)}>{c.code}</button></span>)}</>
+            : null} — read-only.</p>
+        )}
+        {data.split_from && (
+          <p className="pl-hint">Split from <button type="button" className="pl-link" onClick={() => onOpen(data.split_from.id)}>{data.split_from.code}</button></p>
+        )}
         <Field label="Title">{can('title')
           ? <input className="pl-input" value={draft.title} onChange={e => set({ title: e.target.value })} />
           : <ReadValue>{it.title}</ReadValue>}</Field>
@@ -215,6 +245,9 @@ function ItemView({ id, isSuper, employeeId, byId, ownerOpts, nameOf, session, s
         {it.kind !== 'theme' && <Field label="Done when">{can('done_when')
           ? <textarea className="pl-input pl-ta" value={draft.done_when} onChange={e => set({ done_when: e.target.value })} />
           : <ReadValue>{it.done_when}</ReadValue>}</Field>}
+        {it.kind !== 'theme' && <Field label="Done when · measured from">{can('measure')
+          ? <MeasureFields value={draft.measure} metrics={metrics} onChange={m => set({ measure: m })} />
+          : <ReadValue>{measureText(it.measure, metrics)}</ReadValue>}</Field>}
         {it.kind !== 'theme' && <Field label="Due date" hint={it.state === 'proposed' ? 'A proposal’s date is a draft until it’s agreed.' : undefined}>
           {can('due_date')
             ? <input type="date" className="pl-input" value={draft.due_date} onChange={e => set({ due_date: e.target.value })} />
@@ -236,7 +269,7 @@ function ItemView({ id, isSuper, employeeId, byId, ownerOpts, nameOf, session, s
           </div>
         )}
 
-        {actions.length > 0 && (
+        {(actions.length > 0 || splittable) && (
           <div className="pl-acts">
             <span className="pl-lbl">Actions</span>
             <div className="pl-acts-row">
@@ -244,8 +277,14 @@ function ItemView({ id, isSuper, employeeId, byId, ownerOpts, nameOf, session, s
                 <Button key={a} size="sm" variant={a === 'drop' ? 'danger' : 'neutral'} aria-pressed={op === a}
                   onClick={() => (op === a ? setOp(null) : openOp(a))}>{ACTION_LABEL[a]}</Button>
               ))}
+              {splittable && <Button size="sm" variant="neutral" icon={Scissors} aria-pressed={op === 'split'}
+                onClick={() => setOp(op === 'split' ? null : 'split')}>{ACTION_LABEL.split}</Button>}
             </div>
-            {op && (
+            {op === 'split' && (
+              <SplitForm item={it} data={data} ownerOpts={ownerOpts} metrics={metrics} session={session} showToast={showToast}
+                onCancel={() => setOp(null)} onDone={async () => { setOp(null); await load(); onChanged(); }} />
+            )}
+            {op && op !== 'split' && (
               <div className="pl-op">
                 {op === 'agree' && <>
                   <Field label="Owner *"><Combobox value={form.owner_employee_id || ''} options={ownerOpts} placeholder="Pick a person…" allowClear={false} portal

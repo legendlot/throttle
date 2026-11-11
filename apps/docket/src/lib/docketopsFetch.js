@@ -35,8 +35,9 @@ export async function docketopsGet(action, params = {}, session) {
 // Scratch notes are the reason this list exists at all: the Scratchpad autosaves
 // 600ms after each typing pause, so an unfiltered hook fires a getMe per pause
 // while someone writes a note, for a surface that holds no tasks.
-// Plan writes (F9) hold no tasks either.
-const NO_COUNT_CHANGE = /ScratchNote|Checklist|PlanItem/i;
+// Plan writes (F9) hold no tasks either — a split re-links tasks but moves none between spaces; proposals
+// (R3) hold none at all.
+const NO_COUNT_CHANGE = /ScratchNote|Checklist|PlanItem|Proposal/i;
 
 export async function docketopsPost(action, body = {}, session) {
   const res = await fetch(`${DK_URL}/?action=${action}`, {

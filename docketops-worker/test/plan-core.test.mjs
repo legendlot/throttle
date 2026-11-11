@@ -1,6 +1,6 @@
 // Run: node --test docketops-worker/test/
-// The §4.3 matrix (minus split). The SQL twin is docket.plan_can / docket.plan_state_ok in
-// migrations/0017_plan_items.sql — change both together.
+// The §4.3 matrix (split since R3). The SQL twin is docket.plan_can / docket.plan_state_ok in
+// migrations/0017_plan_items.sql, replaced by 0019_plan_r3.sql — change both together.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { canPlanAct, planStateAllows, planActionsFor, editableFields, planFlags, nextPlanCode,
@@ -35,7 +35,7 @@ test('results: owner edits + marks done; milestone owner also creates, re-owns, 
 
 test('unknown kind/action is never allowed, even for super', () => {
   assert.equal(canPlanAct('task', 'edit', SUPER), false);
-  assert.equal(canPlanAct('result', 'split', SUPER), false);   // R3
+  assert.equal(canPlanAct('result', 'split', { isOwner: true, isParentOwner: true }), false);   // R3: super only
 });
 
 test('lifecycle: agree only a proposed milestone; redate/done only agreed; theme drop/reopen', () => {

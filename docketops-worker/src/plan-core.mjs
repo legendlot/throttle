@@ -1,7 +1,7 @@
-// Docket F9 plan layer (R1) — pure logic shared by the worker and its tests.
-// Spec: docs/superpowers/specs/2026-11-11-docket-plan-layer.md §4.1, §4.3 (minus split), §5.2–5.3.
+// Docket F9 plan layer (R1–R3) — pure logic shared by the worker and its tests.
+// Spec: docs/superpowers/specs/2026-11-11-docket-plan-layer.md §4.1, §4.3 (+ split, R3), §4.5, §5.2–5.3.
 //
-// The SQL in migrations/0017_plan_items.sql (docket.plan_can / docket.plan_state_ok) is the
+// The SQL in migrations/0017_plan_items.sql + 0019_plan_r3.sql (docket.plan_can / docket.plan_state_ok) is the
 // ENFORCER. This file is the same matrix in JS so the worker and the app can show only the
 // actions that will succeed; test/plan-core.test.mjs pins it and apps/docket/src/lib/plan.test.mjs
 // checks the app's copy against this one. Change all three together.
@@ -11,8 +11,9 @@ export const PLAN_STATES = ['proposed', 'agreed', 'done', 'split', 'dropped'];
 // edit       = title / done_when / measure
 // edit_admin = sort / target_text / code / restricted / department_id / a proposal's due_date
 // owner      = change owner
-export const PLAN_ACTIONS = ['create', 'edit', 'edit_admin', 'owner', 'agree', 'redate', 'drop', 'done', 'reopen'];
-// The actions plan_act runs (create → plan_create, edit* / owner → plan_update).
+// split       = R3: an agreed milestone/result → N agreed siblings (docket.plan_split), super only
+export const PLAN_ACTIONS = ['create', 'edit', 'edit_admin', 'owner', 'agree', 'redate', 'split', 'drop', 'done', 'reopen'];
+// The actions plan_act runs (create → plan_create, edit* / owner → plan_update, split → plan_split).
 export const PLAN_ACT_ACTIONS = ['agree', 'redate', 'drop', 'done', 'reopen'];
 
 // WHO may do it. flags: { isSuper, isOwner, isParentOwner } — isParentOwner = the caller owns the
@@ -24,16 +25,18 @@ export function canPlanAct(kind, action, { isSuper = false, isOwner = false, isP
   if (kind !== 'result') return false;
   if (action === 'edit' || action === 'done') return !!(isOwner || isParentOwner);
   if (action === 'create' || action === 'owner' || action === 'redate') return !!isParentOwner;
-  return false;   // edit_admin, drop, reopen (and agree, which results never need)
+  return false;   // edit_admin, split, drop, reopen (and agree, which results never need)
 }
 
-// WHEN it is allowed: the lifecycle half of §4.3. `split` is terminal and read-only (R3).
+// WHEN it is allowed: the lifecycle half of §4.3. The `split` STATE is terminal and read-only (no action
+// lists it); the `split` ACTION takes an agreed milestone or result.
 export function planStateAllows(kind, action, state) {
   switch (action) {
     case 'edit': case 'edit_admin': case 'owner':
       return state === 'proposed' || state === 'agreed';
     case 'agree':  return kind === 'milestone' && state === 'proposed';
     case 'redate': return kind !== 'theme' && state === 'agreed';
+    case 'split':  return (kind === 'milestone' || kind === 'result') && state === 'agreed';
     case 'drop':   return kind === 'milestone' ? (state === 'proposed' || state === 'agreed') : state === 'agreed';
     case 'done':   return kind !== 'theme' && state === 'agreed';
     case 'reopen': return kind === 'theme' ? state === 'dropped' : (state === 'done' || state === 'dropped');
@@ -45,6 +48,11 @@ export function planStateAllows(kind, action, state) {
 export function planActionsFor(item, flags) {
   if (!item) return [];
   return PLAN_ACT_ACTIONS.filter(a => canPlanAct(item.kind, a, flags) && planStateAllows(item.kind, a, item.state));
+}
+
+// May the caller split this item now (the Split button)?
+export function canSplit(item, flags) {
+  return !!item && canPlanAct(item.kind, 'split', flags) && planStateAllows(item.kind, 'split', item.state);
 }
 
 // plan_update field → the matrix action that gates it.
@@ -145,11 +153,65 @@ export function validateActPayload(action, p = {}) {
   return null;
 }
 
+// ── R3: split (§4.3.1) — the worker's shape pre-check; docket.plan_split re-checks everything ──
+export const SPLIT_MIN = 2, SPLIT_MAX = 10;
+const isIndex = (v, n) => Number.isInteger(v) && v >= 0 && v < n;
+export function validateSplitPayload(p = {}) {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return 'bad_payload';
+  const text = (v, max) => typeof v === 'string' && v.trim().length > 0 && v.length <= max;
+  if (!text(p.reason, MAX_TEXT.reason)) return 'reason_required';
+  const kids = p.children;
+  if (!Array.isArray(kids) || kids.length < SPLIT_MIN || kids.length > SPLIT_MAX) return 'bad_children';
+  for (const c of kids) {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return 'bad_children';
+    const bad = validatePlanFields({ title: c.title ?? '', owner_employee_id: c.owner_employee_id, due_date: c.due_date,
+      done_when: c.done_when, code: c.code, measure: c.measure });
+    if (bad) return bad;
+    if (!isUuid(c.owner_employee_id)) return 'owner_required';
+    if (!isPlanDate(c.due_date) || !text(c.done_when, MAX_TEXT.done_when)) return 'missing_fields';
+  }
+  const n = kids.length;
+  const obj = (v) => v == null || (typeof v === 'object' && !Array.isArray(v));
+  if (!obj(p.results)) return 'bad_results';
+  for (const [k, v] of Object.entries(p.results || {})) if (!isUuid(k) || !(v === 'drop' || isIndex(v, n))) return 'bad_results';
+  if (p.result_drop_reason != null && (typeof p.result_drop_reason !== 'string' || p.result_drop_reason.length > MAX_TEXT.reason)) return 'text_too_long';
+  if (!obj(p.tasks)) return 'bad_tasks';
+  for (const [k, v] of Object.entries(p.tasks || {})) if (!isUuid(k) || !(isIndex(v, n) || isUuid(v))) return 'bad_tasks';
+  if (p.tasks_default != null && !isIndex(p.tasks_default, n)) return 'bad_tasks_default';
+  return null;
+}
+
+// ── R3: proposals (§4.5) ─────────────────────────────────────────────────────
+export const PROPOSAL_MAX = { title: 200, why: 2000, note: 2000 };
+export const PROPOSAL_KINDS = ['milestone', 'risk'];
+export function validateProposal(p = {}) {
+  if (typeof p.title !== 'string' || !p.title.trim()) return 'title_required';
+  if (p.title.trim().length > PROPOSAL_MAX.title) return 'text_too_long';
+  if (typeof p.why !== 'string' || !p.why.trim()) return 'why_required';
+  if (p.why.trim().length > PROPOSAL_MAX.why) return 'text_too_long';
+  if (p.kind_hint != null && !PROPOSAL_KINDS.includes(p.kind_hint)) return 'bad_kind';
+  if (p.suggested_date != null && p.suggested_date !== '' && !isPlanDate(p.suggested_date)) return 'bad_date';
+  for (const k of ['suggested_theme_id', 'suggested_owner_employee_id']) if (p[k] != null && p[k] !== '' && !isUuid(p[k])) return 'bad_' + k.replace('suggested_', '').replace('_employee_id', '').replace('_id', '');
+  return null;
+}
+export function validateDecision(p = {}) {
+  if (p.decision !== 'accept' && p.decision !== 'decline') return 'bad_decision';
+  if (p.note != null && (typeof p.note !== 'string' || p.note.length > PROPOSAL_MAX.note)) return 'text_too_long';
+  if (p.decision === 'decline' && !(typeof p.note === 'string' && p.note.trim())) return 'note_required';
+  if (p.state != null && p.state !== 'proposed' && p.state !== 'agreed') return 'bad_state';
+  const bad = validatePlanFields({ title: p.title, owner_employee_id: p.owner_employee_id, due_date: p.due_date, done_when: p.done_when });
+  if (bad) return bad;
+  if (p.theme_id != null && p.theme_id !== '' && !isUuid(p.theme_id)) return 'bad_theme';
+  return null;
+}
+
 // RPC/validation code → HTTP status.
 const STATUS = {
   forbidden: 403, forbidden_field: 403,
   not_found: 404, parent_not_found: 404,
   duplicate_code: 409, bad_state: 409, live_children: 409, parent_not_agreed: 409, same_date: 409,
+  // R3 — split + proposals
+  unmapped_results: 422, unmapped_tasks: 422, cannot_drop: 422, already_decided: 409, too_many_open: 429,
   // R2 — task links
   plan_item_not_found: 404, restricted_tasks_outside: 409,
   plan_item_closed: 422, subtask_follows_parent: 422, restricted_needs_founders_space: 422,
@@ -207,6 +269,7 @@ export function planDbError(body) {
   const msg = String((body && (body.message || body.error)) || body || '');
   if (/restricted_needs_founders_space/.test(msg)) return { code: 'restricted_needs_founders_space' };
   if (/plan_item_closed/.test(msg)) return { code: 'plan_item_closed' };
+  if (/parent_not_agreed/.test(msg)) return { code: 'parent_not_agreed' };
   if (/tasks_plan_link_top_level/.test(msg)) return { code: 'subtask_follows_parent' };
   const m = /restricted_tasks_outside:\s*(.*)$/.exec(msg);
   if (m) return { code: 'restricted_tasks_outside', detail: m[1].trim() };

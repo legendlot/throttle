@@ -1,11 +1,11 @@
-// Docket F9 plan layer (R1) — pure helpers for /plan.
+// Docket F9 plan layer (R1–R3) — pure helpers for /plan.
 // The permission matrix below is a COPY of docketops-worker/src/plan-core.mjs (itself the mirror of
 // docket.plan_can / docket.plan_state_ok in migration 0017, which is the enforcer). plan.test.mjs
 // compares the two cell by cell, so a drift fails the app's test suite. It only decides which
 // buttons to show — the database refuses anything else.
 
 export const PLAN_KINDS = ['theme', 'milestone', 'result'];
-export const PLAN_ACTIONS = ['create', 'edit', 'edit_admin', 'owner', 'agree', 'redate', 'drop', 'done', 'reopen'];
+export const PLAN_ACTIONS = ['create', 'edit', 'edit_admin', 'owner', 'agree', 'redate', 'split', 'drop', 'done', 'reopen'];
 export const PLAN_ACT_ACTIONS = ['agree', 'redate', 'drop', 'done', 'reopen'];
 
 export function canPlanAct(kind, action, { isSuper = false, isOwner = false, isParentOwner = false } = {}) {
@@ -23,6 +23,7 @@ export function planStateAllows(kind, action, state) {
       return state === 'proposed' || state === 'agreed';
     case 'agree':  return kind === 'milestone' && state === 'proposed';
     case 'redate': return kind !== 'theme' && state === 'agreed';
+    case 'split':  return (kind === 'milestone' || kind === 'result') && state === 'agreed';
     case 'drop':   return kind === 'milestone' ? (state === 'proposed' || state === 'agreed') : state === 'agreed';
     case 'done':   return kind !== 'theme' && state === 'agreed';
     case 'reopen': return kind === 'theme' ? state === 'dropped' : (state === 'done' || state === 'dropped');
@@ -33,6 +34,11 @@ export function planStateAllows(kind, action, state) {
 export function planActionsFor(item, flags) {
   if (!item) return [];
   return PLAN_ACT_ACTIONS.filter(a => canPlanAct(item.kind, a, flags) && planStateAllows(item.kind, a, item.state));
+}
+
+// R3: the Split button (super admin, an agreed milestone or result).
+export function canSplit(item, flags) {
+  return !!item && canPlanAct(item.kind, 'split', flags) && planStateAllows(item.kind, 'split', item.state);
 }
 
 export const FIELD_ACTION = {
@@ -151,7 +157,7 @@ export function moveSort(siblings = [], id, dir) {
 }
 
 export const KIND_LABEL = { theme: 'Theme', milestone: 'Milestone', result: 'Result' };
-export const ACTION_LABEL = { agree: 'Agree', redate: 'Re-date', drop: 'Drop', done: 'Mark done', reopen: 'Reopen' };
+export const ACTION_LABEL = { agree: 'Agree', redate: 'Re-date', split: 'Split', drop: 'Drop', done: 'Mark done', reopen: 'Reopen' };
 
 const ERR = {
   forbidden: 'You can’t do that on this item.',
@@ -184,6 +190,23 @@ const ERR = {
   founders_space: 'Only a super admin can do that in the Founders’ space.',
   founders_space_fixed: 'The Founders’ space can’t be archived or recovered.',
   bad_plan_item_id: 'Pick a plan item from the list.',
+  // R3 — split, measure, proposals
+  bad_children: 'A split needs 2 to 10 parts, each with a title, owner, due date and done-when.',
+  bad_results: 'Map each result to one of the new parts, or drop it.',
+  unmapped_results: 'Every result under it has to go somewhere — map or drop each one.',
+  cannot_drop: 'Only a live result can be dropped in a split.',
+  bad_tasks: 'A linked task points at something it can’t move to.',
+  bad_tasks_default: 'Pick where the other linked tasks go.',
+  unmapped_tasks: 'Some linked tasks have nowhere to go — pick a default part.',
+  bad_measure: 'Pick a system and a metric for “measured from”.',
+  unknown_metric: 'That metric isn’t in the registry.',
+  why_required: 'Say why it should be on the plan.',
+  text_too_long: 'That text is too long.',
+  note_required: 'A note is required.',
+  theme_required: 'Pick the theme it goes under.',
+  already_decided: 'That proposal has already been decided.',
+  too_many_open: 'You have 20 proposals waiting — wait for some to be decided.',
+  bad_decision: 'Accept or decline.',
 };
 export function planErrorText(e) {
   const code = e?.message || String(e || '');
@@ -192,6 +215,7 @@ export function planErrorText(e) {
     return `Required: ${e.detail.fields.map(f => names[f] || f).join(', ')}.`;
   }
   if (code === 'restricted_tasks_outside' && e?.detail?.detail) return `${ERR[code]} (${e.detail.detail})`;
+  if (code === 'unmapped_tasks' && e?.detail?.count) return `${e.detail.count} linked task${e.detail.count === 1 ? '' : 's'} have nowhere to go — pick a default part.`;
   return ERR[code] || code || 'Something went wrong.';
 }
 
@@ -283,6 +307,8 @@ export function historyText(h, names = {}) {
     case 'dropped':  return 'Dropped';
     case 'done':     return 'Marked done';
     case 'reopened': return 'Reopened';
+    case 'split':    return 'Split' + (Array.isArray(n.split_into) && n.split_into.length ? ` into ${n.split_into.join(', ')}` : '');
+    case 'moved':    return 'Moved to another parent';
     case 'owner_changed': return `Owner → ${names[n.owner_employee_id] || 'someone else'}`;
     case 'field_changed': {
       const keys = Object.keys(n).map(k => FIELD_LABEL[k] || k);
@@ -291,3 +317,145 @@ export function historyText(h, names = {}) {
     default: return h?.event || '';
   }
 }
+
+// ── R3: "measured from" (§4.4) ───────────────────────────────────────────────
+// The registry comes from getPlan (`metrics`: { key, system, label, unit, source_ok }) — the worker's
+// src/plan-metrics.mjs, never a copy here. A stored measure is { system, metric, target, source_ok }.
+export const LIVE_STATES = ['proposed', 'agreed'];
+// ⚠ No data source: a live milestone/result with no measure, a manual one, or one whose metric the
+// registry says isn't recorded today (the registry's CURRENT flag wins over the stored one).
+export function noDataSource(item, metrics = []) {
+  if (!item || (item.kind !== 'milestone' && item.kind !== 'result') || !LIVE_STATES.includes(item.state)) return false;
+  const m = item.measure;
+  // No measure: flagged once committed (agreed) — a proposal is a draft and isn't flagged until it has one.
+  if (!m || typeof m !== 'object') return item.state === 'agreed';
+  if (m.system === 'manual' || m.metric === 'manual') return true;
+  const reg = (metrics || []).find(x => x.key === m.metric);
+  return reg ? !reg.source_ok : m.source_ok !== true;
+}
+export function metricSystems(metrics = []) { return [...new Set((metrics || []).map(m => m.system))]; }
+export function metricsFor(metrics = [], system) { return (metrics || []).filter(m => m.system === system); }
+export function measureText(measure, metrics = []) {
+  if (!measure || typeof measure !== 'object') return '';
+  const reg = (metrics || []).find(x => x.key === measure.metric);
+  const label = measure.metric === 'manual' ? 'Manual' : (reg?.label || measure.metric || '');
+  return [label, measure.target].filter(Boolean).join(' · ');
+}
+// Editor draft ⇄ stored measure. '' system = no measure. An incomplete draft (a system, no metric) → undefined.
+export function measureDraft(m) {
+  return { system: m?.system || '', metric: m?.metric || '', target: m?.target || '' };
+}
+export function measureFromDraft(d) {
+  if (!d || !d.system) return null;
+  if (d.system === 'manual') return { system: 'manual', metric: 'manual', target: d.target.trim() || null };
+  if (!d.metric) return undefined;
+  return { system: d.system, metric: d.metric, target: d.target.trim() || null };
+}
+export function sameMeasure(a, b) {
+  const k = (m) => (m ? JSON.stringify([m.system, m.metric, m.target || null]) : 'null');
+  return k(a) === k(b);
+}
+
+// ── R3: split (§4.3.1) ───────────────────────────────────────────────────────
+export const SPLIT_MIN = 2, SPLIT_MAX = 10;
+export const emptySplitChild = () => ({ title: '', owner_employee_id: '', due_date: '', done_when: '', measure: measureDraft(null) });
+// The form: { reason, children: [child…], results: { id: '<index>' | 'drop' | '' }, result_drop_reason,
+//   tasks: { taskId: '' | 'c:<index>' | 'r:<result id>' }, tasks_default: '<index>' }.
+export function newSplitForm(item, results = []) {
+  const kid = () => ({ ...emptySplitChild(), owner_employee_id: item?.owner_employee_id || '', done_when: '' });
+  return { reason: '', children: [kid(), kid()], results: Object.fromEntries(results.map(r => [r.id, ''])),
+    result_drop_reason: '', tasks: {}, tasks_default: '0' };
+}
+const live = (r) => LIVE_STATES.includes(r?.state);
+const droppedIds = (form) => Object.entries(form?.results || {}).filter(([, v]) => v === 'drop').map(([k]) => k);
+// The OPEN linked tasks a split re-links (the visible ones): on the original, or on a result being dropped.
+export function splitTasks(item, tasks = [], form) {
+  const on = new Set([item?.id, ...droppedIds(form)]);
+  return (tasks || []).filter(t => t.plan?.id && on.has(t.plan.id) && t.status !== 'done' && t.status !== 'abandoned');
+}
+// How many open linked tasks the caller can't open go to the default part (getPlanItem.hidden_open, level F).
+export function splitHiddenCount(item, hiddenOpen = {}, form) {
+  return [item?.id, ...droppedIds(form)].reduce((n, id) => n + (Number(hiddenOpen?.[id]) || 0), 0);
+}
+// A per-task override can point at a part, or at a LIVE result that is moving under a part.
+export function splitTaskTargets(form, results = []) {
+  const parts = (form?.children || []).map((c, i) => ({ value: `c:${i}`, label: c.title.trim() || `Part ${i + 1}` }));
+  const moved = results.filter(r => live(r) && /^[0-9]+$/.test(form?.results?.[r.id] || ''))
+    .map(r => ({ value: `r:${r.id}`, label: `${r.code} · ${r.title}` }));
+  return [...parts, ...moved];
+}
+// Returns a message, or null when the form can be sent.
+export function splitFormError(item, form, results = [], tasks = []) {
+  if (!form) return 'Nothing to split.';
+  if (!form.reason.trim()) return 'Give a reason for the split.';
+  const n = form.children.length;
+  if (n < SPLIT_MIN || n > SPLIT_MAX) return `A split makes ${SPLIT_MIN} to ${SPLIT_MAX} parts.`;
+  for (let i = 0; i < n; i++) {
+    const c = form.children[i];
+    if (!c.title.trim() || !c.owner_employee_id || !c.due_date || !c.done_when.trim()) return `Part ${i + 1} needs a title, owner, due date and done-when.`;
+    if (c.measure?.system && measureFromDraft(c.measure) === undefined) return `Part ${i + 1}: pick the metric it’s measured from.`;
+  }
+  if (item?.kind === 'milestone') {
+    for (const r of results) {
+      const v = form.results?.[r.id] || '';
+      if (v === '' && live(r)) return `Map result ${r.code} to a part, or drop it.`;
+      if (v === 'drop' && !live(r)) return `${r.code} is closed — move it to a part instead.`;
+      if (/^[0-9]+$/.test(v) && Number(v) >= n) return `Map result ${r.code} to a part.`;
+    }
+    if (droppedIds(form).length && !form.result_drop_reason.trim()) return 'Say why the dropped results are dropped.';
+  }
+  if (!/^[0-9]+$/.test(form.tasks_default || '') || Number(form.tasks_default) >= n) return 'Pick the part the other linked tasks go to.';
+  const targets = new Set(splitTaskTargets(form, results).map(t => t.value));
+  for (const t of splitTasks(item, tasks, form)) {
+    const v = form.tasks?.[t.id];
+    if (v && !targets.has(v)) return `${t.task_no} points at a part or result that no longer takes tasks — pick again.`;
+  }
+  return null;
+}
+// The form → plan_split's payload (worker: planItemAction op 'split').
+export function splitPayload(item, form, tasks = []) {
+  const children = form.children.map(c => {
+    const out = { title: c.title.trim(), owner_employee_id: c.owner_employee_id, due_date: c.due_date, done_when: c.done_when.trim() };
+    const m = measureFromDraft(c.measure);
+    if (m) out.measure = m;
+    return out;
+  });
+  const p = { reason: form.reason.trim(), children, tasks_default: Number(form.tasks_default) };
+  if (item?.kind === 'milestone') {
+    p.results = {};
+    for (const [id, v] of Object.entries(form.results || {})) if (v === 'drop') p.results[id] = 'drop'; else if (/^[0-9]+$/.test(v)) p.results[id] = Number(v);
+    if (form.result_drop_reason.trim()) p.result_drop_reason = form.result_drop_reason.trim();
+  }
+  const open = new Set(splitTasks(item, tasks, form).map(t => t.id));
+  const t = {};
+  for (const [id, v] of Object.entries(form.tasks || {})) {
+    if (!v || !open.has(id)) continue;
+    t[id] = v.startsWith('c:') ? Number(v.slice(2)) : v.slice(2);
+  }
+  if (Object.keys(t).length) p.tasks = t;
+  return p;
+}
+// "Split → M47, M48" for the register: the codes of the items split from this one, in sort order.
+export function splitIntoCodes(item, items = []) {
+  if (!item || item.state !== 'split') return [];
+  return (items || []).filter(x => x.split_from_id === item.id).sort(bySort).map(x => x.code);
+}
+
+// ── R3: proposals (§4.5) ─────────────────────────────────────────────────────
+export const PROPOSAL_MAX = { title: 200, why: 2000 };
+export function proposalFormError(f) {
+  if (!f?.title?.trim()) return 'Give it a title.';
+  if (f.title.trim().length > PROPOSAL_MAX.title) return `Keep the title under ${PROPOSAL_MAX.title} characters.`;
+  if (!f.why?.trim()) return 'Say why it should be on the plan.';
+  if (f.why.trim().length > PROPOSAL_MAX.why) return `Keep the why under ${PROPOSAL_MAX.why} characters.`;
+  return null;
+}
+// What the proposer reads: "Waiting", "Accepted — M47 · Title" (only when they can see it), "Declined: reason".
+export function proposalOutcome(p) {
+  if (!p) return '';
+  if (p.status === 'submitted') return 'Waiting for the founders';
+  if (p.status === 'declined') return 'Declined' + (p.decision_note ? `: ${p.decision_note}` : '');
+  if (p.status === 'accepted') return 'Accepted' + (p.accepted_item_code ? ` — ${[p.accepted_item_code, p.accepted_item_title].filter(Boolean).join(' · ')}` : '');
+  return p.status || '';
+}
+export const PROPOSAL_KIND_LABEL = { milestone: 'Milestone', risk: 'Risk' };

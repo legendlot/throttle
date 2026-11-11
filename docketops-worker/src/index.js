@@ -28,7 +28,9 @@
  */
 import { istDateStr, isExpired, isDueOn, istHM, lateFlag, buildRegister } from './register-core.mjs';
 import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT_ACTIONS,
-  linkError, effectiveLink, taskPlan, planLinkLabel, planDbError } from './plan-core.mjs';
+  linkError, effectiveLink, taskPlan, planLinkLabel, planDbError,
+  validateSplitPayload, validateProposal, validateDecision } from './plan-core.mjs';
+import { normalizeMeasure, publicMetrics } from './plan-metrics.mjs';
 
 
 // ── CORS ──────────────────────────────────────────────────────────────────
@@ -2734,7 +2736,9 @@ async function getPlan(url, auth, env) {
   if (!r.ok) return err('db_error', 500);
   const rows = Array.isArray(r.data) ? r.data : [];
   const names = await nameMap(sbPodium, 'employees', rows.map(x => x.owner_employee_id), env);
-  return ok({ items: rows.map(withOwnerName(names)), can_admin: isPlanAdmin(auth), employee_id: auth.employeeId });
+  // R3: the "measured from" registry rides along so the app never keeps its own copy (§4.4).
+  return ok({ items: rows.map(withOwnerName(names)), can_admin: isPlanAdmin(auth), employee_id: auth.employeeId,
+    metrics: publicMetrics() });
 }
 async function getPlanItem(url, auth, env) {
   const id = url.searchParams.get('id');
@@ -2757,6 +2761,15 @@ async function getPlanItem(url, auth, env) {
   if (!tr.ok) return err('db_error', 500);
   const linked = Array.isArray(tr.data) ? tr.data : [];
   const visible = await visibleTaskRows(auth, linked, env);
+  // R3 split form (level F only): the OPEN linked tasks the caller can't open, per plan item — they go to
+  // the split's default child ("+N in spaces you can't open will go to …").
+  const seen = new Set(visible.map(t => t.id));
+  const hiddenOpen = {};
+  for (const t of linked) {
+    if (seen.has(t.id) || t.parent_task_id || t.status === 'done' || t.status === 'abandoned') continue;
+    hiddenOpen[t.plan_item_id] = (hiddenOpen[t.plan_item_id] || 0) + 1;
+  }
+  const code = (x) => (x ? { id: x.id, code: x.code } : null);
   const [names, actors, planned] = await Promise.all([
     nameMap(sbPodium, 'employees', [item, ...children, ...visible].map(x => x.owner_employee_id), env),
     nameMap(sbStore, 'users_profile', history.map(x => x.actor_user_id), env),
@@ -2772,7 +2785,10 @@ async function getPlanItem(url, auth, env) {
       deadline: t.deadline, revised_deadline: t.revised_deadline,
       space_name: spaceOf(auth, t)?.name || null, plan: t.plan,
     })),
-    ...(item.level === 'F' ? { hidden_count: linked.length - visible.length } : {}),
+    ...(item.level === 'F' ? { hidden_count: linked.length - visible.length, hidden_open: hiddenOpen } : {}),
+    // R3: split lineage, through the same projection (a child the caller can't see is simply absent).
+    split_into: rows.filter(x => x.split_from_id === id).map(code),
+    split_from: code(item.split_from_id ? rows.find(x => x.id === item.split_from_id) : null),
     can_admin: isPlanAdmin(auth),
   });
 }
@@ -2790,7 +2806,9 @@ async function planRpc(fn, args, env) {
   const res = r.data || {};
   if (!res.ok) {
     const code = res.code || 'plan_failed';
-    return json({ ok: false, error: code, ...(res.fields ? { fields: res.fields } : {}), ...(res.field ? { field: res.field } : {}) }, planErrStatus(code));
+    const extra = {};
+    for (const k of ['fields', 'field', 'ids', 'count', 'value']) if (res[k] !== undefined && res[k] !== null) extra[k] = res[k];
+    return json({ ok: false, error: code, ...extra }, planErrStatus(code));
   }
   const { ok: _ok, ...data } = res;
   return ok(data);
@@ -2801,6 +2819,7 @@ async function createPlanItem(body, auth, env) {
   for (const k of PLAN_ITEM_KEYS) if (d[k] !== undefined) item[k] = d[k];
   const bad = validatePlanFields(item);
   if (bad) return err(bad, 400);
+  if (item.measure !== undefined) { const m = normalizeMeasure(item.measure); if (m.error) return err(m.error, 400); item.measure = m.value; }
   return planRpc('plan_create', { ...planArgs(auth), p_item: item }, env);
 }
 async function updatePlanItem(body, auth, env) {
@@ -2810,17 +2829,76 @@ async function updatePlanItem(body, auth, env) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch) || !Object.keys(patch).length) return err('bad_patch', 400);
   const bad = validatePlanFields(patch);
   if (bad) return err(bad, 400);
+  // R3: measure is validated against the registry and source_ok SET from it — never trusted from the client.
+  if (patch.measure !== undefined) { const m = normalizeMeasure(patch.measure); if (m.error) return err(m.error, 400); patch.measure = m.value; }
   return planRpc('plan_update', { ...planArgs(auth), p_id: d.id, p_patch: patch }, env);
 }
-// body: { id, op: agree | redate | drop | done | reopen, payload } (`action` is the worker's own key).
+// body: { id, op: agree | redate | drop | done | reopen | split, payload } (`action` is the worker's own key).
 async function planItemAction(body, auth, env) {
   const d = body.data || body;
   if (!isUuid(d.id)) return err('bad_id', 400);
-  if (!PLAN_ACT_ACTIONS.includes(d.op)) return err('bad_action', 400);
   const payload = (d.payload && typeof d.payload === 'object') ? d.payload : {};
+  // R3: split → docket.plan_split (one transaction; super only — below F it is not_found in SQL).
+  if (d.op === 'split') {
+    const bad = validateSplitPayload(payload);
+    if (bad) return err(bad, 400);
+    const children = [];
+    for (const c of payload.children) {
+      const kid = { title: c.title, owner_employee_id: c.owner_employee_id, due_date: c.due_date, done_when: c.done_when };
+      if (c.code) kid.code = c.code;
+      if (c.measure !== undefined) { const m = normalizeMeasure(c.measure); if (m.error) return err(m.error, 400); kid.measure = m.value; }
+      children.push(kid);
+    }
+    const p = { reason: payload.reason, children };
+    for (const k of ['results', 'result_drop_reason', 'tasks', 'tasks_default']) if (payload[k] !== undefined) p[k] = payload[k];
+    return planRpc('plan_split', { ...planArgs(auth), p_id: d.id, p_payload: p }, env);
+  }
+  if (!PLAN_ACT_ACTIONS.includes(d.op)) return err('bad_action', 400);
   const bad = validateActPayload(d.op, payload);
   if (bad) return err(bad, 400);
   return planRpc('plan_act', { ...planArgs(auth), p_id: d.id, p_action: d.op, p_payload: payload }, env);
+}
+
+// ── F9 R3: proposals (spec §4.5, migration 0019) ──────────────────────────────
+// Anyone signed in proposes; a super admin accepts (→ a milestone via plan_create, same transaction) or
+// declines with a reason. docket.plan_proposals_for decides what each caller gets back: super → the
+// queue; everyone else → only their own, with the outcome (an accepted item's code only if they see it).
+const PROPOSAL_KEYS = ['title', 'why', 'kind_hint', 'suggested_theme_id', 'suggested_owner_employee_id', 'suggested_date'];
+async function proposePlanItem(body, auth, env) {
+  const d = body.data || body;
+  const p = {};
+  for (const k of PROPOSAL_KEYS) if (d[k] !== undefined && d[k] !== null && d[k] !== '') p[k] = d[k];
+  const bad = validateProposal(p);
+  if (bad) return err(bad, 400);
+  return planRpc('plan_propose', { p_actor: auth.userId, p_is_super: isPlanAdmin(auth), p_payload: p }, env);
+}
+const DECISION_KEYS = ['decision', 'note', 'theme_id', 'owner_employee_id', 'due_date', 'done_when', 'state', 'title'];
+async function decideProposal(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.id)) return err('bad_id', 400);
+  const p = {};
+  for (const k of DECISION_KEYS) if (d[k] !== undefined && d[k] !== null && d[k] !== '') p[k] = d[k];
+  const bad = validateDecision(p);
+  if (bad) return err(bad, 400);
+  return planRpc('plan_proposal_decide', { ...planArgs(auth), p_id: d.id, p_payload: p }, env);
+}
+async function getProposals(url, auth, env) {
+  const r = await sbDocket(`/rest/v1/rpc/plan_proposals_for`, env, { method: 'POST', body: JSON.stringify({
+    p_actor: auth.userId, p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth) }) });
+  if (!r.ok) return err('db_error', 500);
+  const rows = Array.isArray(r.data) ? r.data : [];
+  const [owners, people] = await Promise.all([
+    nameMap(sbPodium, 'employees', rows.map(x => x.suggested_owner_employee_id), env),
+    nameMap(sbStore, 'users_profile', rows.flatMap(x => [x.proposer_user_id, x.decided_by]), env),
+  ]);
+  return ok({
+    proposals: rows.map(({ proposer_user_id, decided_by, ...x }) => ({
+      ...x,
+      suggested_owner_name: x.suggested_owner_employee_id ? (owners[x.suggested_owner_employee_id] || null) : null,
+      ...(isPlanAdmin(auth) ? { proposer_name: people[proposer_user_id] || null, decided_by_name: decided_by ? (people[decided_by] || null) : null } : {}),
+    })),
+    can_admin: isPlanAdmin(auth),
+  });
 }
 
 // ── F9 R2: tasks link up (spec §4.1 "Tasks point up", §5.3, migration 0018) ──────────────────────
@@ -2918,7 +2996,7 @@ const GET_ACTIONS = {
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,
-  getPlan, getPlanItem,
+  getPlan, getPlanItem, getProposals,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,
@@ -2937,6 +3015,7 @@ const POST_ACTIONS = {
   createDocketRole, updateDocketRole, deleteDocketRole, assignDocketRole,
   setDashboardPublic, addDashboardViewer, removeDashboardViewer,
   createPlanItem, updatePlanItem, planItemAction,
+  proposePlanItem, decideProposal,
 };
 
 async function handleGet(url, request, env) {

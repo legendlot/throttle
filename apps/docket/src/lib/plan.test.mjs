@@ -178,3 +178,118 @@ test('R2 error codes read as words', () => {
   assert.match(planErrorText(new Error('founders_move_out')), /super admin/);
   assert.match(planErrorText(new Error('subtask_follows_parent')), /parent/);
 });
+
+// ── R3 ───────────────────────────────────────────────────────────────────────
+test('R3 split button: parity with the worker; super only, agreed milestone/result', () => {
+  for (const k of core.PLAN_KINDS) for (const s of ['proposed', 'agreed', 'done', 'split', 'dropped']) for (const isSuper of [false, true]) {
+    const f = { isSuper, isOwner: true, isParentOwner: true };
+    assert.equal(app.canSplit({ kind: k, state: s }, f), core.canSplit({ kind: k, state: s }, f), `${k} ${s} ${isSuper}`);
+  }
+  assert.equal(app.canSplit(M({}), { isSuper: true }), true);
+  assert.equal(app.canSplit(T({}), { isSuper: true }), false);
+  assert.equal(app.canSplit(R({}), { isOwner: true, isParentOwner: true }), false);
+});
+
+const METRICS = [
+  { key: 'redline.first_pass_yield', system: 'redline', label: 'QC first-pass yield', source_ok: true },
+  { key: 'redline.downtime_minutes', system: 'redline', label: 'Line downtime', source_ok: false },
+  { key: 'manual', system: 'manual', label: 'Manual', source_ok: false },
+];
+test('R3 ⚠ no data source: live milestones/results with no measure, manual, or an unrecorded metric', () => {
+  const { noDataSource } = app;
+  assert.equal(noDataSource(M({ measure: null }), METRICS), true);
+  assert.equal(noDataSource(R({ measure: { system: 'manual', metric: 'manual' } }), METRICS), true);
+  assert.equal(noDataSource(M({ measure: { system: 'redline', metric: 'redline.downtime_minutes', source_ok: true } }), METRICS), true);   // the registry wins
+  assert.equal(noDataSource(M({ measure: { system: 'redline', metric: 'redline.first_pass_yield', source_ok: false } }), METRICS), false);
+  assert.equal(noDataSource(M({ measure: { system: 'x', metric: 'gone', source_ok: true } }), METRICS), false);   // unknown: the stored flag
+  assert.equal(noDataSource(M({ measure: { system: 'x', metric: 'gone' } }), METRICS), true);
+  assert.equal(noDataSource(M({ state: 'proposed', measure: null }), METRICS), false);   // a proposal is a draft (review R3 #7)
+  for (const state of ['done', 'dropped', 'split']) assert.equal(noDataSource(M({ state, measure: null }), METRICS), false, state);
+  assert.equal(noDataSource(T({ measure: null }), METRICS), false);
+});
+
+test('R3 measure editor: draft ⇄ stored, incomplete is undefined, manual needs no metric', () => {
+  const { measureDraft, measureFromDraft, sameMeasure, metricSystems, metricsFor, measureText } = app;
+  assert.deepEqual(measureDraft(null), { system: '', metric: '', target: '' });
+  assert.equal(measureFromDraft(measureDraft(null)), null);
+  assert.equal(measureFromDraft({ system: 'redline', metric: '', target: '' }), undefined);
+  assert.deepEqual(measureFromDraft({ system: 'manual', metric: '', target: ' 5 ' }), { system: 'manual', metric: 'manual', target: '5' });
+  assert.deepEqual(measureFromDraft({ system: 'redline', metric: 'redline.first_pass_yield', target: '' }), { system: 'redline', metric: 'redline.first_pass_yield', target: null });
+  assert.equal(sameMeasure({ system: 'a', metric: 'b', target: null, source_ok: true }, { system: 'a', metric: 'b' }), true);
+  assert.equal(sameMeasure(null, { system: 'a', metric: 'b' }), false);
+  assert.deepEqual(metricSystems(METRICS), ['redline', 'manual']);
+  assert.deepEqual(metricsFor(METRICS, 'redline').map(m => m.key), ['redline.first_pass_yield', 'redline.downtime_minutes']);
+  assert.equal(measureText({ metric: 'redline.first_pass_yield', target: '≥ 97%' }, METRICS), 'QC first-pass yield · ≥ 97%');
+});
+
+test('R3 split form: validation, task scope, hidden count, payload', () => {
+  const { newSplitForm, splitFormError, splitPayload, splitTasks, splitHiddenCount, splitTaskTargets, splitIntoCodes } = app;
+  const ms = M({ id: 'm', code: 'M01', owner_employee_id: 'e1' });
+  const results = [R({ id: 'r1', code: 'M01.R1', title: 'one' }), R({ id: 'r2', code: 'M01.R2', title: 'two' }), R({ id: 'r3', code: 'M01.R3', state: 'done' })];
+  const tasks = [
+    { id: 'k1', task_no: 'DKT-1', status: 'in_progress', plan: { id: 'm' } },
+    { id: 'k2', task_no: 'DKT-2', status: 'done', plan: { id: 'm' } },
+    { id: 'k3', task_no: 'DKT-3', status: 'not_started', plan: { id: 'r2' } },
+    { id: 'k4', task_no: 'DKT-4', status: 'not_started', plan: { id: 'r1' } },
+  ];
+  const f = newSplitForm(ms, results);
+  assert.equal(f.children.length, 2);
+  assert.equal(f.children[0].owner_employee_id, 'e1');
+  assert.match(splitFormError(ms, f, results, tasks), /reason/);
+  f.reason = 'two teams';
+  assert.match(splitFormError(ms, f, results, tasks), /Part 1/);
+  f.children = f.children.map((c, i) => ({ ...c, title: `P${i}`, due_date: '2026-12-31', done_when: 'x' }));
+  assert.match(splitFormError(ms, f, results, tasks), /M01\.R1/);
+  f.results = { r1: '1', r2: 'drop', r3: '' };                 // r3 (done) falls back to the default part
+  assert.match(splitFormError(ms, f, results, tasks), /dropped/);
+  f.result_drop_reason = 'not needed';
+  assert.equal(splitFormError(ms, f, results, tasks), null);
+  // only open tasks on the original or on a dropped result
+  assert.deepEqual(splitTasks(ms, tasks, f).map(t => t.id), ['k1', 'k3']);
+  assert.equal(splitHiddenCount(ms, { m: 2, r2: 1, r1: 5 }, f), 3);
+  assert.deepEqual(splitTaskTargets(f, results).map(t => t.value), ['c:0', 'c:1', 'r:r1']);
+  f.tasks = { k3: 'r:r1', k4: 'c:0' };                          // k4 is not re-linked (its result moves), so it's ignored
+  assert.deepEqual(splitPayload(ms, f, tasks), {
+    reason: 'two teams', tasks_default: 0,
+    children: [{ title: 'P0', owner_employee_id: 'e1', due_date: '2026-12-31', done_when: 'x' }, { title: 'P1', owner_employee_id: 'e1', due_date: '2026-12-31', done_when: 'x' }],
+    results: { r1: 1, r2: 'drop' }, result_drop_reason: 'not needed', tasks: { k3: 'r1' } });
+  // pointing a task at a result that is now dropped is caught
+  f.results = { r1: 'drop', r2: 'drop', r3: '' };
+  f.tasks = { k1: 'r:r1' };
+  assert.match(splitFormError(ms, f, results, tasks), /DKT-1/);
+  // a measure on a part: a system without a metric is incomplete
+  f.tasks = {}; f.children[1].measure = { system: 'redline', metric: '', target: '' };
+  assert.match(splitFormError(ms, f, results, tasks), /Part 2/);
+  f.children[1].measure = { system: 'manual', metric: '', target: '' };
+  assert.deepEqual(splitPayload(ms, f, tasks).children[1].measure, { system: 'manual', metric: 'manual', target: null });
+  // a result split sends no results map
+  const rs = R({ id: 'r1', code: 'M01.R1' });
+  const g = { ...newSplitForm(rs, []), reason: 'r' };
+  g.children = g.children.map(c => ({ ...c, title: 'x', owner_employee_id: 'e2', due_date: '2026-12-31', done_when: 'y' }));
+  assert.equal(splitFormError(rs, g, [], []), null);
+  assert.equal('results' in splitPayload(rs, g, []), false);
+  // the register's "Split → M47, M48"
+  const items = [M({ id: 'old', state: 'split', code: 'M01' }), M({ id: 'b', code: 'M48', split_from_id: 'old', sort: 12 }), M({ id: 'a', code: 'M47', split_from_id: 'old', sort: 11 })];
+  assert.deepEqual(splitIntoCodes(items[0], items), ['M47', 'M48']);
+  assert.deepEqual(splitIntoCodes(M({ id: 'old' }), items), []);
+});
+
+test('R3 proposals: form checks and the outcome the proposer reads', () => {
+  const { proposalFormError, proposalOutcome } = app;
+  assert.match(proposalFormError({ title: '', why: 'x' }), /title/);
+  assert.match(proposalFormError({ title: 'x', why: ' ' }), /why/i);
+  assert.match(proposalFormError({ title: 'x'.repeat(201), why: 'y' }), /200/);
+  assert.equal(proposalFormError({ title: 'x', why: 'y' }), null);
+  assert.equal(proposalOutcome({ status: 'submitted' }), 'Waiting for the founders');
+  assert.equal(proposalOutcome({ status: 'declined', decision_note: 'covered by M03' }), 'Declined: covered by M03');
+  assert.equal(proposalOutcome({ status: 'accepted' }), 'Accepted');
+  assert.equal(proposalOutcome({ status: 'accepted', accepted_item_code: 'M47', accepted_item_title: 'Ship' }), 'Accepted — M47 · Ship');
+});
+
+test('R3 history + errors read as words', () => {
+  assert.equal(historyText({ event: 'split', new: { state: 'split', split_into: ['M47', 'M48'] } }), 'Split into M47, M48');
+  assert.equal(historyText({ event: 'moved', new: { parent_id: 'x' } }), 'Moved to another parent');
+  assert.match(planErrorText(Object.assign(new Error('unmapped_tasks'), { detail: { count: 3 } })), /^3 linked tasks/);
+  assert.match(planErrorText(new Error('unmapped_results')), /result/);
+  assert.match(planErrorText(new Error('note_required')), /note/);
+});
