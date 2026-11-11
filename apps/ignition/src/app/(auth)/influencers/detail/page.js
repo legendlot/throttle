@@ -8,6 +8,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
 import { channelLinkError, normalizeChannelLink } from '../../../../lib/channelLink.js';
 import { NewDealModal } from '../../../../components/NewDealModal.js';
+import { TdsBanner } from '../../../../components/TdsBanner.js';
 import LocationInput from '../../../../components/LocationInput.js';
 import { canonicalLocation } from '../../../../lib/locations.js';
 import { organicViews } from '../../../../lib/metrics.js';
@@ -246,6 +247,8 @@ function InfluencerDetailPageBody() {
           )}
         </div>
       </header>
+
+      <TdsBanner tds={data.tds} quiet />
 
       {canManage && (
         <NewDealModal

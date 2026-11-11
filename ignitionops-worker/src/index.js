@@ -14,6 +14,7 @@
  */
 
 import { dedupeBySku } from './price-dedupe.js';
+import { tdsSummary } from './tds.js';
 import { isLocked, unlockActive, metricsCompleteness, lockedFieldsIn, LOCK_SELECT, LOCKED_MESSAGE } from './completeness.js';
 import {
   ROSTER_STAGES, PARTNER_TOGGLES, isPartner, partnerScoped, partnerGetRefusal, stripPartnerFields,
@@ -21,6 +22,7 @@ import {
 } from './partner.js';
 import {
   SHIP_LOCK_STAGES, INVOICE_MIMES, composeContract, renderContractEmail, shipLockRefusal, wordingPublished,
+  TEMPLATE_KINDS, TEMPLATE_LABELS,
   validateBank, maskBank, needsPayment, isDeadStage, isTerminalStage, invoicePathOk, validEmail,
   newToken, hashToken, tokenShapeOk,
 } from './contract.js';
@@ -628,6 +630,17 @@ async function getInfluencerCounts(url, auth, env) {
   return ok({ total, total_reach: totalReach, counts, untyped: Math.max(total - known, 0) });
 }
 
+// TDS on products (Reann #bugs 1794284934.757279): this creator's product value this FY. Staff only.
+// A failed read is `{ error }`, never a silent "clear": a missing flag would read as under ₹20,000.
+async function loadCreatorTds(env, influencerId) {
+  if (!influencerId) return null;
+  const r = await sb(`/rest/v1/rpc/creator_product_value_fy`, env, {
+    method: 'POST', body: JSON.stringify({ p_influencer_id: influencerId }),
+  }).catch(() => ({ ok: false }));   // started early in getEngagement: a throw must not 500 the page
+  if (!r.ok || !Array.isArray(r.data)) return { error: 'Could not work out the product value this year.' };
+  return tdsSummary(r.data, istToday());
+}
+
 async function getInfluencer(url, auth, env) {
   const id = url.searchParams.get('id');
   const code = url.searchParams.get('code');
@@ -652,8 +665,11 @@ async function getInfluencer(url, auth, env) {
   if (partnerScoped(auth)) {
     engagements = engagements.filter(e => ROSTER_STAGES.includes(e.stage));
     if (inf.list_status === 'archived' || !engagements.length) return err('not_found', 404);
+    return ok({ influencer: inf, engagements });
   }
-  return ok({ influencer: inf, engagements });
+  // isPartner, not partnerScoped: a partner with every influencer is still a partner.
+  if (isPartner(auth)) return ok({ influencer: inf, engagements });
+  return ok({ influencer: inf, engagements, tds: await loadCreatorTds(env, inf.id) });
 }
 
 // Is this influencer on the Roster (not archived, ≥1 deal in ROSTER_STAGES)? Partner scope check
@@ -949,6 +965,7 @@ async function getEngagement(url, auth, env) {
   const unlockOpen = !!eng.unlocked_by && unlockActive(eng);
   const ids = actorIds(eng, history, notes, { unlockOpen });
   // Deal contract: staff only, video only, and not on a partner's wire at all. A failed read is null.
+  const tdsP = isPartner(auth) ? null : loadCreatorTds(env, eng.influencer_id);
   const contract = isPartner(auth) || eng.engagement_type === 'ugc' ? undefined : await loadContractSummary(env, eng);
   for (const a of [contract?.sent_by, contract?.by_hand_by]) if (a && UUID_RE.test(a) && !ids.includes(a)) ids.push(a);
   const nameOf = {};
@@ -1002,6 +1019,7 @@ async function getEngagement(url, auth, env) {
     ads: adr.ok ? (adr.data || []).map(a => ({ ...a, approve_gate: adApprovalGate(adTake(a, vr.data || [])) })) : null,
     ad_payments: apr.ok ? (apr.data || []) : null,
   };
+  if (tdsP) out.tds = await tdsP;
   if (contract !== undefined) {
     out.contract = contract && {
       ...contract,
@@ -4592,7 +4610,10 @@ async function mintTrackingLinkFor(env, engagementId, { target, force } = {}) {
 // still what arms it: nothing sends and nothing locks until contract_settings is published.
 const DEAL_LINK_BASE = 'https://ignition.legendoftoys.com/deal/?t=';
 const INVOICE_BUCKET = 'ignition-creator-invoices';
-const CONTRACT_SETTINGS_COLS = 'subject,dos_and_donts,terms,published_at,published_by,updated_at,updated_by';
+// One template per deal type since 0010 (Reann #bugs 1794284934.757279). dos_and_donts/terms are
+// the retired single template and are no longer read.
+const TEMPLATE_FIELDS = TEMPLATE_KINDS.flatMap(k => [`${k}_dos_and_donts`, `${k}_terms`]);
+const CONTRACT_SETTINGS_COLS = ['subject', ...TEMPLATE_FIELDS, 'published_at', 'published_by', 'updated_at', 'updated_by'].join(',');
 const SEND_DEDUPE_MS = 60 * 1000;
 const STUCK_SENDING_MS = 5 * 60 * 1000;
 const BANK_REOPEN_MS = 7 * 24 * 3600 * 1000;
@@ -4679,17 +4700,16 @@ async function getContractSettings(url, auth, env) {
 // ⚠️ ignition_admin, like the Users page: publishing arms the lock on every video deal, so the gate
 // on the API must match the gate on the page rather than rely on the nav hiding it.
 const textOrNull = (v) => { const s = v == null ? '' : String(v).trim(); return s || null; };
-async function saveContractSettings(body, auth, env) {
+export async function saveContractSettings(body, auth, env) {
   const gate = requirePerm('ignition_admin', auth); if (gate) return gate;
   const cur = await readContractSettings(env);
   if (cur === undefined) return err('db_error', 500);
-  const patch = {
-    subject: textOrNull(body.subject), dos_and_donts: textOrNull(body.dos_and_donts), terms: textOrNull(body.terms),
-    updated_at: nowIso(), updated_by: auth.userId,
-  };
+  const patch = { subject: textOrNull(body.subject), updated_at: nowIso(), updated_by: auth.userId };
+  for (const f of TEMPLATE_FIELDS) patch[f] = textOrNull(body[f]);
   // Once published, blanking a section would silently switch sending and the lock back off.
-  if (cur?.published_at && (!patch.dos_and_donts || !patch.terms)) {
-    return err("Published wording cannot be emptied. Keep dos and don'ts and terms filled in.", 422);
+  const empty = TEMPLATE_KINDS.filter(k => !patch[`${k}_dos_and_donts`] || !patch[`${k}_terms`]);
+  if (cur?.published_at && empty.length) {
+    return err(`Published wording cannot be emptied. Keep dos and don'ts and terms filled in on ${empty.map(k => TEMPLATE_LABELS[k]).join(', ')}.`, 422);
   }
   const r = await sb(`/rest/v1/contract_settings?id=eq.1`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   if (!r.ok || !r.data?.[0]) return err('Could not save the wording. Has the migration been applied?', 500);
@@ -4700,8 +4720,9 @@ export async function publishContractSettings(body, auth, env) {
   const gate = requirePerm('ignition_admin', auth); if (gate) return gate;
   const cur = await readContractSettings(env);
   if (cur === undefined) return err('db_error', 500);
-  if (!textOrNull(cur?.dos_and_donts) || !textOrNull(cur?.terms)) {
-    return err("Add dos and don'ts and terms, and save them, before publishing.", 422);
+  const missing = TEMPLATE_KINDS.filter(k => !textOrNull(cur?.[`${k}_dos_and_donts`]) || !textOrNull(cur?.[`${k}_terms`]));
+  if (missing.length) {
+    return err(`Add dos and don'ts and terms on every template, and save them, before publishing (missing: ${missing.map(k => TEMPLATE_LABELS[k]).join(', ')}).`, 422);
   }
   const at = nowIso();
   const stamp = JSON.stringify({ published_at: at, published_by: auth.userId, updated_at: at, updated_by: auth.userId });

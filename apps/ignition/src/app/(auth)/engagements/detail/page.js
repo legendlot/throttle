@@ -21,6 +21,7 @@ import { CodesCard } from './components/CodesCard.js';
 import { ComplianceCard } from './components/ComplianceCard.js';
 import { PaymentsCard } from './components/PaymentsCard.js';
 import { CommissionCard } from './components/CommissionCard.js';
+import { TdsBanner } from '../../../../components/TdsBanner.js';
 import { isAffiliateDeal } from '../../../../lib/dealPayload.js';
 import { InfluencerCard } from './components/InfluencerCard.js';
 import { LogisticsCard } from './components/LogisticsCard.js';
@@ -185,6 +186,9 @@ function EngagementDetailPageBody() {
         style={{ fontSize: 13, color: 'var(--text-3)', width: 'max-content', textDecoration: 'none' }}>← Engagements</a>
 
       <DetailHeader e={e} inf={inf} data={data} completeness={completeness} session={session} reload={reload} setAdvOpen={setAdvOpen} canManage={canManage} setDelOpen={setDelOpen} partner={partner} />
+
+      {/* TDS on products (Reann #bugs 1794284934.757279): silent until this creator nears ₹20,000 this FY. */}
+      {!partner && <TdsBanner tds={data.tds} />}
 
       <PipelineCard e={e} data={data} canApprove={canApprove} doApprove={doApprove} approving={approving} locked={locked} doUnlock={doUnlock} unlocking={unlocking} unlockedWindow={unlockedWindow} doRelock={doRelock} dataWarnings={dataWarnings} />
 

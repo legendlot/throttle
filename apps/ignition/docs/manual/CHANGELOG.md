@@ -3,6 +3,12 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.22.0] - 2026-11-11
+### Added
+- Contract Wording: three templates (Barter, Paid, Affiliate) with a tab row, shared subject, and a commission line added automatically on Paid + Affiliate deals. Save covers all three; a bullet marks unsaved tabs, "(empty)" marks a missing section; publishing needs all three filled and none can be emptied afterwards.
+- Send contract window names the template used. New send blockers: commission % on affiliate and paid + affiliate deals, and a deal type on every deal.
+- TDS on products (section 194R): "Products this year (TDS)" line on the creator page with amber (from Rs 15,000) and red (above Rs 20,000) banners; the same banners on the deal page; a note on New deal.
+
 ## [1.21.0] - 2026-11-09
 ### Added
 - Affiliate Commission chapter (Analyze): what commission is, the Commission screen and month picker, Verify, Verify at estimate, payment statuses, Raise again, admin Reopen and Rebuild estimates, refused-verify messages.

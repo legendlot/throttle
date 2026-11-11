@@ -2,14 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   SHIP_LOCK_STAGES, composeContract, renderContractEmail, shipLockRefusal, validateBank, maskBank,
-  needsPayment, wordingPublished, isTerminalStage, isDeadStage, invoicePathOk, validEmail,
+  needsPayment, wordingPublished, templateKind, TEMPLATE_KINDS, isTerminalStage, isDeadStage, invoicePathOk, validEmail,
   newToken, hashToken, tokenShapeOk,
 } from '../src/contract.js';
 import { partnerGetRefusal, PARTNER_GET_ACTIONS, stripPartnerFields, partnerEngagementView } from '../src/partner.js';
 import { LOCKED_FIELDS } from '../src/completeness.js';
 
-const published = { published_at: '2026-11-05T00:00:00Z', dos_and_donts: 'Do show the car.', terms: 'Term one.', subject: 'Your deal' };
-const unpublished = { published_at: null, dos_and_donts: 'Do show the car.', terms: 'Term one.' };
+// Three templates (0010). Paid carries the words the older tests look for.
+const words = {
+  barter_dos_and_donts: 'Barter do.', barter_terms: 'Barter term.',
+  paid_dos_and_donts: 'Do show the car.', paid_terms: 'Term one.',
+  affiliate_dos_and_donts: 'Affiliate do.', affiliate_terms: 'Affiliate term.',
+};
+const published = { published_at: '2026-11-05T00:00:00Z', subject: 'Your deal', ...words };
+const unpublished = { published_at: null, ...words };
 const deal = (over = {}) => ({
   engagement_no: 'IGN-2026-00001', engagement_type: 'video_tracking', deal_type: 'paid', stage: 'planning',
   approved_at: '2026-11-01T00:00:00Z', deliverables: '1 reel', expected_post_date: '2026-12-09',
@@ -47,10 +53,48 @@ test('barter: no payment section at all, even with an amount left on the row, an
   assert.deepEqual(c.blockers, []);
 });
 
-test('affiliate with no amount and n_a terms prints no payment section and is not blocked', () => {
-  const c = compose(deal({ deal_type: 'affiliate', payment_amount: null, payment_terms: 'n_a' }));
-  assert.ok(!c.body.includes('Payment:'));
+test('affiliate with no amount and n_a terms prints only the commission line and is not blocked', () => {
+  const c = compose(deal({ deal_type: 'affiliate', payment_amount: null, payment_terms: 'n_a', affiliate_pct: '10.00' }));
+  assert.ok(c.body.includes('Payment:\nCommission: 10% of the sales made with your discount code, excluding GST'));
+  assert.ok(!c.body.includes('Amount:'));
   assert.deepEqual(c.blockers, []);
+});
+
+// ── templates (Reann #bugs 1794284934.757279) ────────────────────────────────────────────────────
+test('the deal type picks the template; paid + affiliate takes Paid', () => {
+  assert.equal(templateKind('barter'), 'barter');
+  assert.equal(templateKind('paid'), 'paid');
+  assert.equal(templateKind('paid_plus_affiliate'), 'paid');
+  assert.equal(templateKind('affiliate'), 'affiliate');
+  for (const t of [null, undefined, '', 'gift', 'PAID']) assert.equal(templateKind(t), null);
+  assert.deepEqual(TEMPLATE_KINDS, ['barter', 'paid', 'affiliate']);
+});
+
+test("each template's words go only into its own deal type's contract", () => {
+  const cases = [
+    [deal({ deal_type: 'barter' }), 'barter', ['Barter do.', 'Barter term.']],
+    [deal({ deal_type: 'paid' }), 'paid', ['Do show the car.', 'Term one.']],
+    [deal({ deal_type: 'affiliate', payment_amount: null, affiliate_pct: 10 }), 'affiliate', ['Affiliate do.', 'Affiliate term.']],
+    [deal({ deal_type: 'paid_plus_affiliate', affiliate_pct: 15 }), 'paid', ['Do show the car.', 'Term one.']],
+  ];
+  const all = Object.values(words);
+  for (const [d, kind, mine] of cases) {
+    const c = compose(d);
+    assert.equal(c.template, kind);
+    for (const w of all) assert.equal(c.body.includes(w), mine.includes(w), `${kind}: ${w}`);
+  }
+});
+
+test('paid + affiliate: the Paid template with the amount AND the commission line', () => {
+  const c = compose(deal({ deal_type: 'paid_plus_affiliate', affiliate_pct: '15.00' }));
+  assert.deepEqual(c.blockers, []);
+  assert.ok(c.body.includes('Amount: ₹5,000'));
+  assert.ok(c.body.includes('Commission: 15% of the sales'));
+});
+
+test('a plain paid or barter deal never prints a commission line, even with a % left on the row', () => {
+  assert.ok(!compose(deal({ deal_type: 'paid', affiliate_pct: 10 })).body.includes('Commission'));
+  assert.ok(!compose(deal({ deal_type: 'barter', affiliate_pct: 10 })).body.includes('Commission'));
 });
 
 test('legal wording comes only from settings: with none, the body holds no such section', () => {
@@ -91,6 +135,10 @@ test('blockers: each condition on its own', () => {
     [deal({ payment_amount: null }), published, /amount/],
     [deal({ payment_amount: '0' }), published, /amount/],
     [deal({ payment_amount: 'abc' }), published, /amount/],
+    [deal({ deal_type: 'affiliate', payment_amount: null, affiliate_pct: null }), published, /commission %/],
+    [deal({ deal_type: 'affiliate', payment_amount: null, affiliate_pct: '0' }), published, /commission %/],
+    [deal({ deal_type: 'paid_plus_affiliate', affiliate_pct: '' }), published, /commission %/],
+    [deal({ deal_type: null }), published, /deal type/],
   ];
   for (const [d, s, re] of cases) {
     const b = blocked(d, s);
@@ -109,11 +157,12 @@ test('hostile compose inputs do not throw and refuse', () => {
 });
 
 // ── wordingPublished ─────────────────────────────────────────────────────────────────────────────
-test('published means stamped AND both sections still filled', () => {
+test('published means stamped AND every template still has both sections', () => {
   assert.equal(wordingPublished(published), true);
-  for (const s of [null, undefined, {}, unpublished, { ...published, terms: '  ' }, { ...published, dos_and_donts: null }]) {
-    assert.equal(wordingPublished(s), false);
-  }
+  const holes = Object.keys(words).map(k => ({ ...published, [k]: '  ' }));
+  for (const s of [null, undefined, {}, unpublished, ...holes]) assert.equal(wordingPublished(s), false);
+  // The retired single-template columns alone no longer count.
+  assert.equal(wordingPublished({ published_at: '2026-11-05T00:00:00Z', dos_and_donts: 'x', terms: 'y' }), false);
 });
 
 // ── shipLockRefusal ──────────────────────────────────────────────────────────────────────────────

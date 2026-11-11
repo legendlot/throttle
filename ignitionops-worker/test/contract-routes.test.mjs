@@ -2,7 +2,7 @@
 // races the reviews found live in the shape of the write, not in any pure function.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import worker, { publishContractSettings, sendDealContract, updateEngagement, allowBankUpdate } from '../src/index.js';
+import worker, { publishContractSettings, saveContractSettings, sendDealContract, updateEngagement, allowBankUpdate } from '../src/index.js';
 import { hashToken } from '../src/contract.js';
 
 const TOKEN = 'a'.repeat(43);
@@ -106,7 +106,7 @@ test('accept is POST only: a mail scanner following the link accepts nothing', a
   assert.equal(writes(calls, /deal_contracts/).length, 0);
 });
 
-const SETTINGS = { id: 1, published_at: '2026-11-01T00:00:00Z', dos_and_donts: 'd', terms: 't', subject: 's' };
+const SETTINGS = { id: 1, published_at: '2026-11-01T00:00:00Z', barter_dos_and_donts: 'd', barter_terms: 't', paid_dos_and_donts: 'd', paid_terms: 't', affiliate_dos_and_donts: 'd', affiliate_terms: 't', subject: 's' };
 const DEAL = { id: EID, influencer_id: IID, engagement_no: 'IGN-1', engagement_type: 'video_tracking', deal_type: 'paid', stage: 'planning',
   approved_at: 'x', deliverables: '1 reel', expected_post_date: '2026-12-01', payment_amount: '100', payment_terms: 'advance', influencer: { email: 'a@b.co' } };
 const sendRoutes = (accepted) => [
@@ -158,7 +158,7 @@ test('an accepted contract is not resent by accident', async () => {
 });
 
 test('the first publish exempts deals already past Planning, a re-publish does not', async () => {
-  const words = { id: 1, dos_and_donts: 'd', terms: 't' };
+  const words = { id: 1, barter_dos_and_donts: 'd', barter_terms: 't', paid_dos_and_donts: 'd', paid_terms: 't', affiliate_dos_and_donts: 'd', affiliate_terms: 't' };
   let calls = db([['GET', /contract_settings/, 200, [{ ...words, published_at: null }]], ['PATCH', /contract_settings/, 200, [words]]]);
   await publishContractSettings({}, auth, env());
   const [ex] = writes(calls, /engagements/);
@@ -170,7 +170,7 @@ test('the first publish exempts deals already past Planning, a re-publish does n
 });
 
 test('if the exemption fails the publish is undone', async () => {
-  const words = { dos_and_donts: 'd', terms: 't', published_at: null };
+  const words = { barter_dos_and_donts: 'd', barter_terms: 't', paid_dos_and_donts: 'd', paid_terms: 't', affiliate_dos_and_donts: 'd', affiliate_terms: 't', published_at: null };
   const calls = db([['GET', /contract_settings/, 200, [words]], ['PATCH', /engagements/, 500, {}], ['PATCH', /contract_settings/, 200, [words]]]);
   assert.equal((await publishContractSettings({}, auth, env())).status, 500);
   const w = writes(calls, /contract_settings/);
@@ -178,7 +178,7 @@ test('if the exemption fails the publish is undone', async () => {
 });
 
 test('two publishers: only the one who wins the guarded write exempts deals', async () => {
-  const words = { dos_and_donts: 'd', terms: 't', published_at: null };
+  const words = { barter_dos_and_donts: 'd', barter_terms: 't', paid_dos_and_donts: 'd', paid_terms: 't', affiliate_dos_and_donts: 'd', affiliate_terms: 't', published_at: null };
   const calls = db([['GET', /contract_settings/, 200, [words]], ['PATCH', /published_at=is\.null/, 200, []], ['PATCH', /contract_settings/, 200, [words]]]);
   assert.equal((await publishContractSettings({}, auth, env())).status, 200);
   assert.equal(writes(calls, /engagements/).length, 0);
@@ -230,3 +230,46 @@ test('token hash is what the lookup uses', async () => {
   assert.ok(calls.some(c => c.at.includes(await_hash)));
 });
 const await_hash = await hashToken(TOKEN);
+
+// ── Three templates (0010, Reann #bugs 1794284934.757279) ──────────────────────────────────────
+const ALL6 = { barter_dos_and_donts: 'bd', barter_terms: 'bt', paid_dos_and_donts: 'pd', paid_terms: 'pt', affiliate_dos_and_donts: 'ad', affiliate_terms: 'at' };
+
+test('publish names the template still missing a section, and writes nothing', async () => {
+  const calls = db([['GET', /contract_settings/, 200, [{ ...ALL6, affiliate_terms: ' ', published_at: null }]]]);
+  const r = await publishContractSettings({}, auth, env());
+  assert.equal(r.status, 422);
+  assert.match((await r.json()).error, /missing: Affiliate/);
+  assert.equal(calls.filter(c => c.method === 'PATCH').length, 0);
+});
+
+test('once published, saving with one template blanked is refused and names it', async () => {
+  const calls = db([['GET', /contract_settings/, 200, [{ ...ALL6, published_at: 'x' }]]]);
+  const r = await saveContractSettings({ subject: 's', ...ALL6, barter_dos_and_donts: '' }, auth, env());
+  assert.equal(r.status, 422);
+  assert.match((await r.json()).error, /on Barter/);
+  assert.equal(calls.filter(c => c.method === 'PATCH').length, 0);
+});
+
+test('an old single-template save (an open tab from before the change) cannot wipe published templates', async () => {
+  db([['GET', /contract_settings/, 200, [{ ...ALL6, published_at: 'x' }]]]);
+  const r = await saveContractSettings({ subject: 's', dos_and_donts: 'd', terms: 't' }, auth, env());
+  assert.equal(r.status, 422);
+});
+
+test('a save writes all six template sections, trimmed, and never the retired columns', async () => {
+  const calls = db([['GET', /contract_settings/, 200, [{ ...ALL6, published_at: 'x' }]], ['PATCH', /contract_settings/, 200, [{ ...ALL6, published_at: 'x' }]]]);
+  const r = await saveContractSettings({ subject: ' s ', ...ALL6, paid_terms: '  new paid terms  ', dos_and_donts: 'old' }, auth, env());
+  assert.equal(r.status, 200);
+  const [w] = writes(calls, /contract_settings/);
+  assert.equal(w.body.paid_terms, 'new paid terms');
+  assert.equal(w.body.subject, 's');
+  for (const k of Object.keys(ALL6)) assert.ok(k in w.body, k);
+  assert.ok(!('dos_and_donts' in w.body) && !('terms' in w.body));
+});
+
+test('a non-admin cannot save the templates', async () => {
+  const calls = db([]);
+  const r = await saveContractSettings({ ...ALL6 }, { userId: 'u2', permissions: { ignition_manage: true, ignition_view: true } }, env());
+  assert.equal(r.status, 403);
+  assert.equal(calls.length, 0);
+});

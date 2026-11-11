@@ -5,6 +5,9 @@
 // ⚠️ No legal wording lives in this file. Dos, don'ts and terms come ONLY from
 // ignition.contract_settings, which Reann owns. Until she publishes them, sending and the lock are
 // both OFF (wordingPublished is the one switch for both).
+//
+// Three templates since 0010 (Reann #bugs 1794284934.757279): Barter, Paid, Affiliate, each with
+// its own dos and don'ts and terms; the deal's type picks one (templateKind).
 
 // Every stage that means the goods have left or the video is out. Transitions are free (S138), so
 // the lock is on the DESTINATION: `planning → live` must not walk around it.
@@ -26,9 +29,32 @@ export function validEmail(v) {
   return /^[^\s@,;:<>()"'*\\]+@[^\s@,;:<>()"'*\\]+\.[a-z]{2,}$/i.test(trimmed(v));
 }
 
-/** Published AND still has the two sections. The one switch for sending and for the lock. */
+export const TEMPLATE_KINDS = ['barter', 'paid', 'affiliate'];
+export const TEMPLATE_LABELS = { barter: 'Barter', paid: 'Paid', affiliate: 'Affiliate' };
+
+/** Which template a deal uses. Paid + affiliate takes Paid, with the commission line added. */
+export function templateKind(dealType) {
+  if (dealType === 'barter') return 'barter';
+  if (dealType === 'paid' || dealType === 'paid_plus_affiliate') return 'paid';
+  if (dealType === 'affiliate') return 'affiliate';
+  return null;
+}
+
+/** One template's two sections, as stored on the settings row. */
+export function templateWording(settings, kind) {
+  return {
+    dos_and_donts: settings?.[`${kind}_dos_and_donts`] ?? null,
+    terms: settings?.[`${kind}_terms`] ?? null,
+  };
+}
+
+/** Published AND every template still has both sections. The one switch for sending and the lock. */
 export function wordingPublished(settings) {
-  return !!settings?.published_at && !blank(settings.dos_and_donts) && !blank(settings.terms);
+  if (!settings?.published_at) return false;
+  return TEMPLATE_KINDS.every(k => {
+    const w = templateWording(settings, k);
+    return !blank(w.dos_and_donts) && !blank(w.terms);
+  });
 }
 
 // Paid and affiliate deals take bank details and an invoice; barter does not. `paid_plus_affiliate`
@@ -37,6 +63,7 @@ export function needsPayment(deal) {
   return ['paid', 'affiliate', 'paid_plus_affiliate'].includes(deal?.deal_type);
 }
 const needsAmount = (deal) => ['paid', 'paid_plus_affiliate'].includes(deal?.deal_type);
+const needsPct = (deal) => ['affiliate', 'paid_plus_affiliate'].includes(deal?.deal_type);
 
 const TERMS_WORDS = {
   advance: 'Paid in advance, before you post',
@@ -70,6 +97,11 @@ export function composeContract(deal, products, coupons, campaign, settings) {
   const code = (coupons || []).find(c => c.kind === 'affiliate' && c.status === 'active');
   const amount = Number(d.payment_amount);
   const hasAmount = Number.isFinite(amount) && amount > 0;
+  const pct = d.affiliate_pct == null || d.affiliate_pct === '' ? NaN : Number(d.affiliate_pct);
+  const hasPct = Number.isFinite(pct) && pct > 0;
+  const kind = templateKind(d.deal_type);
+  const wording = kind ? templateWording(settings, kind) : { dos_and_donts: null, terms: null };
+  const hasTerms = !!TERMS_WORDS[d.payment_terms] && d.payment_terms !== 'n_a';
 
   const out = [`Hi ${who},`, '', `Here are the details of your collaboration with Legend of Toys (${d.engagement_no || 'new deal'}).`, ''];
   if (campaign?.name) out.push(`Campaign: ${campaign.name}`);
@@ -79,16 +111,21 @@ export function composeContract(deal, products, coupons, campaign, settings) {
   // Reann #bugs 1794226469.391889: only a FIXED date (a launch) goes in the contract. Otherwise the
   // published terms say when to post (Reann adds "within 7 days") and the date stays planning only.
   if (d.post_date_fixed === true && !blank(d.expected_post_date)) out.push(`Post date (fixed): ${plainDate(d.expected_post_date)}`, '');
-  if (d.deal_type !== 'barter' && (hasAmount || (TERMS_WORDS[d.payment_terms] && d.payment_terms !== 'n_a'))) {
+  const showPct = needsPct(d) && hasPct;
+  if (d.deal_type !== 'barter' && (hasAmount || hasTerms || showPct)) {
     out.push('Payment:');
     if (hasAmount) out.push(`Amount: ₹${amount.toLocaleString('en-IN')}`);
-    if (TERMS_WORDS[d.payment_terms] && d.payment_terms !== 'n_a') out.push(`When: ${TERMS_WORDS[d.payment_terms]}`);
+    if (hasTerms) out.push(`When: ${TERMS_WORDS[d.payment_terms]}`);
+    // The commission line (Reann: paid + affiliate is the Paid template "with the commission line
+    // added"). Same basis the monthly statements use: net sales excluding GST on the creator's
+    // affiliate CODE (coupon_redemptions; a link-only sale earns nothing), per calendar month.
+    if (showPct) out.push(`Commission: ${pct.toLocaleString('en-IN')}% of the sales made with your discount code, excluding GST, worked out every month`);
     out.push('');
   }
   if (!blank(d.utm_link)) out.push('Your tracking link, please use this one:', trimmed(d.utm_link), '');
   if (code) out.push(`Your discount code: ${code.code}`, '');
-  if (!blank(settings?.dos_and_donts)) out.push("Dos and don'ts:", trimmed(settings.dos_and_donts), '');
-  if (!blank(settings?.terms)) out.push('Terms:', trimmed(settings.terms), '');
+  if (!blank(wording.dos_and_donts)) out.push("Dos and don'ts:", trimmed(wording.dos_and_donts), '');
+  if (!blank(wording.terms)) out.push('Terms:', trimmed(wording.terms), '');
   out.push('Anything unclear, just reply to this email.', '', 'Thanks,', 'Legend of Toys');
 
   const warnings = [];
@@ -105,12 +142,15 @@ export function composeContract(deal, products, coupons, campaign, settings) {
   if (blank(d.deliverables)) blockers.push('Add the deliverables on Deal terms first.');
   if (d.post_date_fixed === true && blank(d.expected_post_date)) blockers.push('This deal has a fixed post date: add the date first.');
   if (needsAmount(d) && !hasAmount) blockers.push('A paid deal needs a payment amount first.');
+  if (needsPct(d) && !hasPct) blockers.push('An affiliate deal needs its commission % first.');
+  if (!kind) blockers.push('Set the deal type first, so the right contract template is used.');
 
   const base = trimmed(settings?.subject) || 'Your Legend of Toys collaboration';
   return {
     to: trimmed(inf.email) || null,
     subject: d.engagement_no ? `${base} (${d.engagement_no})` : base,
     body: out.join('\n'),
+    template: kind,
     warnings,
     blockers,
   };

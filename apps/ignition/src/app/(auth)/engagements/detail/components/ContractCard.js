@@ -18,6 +18,8 @@ const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Ko
 const ctl = { width: '100%', boxSizing: 'border-box', background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-ctl)', padding: '9px 12px', fontFamily: 'var(--font-ui)', fontSize: 14 };
 const lbl = { display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 6 };
 
+const TEMPLATE_LABEL = { barter: 'Barter', paid: 'Paid', affiliate: 'Affiliate' };
+
 export function ContractCard({ e, contract, canManage, canAdmin, session, onSaved }) {
   const { showToast: toast } = useToast();
   const [sendOpen, setSendOpen] = useState(false);
@@ -155,6 +157,11 @@ function SendModal({ e, accepted, session, onClose, onSent }) {
             <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: 'var(--state-warning-fg)', lineHeight: 1.6 }}>
               {draft.warnings.map(w => <li key={w}>{w}</li>)}
             </ul>
+          )}
+          {draft.template && (
+            <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
+              Template: <b style={{ color: 'var(--text-2)' }}>{TEMPLATE_LABEL[draft.template] || draft.template}</b>, picked from the deal type{e.deal_type === 'paid_plus_affiliate' ? ', with the commission line added' : ''}. Edit it in Admin → Contract wording.
+            </div>
           )}
           {accepted && (
             <Banner tone="warning" lead="This contract is already accepted.">
