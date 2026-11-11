@@ -31,6 +31,8 @@ import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT
   linkError, effectiveLink, taskPlan, planLinkLabel, planDbError,
   validateSplitPayload, validateProposal, validateDecision } from './plan-core.mjs';
 import { normalizeMeasure, publicMetrics } from './plan-metrics.mjs';
+import { WEEK_KEYS, normalizeWeekSettings, resolveWeekFilter, matchesWeek, planWindow, istMidnight, staleCutoff,
+  buildPlanWeeks, ROWS_BY } from './weeks-core.mjs';
 
 
 // ── CORS ──────────────────────────────────────────────────────────────────
@@ -709,8 +711,29 @@ async function hydrateTasks(rows, auth, env) {
   }));
 }
 
+// F9 R4 — weeks (spec §6). The week settings (docket.settings week_end_dow / working_days / holidays,
+// migration 0020), normalised; a failed read falls back to the defaults (Sunday, Mon–Sat, no holidays).
+async function weekSettings(env) {
+  const r = await sbDocket(`/rest/v1/settings?key=in.${inList(WEEK_KEYS)}&select=key,value`, env);
+  return normalizeWeekSettings(r.ok && Array.isArray(r.data) ? r.data : []);
+}
+// The Week filter (?week=this|next|overdue|none|YYYY-MM-DD → that date's week) on the three task lists.
+// `overdue` IS the existing p_overdue (one meaning of overdue, in the RPC); the rest filter the RPC's rows
+// here, before hydration — every row, sub-tasks included, exactly as p_overdue does. null → bad value.
+async function weekFilterFor(q, env) {
+  const w = q.get('week');
+  if (!w) return { test: () => true, overdue: false };
+  if (w === 'overdue') return { test: () => true, overdue: true };
+  const s = await weekSettings(env);
+  const now = Date.now();
+  const r = resolveWeekFilter(w, s.week_end_dow, now);
+  return r ? { test: (t) => matchesWeek(t, r, s.week_end_dow, now), overdue: false } : null;
+}
+
 async function getTasks(url, auth, env) {
   const q = url.searchParams;
+  const wf = await weekFilterFor(q, env);
+  if (!wf) return err('bad_week', 400);
   const spaceId = q.get('space_id') || await defaultSpaceId(env);
   const space = await loadSpace(spaceId, env);
   if (!space) return err('space_not_found', 404);
@@ -722,7 +745,7 @@ async function getTasks(url, auth, env) {
     p_department_id: q.get('department_id') || null,
     p_employee_filter: q.get('employee_id') || null,
     p_priority: q.get('priority') || null,
-    p_overdue: q.get('overdue') === '1' || q.get('overdue') === 'true',
+    p_overdue: q.get('overdue') === '1' || q.get('overdue') === 'true' || wf.overdue,
     p_revised: q.get('revised') === '1' || q.get('revised') === 'true',
     p_parent_id: q.get('parent_id') || null,
     p_mine: q.get('lens') === 'mine',
@@ -731,7 +754,7 @@ async function getTasks(url, auth, env) {
   };
   const r = await sbDocket(`/rest/v1/rpc/list_tasks`, env, { method: 'POST', body: JSON.stringify(params) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
-  const rows = await hydrateTasks(r.data || [], auth, env);
+  const rows = await hydrateTasks((r.data || []).filter(wf.test), auth, env);
   return ok(depsFilter(rows, q.get('deps')));
 }
 
@@ -741,6 +764,8 @@ async function getProgramTasks(url, auth, env) {
   const q = url.searchParams;
   const programId = q.get('program_id');
   if (!programId) return err('program_id required', 400);
+  const wf = await weekFilterFor(q, env);
+  if (!wf) return err('bad_week', 400);
   const { memberSpaceIds, defaultId } = await programScopeArgs(auth, env);
   const params = {
     p_user: auth.userId, p_employee: auth.employeeId, p_dept: auth.departmentId,
@@ -750,14 +775,14 @@ async function getProgramTasks(url, auth, env) {
     p_department_id: q.get('department_id') || null,
     p_employee_filter: q.get('employee_id') || null,
     p_priority: q.get('priority') || null,
-    p_overdue: q.get('overdue') === '1' || q.get('overdue') === 'true',
+    p_overdue: q.get('overdue') === '1' || q.get('overdue') === 'true' || wf.overdue,
     p_revised: q.get('revised') === '1' || q.get('revised') === 'true',
     p_mine: q.get('lens') === 'mine',
     p_q: q.get('q') || null,
   };
   const r = await sbDocket(`/rest/v1/rpc/list_tasks_by_program`, env, { method: 'POST', body: JSON.stringify(params) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
-  let rows = await hydrateTasks(r.data || [], auth, env);
+  let rows = await hydrateTasks((r.data || []).filter(wf.test), auth, env);
   const spaceIds = uniq(rows.map(t => t.space_id));
   if (spaceIds.length) {
     const sr = await sbDocket(`/rest/v1/spaces?id=in.${inList(spaceIds)}&select=id,name`, env);
@@ -772,6 +797,8 @@ async function getProgramTasks(url, auth, env) {
 // with _relation ('owner' | 'collaborator') so the page splits them into two sections.
 async function getMyTasks(url, auth, env) {
   const q = url.searchParams;
+  const wf = await weekFilterFor(q, env);
+  if (!wf) return err('bad_week', 400);
   const { memberSpaceIds, defaultId } = await programScopeArgs(auth, env);
   const params = {
     p_user: auth.userId, p_employee: auth.employeeId,
@@ -779,14 +806,14 @@ async function getMyTasks(url, auth, env) {
     p_status: q.get('status') || null,
     p_department_id: q.get('department_id') || null,
     p_priority: q.get('priority') || null,
-    p_overdue: q.get('overdue') === '1' || q.get('overdue') === 'true',
+    p_overdue: q.get('overdue') === '1' || q.get('overdue') === 'true' || wf.overdue,
     p_revised: q.get('revised') === '1' || q.get('revised') === 'true',
     p_program_id: q.get('program_id') || null,
     p_q: q.get('q') || null,
   };
   const r = await sbDocket(`/rest/v1/rpc/list_my_tasks`, env, { method: 'POST', body: JSON.stringify(params) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
-  let rows = await hydrateTasks(r.data || [], auth, env);
+  let rows = await hydrateTasks((r.data || []).filter(wf.test), auth, env);
   const spaceIds = uniq(rows.map(t => t.space_id));
   if (spaceIds.length) {
     const sr = await sbDocket(`/rest/v1/spaces?id=in.${inList(spaceIds)}&select=id,name`, env);
@@ -2732,13 +2759,14 @@ async function nameMap(sb, table, ids, env) {
 const withOwnerName = (names) => (x) => ({ ...x, owner_name: x.owner_employee_id ? (names[x.owner_employee_id] || null) : null });
 
 async function getPlan(url, auth, env) {
-  const r = await planRows(auth, env);
+  const [r, week] = await Promise.all([planRows(auth, env), weekSettings(env)]);
   if (!r.ok) return err('db_error', 500);
   const rows = Array.isArray(r.data) ? r.data : [];
   const names = await nameMap(sbPodium, 'employees', rows.map(x => x.owner_employee_id), env);
   // R3: the "measured from" registry rides along so the app never keeps its own copy (§4.4).
+  // R4: so do the week settings — /tasks groups and filters by week with the org's week_end_dow.
   return ok({ items: rows.map(withOwnerName(names)), can_admin: isPlanAdmin(auth), employee_id: auth.employeeId,
-    metrics: publicMetrics() });
+    metrics: publicMetrics(), week });
 }
 async function getPlanItem(url, auth, env) {
   const id = url.searchParams.get('id');
@@ -2975,6 +3003,102 @@ async function visibleTaskRows(auth, rows, env) {
   }
   return inSpace.filter(t => !general(t) || quick(t) || collab.has(t.id));
 }
+// ── F9 R4: /plan/weeks (spec §7.2) ───────────────────────────────────────────
+// GET ?action=getPlanWeeks[&rows=team|person|theme][&team=<department id>|all]
+// The rolling three-week view + its four warnings. ACCESS: plan items only from plan_items_for (F / O / T —
+// the projection, never a forked one); tasks only through visibleTaskRows (private spaces, Founders' space,
+// the General baseline) and never from an ARCHIVED space (as accessibleSpaces / My tasks / programs — the
+// shared keepAccessible deliberately keeps archived spaces for by-id access, so the exclusion is here).
+// A level-F item's "No actionable tasks" counts every linked task (§5.3 rollups), and its card carries
+// hidden_actionable = how many of those sit in spaces the viewer isn't in ("+N in spaces you're not in");
+// below F only tasks the viewer can open count, and nothing about the rest is said. Default scope: a plan
+// admin all teams, everyone else their own department. Every list read is paginated (sbInAll / sbAll) — a
+// clipped history read would mark a fresh task stale.
+const PW_TASK_COLS = 'id,task_no,title,status,priority,owner_employee_id,assignee_employee_id,created_by_user_id,department_id,deadline,revised_deadline,space_id,plan_item_id,parent_task_id,created_at';
+const PW_OPEN = 'status=in.(not_started,in_progress,blocked)';
+// sbIn (chunked ids) × sbAll (paged): an in.(…) read that neither a long id list nor max-rows can clip.
+// `build` must carry an order= so the pages are stable.
+async function sbInAll(sb, ids, build, env, size = 150) {
+  if (!ids.length) return { ok: true, status: 200, data: [] };
+  const parts = [];
+  for (let i = 0; i < ids.length; i += size) parts.push(ids.slice(i, i + size));
+  const res = await Promise.all(parts.map(p => sbAll(sb, build(inList(p)), env)));
+  const bad = res.find(r => !r.ok);
+  return bad || { ok: true, status: 200, data: res.flatMap(r => r.data || []) };
+}
+async function getPlanWeeks(url, auth, env) {
+  const q = url.searchParams;
+  const rowsBy = ROWS_BY.includes(q.get('rows')) ? q.get('rows') : 'team';
+  const teamParam = q.get('team') || '';
+  if (teamParam && teamParam !== 'all' && !isUuid(teamParam)) return err('bad_team', 400);
+  const isSuper = isPlanAdmin(auth);
+  const teamId = teamParam === 'all' ? null : (teamParam || (isSuper ? null : auth.departmentId || null));
+  const now = Date.now();
+  const [settings, pr, dr] = await Promise.all([
+    weekSettings(env), planRows(auth, env),
+    sbPodium(`/rest/v1/departments?select=id,name&order=name.asc`, env),
+  ]);
+  if (!pr.ok || !dr.ok) return err('db_error', 500);
+  const departments = dr.data || [];
+  const deptNames = Object.fromEntries(departments.map(d => [d.id, d.name]));
+  const win = planWindow(now, settings.week_end_dow);
+  const raw = Array.isArray(pr.data) ? pr.data : [];
+  const fo = (i) => i.level === 'F' || i.level === 'O';
+  const live = (i) => i.state === 'proposed' || i.state === 'agreed';
+  const itemIds = raw.filter(i => i.kind !== 'theme' && fo(i) && live(i)).map(i => i.id);
+  const themeIds = uniq(raw.filter(i => i.kind === 'milestone' && fo(i) && i.state === 'agreed').map(i => i.parent_id));
+
+  // The window's top-level tasks: due before the last week ends, and either still open (Overdue) or due
+  // inside the window. Then the viewer's own gate.
+  const iso = (ms) => new Date(ms).toISOString();
+  const team = teamId ? `&department_id=eq.${enc(teamId)}` : '';
+  const effBefore = `or(revised_deadline.lt.${iso(win.end)},and(revised_deadline.is.null,deadline.lt.${iso(win.end)}))`;
+  const openOrInside = `or(status.in.(not_started,in_progress,blocked),revised_deadline.gte.${iso(win.start)},and(revised_deadline.is.null,deadline.gte.${iso(win.start)}))`;
+  const topLive = 'archived_at=is.null&is_recurring=eq.false&parent_task_id=is.null';
+  const [wr, lr, tr, er, ar] = await Promise.all([
+    sbAll(sbDocket, `/rest/v1/tasks?${topLive}&status=neq.abandoned${team}&and=(${effBefore},${openOrInside})&select=${PW_TASK_COLS}&order=id.asc`, env),
+    sbInAll(sbDocket, itemIds, l => `/rest/v1/tasks?plan_item_id=in.${l}&${topLive}&${PW_OPEN}&select=${PW_TASK_COLS}&order=id.asc`, env),
+    sbInAll(sbDocket, themeIds, l => `/rest/v1/tasks?plan_item_id=in.${l}&${topLive}&${PW_OPEN}${team}&select=${PW_TASK_COLS}&order=id.asc`, env),
+    sbIn(sbPodium, uniq(raw.map(i => i.owner_employee_id)), l => `/rest/v1/employees?id=in.${l}&select=id,full_name,department_id`, env),
+    sbAll(sbDocket, `/rest/v1/spaces?archived_at=not.is.null&select=id&order=id.asc`, env),
+  ]);
+  if (!wr.ok || !lr.ok || !tr.ok || !er.ok || !ar.ok) return err('db_error', 500);   // fail closed
+  const archived = new Set((ar.data || []).map(x => x.id));
+  const unarchived = (res) => (res.data || []).filter(t => !archived.has(t.space_id));
+  const [winRows, linkedRows, themeRows] = [unarchived(wr), unarchived(lr), unarchived(tr)];
+  const [winVisible, linkedVisible, themeVisible] = await Promise.all([
+    visibleTaskRows(auth, winRows, env),
+    visibleTaskRows(auth, linkedRows, env),
+    visibleTaskRows(auth, themeRows, env),
+  ]);
+  const seen = new Set(linkedVisible.map(t => t.id));
+  const linked = linkedRows.map(t => ({ id: t.id, plan_item_id: t.plan_item_id, parent_task_id: t.parent_task_id, status: t.status,
+    owner_employee_id: t.owner_employee_id, deadline: t.deadline, revised_deadline: t.revised_deadline, visible: seen.has(t.id) }));
+
+  // Qualifying updates (§8.3) since the stale cut-off: a task_history row or a live comment.
+  const since = iso(istMidnight(staleCutoff(now, settings)));
+  const openIds = winVisible.filter(t => t.status !== 'done').map(t => t.id);
+  const [hr, cr, planned] = await Promise.all([
+    sbInAll(sbDocket, openIds, l => `/rest/v1/task_history?task_id=in.${l}&created_at=gte.${since}&select=task_id&order=id.asc`, env),
+    sbInAll(sbDocket, openIds, l => `/rest/v1/task_comments?task_id=in.${l}&deleted_at=is.null&created_at=gte.${since}&select=task_id&order=id.asc`, env),
+    hydratePlan(winVisible, auth, env),
+  ]);
+  if (!hr.ok || !cr.ok) return err('db_error', 500);
+  const fresh = new Set([...(hr.data || []), ...(cr.data || [])].map(x => x.task_id));
+
+  const emp = {}; (er.data || []).forEach(e => { emp[e.id] = e; });
+  const items = raw.map(i => ({ ...i, owner_name: emp[i.owner_employee_id]?.full_name || null,
+    team_id: i.department_id || emp[i.owner_employee_id]?.department_id || null }));
+  const names = await nameMap(sbPodium, 'employees', [...winVisible, ...themeVisible].map(t => t.owner_employee_id), env);
+  const named = (t) => ({ ...t, owner_name: t.owner_employee_id ? (names[t.owner_employee_id] || null) : null,
+    department_name: deptNames[t.department_id] || null, _can_edit: canEditTask(auth, t) });
+  const model = buildPlanWeeks({
+    items, tasks: planned.map(named), linked, themeTasks: themeVisible.map(named), fresh,
+    settings, now, rowsBy, teamId, deptNames, isSuper,
+  });
+  return ok({ ...model, employee_id: auth.employeeId, department_id: auth.departmentId || null, departments });
+}
+
 // A plan admin, read strictly: any failed read is "no" (the role guard's userIsPlanAdmin fails the other
 // way, because there "yes" blocks). Used where "yes" GRANTS — the Founders' space.
 async function userIsPlanAdminStrict(userId, env) {
@@ -2996,7 +3120,7 @@ const GET_ACTIONS = {
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,
-  getPlan, getPlanItem, getProposals,
+  getPlan, getPlanItem, getProposals, getPlanWeeks,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,

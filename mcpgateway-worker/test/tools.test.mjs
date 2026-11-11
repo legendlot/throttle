@@ -259,6 +259,17 @@ test('the write actions are exactly these seven; reads drop LOT user ids', async
   assert.deepEqual(Object.fromEntries(seen[0].u.searchParams), { action: 'getMyTasks', overdue: 'true', status: 'blocked' });
   assert.equal(seen[0].init.method, undefined); // reads are GETs
 });
+test('F9 R4: docket_tasks takes a week filter (this/next/overdue/none/a date) and forwards it as is', async () => {
+  const rd = findTool('docket_tasks');
+  for (const w of ['this', 'next', 'overdue', 'none', '2026-11-18']) {
+    const seen = []; const p = rd.parse({ report: 'space_tasks', week: w }, NOW);
+    assert.equal(p.ok, true, w);
+    await rd.run({ env: docketEnv(seen), sbAccess: 'J', input: p.value });
+    assert.equal(seen[0].u.searchParams.get('week'), w);
+  }
+  for (const bad of ['last', '2026-02-30', "this'", 'x'.repeat(11)]) assert.equal(rd.parse({ report: 'my_tasks', week: bad }, NOW).ok, false, bad);
+  assert.equal(rd.parse({ report: 'program_tasks', program_id: U, week: 'this' }, NOW).ok, false);   // not on program_tasks
+});
 test('comment: a task you cannot open (private space) is refused before writing', async () => {
   const seen = []; const t = findTool('docket_add_comment');
   const env = { DOCKETOPS: { fetch: async (u, init = {}) => { seen.push(init.method || 'GET'); return new Response(JSON.stringify({ ok: false, error: 'forbidden_space' }), { status: 403 }); } } };

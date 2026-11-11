@@ -31,12 +31,14 @@ import { ROW_SELECTOR } from '../../../components/tasks/TaskRow.js';
 import { useTaskViewState, visibleColumns, COLUMNS } from '../../../components/tasks/useTaskViewState.js';
 import { Button, EmptyState } from '../../../components/ui/index.js';
 import { sendDone, doneConfirmText, bulkDoneConfirmText, DECLINED } from '../../../lib/deps.js';
-import { usePlanItems, usePlanById } from '../../../components/plan/PlanPicker.js';
+import { usePlanItems, usePlanById, usePlanWeek } from '../../../components/plan/PlanPicker.js';
+import { groupByWeek } from '../../../lib/weeks.js';
 import { matchesPlanFilter, planFilterOptions, planErrorText } from '../../../lib/plan.js';
 
 const GROUP_OPTS = [
   { value: 'none', label: 'No grouping' }, { value: 'person', label: 'Owner' },
   { value: 'department', label: 'Team' }, { value: 'status', label: 'Status' }, { value: 'program', label: 'Program' },
+  { value: 'week', label: 'Week ending' },   // F9 R4 — read-only axis: a deadline moves by revising it, never by a drop
 ];
 // Group axis → the createTask field a group-foot capture prefills (status included —
 // createTask takes an initial status since functionality F1).
@@ -77,7 +79,7 @@ function TasksBoard() {
   const { filters: f, groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView, cardSize, chooseCardSize,
     showIds, toggleShowIds, subtaskMode, chooseSubtaskMode, cols, toggleColumn, moveColumn, resizeColumn, resetColumns,
     collapsed, toggleGroupCollapsed, setGroupsCollapsed } = view;
-  const { status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, q, planFilter } = f;
+  const { status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, q, planFilter, week } = f;
 
   const [tasks, setTasks] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -130,6 +132,8 @@ function TasksBoard() {
   const planItems = usePlanItems(session);
   const planById = usePlanById(planItems);
   const planOpts = useMemo(() => planFilterOptions(planItems), [planItems]);
+  // F9 R4: the org's week end (getPlan `week`, same cached read) — Group by "Week ending" + the Week filter label.
+  const weekEndDow = usePlanWeek(session).week_end_dow;
   const opts = useMemo(() => ({ teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts, planItems }), [teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts, planItems]);
   // F2 capture chips + @name tokens: the same people / options as the owner and priority cells.
   const captureCtx = useMemo(() => ({ people: employees, ownerOpts: ownerCellOpts, prioOpts, planItems }), [employees, ownerCellOpts, prioOpts, planItems]);
@@ -172,14 +176,14 @@ function TasksBoard() {
     try {
       const common = {
         status, department_id: departmentId, employee_id: employeeId, priority,
-        overdue: overdue ? '1' : '', revised: revised ? '1' : '', deps, lens: mine ? 'mine' : '',
+        overdue: overdue ? '1' : '', revised: revised ? '1' : '', deps, lens: mine ? 'mine' : '', week,
       };
       // My-tasks: cross-space owner+collaborator list. Program mode: cross-space aggregation
       // of one program's tasks. Otherwise the normal single-space board.
       const r = mineMode
         ? await docketopsGet('getMyTasks', {
             status, department_id: departmentId, priority, program_id: programId,
-            overdue: overdue ? '1' : '', revised: revised ? '1' : '', deps,
+            overdue: overdue ? '1' : '', revised: revised ? '1' : '', deps, week,
           }, session)
         : inProgramMode
           ? await docketopsGet('getProgramTasks', { program_id: viewProgramId, ...common }, session)
@@ -187,7 +191,7 @@ function TasksBoard() {
       setTasks(Array.isArray(r) ? r : []);
     } catch (e) { showToast(e.message || 'Failed to load tasks', 'error'); }
     finally { setLoading(false); }
-  }, [session, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, showToast]);
+  }, [session, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, week, showToast]);
   useEffect(() => { load(); }, [load]);
 
   // F4: My tasks' "Clean up N" — my stale count (count_only: no hydration). Re-read after
@@ -498,6 +502,12 @@ function TasksBoard() {
     }
     const capPlaceholder = inProgramMode ? "Add task — it's tagged to this program" : 'Add task';
     if (groupBy === 'none') return [{ key: 'none', label: null, rows: listRows, capture: cap(), capturePlaceholder: capPlaceholder }];
+    // F9 R4: Overdue · each week ending (IST, the org's week end) in date order · No date. No foot capture —
+    // a new task's week is its deadline, which the top capture (or its date chip) sets.
+    if (groupBy === 'week') {
+      const out = groupByWeek(listRows, weekEndDow, Date.now());   // re-run on a new IST day (istDay dep)
+      return out.length ? out : [{ key: 'none', label: null, rows: [], capture: cap(), capturePlaceholder: capPlaceholder }];
+    }
     const field = GROUP_FIELD[groupBy];
     const m = new Map();
     for (const t of listRows) {
@@ -525,7 +535,7 @@ function TasksBoard() {
     // Grouped but nothing on the board yet: still offer one capture.
     if (!out.length) out.push({ key: 'none', label: null, rows: [], capture: cap(), capturePlaceholder: capPlaceholder });
     return out;
-  }, [mineMode, mineToday, mineOwner, mineCollab, mineCreated, groupBy, listRows, statusRank, inProgramMode, programs]);
+  }, [mineMode, mineToday, mineOwner, mineCollab, mineCreated, groupBy, listRows, statusRank, inProgramMode, programs, weekEndDow, istDay]);
 
   const visibleCols = useMemo(() => visibleColumns(cols, { crossSpace }), [cols, crossSpace]);
   const columnKeys = useMemo(() => Object.keys(COLUMNS).filter(k => !COLUMNS[k].crossSpaceOnly || crossSpace)
@@ -624,8 +634,8 @@ function TasksBoard() {
   // group foot — the column's axis value prefilled (status via the follow-up changeStatus),
   // never a program id that no longer resolves.
   const boardCtx = {
-    ...gridCtx, showIds, cardSize, activeId: drawerId, drawerOpen: drawerId != null, shellModalOpen, sortKey,
-    createIn: (title, value, extras) => {
+    ...gridCtx, showIds, cardSize, activeId: drawerId, drawerOpen: drawerId != null, shellModalOpen, sortKey, weekEndDow,
+    createIn: kanbanAxis === 'week' ? null : (title, value, extras) => {
       const dead = kanbanAxis === 'program' && value && !programs.some(p => p.id === value);
       return live.current.createInGroup(title, GROUP_FIELD[kanbanAxis], dead ? undefined : value, extras);
     },
@@ -706,7 +716,7 @@ function TasksBoard() {
         filterOpen={filterOpen} setFilterOpen={setFilterOpen} filterCount={f.panelFilterCount}
         filter={{ status, setStatus: f.setStatus, departmentId, setDepartmentId: f.setDepartmentId, employeeId, setEmployeeId: f.setEmployeeId,
           priority, setPriority: f.setPriority, programId, setProgramId: f.setProgramId, overdue, setOverdue: f.setOverdue, revised, setRevised: f.setRevised, deps, setDeps: f.setDeps,
-          planFilter, setPlanFilter: f.setPlanFilter, planOpts,
+          planFilter, setPlanFilter: f.setPlanFilter, planOpts, week, setWeek: f.setWeek, weekEndDow,
           teamOpts, empOpts, programOpts, filterCount: f.panelFilterCount, clearFilters: f.clearPanelFilters, hideProgramFilter: inProgramMode, hideOwnerFilter: mineMode }}
         showMe={!mineMode} mine={mine} setMine={f.setMine}
         showArchive={!mineMode && !boardMode} archiveDone={archiveDone} toggleArchiveDone={toggleArchiveDone}

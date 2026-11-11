@@ -126,6 +126,8 @@ export function DocketSidebar({
       <div className="dks-scroll">
         {/* Plan (F9): the plan register / My milestones — top of the sidebar, for everyone. */}
         <Row label="Plan" lead={<Target size={13} strokeWidth={2} aria-hidden />} active={path === '/plan'} onClick={go('/plan')} />
+        {/* F9 R4: the rolling three-week view (Overdue · this · next · the week after). */}
+        <Row depth={1} label="Three weeks" active={path === '/plan/weeks'} onClick={go('/plan/weeks')} />
         {/* Programs (S138): cross-space jump-to — every task tagged to the program, in any
             space you can access. Only programs you have visible tasks in are listed (counts). */}
         {(programs.length > 0 || onNewProgram) && shown('programs', programActive) && <div className="dks-section">

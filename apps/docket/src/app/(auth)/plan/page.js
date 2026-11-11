@@ -10,7 +10,8 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, Lock, ChevronUp, ChevronDown, Target, Flag, Lightbulb } from 'lucide-react';
+import { Plus, Lock, ChevronUp, ChevronDown, Target, Flag, Lightbulb, CalendarRange } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { Button, IconButton, Pill, EmptyState } from '../../../components/ui/index.js';
 import { PlanPanel } from '../../../components/plan/PlanPanel.js';
@@ -24,6 +25,7 @@ import {
 export default function PlanPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
+  const router = useRouter();
   const [data, setData] = useState(null);       // { items, can_admin, employee_id }
   const [employees, setEmployees] = useState([]);
   const [target, setTarget] = useState(null);   // { mode: 'new', kind, parent } | { mode: 'view', id } | { mode: 'propose' } | { mode: 'proposal', proposal }
@@ -89,6 +91,7 @@ export default function PlanPage() {
             : 'The milestones you own, under their theme, with the results you’ve committed to.'}</p>
         </div>
         <div className="pl-head-acts">
+          <Button variant="neutral" icon={CalendarRange} onClick={() => router.push('/plan/weeks')}>Three weeks</Button>
           <Button variant={isSuper ? 'neutral' : 'primary'} icon={Lightbulb} onClick={propose}>Propose</Button>
           {isSuper && <Button variant="primary" icon={Plus} onClick={() => add('theme')}>Theme</Button>}
         </div>

@@ -133,6 +133,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
     const add = (it) => items.push({ ...it, lc: it.label.toLowerCase(), lcSub: (it.sub || '').toLowerCase() });
     const navItems = [
       { key: 'nav:plan', label: 'Plan', icon: Target, route: '/plan' },
+      { key: 'nav:plan-weeks', label: 'Three weeks', icon: Target, route: '/plan/weeks' },
       { key: 'nav:tasks', label: 'Tasks', icon: ListTodo, route: '/tasks' },
       { key: 'nav:mine', label: 'My tasks', icon: UserCheck, route: '/tasks?lens=mine' },
       { key: 'nav:checklist', label: 'Checklist', icon: ListChecks, route: '/checklist' },

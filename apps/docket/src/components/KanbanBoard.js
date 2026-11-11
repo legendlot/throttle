@@ -10,7 +10,9 @@
    Columns: 272px, tinted with the status colour when the axis is status (neutral
    otherwise), collapsible to a strip (localStorage `docket.board.collapsed`), each with
    a foot "+ Add task" that creates through the page's createInGroup with the column's
-   value prefilled. Cards: S / M / L (ctx.cardSize, set in Customize). */
+   value prefilled. Cards: S / M / L (ctx.cardSize, set in Customize).
+   F9 R4: the `week` axis (Overdue · Week ending … · No date, ctx.weekEndDow) is READ-ONLY — no drag, no
+   Shift+←/→ move, no column capture: a deadline changes only by revising it (reason logged). */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MoreHorizontal, Plus, ListTree, UserRound, ChevronsRightLeft, Link2, MessageSquare } from 'lucide-react';
 import { Avatar, personColor } from './primitives.js';
@@ -20,6 +22,7 @@ import { PriorityFlag, DeadlineCell } from './tasks/TaskCells.js';
 import { DepsBadge } from './task/Dependencies.js';
 import { PlanChip } from './plan/PlanPicker.js';
 import { useQuickCapture, CaptureChips, withHint, keepFocus, isSubmitKey } from './tasks/QuickCapture.js';
+import { weekBucket, groupByWeek } from '../lib/weeks.js';
 
 const NONE = '__none__';
 const COLLAPSED_KEY = 'docket.board.collapsed';
@@ -31,9 +34,14 @@ const AXIS = {
   department: { field: 'department_id',     keyOf: (t) => t.department_id || NONE,       curr: (t) => t.department_id || '' },
   program:    { field: 'program_id',        keyOf: (t) => t.program?.id || NONE,         curr: (t) => t.program?.id || '' },
 };
+// Read-only (field null); keyOf needs the org's week end, so it is built per render.
+const weekAxis = (dow, now) => ({ field: null, keyOf: (t) => weekBucket(t, dow, now), curr: (t) => weekBucket(t, dow, now) });
 const NONE_LABEL = { person: 'Unassigned', department: 'No team', program: 'No program' };
 
-function buildColumns(axis, rows) {
+function buildColumns(axis, rows, dow) {
+  if (axis === 'week') {
+    return groupByWeek(rows, dow, Date.now()).map(g => ({ key: g.value, value: g.value, label: g.label, color: g.color || 'var(--text-4)' }));
+  }
   if (axis === 'status') {
     // Fixed columns, always present (so an empty column is still a drop target).
     return SETTABLE_STATUSES.map(s => ({ key: s.key, value: s.key, label: s.label, color: s.color }));
@@ -63,8 +71,10 @@ function readCollapsed() {
 }
 
 export function KanbanBoard({ rows, axis, ctx }) {
-  const ax = AXIS[axis] || AXIS.status;
-  const columns = buildColumns(axis, rows);
+  const now = Date.now();
+  const ax = axis === 'week' ? weekAxis(ctx.weekEndDow || 7, now) : (AXIS[axis] || AXIS.status);
+  const columns = buildColumns(axis, rows, ctx.weekEndDow || 7);
+  const canMove = !!ax.field;
   const [dragId, setDragId] = useState(null);
   const [overKey, setOverKey] = useState(null);
   const [collapsed, setCollapsed] = useState({});
@@ -125,7 +135,7 @@ export function KanbanBoard({ rows, axis, ctx }) {
   // repeat press can't re-read the stale value and send the change twice.
   const moving = useRef(new Set());
   function moveTo(task, col) {
-    if (!task || !task._can_edit) return null;
+    if (!task || !task._can_edit || !canMove) return null;
     if (ax.curr(task) === col.value) return null; // already here
     if (moving.current.has(task.id)) return null;
     moving.current.add(task.id);
@@ -186,7 +196,7 @@ export function KanbanBoard({ rows, axis, ctx }) {
           const isOver = overKey === col.key && !!dragTask && ax.curr(dragTask) !== col.value;
           const tint = statusAxis ? { '--kb-tint': col.color } : undefined;
           const dragProps = {
-            onDragOver: (e) => { if (dragId) { e.preventDefault(); setOverKey(col.key); } },
+            onDragOver: (e) => { if (dragId && canMove) { e.preventDefault(); setOverKey(col.key); } },
             onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOverKey(k => (k === col.key ? null : k)); },
             onDrop: (e) => { e.preventDefault(); onDrop(col); },
           };
@@ -214,7 +224,7 @@ export function KanbanBoard({ rows, axis, ctx }) {
                 {cards.map((task, i) => (
                   <div key={task.id} className="kb-slot">
                     {landAt === i && <div className="kb-insert" aria-hidden />}
-                    <KanbanCard task={task} axis={axis} ctx={ctx}
+                    <KanbanCard task={task} axis={axis} ctx={ctx} canMove={canMove}
                       dragging={dragId === task.id} onDragStart={onDragStart} onDragEnd={onDragEnd}
                       onMove={moveBy} onWalk={focusNeighbour} />
                   </div>
@@ -292,10 +302,11 @@ function ColumnAdd({ col, create }) {
   );
 }
 
-function KanbanCard({ task, axis, ctx, dragging, onDragStart, onDragEnd, onMove, onWalk }) {
+function KanbanCard({ task, axis, ctx, canMove = true, dragging, onDragStart, onDragEnd, onMove, onWalk }) {
   const { openDrawer, showSpace } = ctx;
   const size = ctx.cardSize || 'm';
   const ed = !!task._can_edit;
+  const drag = ed && canMove;
   const collabs = (task.collaborators || []).map(c => c.full_name).filter(Boolean);
   const kids = task.child_count || 0;
   const st = STATUS_MAP[task.status];
@@ -311,7 +322,7 @@ function KanbanCard({ task, axis, ctx, dragging, onDragStart, onDragEnd, onMove,
     if (ctx.drawerOpen || ctx.shellModalOpen) return;
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(task.id); }
     else if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-      e.preventDefault(); if (ed) onMove(task, e.key === 'ArrowLeft' ? -1 : 1);
+      e.preventDefault(); if (drag) onMove(task, e.key === 'ArrowLeft' ? -1 : 1);
     }
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); onWalk(task, e.key === 'ArrowLeft' ? -1 : 1, 0); }
     else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); onWalk(task, 0, e.key === 'ArrowUp' ? -1 : 1); }
@@ -319,8 +330,8 @@ function KanbanCard({ task, axis, ctx, dragging, onDragStart, onDragEnd, onMove,
   return (
     <div className={'kb-card' + (dragging ? ' dragging' : '') + (ed ? '' : ' locked') + (ctx.activeId === task.id ? ' active' : '')}
       data-card-id={task.id} tabIndex={0} role="button"
-      aria-label={`${task.task_no ? task.task_no + ' ' : ''}${task.title}${ed ? ' — Shift+Left/Right to move' : ''}`}
-      draggable={ed} onDragStart={ed ? (e) => onDragStart(e, task) : undefined} onDragEnd={onDragEnd}
+      aria-label={`${task.task_no ? task.task_no + ' ' : ''}${task.title}${drag ? ' — Shift+Left/Right to move' : ''}`}
+      draggable={drag} onDragStart={drag ? (e) => onDragStart(e, task) : undefined} onDragEnd={onDragEnd}
       onClick={() => openDrawer(task.id)} onKeyDown={onKeyDown}>
       <div className="kb-title-row">
         <div className="kb-title">{task.title}</div>

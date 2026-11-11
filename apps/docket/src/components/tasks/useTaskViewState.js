@@ -53,17 +53,20 @@ export function useTaskViewState({ lensParam }) {
   const [q, setQ] = useState('');
   // F9 R2: '' | 'unplanned' | a plan item id. Client-side (rows carry `plan`), so it is not a load param.
   const [planFilter, setPlanFilter] = useState('');
+  // F9 R4: '' | 'this' | 'next' | 'overdue' | 'none' | a week-ending 'YYYY-MM-DD' → getTasks / getMyTasks /
+  // getProgramTasks `week` (server-side, where Overdue filters — the worker applies the org's week_end_dow).
+  const [week, setWeek] = useState('');
 
-  const activeFilterCount = [status, departmentId, employeeId, priority, programId, planFilter].filter(Boolean).length
+  const activeFilterCount = [status, departmentId, employeeId, priority, programId, planFilter, week].filter(Boolean).length
     + [overdue, revised, deps, mine].filter(Boolean).length;
   const clearFilters = useCallback(() => {
-    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId(''); setPlanFilter('');
+    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId(''); setPlanFilter(''); setWeek('');
     setOverdue(false); setRevised(false); setDeps(''); setMine(false);
   }, []);
   // The Filter popover's own count + clear: Me mode is its own toolbar toggle (P2).
   const panelFilterCount = activeFilterCount - (mine ? 1 : 0);
   const clearPanelFilters = useCallback(() => {
-    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId(''); setPlanFilter('');
+    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId(''); setPlanFilter(''); setWeek('');
     setOverdue(false); setRevised(false); setDeps('');
   }, []);
 
@@ -144,7 +147,7 @@ export function useTaskViewState({ lensParam }) {
 
   return {
     filters: { status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId, priority, setPriority,
-      programId, setProgramId, planFilter, setPlanFilter, overdue, setOverdue, revised, setRevised, deps, setDeps, mine, setMine, q, setQ,
+      programId, setProgramId, planFilter, setPlanFilter, week, setWeek, overdue, setOverdue, revised, setRevised, deps, setDeps, mine, setMine, q, setQ,
       activeFilterCount, clearFilters, panelFilterCount, clearPanelFilters },
     groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView,
     cardSize, chooseCardSize,

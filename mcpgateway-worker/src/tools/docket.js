@@ -29,6 +29,10 @@ const notAbandoned = t => (t.status === 'abandoned' ? 'this task is abandoned, s
 const TASK = { ...T.uuid, about: 'The task id (from a task list).' };
 const STATUS = T.oneOf('not_started', 'in_progress', 'done', 'blocked');
 const PRIORITY = T.oneOf('P0', 'P1', 'P2', 'P3');
+// F9 R4: the Week filter docketops applies to its task lists (IST, the org's week end): this / next /
+// overdue / none (no date), or any YYYY-MM-DD → the week holding that date.
+const WEEK = { schema: { type: 'string', maxLength: 10 }, check: v => (['this', 'next', 'overdue', 'none'].includes(v) || T.date.check(v).ok)
+  ? { ok: true, value: v } : { ok: false, error: 'must be this, next, overdue, none, or a date YYYY-MM-DD (its week)' } };
 // F9 R2: a task's plan link. Docket decides who may set it (edit right on the task + the item visible to you
 // as its owner, a theme, or a super admin; live items only) — the gateway only shapes it.
 const PLAN_ITEM = { ...T.uuid, nullable: true, schema: { type: ['string', 'null'] } };
@@ -85,10 +89,10 @@ const docketTools = [
   reportTool({
     system: 'docket', name: 'docket_tasks', title: 'Docket tasks', binding: 'DOCKETOPS', dropKeys: DOCKET_DROP,
     description: 'Read Docket: your own task list (tasks you own, created or collaborate on), a space\'s tasks, one task in full (comments, history, collaborators, subtasks), and the spaces/programs you can see. Docket\'s own visibility rules apply.',
-    paramAbout: { status: 'Filter by status.', priority: 'Filter by priority.', overdue: 'Only overdue tasks.', q: 'Search text in titles.', program_id: 'Limit to one program.', space_id: 'The space (from report=spaces). Omit for the default space.', id: 'Task id.' },
+    paramAbout: { status: 'Filter by status.', priority: 'Filter by priority.', overdue: 'Only overdue tasks.', week: 'Only tasks due in one week (IST, Docket\'s week end): this, next, overdue, none (no deadline), or any date YYYY-MM-DD for the week holding it.', q: 'Search text in titles.', program_id: 'Limit to one program.', space_id: 'The space (from report=spaces). Omit for the default space.', id: 'Task id.' },
     reports: {
-      my_tasks: { action: 'getMyTasks', about: 'your own tasks (owner, creator or collaborator), filterable', params: { status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, q: T.text, program_id: T.uuid } },
-      space_tasks: { action: 'getTasks', about: 'tasks in one space you can access, filterable', params: { space_id: T.uuid, status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, q: T.text, program_id: T.uuid } },
+      my_tasks: { action: 'getMyTasks', about: 'your own tasks (owner, creator or collaborator), filterable', params: { status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, week: WEEK, q: T.text, program_id: T.uuid } },
+      space_tasks: { action: 'getTasks', about: 'tasks in one space you can access, filterable', params: { space_id: T.uuid, status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, week: WEEK, q: T.text, program_id: T.uuid } },
       task: { action: 'getTask', about: 'one task in full: comments, history, collaborators, documents, subtasks', params: { id: T.uuid }, required: ['id'] },
       program_tasks: { action: 'getProgramTasks', about: 'tasks across spaces for one program', params: { program_id: T.uuid }, required: ['program_id'] },
       spaces: { action: 'getSpaces', about: 'the spaces you can see, with ids', params: {} },

@@ -63,6 +63,7 @@ export function routeModel(pathname, search, { spaces = [], programs = [] } = {}
   if (path.startsWith('/tasks/detail')) return { ...base, railKey: 'tasks', crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: 'Task' }] };
   if (path.startsWith('/tasks/new'))    return { ...base, railKey: 'tasks', crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: 'New task' }] };
   if (path === '/plan')       return { ...base, railKey: 'plan',       crumbs: [{ label: 'Plan' }] };
+  if (path === '/plan/weeks') return { ...base, railKey: 'plan',       crumbs: [{ label: 'Plan', href: '/plan' }, { label: 'Three weeks' }] };
   if (path === '/checklist')  return { ...base, railKey: 'checklist',  crumbs: [{ label: 'Checklist' }] };
   if (path === '/scratchpad') return { ...base, railKey: 'scratchpad', crumbs: [{ label: 'Scratchpad' }] };
   if (path === '/manual')     return { ...base, railKey: 'manual',     crumbs: [{ label: 'Manual' }] };

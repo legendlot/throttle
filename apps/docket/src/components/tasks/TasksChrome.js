@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { COLUMNS } from './useTaskViewState.js';
 import { STATUSES, PRIORITIES } from '../../lib/tasks.js';
+import { isDateStr, weekFilterLabel } from '../../lib/weeks.js';
 import { Button, IconButton, SplitButton, SegmentedTabs, Tooltip, Popover, Menu, MenuItem, MenuLabel, MenuSeparator, Kbd } from '../ui/index.js';
 
 /* ---------------- Views bar ---------------- */
@@ -34,7 +35,7 @@ export function ViewsBar({ viewMode, onView, allowBoard, onCopyLink, space, onSp
 }
 
 /* ---------------- Toolbar ---------------- */
-const GROUP_LABEL = { none: 'None', person: 'Owner', department: 'Team', status: 'Status', program: 'Program' };
+const GROUP_LABEL = { none: 'None', person: 'Owner', department: 'Team', status: 'Status', program: 'Program', week: 'Week ending' };
 
 function ToggleBtn({ on, icon, children, tip, label, onClick }) {
   const b = (
@@ -185,10 +186,33 @@ export function TasksToolbar(p) {
   );
 }
 
+/* ---------------- Week filter (F9 R4) ---------------- */
+const WEEK_OPTS = [['this', 'This week'], ['next', 'Next week'], ['date', 'Week ending…'], ['overdue', 'Overdue'], ['none', 'No date']];
+function WeekFilter({ week, setWeek, dow }) {
+  const isDate = isDateStr(week);
+  const mode = isDate ? 'date' : week;
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  return (
+    <div className="tk-fp-grp" role="group" aria-label="Week">
+      <span className="tk-fp-lbl">Week</span>
+      <select className="tk-fp-sel" value={mode || ''} aria-label="Week"
+        onChange={e => { const v = e.target.value; setWeek(v === 'date' ? today : v); }}>
+        <option value="">Any week</option>
+        {WEEK_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+      {isDate && <>
+        <input type="date" className="tk-fp-sel" value={week} aria-label="Any day in the week"
+          onChange={e => { if (isDateStr(e.target.value)) setWeek(e.target.value); }} />
+        <span className="tk-fp-lbl">{weekFilterLabel(week, dow)}</span>
+      </>}
+    </div>
+  );
+}
+
 /* ---------------- Filter panel (inside the Filter popover) ---------------- */
 function FilterPanel({ status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId,
   priority, setPriority, programId, setProgramId, overdue, setOverdue, revised, setRevised, deps = '', setDeps,
-  planFilter = '', setPlanFilter, planOpts = [],
+  planFilter = '', setPlanFilter, planOpts = [], week = '', setWeek, weekEndDow = 7,
   teamOpts, empOpts, programOpts, filterCount, clearFilters, hideProgramFilter, hideOwnerFilter }) {
   const Sel = ({ label, value, set, any, options }) => (
     <label className="tk-fp-grp">
@@ -208,6 +232,9 @@ function FilterPanel({ status, setStatus, departmentId, setDepartmentId, employe
       {!hideProgramFilter && <Sel label="Program" value={programId} set={setProgramId} any="Any program" options={programOpts} />}
       {/* F9 R2: by theme (incl. its milestones + results), milestone (incl. its results), result, or Unplanned. */}
       {setPlanFilter && <Sel label="Plan" value={planFilter} set={setPlanFilter} any="Any plan" options={planOpts} />}
+      {/* F9 R4: by the week the effective deadline falls in (IST, the org's week end). "Week ending…" takes
+          any date and snaps it to its week. */}
+      {setWeek && <WeekFilter week={week} setWeek={setWeek} dow={weekEndDow} />}
       <div className="tk-fp-grp">
         <span className="tk-fp-lbl">Quick</span>
         <div className="tk-fp-toggles">
