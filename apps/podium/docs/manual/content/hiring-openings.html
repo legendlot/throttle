@@ -1,0 +1,51 @@
+<p class="lead">An Opening is one open seat (or several identical seats) that Legend of Toys wants to fill. Everything in hiring hangs off an opening: its job description (JD), its approved salary band, the people who run it, and the candidates who apply. You make one here before you can add a single CV.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Creating and tracking openings.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act: create, edit, open, hold, close.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mgr">Manager</span> <span class="role hr">HR</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Needs first</div><div class="g-val">A JD, before any candidate.</div></div>
+</div>
+
+<h2 class="sec">Finding an opening</h2>
+<p>Open <strong>Hiring &rarr; Openings</strong> (<code>/hiring/openings</code>). The chips along the top filter by status: <strong>Live</strong> (the default: Draft, Open and On Hold together), Open, Draft, On Hold, Filled, Cancelled and All. The search box matches the opening's name. Each row shows the opening and its code, the department, the reporting manager, a status badge, whether the <strong>JD</strong> is in (&ldquo;JD &#10003;&rdquo; or &ldquo;JD needed&rdquo;), the salary <strong>Band</strong> status, <strong>Candidates</strong> (active over total) and <strong>Seats</strong>. Click a row to open it.</p>
+<p>You see the openings you run, the ones you manage, the ones you are the approver on, plus everything if you hold the Hiring permission or are HR. Anyone else sees an empty list.</p>
+
+<h2 class="sec">To create an opening</h2>
+<p>You can create one if you hold the <strong>Hiring</strong> permission or manage people. Press <strong>New opening</strong> (top right of the list) and fill four cards:</p>
+<ol class="steps">
+  <li><span class="s-title">Role.</span> Pick a <strong>Job role</strong> from the registry if one fits (it prefills the designation and department), or just type the <strong>Designation</strong> (required). Choose the <strong>Department</strong>, the <strong>Type</strong> (Full-time or Intern), the <strong>Headcount</strong> (how many identical seats, 1 to 100), the city and state, an optional target join date and notes.</li>
+  <li><span class="s-title">Team.</span> The <strong>Reporting manager</strong> (required) defaults to you. The <strong>Hiring owner</strong> is the person who runs the opening day to day and whose mailbox the offer email is sent from. It is you unless you hold the Hiring permission, in which case you can name someone else.</li>
+  <li><span class="s-title">Salary band.</span> Enter the <strong>Band min</strong> and <strong>Band max</strong> as annual total CTC in rupees (for example &#8377;X to &#8377;Y). If you are on the salary allow-list you can instead tick <strong>Use the role's band</strong> to copy the band already set on the job role.</li>
+  <li><span class="s-title">Job description.</span> Choose <strong>Later</strong>, <strong>Paste</strong> text, <strong>Upload</strong> a PDF or Word file, or <strong>Role's JD</strong> (copies the job role's current JD). Then press <strong>Create opening</strong>.</li>
+</ol>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; No JD, no candidates</div>
+  <p>An opening with no JD stays a <strong>Draft</strong>, and no CVs or candidates can be added to it. Choosing &ldquo;Later&rdquo; is allowed, but the opening shows a &ldquo;JD needed&rdquo; badge until someone adds one. Add it on the opening's page with <strong>Add JD</strong>; later edits use <strong>New version</strong>, and every earlier version stays in the version history.</p>
+</div>
+
+<h2 class="sec">The salary band: requested, then approved</h2>
+<p>Creating the opening does not approve the band. It <strong>sends the band for approval</strong>, and the screen tells you so (&ldquo;Opening created, band sent for approval&rdquo;). The approver is fixed at that moment (a snapshot): it is the <strong>reporting manager's manager</strong>, or a founder when the reporting manager is a founder or has no manager above them.</p>
+<ul>
+  <li>The approver sees <strong>Approve</strong> and <strong>Reject</strong> on the opening's <em>Salary band</em> card and is asked for a note. Nobody else sees those buttons.</li>
+  <li><strong>Nobody approves their own request.</strong> If you asked for the band, someone else has to decide it. If you try to put yourself on an opening's approval chain, Podium refuses and tells you to ask a founder.</li>
+  <li>To change a band later press <strong>Request change</strong>, enter the new min and max, and <strong>Send for approval</strong>. It replaces any pending request. Earlier versions stay listed with their outcome (Approved, Rejected, Superseded).</li>
+  <li>Changing the reporting manager re-sends a pending band to the new approver.</li>
+</ul>
+<p>An <strong>approved band is required before an offer can be made</strong>. The band numbers are visible only to the opening's own chain and the salary allow-list; everyone else sees &ldquo;hidden&rdquo;.</p>
+
+<h2 class="sec">Running the opening</h2>
+<p>The buttons at the top of an opening depend on its status and on whether you are the hiring owner or hold the Hiring permission:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Open</div><div class="a-val"><p>Available on a Draft or On Hold opening <strong>that has a JD</strong>. Candidates can be added only while it is Open.</p></div></div>
+  <div class="a-row"><div class="a-key">Hold</div><div class="a-val"><p>Pauses an Open opening. You are asked why.</p></div></div>
+  <div class="a-row"><div class="a-key">Mark filled</div><div class="a-val"><p>Closes the opening as Filled. Joining someone (see <em>Joining</em>) also fills it automatically once the headcount is reached.</p></div></div>
+  <div class="a-row"><div class="a-key">Cancel</div><div class="a-val"><p>Closes it as Cancelled; you are asked why.</p></div></div>
+  <div class="a-row"><div class="a-key">Reopen</div><div class="a-val"><p>Only with the Hiring permission, on a Filled or Cancelled opening. It returns to Open, or to On Hold if it has no JD.</p></div></div>
+</div>
+<div class="callout note">
+  <div class="c-title">&#9432; Close the candidates first</div>
+  <p>You cannot mark an opening Filled or Cancelled while candidates are still active on it. Close or move each of them first (see <em>Candidates &amp; Pipeline</em>).</p>
+</div>
+<p>The <strong>Team</strong> card holds the hiring owner, the reporting manager and the band approver, with <strong>Edit</strong> for the details. Changing the reporting manager or hiring owner needs the Hiring permission. The <strong>Candidates</strong> card and a <strong>Timeline</strong> of everything that happened sit below.</p>

@@ -1,0 +1,34 @@
+<p class="lead">Onboarding is HR's board for new joiners. It tracks each person's first-weeks checklist, runs a one-time campaign to get everyone's profile complete, decides requests to change PAN or bank details, and exports the sheet payroll needs. Most of it ticks itself as the joiner completes their own page (see <em>My Profile</em>).</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">New-joiner checklist and profile data.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role hr">HR</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">People &rarr; Onboarding, <code>/onboarding</code>.</div></div>
+</div>
+
+<p>The page has four tabs: <strong>Joiners</strong>, <strong>Profile completion</strong>, <strong>Change requests</strong>, and <strong>Export</strong> (shown only to people with salary access).</p>
+
+<h2 class="sec">Joiners</h2>
+<p><strong>Confirm joining</strong> starts an onboarding automatically (see <em>Joining</em>). Anyone who joined by another route appears under <strong>Joined without an onboarding</strong> with a <strong>Start</strong> button.</p>
+<p><strong>Open onboardings</strong> lists each joiner with their progress (for example 3/7 required), a red <em>overdue</em> count, and a badge per checklist line coloured by state: Done, Open, N/A, or &ldquo;Check by hand&rdquo; for a line that cannot be verified automatically. Hover a badge to see its due date. Two buttons per person:</p>
+<ul>
+  <li><strong>Complete</strong>: greyed out until every required line is done or N/A; it names what is still blocking.</li>
+  <li><strong>Cancel</strong>: asks for a reason.</li>
+</ul>
+<p>Click a name to open the person; their <strong>Onboarding</strong> card there shows every line. Lines tick themselves when the fact is true (profile complete, documents uploaded, policies acknowledged, LOT login linked, IT kit assigned in Snorkel, probation date set). Other lines are ticked by their owner: the joiner, IT, the manager (manager lines only) or HR, with a note where one is required. The lines themselves are edited at <strong>Admin &rarr; Onboarding Checklist</strong>, and the policies joiners must read at <strong>Admin &rarr; Policies</strong>.</p>
+
+<h2 class="sec">Profile completion</h2>
+<p>Gets every current employee's profile filled in once. The <strong>Campaign</strong> card shows how many active profiles are complete. Press <strong>Launch</strong> and confirm: everyone with an incomplete profile then sees a <strong>Complete your profile</strong> banner until they finish. Joiners with an open onboarding see it already. Launching is once only.</p>
+<p><strong>Missing, by field</strong> counts what is missing across the company, and the <strong>People</strong> list shows each person's percentage done and the <em>labels</em> of what they still need (never the values). Switch between <em>Incomplete only</em> and <em>Everyone</em>.</p>
+
+<h2 class="sec">Change requests</h2>
+<p>PAN and bank details, once filled, cannot simply be overwritten by the employee; a change becomes a request for HR to decide. <strong>Awaiting approval</strong> lists each request with the person, what and when, and a table of <em>Current</em> against <em>New</em>. PAN is decided on its own; the three bank fields (name, account number, IFSC) are one change, decided together. Press <strong>Approve</strong> (it takes effect at once) or <strong>Reject</strong> (you must give a reason the person will see). If the person edited the request after you loaded it, Podium reloads so you decide what they actually sent. <strong>You never decide your own request</strong>: another HR person does. <strong>Recently decided</strong> keeps the history.</p>
+
+<h2 class="sec">Export for payroll</h2>
+<p>For people with salary access. Tick the joiners (open onboardings and recent joiners are ticked by default) and press <strong>Download Excel</strong>. The file has the columns of the payroll provider's &ldquo;Employee Data&rdquo; sheet, with account, UAN and phone numbers kept as text so leading zeros survive. Podium warns when the PF yes/no column is blank for anyone (no accepted offer carried it); fill it before uploading.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; The export holds pay and bank data</div>
+  <p>It carries CTC, bank and past-salary figures. Each export is logged per person. Share it only with the payroll team.</p>
+</div>

@@ -1,0 +1,53 @@
+<p class="lead">Offers is where a candidate's terms become a formal offer letter. Podium builds the letter and its salary breakdown (the annexure) from a template and the statutory rules, checks the terms against the opening's approved band, gets any needed approval, and freezes the result as a PDF.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Drafting, approving and issuing offers.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mgr">Manager</span> <span class="role hr">HR</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Needs first</div><div class="g-val">An approved band on the opening.</div></div>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Who sees the figures</div>
+  <p>The salary, the letter and the PDF are visible only to the opening's hiring owner, reporting manager and approver, and to the salary allow-list. Someone with only the Hiring permission sees an offer's status but no figures. Each view of an offer's figures is logged.</p>
+</div>
+
+<h2 class="sec">To make an offer</h2>
+<ol class="steps">
+  <li><span class="s-title">Start from the candidate.</span> On the candidate's page, find the application. Once it is at <strong>Interviewing</strong> (and the opening is Open and has an approved band), its <em>Offers</em> box shows <strong>Create offer</strong>. If the opening has no approved band the form says so, and nothing can be created.</li>
+  <li><span class="s-title">Choose the letter.</span> <strong>Offer of Employment</strong> is the standard letter; <strong>Internship Offer</strong> is for interns.</li>
+  <li><span class="s-title">Enter the terms.</span> For employment: <strong>Fixed salary, annual</strong> (&#8377;X), optional <strong>Variable, annual</strong> (called Variable pay or Incentive pay, paid Half-yearly or Monthly), and optional <strong>Joining bonus</strong> and <strong>Retention bonus</strong>. For an internship: <strong>Stipend / month</strong> and <strong>Months</strong> (1 to 24). Then the designation, department, location, <strong>Start date</strong> (on or before), probation in months, <strong>Signed by</strong> (an authorised signatory) and <strong>Valid for (days)</strong> (default 7).</li>
+  <li><span class="s-title">Read the live preview.</span> As you type, the letter and the annexure appear on the right, exactly as they will print.</li>
+  <li><span class="s-title">Save draft or Submit.</span> <strong>Save draft</strong> keeps it. <strong>Submit</strong> checks it and either issues it or sends it for approval.</li>
+</ol>
+
+<h2 class="sec">The statutory calculator</h2>
+<p>The annexure splits the fixed salary into its components and works out provident fund, professional tax and ESI under the statutory rules in force <strong>on the start date</strong>, ending with an estimated monthly in-hand. Podium stops you from entering terms that break a rule:</p>
+<ul>
+  <li><strong>Basic may not fall below 50% of fixed pay.</strong></li>
+  <li><strong>Not opting in to PF</strong> is allowed only when Basic is above the PF wage ceiling, and needs a reason.</li>
+  <li>If deductions would push the special allowance below zero, it is refused.</li>
+  <li>A warning appears under the band box when a state has no professional-tax rule (PT then shows as 0).</li>
+</ul>
+<p>Interns are paid a stipend, with no PF, PT or variable by default; the annexure shows the monthly stipend and the total.</p>
+
+<h2 class="sec">The band check and approval</h2>
+<p>The <strong>Band</strong> box compares the offer's total CTC and any one-time bonuses with the opening's approved band and shows one of: <strong>In band</strong>, <strong>Below band</strong> (allowed, flagged), <strong>Above band, needs approval</strong>, or <strong>One-time extras, need approval</strong>. Inside the band with no bonus, Submit issues the PDF straight away. Otherwise it goes to the opening's approver (named on the screen), who sees <strong>Approve / reject</strong> on the offer and gives an optional note. The approver is never the person who submitted it. If it is approved but the PDF was not issued, press <strong>Issue PDF</strong>.</p>
+
+<h2 class="sec">The offer's life</h2>
+<table>
+  <tr><th>Status</th><th>Meaning</th></tr>
+  <tr><td>Draft</td><td>Being written; <strong>Edit</strong> or <strong>Submit</strong>.</td></tr>
+  <tr><td>Pending approval / Approved / Approval rejected</td><td>Outside the band or with bonuses. A rejected one can be edited and resubmitted.</td></tr>
+  <tr><td>Ready to send</td><td>The PDF is issued and frozen; the terms can no longer change.</td></tr>
+  <tr><td>Sent</td><td>The candidate has been given the offer. The application moves to <em>Offer</em>.</td></tr>
+  <tr><td>Accepted</td><td>The application moves to <em>Accepted</em>.</td></tr>
+  <tr><td>Declined, Expired, Withdrawn, Superseded</td><td>Closed outcomes. Superseded means a newer revision replaced it.</td></tr>
+</table>
+<p>From <strong>Ready to send</strong> you have two ways to deliver it. <strong>Send by email</strong> emails the candidate a link (see <em>Offer Link</em>). <strong>Mark as sent</strong> is for when you emailed the downloaded PDF yourself: enter who it went to, when (blank means now), the CC list and, optionally, the sent email printed to PDF as evidence. Podium records it and does not email anyone. Once sent, <strong>Record acceptance</strong> takes the acceptance date and the <strong>signed copy (PDF)</strong>; <strong>Record decline</strong> notes a decline (the application stays at Offer until you close it from the candidate page). <strong>Download PDF</strong> always serves the issued file, never a fresh rebuild, and its fingerprint is shown.</p>
+
+<h2 class="sec">Revising and withdrawing</h2>
+<p>An issued offer is never edited. Press <strong>Revise</strong> (or <strong>Amend</strong> on an accepted one) to start a new draft from its terms; the reference (for example OFR-2026-001) stays and the revision number goes up (r2, r3). Sending a new revision replaces the old one. <strong>Withdraw</strong> cancels a live offer and needs a reason. An offer past its <strong>Valid until</strong> date becomes Expired; an acceptance after that needs a fresh revision.</p>
+
+<h2 class="sec">Templates and signatories</h2>
+<p>The salary allow-list and Podium admins manage the letters at <strong>Admin &rarr; Offer Templates</strong> (<code>/admin/offer-templates</code>): one editor each for the standard and the intern letter, the authorised signatories, and a read-only list of the statutory rule sets. <strong>Saving a template creates a new version</strong>; offers already issued keep the version they used. <strong>Preview</strong> shows the result before you save.</p>

@@ -3,6 +3,22 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.5.0] - 2026-11-12
+### Added
+- New "Hiring" part (6 chapters): Openings (create, JD-first rule, band requested
+  then approved by the snapshotted approver, no self-approval, headcount), Candidates
+  & Pipeline (candidate vs application, duplicates, documents, statuses), Import CVs
+  (AI-read bulk import: nothing added until Accept, Enter by hand reasons, dropped
+  unsupported fields, duplicate warnings, AI spend line, 7-day clean-up), Offers
+  (templates, statutory calculator, band check and approval, PDF), Offer Link (email
+  from the hiring owner's mailbox, what the candidate sees at /offer, HR verify, bank
+  reopen, revisions) and Joining (work account, then Confirm joining, no-show).
+- New "Onboarding & Exits" part (3 chapters): Onboarding (/onboarding HR board,
+  profile campaign, PAN and bank change approvals, payroll export), My Profile
+  (/welcome self-serve profile, documents, policies, change requests) and Exits
+  (/exits, Exit card, no-dues checklist with live blockers, Close, Google keep /
+  suspend / transfer).
+
 ## [1.1.0] - 2026-07-07
 ### Added
 - New "Analytics" chapter (Performance part, `/analytics`): the HR/admin

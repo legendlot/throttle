@@ -264,7 +264,7 @@ function ExportTab({ board, session }) {
   }
   const toggle = (id) => setSel(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   return (
-    <Card title="XPayroll onboarding sheet" right={<button style={primaryBtn} disabled={busy || !sel.size} onClick={download}><Download size={13} /> Download CSV ({sel.size})</button>}>
+    <Card title="XPayroll onboarding sheet" right={<button style={primaryBtn} disabled={busy || !sel.size} onClick={download}><Download size={13} /> Download Excel ({sel.size})</button>}>
       <div style={{ ...muted, marginBottom: 8 }}>Columns match the XPayroll “Employee Data” sheet. The file carries CTC, bank and past-salary figures — each export is logged per person.</div>
       {pfBlank.length > 0 && (
         <div style={{ fontSize: 12, color: 'var(--warn-fg)', marginBottom: 8 }}>

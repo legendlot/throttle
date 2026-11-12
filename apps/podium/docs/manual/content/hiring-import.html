@@ -1,0 +1,56 @@
+<p class="lead">Import CVs turns a folder of resumes into candidates in minutes. You drop the files in, AI reads each one and fills in the details, and you check every row before it counts. <strong>Nobody is added to Podium until you press Accept.</strong></p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Bulk-adding candidates from CV files.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act: you review, then accept.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mgr">Manager</span> <span class="role hr">HR</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Limits</div><div class="g-val">100 CVs per batch, 15 MB each.</div></div>
+</div>
+
+<h2 class="sec">To import a batch</h2>
+<ol class="steps">
+  <li><span class="s-title">Open Import CVs.</span> Go to <strong>Hiring &rarr; Candidates</strong> and press <strong>Import CVs</strong> (<code>/hiring/import</code>). It lists your earlier batches; the <em>New batch</em> card is at the top.</li>
+  <li><span class="s-title">Pick the opening and the source.</span> The opening must be <strong>Open and have a JD</strong>, and you must be able to add candidates to it. Choose a <strong>Source</strong> (LinkedIn, Naukri, Campus, Walk-in, Agency, Careers page or Other) and, if you like, a <strong>Detail</strong> such as the job post. Referral is not offered here because it needs a named person. Press <strong>Start batch</strong>.</li>
+  <li><span class="s-title">Drop the files.</span> On the batch page (<code>/hiring/import/batch</code>) drag up to <strong>100 CVs</strong> onto <em>Add CVs</em>, or click it to choose. PDF, Word or image files, <strong>up to 15 MB each</strong>. Any file that is too big or fails to upload is listed under &ldquo;Not uploaded&rdquo; with the reason.</li>
+  <li><span class="s-title">Wait for the reading.</span> Files upload and are read a few at a time. Each row moves from <em>Waiting</em> to <em>Reading&hellip;</em> to <em>Check &amp; accept</em>. You can leave and come back: reopening the batch picks up whatever was not read yet.</li>
+  <li><span class="s-title">Review each row</span> and decide (next section).</li>
+</ol>
+
+<h2 class="sec">Reviewing the grid</h2>
+<p>The tabs are <strong>To review</strong>, <strong>Reading</strong>, <strong>Accepted</strong>, <strong>Skipped</strong> and <strong>All</strong>, each with a count. Every CV in To review is a card: a status badge, the CV's file name (press it to open the original), any warnings, then editable fields: name, email, phone, location, current employer and title, experience, notice days, education, LinkedIn and skills. Fix anything that is wrong. Under experience, notice period and CTC, the exact sentence from the CV that supports the value is shown in italics so you can check it at a glance.</p>
+<p>The buttons on each card:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Accept as new candidate</div><div class="a-val"><p>Creates the candidate, puts them on the opening at status New and files the CV on their profile.</p></div></div>
+  <div class="a-row"><div class="a-key">Attach to existing</div><div class="a-val"><p>Shown when Podium already has a match. Pick the person in the dropdown and press <strong>Attach</strong>: they get a new application on this opening and the CV, and their existing profile is left untouched.</p></div></div>
+  <div class="a-row"><div class="a-key">Save</div><div class="a-val"><p>Keeps your edits without accepting, and re-checks for duplicates.</p></div></div>
+  <div class="a-row"><div class="a-key">Skip</div><div class="a-val"><p>Sets the CV aside. Nothing is created.</p></div></div>
+</div>
+<p>Above the grid, <strong>Accept N clean</strong> accepts every row that has a name, <strong>no warnings and no duplicate of any kind</strong>, in one go. It never forces through a duplicate. <strong>Discard batch</strong> deletes every CV in the batch that has not been accepted (it asks first); candidates you already accepted stay.</p>
+
+<h2 class="sec">When a row says &ldquo;Enter by hand&rdquo;</h2>
+<p>Some CVs cannot be read by AI. The row is marked <strong>Enter by hand</strong>, says why, and you type the fields yourself and Accept as normal. The reasons are:</p>
+<ul>
+  <li>the file is an old <strong>.doc</strong> Word file, which cannot be read (save it as .docx or PDF, or type it in);</li>
+  <li>AI reading is <strong>switched off</strong> or not set up;</li>
+  <li>this month's <strong>AI cap has been reached</strong> (see the spend line below);</li>
+  <li>a <strong>scanned or photographed CV over 5 MB</strong>;</li>
+  <li>the read failed.</li>
+</ul>
+
+<h2 class="sec">Warnings you should believe</h2>
+<ul>
+  <li><strong>Unsupported values are dropped.</strong> Podium only keeps experience, notice period and CTC if the AI can quote the sentence from the CV that says it, and an email or phone only if it really appears in the CV. A field with no supporting quote is left blank and the row shows a warning, so you never accept a number the AI made up.</li>
+  <li><strong>Scans and photos</strong> cannot be checked that way, so the row is flagged to <strong>check every field by hand</strong>. They are labelled &ldquo;read from scan&rdquo; or &ldquo;read from image&rdquo;.</li>
+  <li><strong>Duplicates</strong> show in three ways: <em>Already in Podium</em> (with links to the person); <em>Looks like the same person as another CV in this batch</em> (same file, email or phone); and <em>someone with this email or phone is already in Podium on an opening you can't see</em>, which means you should check with HR before accepting. If you try to create a new candidate despite a match, Podium asks once to confirm.</li>
+</ul>
+
+<h2 class="sec">Pay figures</h2>
+<p><strong>Current CTC</strong> and <strong>Expected CTC</strong> fields appear only for people who can see salary on that opening. If you cannot see them, they are never shown or saved from your import.</p>
+
+<h2 class="sec">The AI spend line</h2>
+<p>The top right shows <strong>&ldquo;AI this month: &#8377;x of &#8377;2,000 &middot; n reads&rdquo;</strong>: what AI reading has cost so far this month against the monthly cap (resets each month, India time). If it reads &ldquo;AI reading is switched off&rdquo; or &ldquo;AI reading not set up&rdquo;, every CV goes to manual entry. The CV text is sent to OpenAI to be read and is not stored there. A super admin can change the AI model and the monthly cap.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Batches clean themselves up</div>
+  <p>A batch you have not touched for <strong>7 days</strong> is cleared: the unaccepted CV files and rows are deleted. Accepted candidates, and the CVs already filed on their profiles, stay. If the opening is closed or put on hold while you work, you can still read CVs but cannot accept until it is Open again.</p>
+</div>

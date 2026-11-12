@@ -1,0 +1,43 @@
+<p class="lead">Exits is how Podium handles someone leaving. You start an exit with a last working day, work through a no-dues checklist that checks Snorkel and Docket live, and <strong>Close the exit</strong>, which is the only way a person becomes Exited. The Exits page is HR's board of everything in flight.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Leaving, no-dues, Google clean-up.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role emp">Employee</span> <span class="role mgr">Manager</span> <span class="role hr">HR</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Board</div><div class="g-val">People &rarr; Exits, <code>/exits</code> (HR).</div></div>
+</div>
+
+<h2 class="sec">To start an exit</h2>
+<p>Open the person's profile (an employee uses their own <em>My Performance</em> page; a manager can also use <em>Your team</em> card there). The <strong>Exit</strong> card has a button: <strong>Resign</strong> for yourself, <strong>Start exit</strong> for someone else.</p>
+<ol class="steps">
+  <li><span class="s-title">Reason.</span> Resignation, Termination, Absconding, End of internship, End of contract or Other (Other needs a note). Someone resigning for themselves is always &ldquo;Resignation&rdquo;.</li>
+  <li><span class="s-title">Notice date.</span> Today for a resignation. For others it can be up to 7 days back (HR can record an older one) and never before they joined.</li>
+  <li><span class="s-title">Last working day (LWD).</span> Defaults to the notice date plus the notice period. Only HR can set a different date, and must say why; an LWD in an earlier month (which changes a closed payroll month) also needs a reason. HR can note whether the person is eligible for rehire, privately.</li>
+  <li><span class="s-title">Press Start exit</span> and confirm. The person stays <strong>Active</strong>, shown as <strong>On notice</strong>, and the checklist is built.</li>
+</ol>
+
+<h2 class="sec">The no-dues checklist</h2>
+<p>The Exit card groups lines by owner (HR, Manager, IT, Admin, Finance, Store). HR can tick any line; a manager can tick only the manager lines. A line is marked <strong>Done</strong> or <strong>N/A</strong> (where allowed, with a reason) and can be <strong>Reopened</strong>. Some lines are checked live:</p>
+<ul>
+  <li><strong>Assets</strong>, from Snorkel: the assets still assigned to them are listed. If Snorkel cannot tell (no linked login), HR checks by hand and marks the line Done with a note of how.</li>
+  <li><strong>Open work</strong>, from Docket: their open tasks are listed.</li>
+  <li><strong>Payment requests</strong>, from Snorkel: open requests are listed; Finance checks by hand if they cannot be found.</li>
+  <li><strong>LOT access</strong> is done by the close itself.</li>
+</ul>
+<p>The F&amp;F line is a later phase: it is not calculated here and is not needed to close.</p>
+
+<h2 class="sec">Closing the exit</h2>
+<p>HR sees <strong>Close exit</strong> and <strong>Cancel exit</strong> at the bottom. Under <strong>Before it can close</strong> Podium lists the live blockers: it is before the last working day, required lines are open, assets still assigned, open Docket tasks. Close stays greyed out until the list is empty. On close, the person becomes <strong>Exited</strong> on their last working day, their LOT login, Podium role and salary access end, and their direct reports move up a level. <strong>Closing is the only way to mark someone exited</strong>; the Google sync no longer exits anyone. <strong>Cancel exit</strong> (for example a withdrawn resignation) asks for a reason. After closing, HR can still add exit-interview notes and the private rehire flag.</p>
+
+<h2 class="sec">The Exits page</h2>
+<p>Four cards, top to bottom:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Open exits</div><div class="a-val"><p>Everyone on notice, their reason, last working day with days left (red when past), checklist progress and what still blocks closing, or &ldquo;Ready to close&rdquo;. Click a row for the person.</p></div></div>
+  <div class="a-row"><div class="a-key">Google accounts to action</div><div class="a-val"><p>An exited person's Google account is <strong>never suspended automatically</strong>; until someone acts it still signs in and still costs a seat. A Google admin picks one of three: <strong>Drive &rarr; manager, suspend</strong> (hands their Drive to the manager, then suspends; use <strong>Check transfer</strong> if it is still running), <strong>Suspend now</strong> (the Drive stays with the suspended account), or <strong>Keep until&hellip;</strong> (a future date and a reason; it comes back as due once the date passes).</p></div></div>
+  <div class="a-row"><div class="a-key">Backfill review</div><div class="a-val"><p>People marked exited before exits were tracked. Pick the reason, confirm the real last working day and press <strong>Confirm</strong>. No guessing: the date decides the month their pay stops counting toward overheads.</p></div></div>
+  <div class="a-row"><div class="a-key">Exited, still with access</div><div class="a-val"><p>Appears only when someone exited still has a login, role, salary access, Google-admin power or assets. <strong>Revoke access</strong> removes the first four (logged); <strong>Open Google item</strong> adds them to the Google list. Nothing is revoked on its own.</p></div></div>
+</div>
+<div class="callout note">
+  <div class="c-title">&#9432; Checklist lines are editable</div>
+  <p>HR can change which lines exist and who owns them at <strong>Admin &rarr; Exit Checklist</strong>.</p>
+</div>
