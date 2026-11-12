@@ -194,3 +194,15 @@ test('binds: value must be stated by its quote', () => {
   assert.deepEqual(numbersIn('12,00,000 or 1.5'), [1200000, 1.5]);
   assert.deepEqual(phoneRuns('Call +91 98765-43210 or 2015-2019'), ['919876543210', '20152019']);
 });
+
+test('cvText leaves the caller\'s PDF bytes intact (pdf.js detaches what it is given)', async () => {
+  const { cvText } = await import('../src/cvtext.js');
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  doc.addPage().drawText('Detach Check CV', { x: 50, y: 700, size: 12, font });
+  const bytes = new Uint8Array(await doc.save());
+  const n = bytes.length;
+  const r = await cvText(bytes, 'pdf');
+  assert.match(r.text, /Detach Check CV/);
+  assert.equal(bytes.length, n);
+});

@@ -7,7 +7,9 @@ import { docxXmlToText } from './cvimport.js';
 export async function cvText(bytes, ext) {
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (ext === 'pdf') {
-    const pdf = await getDocumentProxy(u8);
+    // pdf.js transfers (detaches) the buffer it is given — hand it a copy, or the caller's bytes go to length 0
+    // (S447 live smoke: the scan fallback sent OpenAI an empty file and the 5 MB scan cap read 0).
+    const pdf = await getDocumentProxy(u8.slice());
     const { text, totalPages } = await extractText(pdf, { mergePages: true });
     return { text: Array.isArray(text) ? text.join('\n') : String(text || ''), pages: totalPages || 0 };
   }
