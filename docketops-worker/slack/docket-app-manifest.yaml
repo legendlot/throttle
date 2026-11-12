@@ -6,8 +6,11 @@
 # FUTURE-PROOFED (Afshaan, 2026-11-12): scopes are the only thing that forces an admin reinstall later, so
 # the bot scopes below cover every foreseeable Docket use case, not just R7's five. Features those scopes
 # unlock (event subscriptions, the Home tab, unfurl handling) are switched on later WITHOUT a reinstall.
-# Event subscriptions are deliberately absent: Slack verifies an events URL at creation, and docketops has
-# no /slack/events route until it is built. No user-token scopes: every action runs as the bot, mapped to
+# Event subscriptions point at docketops /slack/events, which (until R7) only answers Slack's url_verification
+# handshake and acknowledges events — it reads, stores and acts on nothing. Slack requires events for the
+# unfurl domain. Channel-message events (message.channels / message.groups) are NOT subscribed: they'd send
+# every message in a channel the bot is in; add them only when thread capture is built (no reinstall — the
+# scopes are granted). No user-token scopes: every action runs as the bot, mapped to
 # the person by work email.
 display_information:
   name: Docket
@@ -79,6 +82,14 @@ oauth_config:
       - bookmarks:write
       - assistant:write
 settings:
+  event_subscriptions:
+    request_url: https://docketops.afshaan.workers.dev/slack/events
+    bot_events:
+      - app_mention
+      - app_home_opened
+      - link_shared
+      - message.im
+      - reaction_added
   interactivity:
     is_enabled: true
     request_url: https://docketops.afshaan.workers.dev/slack/interactive

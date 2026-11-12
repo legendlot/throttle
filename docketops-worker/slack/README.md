@@ -12,7 +12,8 @@ announce it yet.
 3. Choose the **YAML** tab, delete the sample, paste the whole of
    [`docket-app-manifest.yaml`](./docket-app-manifest.yaml) → **Next** → check the summary shows
    28 bot scopes, 2 shortcuts, 1 slash command, 1 unfurl domain
-   (`docket.legendoftoys.com`) → **Create**.
+   (`docket.legendoftoys.com`), 5 bot events → **Create**. (Slack checks the events URL here; docketops
+   answers it.)
 4. **Install to Workspace** (left menu → *Install App*) → **Allow**. If the workspace requires admin
    approval for apps, approve it in the admin console.
 5. Optional: *Basic Information → Display Information* → add an app icon.
@@ -89,6 +90,11 @@ next ask, and adding them later would force a reinstall.
 - Workflow Builder custom steps ("Create Docket task" as a workflow step): they need a functions block +
   an events URL in the manifest. Revisit when wanted — that one is a manifest change, not a scope.
 
-**Switched on later without a reinstall** (Slack only asks for one when a change needs a scope that isn't granted): event subscriptions (`app_mention`, `message.im`,
-`reaction_added`, `link_shared`, `app_home_opened` — added once docketops serves `/slack/events`), the Home
-tab (a personal "my tasks" view), more `/docket` sub-commands, link-preview handling.
+**Event subscriptions are in from day one** (`app_mention`, `app_home_opened`, `link_shared`, `message.im`,
+`reaction_added` → `/slack/events`): Slack requires them for the unfurl domain and verifies the URL at
+creation, so docketops answers the handshake already and only acknowledges events until R7. Channel-message
+events are NOT subscribed (they'd stream every message in a channel the bot is in) — added when thread
+capture is built.
+
+**Switched on later without a reinstall** (Slack only asks for one when a change needs a scope that isn't
+granted): more events, the Home tab (a personal "my tasks" view), more `/docket` sub-commands.
