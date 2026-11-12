@@ -27,7 +27,7 @@ join; nothing is re-keyed.
 | C1 | Openings: role, JD, reporting manager, approved band, headcount | Core | — | 1 session (with C2) |
 | C2 | Candidates + applications + HR documents; joining hand-off | Core | C1 | ↑ + 1 |
 | C3 | Offer letter: template, statutory calculator, revisions, approval, PDF, manual send | Core | C1, C2 | 2 sessions |
-| C4 | Bulk CV upload → candidates (Claude extraction, review-and-confirm) | Core | C2 + Anthropic API key | 1 session |
+| C4 | Bulk CV upload → candidates (OpenAI extraction, review-and-confirm) — ✅ LIVE 2026-11-12 | Core | C2 + `OPENAI_API_KEY` | 1 session |
 | O1 | Offer email + acceptance link (accept / decline / question → confirmation email → joining documents) | Optional, **build right after C3** | C3 + Workspace scope | 2 sessions |
 | O2 | Interview rounds + feedback | Optional | C1, C2 | 1–2 sessions |
 | O3 | One-click Calendar scheduling (Podium link) | Optional | O2 + Workspace scope | 1 session |
@@ -267,9 +267,10 @@ plus `withdrawn` (by LOT, any time before joining) and `superseded`.
 
 ## C4 — Bulk CV upload
 
-> **Afshaan 2026-11-12: no Claude API for CV reading.** He wants a reader that parses the different CV formats
-> itself (PDF text / DOCX / scans) instead of an LLM API route — or a reasoned case for the API route. Discuss when
-> C4 comes up; until then the extraction step below is OPEN.
+> **As built 2026-11-12 (S447) — OpenAI, extraction ONLY** (Afshaan: "only pull information from the CV and
+> populate the right fields"; scoring / matching / reassignment extend later on the same ledger + cap). Text is
+> pulled locally (unpdf / fflate); only the text goes to `gpt-6-luna` (scans and images go as files). Plan + decisions
+> D1–D11: `plans/2026-11-12-podium-c4-cv-import.md`. Items 4 and 6 below are superseded by that plan.
 
 1. Pick an opening that has a JD, then drop 1–100 CVs (PDF/DOCX/scans; size and type limits).
 2. Files land in a **staging area** (`cv_imports` batch + per-file rows). An abandoned batch is purged after

@@ -15,14 +15,14 @@ export default function CvImportsPage() {
   const router = useRouter();
   const { showToast } = useToast();
   const [data, setData] = useState(null);
-  const [openings, setOpenings] = useState([]);
+  const [openings, setOpenings] = useState(null); // null = still loading
   const [form, setForm] = useState({ opening_id: '', source: 'linkedin', source_detail: '' });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!session) return;
     podiumopsGet('getCvImports', {}, session).then(setData).catch(e => { setData({ imports: [] }); showToast(hiringError(e, 'Failed to load'), 'error'); });
-    podiumopsGet('getOpenings', {}, session).then(d => setOpenings(listOf(d, 'openings').filter(o => o.status === 'open'))).catch(() => {});
+    podiumopsGet('getOpenings', {}, session).then(d => setOpenings(listOf(d, 'openings').filter(o => o.status === 'open'))).catch(() => setOpenings([]));
   }, [session, showToast]);
 
   async function start() {
@@ -51,7 +51,7 @@ export default function CvImportsPage() {
         <Row>
           <F label="Opening (open, with a JD)" style={{ flex: 2, minWidth: 260 }}>
             <Combobox value={form.opening_id} onChange={v => setForm(f => ({ ...f, opening_id: v }))} inputStyle={inp}
-              placeholder="Pick an opening" options={openings.map(o => ({ value: o.id, label: o.designation, hint: o.opening_code }))} />
+              placeholder="Pick an opening" options={(openings || []).map(o => ({ value: o.id, label: o.designation, hint: o.opening_code }))} />
           </F>
           <F label="Source" style={{ flex: 1, minWidth: 150 }}>
             <select value={form.source} onChange={e => setForm(f => ({ ...f, source: e.target.value }))} style={inp}>
@@ -65,7 +65,7 @@ export default function CvImportsPage() {
         <div style={{ marginTop: 12 }}>
           <button onClick={start} disabled={busy} style={primaryBtn}><UploadCloud size={14} /> {busy ? 'Starting…' : 'Start batch'}</button>
         </div>
-        {!openings.length && <div style={{ marginTop: 10 }}><Note>No open openings you can add candidates to. An opening needs a JD and must be open.</Note></div>}
+        {openings?.length === 0 && <div style={{ marginTop: 10 }}><Note>No open openings you can add candidates to. An opening needs a JD and must be open.</Note></div>}
       </Card>
 
       <Card title="Batches">
