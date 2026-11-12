@@ -37,7 +37,8 @@ export async function docketopsGet(action, params = {}, session) {
 // while someone writes a note, for a surface that holds no tasks.
 // Plan writes (F9) hold no tasks either — a split re-links tasks but moves none between spaces; proposals
 // (R3) hold none at all.
-const NO_COUNT_CHANGE = /ScratchNote|Checklist|PlanItem|Proposal|Review|FounderFocus/i;
+// R9a: saving / archiving a template holds no tasks (applying one creates tasks — it refreshes).
+const NO_COUNT_CHANGE = /ScratchNote|Checklist|PlanItem|Proposal|Review|FounderFocus|saveTemplate|archiveTemplate/i;
 
 export async function docketopsPost(action, body = {}, session) {
   const res = await fetch(`${DK_URL}/?action=${action}`, {
@@ -60,6 +61,7 @@ export async function docketopsPost(action, body = {}, session) {
     window.dispatchEvent(new Event('docket:counts-changed'));
   }
   // F9 R2: the shared Plan pickers (components/plan/PlanPicker.js) re-read after any plan write.
-  if (typeof window !== 'undefined' && /PlanItem/.test(action)) window.dispatchEvent(new Event('docket:plan-changed'));
+  // R9a: applying a template creates plan items too.
+  if (typeof window !== 'undefined' && /PlanItem|applyTemplate/.test(action)) window.dispatchEvent(new Event('docket:plan-changed'));
   return data.data;
 }

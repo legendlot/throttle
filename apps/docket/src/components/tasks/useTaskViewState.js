@@ -36,7 +36,7 @@ function write(key, val) { try { localStorage.setItem(key, JSON.stringify(val));
 // Old density values: 'compact' | 'roomy' (P2 added 'default'). All three still valid.
 const DENSITIES = ['compact', 'default', 'roomy'];
 
-export function useTaskViewState({ lensParam }) {
+export function useTaskViewState({ lensParam, planParam = '' }) {
   // ---- structured filters (server-side) ----
   const [status, setStatus] = useState('');
   const [departmentId, setDepartmentId] = useState('');
@@ -52,7 +52,9 @@ export function useTaskViewState({ lensParam }) {
   useEffect(() => { setMine(lensParam === 'mine'); }, [lensParam]);
   const [q, setQ] = useState('');
   // F9 R2: '' | 'unplanned' | a plan item id. Client-side (rows carry `plan`), so it is not a load param.
-  const [planFilter, setPlanFilter] = useState('');
+  const [planFilter, setPlanFilter] = useState(planParam || '');
+  // R9a: /tasks?plan=<item id> (the tree's "+N more") opens with that plan filter set.
+  useEffect(() => { if (planParam) setPlanFilter(planParam); }, [planParam]);
   // F9 R4: '' | 'this' | 'next' | 'overdue' | 'none' | a week-ending 'YYYY-MM-DD' → getTasks / getMyTasks /
   // getProgramTasks `week` (server-side, where Overdue filters — the worker applies the org's week_end_dow).
   const [week, setWeek] = useState('');

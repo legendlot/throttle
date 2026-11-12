@@ -66,7 +66,7 @@ function SectionHead({ label, open, onToggle, depth = 0, onAdd, addLabel }) {
 const dot = (color) => <span className="dks-dot" style={{ background: color }} />;
 
 export function DocketSidebar({
-  activeKey = '', path = '', spaces = [], programs = [], isAdmin = false, isPlanAdmin = false,
+  activeKey = '', path = '', spaces = [], programs = [], isAdmin = false, isPlanAdmin = false, showTemplates = false,
   collapsed = false, mobileOpen = false, onSelect, onNewSpace, onNewProgram, onSpaceSettings,
 }) {
   const privates = (spaces || []).filter(s => s.is_private);
@@ -128,6 +128,9 @@ export function DocketSidebar({
         <Row label="Plan" lead={<Target size={13} strokeWidth={2} aria-hidden />} active={path === '/plan'} onClick={go('/plan')} />
         {/* F9 R4: the rolling three-week view (Overdue · this · next · the week after). */}
         <Row depth={1} label="Three weeks" active={path === '/plan/weeks'} onClick={go('/plan/weeks')} />
+        {/* F9 R9a: theme → milestone → result → task, with rollups; and templates (only for people who may make or see one). */}
+        <Row depth={1} label="Tree" active={path === '/plan/tree'} onClick={go('/plan/tree')} />
+        {showTemplates && <Row depth={1} label="Templates" active={path === '/plan/templates'} onClick={go('/plan/templates')} />}
         {/* F9 R6a: the weekly review pack — everyone (a lead sees their own team; plan admins any). */}
         <Row depth={1} label="Review" active={path === '/review'} onClick={go('/review')} />
         {/* F9 R6b: the Saturday founders' catch-up — plan admins only (the worker 403s anyone else). */}

@@ -77,7 +77,7 @@ function TasksBoard() {
   const mineMode = lensParam === 'mine' && !spaceId && !inProgramMode;
   const crossSpace = inProgramMode || mineMode;
 
-  const view = useTaskViewState({ lensParam });
+  const view = useTaskViewState({ lensParam, planParam: search.get('plan') || '' });
   const { filters: f, groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView, cardSize, chooseCardSize,
     showIds, toggleShowIds, subtaskMode, chooseSubtaskMode, cols, toggleColumn, moveColumn, resizeColumn, resetColumns,
     collapsed, toggleGroupCollapsed, setGroupsCollapsed } = view;

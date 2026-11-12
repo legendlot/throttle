@@ -2,7 +2,8 @@
 // Supabase JWT, service binding DOCKETOPS), so Docket's own rules decide what they may see and edit
 // (owner / creator / collaborator / own department; docket_admin + docket_view_all widen it).
 // Write safety (Afshaan 2026-11-09 asked for read + write so Claude can manage a task list):
-//   - only single-task actions; no bulk actions, no space/role/program/template admin, no deletes
+//   - only single-task actions (and applying a plan template, F9 R9a); no bulk actions, no space/role/program/
+//     template admin (templates are edited in the app only), no deletes
 //     (Docket has no task delete; abandon is reversible via set_status and needs a reason);
 //   - every write is a separate tool with readOnlyHint:false, so Claude asks before each one unless
 //     the person has chosen otherwise in their own Claude settings;
@@ -15,7 +16,8 @@ import { getAs, postAs, scrub, capPayload } from '../workers.js';
 const DOCKET_DROP = ['auth_user_id', 'created_by_user_id', 'updated_by', 'abandoned_by', 'author_user_id', 'actor_user_id', 'added_by',
   'proposer_user_id', 'decided_by',    // F9 R3 proposals (docketops already strips them; belt and braces)
   'founder_user_id',                    // F9 R6b founders' top 5 (is_me + founder_name ride alongside)
-  'handoff_accepted_by'];               // F9 R8 hand-offs (handoff_accepted_by_name rides alongside)
+  'handoff_accepted_by',                // F9 R8 hand-offs (handoff_accepted_by_name rides alongside)
+  'created_by'];                        // F9 R9a templates (created_by_name rides alongside)
 
 // The Docket app makes an abandoned task read-only (TaskView `canEdit = _can_edit && status !== 'abandoned'`,
 // decisions 2026-11-09), but docketops' single-task endpoints don't enforce it, so the gateway does: these
@@ -74,6 +76,22 @@ const PLAN_ITEM = { ...T.uuid, nullable: true, schema: { type: ['string', 'null'
 // null clears. Docket validates (receiver in that department, not the task's own team, top-level only) and
 // never lets these set the acceptance — only docket_accept_handoff does.
 const HANDOFF_ID = { ...T.uuid, nullable: true, schema: { type: ['string', 'null'] } };
+// F9 R9a: a template's roles → people: { "<role label>": "<employee id from docket_tasks report=people>" }. Docket
+// checks every role is mapped to an active person and that no label is foreign to the template.
+const TEMPLATE_ROLES = {
+  schema: { type: 'object', maxProperties: 200, additionalProperties: { type: 'string' } },
+  raw: true,
+  check: (v) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return { ok: false, error: 'must be an object { "<role label>": "<employee id>" }' };
+    const keys = Object.keys(v);
+    if (!keys.length || keys.length > 200) return { ok: false, error: 'must map 1–200 roles' };
+    for (const k of keys) {
+      if (!k.trim() || k.length > 40) return { ok: false, error: 'each role label is 1–40 characters' };
+      if (typeof v[k] !== 'string' || !UUIDV.test(v[k])) return { ok: false, error: `role \`${k}\` must map to an employee id (uuid)` };
+    }
+    return { ok: true, value: v };
+  },
+};
 const longText = max => ({ schema: { type: 'string', maxLength: max }, check: v => typeof v === 'string' && v.trim().length > 0 && v.length <= max ? { ok: true, value: v.trim() } : { ok: false, error: `must be non-empty text up to ${max} characters` } });
 const optText = max => ({ allowEmpty: true, schema: { type: 'string', maxLength: max }, check: v => typeof v === 'string' && v.length <= max ? { ok: true, value: v } : { ok: false, error: `must be text up to ${max} characters` } });
 
@@ -146,7 +164,7 @@ const docketTools = [
   reportTool({
     system: 'docket', name: 'docket_plan', title: 'Docket plan', binding: 'DOCKETOPS', dropKeys: DOCKET_DROP,
     description: 'Read the Docket plan (themes → milestones → results) at your own level: themes you can link tasks to, the milestones and results you own, one item with its children and the linked tasks you can see. Use the ids as plan_item_id on docket_create_task / docket_update_task (a Founders\' Associate sees every unrestricted item but links only to themes and to items they own).',
-    paramAbout: { id: 'Plan item id (from report=items or themes).', week: 'For report=score / review / founders: this (default), last (the week just closed), or any date YYYY-MM-DD for the week holding it.',
+    paramAbout: { id: 'For report=item: a plan item id (from report=items or themes). For report=template: a template id (from report=templates).', week: 'For report=score / review / founders: this (default), last (the week just closed), or any date YYYY-MM-DD for the week holding it.',
       team: 'For report=review: a department id, or all. Default: a founder or Founders\' Associate all teams; everyone else their own team.' },
     reports: {
       themes: { action: 'getPlan', about: 'the themes you can see (code, title, state)', params: {},
@@ -165,6 +183,9 @@ const docketTools = [
       review: { action: 'getReviewPack', about: 'the weekly review pack per team: this week (provisional) and last week (final) on-time score + trend, slipped tasks with every revision, milestones due / re-dated / warnings, staleness, the next two weeks, unplanned share, and a Copy-for-Slack text', params: { week: SCORE_WEEK, team: TEAM } },
       // F9 R6b (spec §8.6): the Saturday founders' catch-up — super admins only (Docket refuses anyone else).
       founders: { action: 'getFoundersReview', about: 'super admins: the Saturday catch-up — cross-team asks (a task waiting on another team\'s task) due this week or next, and each founder\'s top 5', params: { week: SCORE_WEEK } },
+      // F9 R9a (spec §11): plan templates — founders' ones to super admins, leads' ones to super admins and leads.
+      templates: { action: 'getTemplates', about: 'the plan templates you can use: name, who it is for (founders → applied to a theme, leads → to a milestone), its roles, steps and day span', params: {} },
+      template: { action: 'getTemplate', about: 'one template: its steps (titles only unless you can edit it), its roles and day span — what docket_apply_template needs', params: { id: T.uuid }, required: ['id'] },
     },
   }),
   // F9 R3 — anyone can propose something for the plan (spec §4.5). It lands in the founders' queue; nothing
@@ -260,6 +281,21 @@ const docketTools = [
     recorded: 'recorded in the task\'s history.',
     params: { id: TASK },
     required: ['id'],
+  }),
+  // F9 R9a — apply a plan template (spec §11): every step is created through Docket's normal path (plan items +
+  // tasks, history, the week's commitments) in ONE transaction — all or nothing. Docket checks the rights
+  // (founders' templates: super admins; leads' templates: the anchor milestone's owner) and every role.
+  writeTool({
+    name: 'docket_apply_template', title: 'Apply a Docket plan template', action: 'applyTemplate',
+    description: 'Create a template\'s milestones, results and tasks under a plan item: a founders template under an agreed theme, a leads template under an agreed milestone you own. Each step is dated anchor_date + its day offset and owned by the person you map to its role. Read the template\'s roles first with docket_plan report=template; find people with docket_tasks report=people. Everything is created or nothing is.',
+    recorded: 'every created item and task records it in its history.',
+    params: {
+      id: { ...T.uuid, about: 'The template id (from docket_plan report=templates).' },
+      anchor_id: { ...T.uuid, about: 'The theme (founders template) or milestone (leads template) to create under — an id from docket_plan.' },
+      anchor_date: { ...T.date, about: 'Day 0, YYYY-MM-DD: each step is dated this plus its offset.' },
+      roles: { ...TEMPLATE_ROLES, about: 'Every role in the template → the employee who owns its steps, e.g. { "Owner": "<employee id>" }.' },
+    },
+    required: ['id', 'anchor_id', 'anchor_date', 'roles'],
   }),
   writeTool({
     name: 'docket_abandon_task', title: 'Abandon a Docket task', action: 'abandonTask',

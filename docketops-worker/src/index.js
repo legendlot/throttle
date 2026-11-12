@@ -35,6 +35,8 @@ import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT
   linkError, effectiveLink, taskPlan, planLinkLabel, planDbError,
   validateSplitPayload, validateProposal, validateDecision } from './plan-core.mjs';
 import { normalizeMeasure, publicMetrics } from './plan-metrics.mjs';
+import { buildTree, treeTaskItemIds, TREE_LEVELS } from './tree-core.mjs';
+import { templateListRow, templateNodesFor } from './template-core.mjs';
 import { WEEK_KEYS, normalizeWeekSettings, resolveWeekFilter, matchesWeek, planWindow, istMidnight, staleCutoff,
   buildPlanWeeks, ROWS_BY, istDate, isDateStr, weekEndOf, effectiveDue } from './weeks-core.mjs';
 import { buildReviewTeams, lastWorkingDay, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack, scoreBlock,
@@ -3776,6 +3778,164 @@ async function userIsPlanAdminStrict(userId, env) {
   return !!(p.ok && normalizeDocketPerms(p.data?.[0]?.permissions).docket_plan_admin);
 }
 
+// ── F9 R9a: the plan tree (spec §7.3) ───────────────────────────────────────
+// GET ?action=getPlanTree[&theme=<uuid>][&closed=1][&mine=1]. Items: plan_items_for (the §5.3 projection getPlan
+// uses — fields a level may not see are already stripped there; L / none never come back). Tasks: ONE batched
+// read of top-level, non-archived tasks linked to the shown items' subtrees, ONE visibility pass
+// (visibleTaskRows; never an archived space; below F never a Founders'-space task). Rollups and leaves: tree-core.
+const TREE_TASK_COLS = 'id,task_no,title,status,owner_employee_id,assignee_employee_id,created_by_user_id,department_id,deadline,'
+  + 'revised_deadline,completed_at,space_id,plan_item_id,parent_task_id,handoff_to_department_id,handoff_to_employee_id';
+async function getPlanTree(url, auth, env) {
+  const q = url.searchParams;
+  const themeId = q.get('theme') || null;
+  if (themeId && !isUuid(themeId)) return err('not_found', 404);
+  const isF = isPlanAdmin(auth);
+  // `structure`: the real links of EVERY plan item (service role) — tree-core hangs a shown item under its nearest
+  // visible ancestor and rolls tasks up through hidden ones with it. Never emitted.
+  const [r, ar, sr] = await Promise.all([planRows(auth, env), sbAll(sbDocket, `/rest/v1/spaces?archived_at=not.is.null&select=id&order=id.asc`, env),
+    sbAll(sbDocket, `/rest/v1/plan_items?select=id,parent_id,kind&order=id.asc`, env)]);
+  if (!r.ok || !ar.ok || !sr.ok) return err('db_error', 500);
+  const items = (Array.isArray(r.data) ? r.data : []).filter(i => TREE_LEVELS.includes(i.level));
+  if (themeId && !items.some(i => i.id === themeId && i.kind === 'theme')) return err('not_found', 404);
+  const opts = { closed: q.get('closed') === '1', mine: q.get('mine') === '1', employeeId: auth.employeeId || null, themeId, structure: sr.data || [] };
+  const tr = await sbInAll(sbDocket, treeTaskItemIds(items, opts),
+    l => `/rest/v1/tasks?plan_item_id=in.${l}&parent_task_id=is.null&archived_at=is.null&is_recurring=eq.false&select=${TREE_TASK_COLS}&order=id.asc`, env);
+  if (!tr.ok) return err('db_error', 500);
+  const archived = new Set((ar.data || []).map(x => x.id));
+  const tasks = (tr.data || []).filter(t => !archived.has(t.space_id));
+  const gated = await visibleTaskRows(auth, tasks, env);
+  const visibleIds = new Set(gated.filter(t => isF || !spaceOf(auth, t)?.is_founders).map(t => t.id));
+  const names = await nameMap(sbPodium, 'employees', [...items.map(i => i.owner_employee_id),
+    ...tasks.filter(t => visibleIds.has(t.id)).map(t => t.owner_employee_id)], env);
+  const tree = buildTree(items, tasks, { ...opts, now: Date.now(), visibleIds, level: isF ? 'F' : null, names, metrics: publicMetrics() });
+  return ok({ items: tree.items, tasks: tree.tasks, ...(isF ? { hidden_total: tree.hidden_total } : {}), generated_at: nowIso() });
+}
+
+// ── F9 R9a: plan templates (spec §11; migration 0028) ────────────────────────
+// Every write is a docket.plan_template_* RPC (save / archive / apply — rights and shape decided there; apply
+// creates every node through plan_create + the task triggers in ONE transaction). Reads: `founders` templates
+// to a plan admin only; `leads` to a plan admin or a lead (docket.plan_is_lead — owns an agreed milestone or
+// result); nobody else sees any. Non-editors get the title-only PREVIEW of the nodes (spec "Previews show only
+// node titles") plus the roles and span needed to apply. RPC codes → TEMPLATE_ERR (status + a readable message).
+const TEMPLATE_ERR = {
+  forbidden: [403, "You can't create or change this template."],
+  not_found: [404, 'Template not found.'],
+  archived: [409, 'This template is archived — restore it first.'],
+  name_required: [400, 'Give the template a name.'],
+  name_too_long: [400, 'The name is too long (120 characters at most).'],
+  description_too_long: [400, 'The description is too long (2,000 characters at most).'],
+  bad_audience: [400, 'Choose who the template is for: founders or leads.'],
+  bad_node: [400, 'A step is incomplete — check its title (1–300 characters) and its fields.'],
+  bad_shape: [400, "A step can't sit there: founders templates start with milestones, leads templates with results or tasks, and tasks have nothing under them."],
+  too_many_nodes: [400, 'A template can have at most 200 steps.'],
+  done_when_required: [400, 'Add "done when" — every result needs one, and so does a milestone with steps under it.'],
+  role_required: [400, 'Give every step a role (up to 40 characters).'],
+  bad_offset: [400, 'Day offsets run from -365 to 730.'],
+  duplicate_key: [400, 'Two steps share the same key.'],
+  bad_anchor: [400, 'Pick an agreed theme (founders template) or an agreed milestone (leads template).'],
+  anchor_not_found: [404, "That theme or milestone isn't available to you."],
+  role_unmapped: [400, 'Pick a person for every role.'],
+  owner_inactive: [400, 'That person has left — pick someone else for this role.'],
+  bad_role: [400, "That role isn't in this template."],
+  bad_date: [400, 'Pick a valid start date.'],
+  bad_source: [400, 'Bad request source.'],
+  forbidden_space: [403, "You can't add tasks to that space — nothing was created."],
+  founders_space_missing: [409, "The Founders' space is missing, so tasks under a restricted theme can't be created."],
+  // plan_create / trigger codes an apply can stop on (nothing was created)
+  parent_not_agreed: [409, 'A milestone above this step is not agreed — nothing was created.'],
+  parent_not_found: [404, "A parent item isn't available to you — nothing was created."],
+  missing_fields: [400, 'A step is missing a date or "done when" — nothing was created.'],
+  owner_not_found: [400, "A role's person wasn't found — nothing was created."],
+  forbidden_field: [403, "You can't set that on a plan item — nothing was created."],
+  duplicate_code: [409, 'A plan code clashed — try again; nothing was created.'],
+  plan_item_closed: [422, 'A plan item closed while applying — nothing was created.'],
+  restricted_needs_founders_space: [422, "Tasks under a restricted theme must sit in the Founders' space — nothing was created."],
+};
+function templateErr(res) {
+  const code = String(res?.code || 'apply_failed');
+  const [status, message] = TEMPLATE_ERR[code] || [400, "The template couldn't be applied — nothing was created."];
+  const extra = {}; for (const k of ['key', 'label', 'fields']) if (res?.[k] != null) extra[k] = res[k];
+  return json({ ok: false, error: code, message, ...extra }, status);
+}
+async function templateRpc(fn, args, env) {
+  const r = await sbDocket(`/rest/v1/rpc/${fn}`, env, { method: 'POST', body: JSON.stringify(args) });
+  if (!r.ok) return { error: err('db_error', 500) };
+  const res = r.data || {};
+  return res.ok ? { data: res } : { error: templateErr(res) };
+}
+// The caller's template rights: plan admin (everything), lead (leads templates), or neither (nothing).
+async function templateAccess(auth, env) {
+  const isSuper = isPlanAdmin(auth);
+  if (isSuper) return { isSuper, lead: true };
+  if (!auth.employeeId) return { isSuper, lead: false };
+  const r = await sbDocket(`/rest/v1/rpc/plan_is_lead`, env, { method: 'POST', body: JSON.stringify({ p_employee: auth.employeeId }) });
+  return { isSuper, lead: r.ok && r.data === true };
+}
+const TEMPLATE_COLS = 'id,name,description,audience,created_by,archived_at,created_at,updated_at';
+async function templateRows(acc, filter, env) {
+  if (!acc.isSuper && !acc.lead) return { ok: true, data: [] };
+  return sbAll(sbDocket, `/rest/v1/plan_templates?${acc.isSuper ? '' : 'audience=eq.leads&'}${filter}select=${TEMPLATE_COLS}&order=name.asc,id.asc`, env);
+}
+async function templateListRows(rows, auth, acc, env) {
+  const nr = await sbInAll(sbDocket, rows.map(t => t.id),
+    l => `/rest/v1/plan_template_nodes?template_id=in.${l}&select=id,template_id,role_label,offset_days&order=id.asc`, env);
+  if (!nr.ok) return null;
+  const byT = {}; for (const n of nr.data || []) (byT[n.template_id] = byT[n.template_id] || []).push(n);
+  const names = await nameMap(sbStore, 'users_profile', rows.map(t => t.created_by), env);
+  return rows.map(t => templateListRow(t, byT[t.id] || [], { names, auth, acc }));
+}
+async function getTemplates(url, auth, env) {
+  const acc = await templateAccess(auth, env);
+  const withArchived = url.searchParams.get('archived') === '1';
+  const tr = await templateRows(acc, withArchived ? '' : 'archived_at=is.null&', env);
+  if (!tr.ok) return err('db_error', 500);
+  // archived=1 adds the archived ones the caller can EDIT (super, or their own).
+  const rows = (tr.data || []).filter(t => !t.archived_at || acc.isSuper || t.created_by === auth.userId);
+  const list = await templateListRows(rows, auth, acc, env);
+  if (!list) return err('db_error', 500);
+  return ok({ templates: list, can_create: { founders: acc.isSuper, leads: acc.isSuper || acc.lead } });
+}
+async function getTemplate(url, auth, env) {
+  const id = url.searchParams.get('id');
+  if (!isUuid(id || '')) return err('not_found', 404);
+  const acc = await templateAccess(auth, env);
+  const tr = await templateRows(acc, `id=eq.${enc(id)}&`, env);
+  if (!tr.ok) return err('db_error', 500);
+  const t = (tr.data || [])[0];
+  // An archived template is shown only to who may restore it (as the list).
+  if (!t || (t.archived_at && !acc.isSuper && t.created_by !== auth.userId)) return err('not_found', 404);
+  const nr = await sbAll(sbDocket, `/rest/v1/plan_template_nodes?template_id=eq.${enc(id)}&select=id,parent_node_id,kind,title,role_label,offset_days,done_when,sort&order=sort.asc,id.asc`, env);
+  if (!nr.ok) return err('db_error', 500);
+  const nodes = nr.data || [];
+  const names = await nameMap(sbStore, 'users_profile', [t.created_by], env);
+  const row = templateListRow(t, nodes, { names, auth, acc });
+  return ok({ template: row, nodes: templateNodesFor(nodes, row.can_edit) });
+}
+async function saveTemplate(body, auth, env) {
+  const d = body.data || body;
+  const t = d.template;
+  if (!t || typeof t !== 'object' || Array.isArray(t)) return templateErr({ code: 'bad_node' });
+  const r = await templateRpc('plan_template_save', { ...planArgs(auth), p_template: t }, env);
+  return r.error || ok({ id: r.data.id });
+}
+async function archiveTemplate(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(String(d.id || ''))) return templateErr({ code: 'not_found' });
+  if (d.archive !== undefined && typeof d.archive !== 'boolean') return err('bad_archive', 400);
+  const r = await templateRpc('plan_template_archive', { p_actor: auth.userId, p_is_super: isPlanAdmin(auth), p_id: d.id,
+    p_archive: d.archive !== false }, env);
+  return r.error || ok({ id: d.id, archived: r.data.archived });
+}
+// POST { action:'applyTemplate', id, anchor_id, anchor_date, roles } — everything or nothing (the RPC).
+async function applyTemplate(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(String(d.id || ''))) return templateErr({ code: 'not_found' });
+  if (d.roles != null && (typeof d.roles !== 'object' || Array.isArray(d.roles))) return templateErr({ code: 'bad_role' });
+  const r = await templateRpc('plan_template_apply', { ...planArgs(auth), p_template_id: d.id,
+    p_payload: { anchor_id: d.anchor_id ?? null, anchor_date: d.anchor_date ?? null, roles: d.roles || {} }, p_source: auth.source || 'app' }, env);
+  return r.error || ok({ items: r.data.items || [], tasks: r.data.tasks || [] });
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Dispatch
 // ════════════════════════════════════════════════════════════════════════════
@@ -3789,6 +3949,7 @@ const GET_ACTIONS = {
   getPlan, getPlanItem, getProposals, getPlanWeeks, getWeekScore,
   getReviewPack, getReviewSnapshots, getFoundersReview,
   getIncoming,
+  getPlanTree, getTemplates, getTemplate,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,
@@ -3810,6 +3971,7 @@ const POST_ACTIONS = {
   proposePlanItem, decideProposal,
   holdReview, setFounderFocus,
   acceptHandoff,
+  saveTemplate, archiveTemplate, applyTemplate,
 };
 
 // task_history.source (F9 R6a, §8.3): the MCP gateway marks every call it makes; anything else is the app.

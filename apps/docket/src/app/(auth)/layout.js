@@ -7,6 +7,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { docketopsGet } from '../../lib/docketopsFetch.js';
+import { showTemplatesNav } from '../../lib/templates.js';
 import { ChromeContext } from '../../lib/chrome.js';
 import { routeModel, focusWhenReady, atRoute } from '../../lib/nav.js';
 import { DocketRail } from '../../components/DocketRail.js';
@@ -39,6 +40,7 @@ function AuthLayoutInner({ children }) {
   const [programs, setPrograms] = useState([]);
   const [canViewDashboard, setCanViewDashboard] = useState(false);
   const [myEmployeeId, setMyEmployeeId] = useState(null);   // getMe.employee_id (F2 capture toast)
+  const [showTemplates, setShowTemplates] = useState(false); // F9 R9a: the Templates nav entry (getTemplates)
   const [helpOpen, setHelpOpen] = useState(false);
   const [count, setCount] = useState(null);   // board task count, published by the tasks page
   const [settingsSpace, setSettingsSpace] = useState(null);   // sidebar ⋯ → SpaceSettings
@@ -132,6 +134,17 @@ function AuthLayoutInner({ children }) {
     setSettingsSpace(s);
     if (!employees && session) docketopsGet('getEmployees', {}, session).then(e => setEmployees(e || [])).catch(() => setEmployees([]));
   }, [employees, session]);
+  // F9 R9a: "Templates" in the nav only for someone who may create one or can see any. One read per user;
+  // a save / archive fires docket:templates-changed.
+  const userId = user?.id || '';
+  useEffect(() => {
+    if (!session || !userId) return undefined;
+    let live = true;
+    const read = () => docketopsGet('getTemplates', {}, session).then(d => { if (live) setShowTemplates(showTemplatesNav(d)); }).catch(() => {});
+    read();
+    window.addEventListener('docket:templates-changed', read);
+    return () => { live = false; window.removeEventListener('docket:templates-changed', read); };
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
   const spacesChanged = () => { if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:spaces-changed')); };
 
   // App-chrome keyboard shortcuts: `[` / ⌘\ / Ctrl+\ toggle the sidebar, `?` toggles the
@@ -219,6 +232,7 @@ function AuthLayoutInner({ children }) {
             programs={programs}
             isAdmin={isAdmin}
             isPlanAdmin={isPlanAdmin}
+            showTemplates={showTemplates}
             collapsed={collapsed}
             mobileOpen={mobileNavOpen}
             onSelect={go}
@@ -246,7 +260,7 @@ function AuthLayoutInner({ children }) {
         {/* Mounted per open: fresh state, sources read synchronously (no stale frame). */}
         {cmdOpen && <CommandBar userId={user?.id} session={session} onClose={() => setCmdOpen(false)} router={router}
           spaces={spaces} programs={[...programs, ...createdPrograms.filter(c => !programs.some(p => p.id === c.id))]}
-          canViewDashboard={canViewDashboard} isAdmin={isAdmin} isPlanAdmin={isPlanAdmin}
+          canViewDashboard={canViewDashboard} isAdmin={isAdmin} isPlanAdmin={isPlanAdmin} showTemplates={showTemplates}
           onNewTask={newTask} onNewSpace={newSpace} onNewProgram={newProgram}
           onToggleSidebar={toggleSidebar} onHelp={() => setHelpOpen(true)} />}
         {helpOpen && <ShortcutsSheet onClose={() => setHelpOpen(false)} />}
