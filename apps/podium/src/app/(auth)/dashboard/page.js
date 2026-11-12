@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
+import { CalendarDays } from 'lucide-react';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import { labelOf, EMPLOYMENT_TYPES, tenure } from '../../../lib/format.js';
 import { Avatar, KpiTile, card, cardLabel } from '../../../components/ui.js';
@@ -13,7 +14,7 @@ import { ProfileBanner } from '../../../components/OnboardingBits.js';
 const BAR_COLS = ['#F2CD1A', '#9fb0ff', '#4ade80', '#fb923c', '#fbbf24', '#ff8a8a'];
 
 export default function DashboardPage() {
-  const { session } = useAuth();
+  const { session, perms } = useAuth();
   const router = useRouter();
   const [emps, setEmps] = useState(null);
   const [depts, setDepts] = useState([]);
@@ -61,6 +62,17 @@ export default function DashboardPage() {
         <KpiTile label="Notice" value={byStatus.notice || 0} sub={(byStatus.notice || 0) ? 'serving notice' : 'none'} subColor="var(--bad-fg)" />
         <KpiTile label="New · 30d" value={newCount} sub={newCount ? 'onboarding' : 'none'} subColor="var(--green-bright)" />
       </div>
+
+      {/* Leave R1 (D15): requests the caller may decide (getMe's podium_leave_pending). */}
+      {Number(perms?.podium_leave_pending) > 0 && (
+        <div onClick={() => router.push('/leave')} style={{ ...card, marginBottom: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <CalendarDays size={16} style={{ color: 'var(--yellow)' }} />
+          <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--t1)' }}>
+            {Number(perms.podium_leave_pending)} leave {Number(perms.podium_leave_pending) === 1 ? 'request' : 'requests'} waiting for you
+          </span>
+          <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--yellow)' }}>Review →</span>
+        </div>
+      )}
 
       {replies.length > 0 && (
         <div style={{ ...card, marginBottom: 14 }}>

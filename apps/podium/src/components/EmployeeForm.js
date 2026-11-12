@@ -1,14 +1,20 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useToast, Combobox } from '@throttle/ui';
+import { useAuth } from '@throttle/auth';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
 import { EMPLOYMENT_TYPES, EMPLOYEE_STATUSES, LEGAL_ENTITIES, GENDER_OPTIONS, BLOOD_GROUPS } from '../lib/format.js';
 import { formLabel, cardLabel, btnPrimary, btnGhost } from './ui.js';
+import { LEAVE_POLICIES } from '../lib/leave.js';
 
 // Shared create/edit form (Pit Wall v2). `initial` (with .id) → edit mode; else create.
 export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
   const { showToast } = useToast();
+  const { perms } = useAuth();
   const editing = !!initial?.id;
+  // Leave R1 (D1): the leave policy is HR's field. It is sent only by HR, and on an edit only when the loaded row
+  // carried the column — so a stale read can never null out a seeded policy.
+  const leaveField = !!perms?.podium_hr && (!editing || (initial && 'leave_policy' in initial));
   const [f, setF] = useState(() => seed(initial));
   const [depts, setDepts] = useState([]);
   const [roles, setRoles] = useState([]);
@@ -54,7 +60,9 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
     if (!f.full_name?.trim()) { showToast('Full name is required', 'error'); return; }
     setBusy(true);
     try {
-      const payload = clean(f);
+      const payload = clean(f, leaveField);
+      // Create: leave_policy rides only when HR picked a policy (the column's default is already null = not covered).
+      if (!editing && !payload.leave_policy) delete payload.leave_policy;
       if (editing) {
         const r = await podiumopsPost('updateEmployee', { employee_id: initial.id, patch: payload }, session);
         toastSaved(showToast, 'Saved', r?.google_sync);
@@ -140,6 +148,14 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
               <div style={{ fontSize: 11, color: 'var(--t4)', marginTop: 4 }}>To exit someone, use the Exit panel on their profile.</div>
             )}
           </Field>
+          {leaveField && (
+            <Field label="Leave policy">
+              <Select value={f.leave_policy || ''} onChange={e => set('leave_policy', e.target.value)}>
+                {LEAVE_POLICIES.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </Select>
+              <div style={{ fontSize: 11, color: 'var(--t4)', marginTop: 4 }}>Covered people apply for leave in Podium and earn 1.5 PL + 1 SL a month.</div>
+            </Field>
+          )}
           {f.status === 'exited' && <>
             <Field label="Last working day"><Input type="date" mono value={f.date_exited} disabled /></Field>
             <Field label="Exit reason"><Input value={f.exit_reason} disabled /></Field>
@@ -165,7 +181,7 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
 const FIELDS = ['full_name', 'preferred_name', 'work_email', 'personal_email', 'phone', 'date_of_birth', 'gender', 'blood_group', 'pan_number', 'photo_url',
   'job_title', 'department_id', 'org_unit_path', 'job_role_id', 'manager_id', 'secondary_manager_id', 'employment_type', 'legal_entity', 'work_location',
   'date_joined', 'probation_end_date', 'confirmed_at', 'status', 'date_exited', 'exit_reason',
-  'emergency_contact_name', 'emergency_contact_phone'];
+  'emergency_contact_name', 'emergency_contact_phone', 'leave_policy'];
 
 function seed(initial) {
   const o = {};
@@ -175,9 +191,10 @@ function seed(initial) {
 }
 // date_exited / exit_reason are shown, never sent: only the exit flow writes them (X1).
 const READ_ONLY = new Set(['date_exited', 'exit_reason']);
-function clean(f) {
+function clean(f, leaveField) {
   const o = {};
   for (const k of FIELDS) if (!READ_ONLY.has(k)) o[k] = f[k] === '' ? null : f[k];
+  if (!leaveField) delete o.leave_policy;
   return o;
 }
 

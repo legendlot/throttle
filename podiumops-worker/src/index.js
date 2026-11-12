@@ -96,6 +96,13 @@ import {
   googleFieldsOf, mergeGoogleUser, bodyFields, scopeOf, diffPerson, nextLastPushed, nextAttemptAt, syncClaimFilter,
   cleanSyncFields, ouExcluded, fieldsToPush, leaseHeld, previewHash, needsOuCheck, effectiveFields, identityChanged,
 } from './googlesync.js';   // J1b Podium → Google field sync (test/googlesync.test.mjs)
+import {
+  LEDGER_TYPES, TYPE_LABELS, LEAVE_COPY, LEAVE_POLICIES, DEFAULT_CUTOVER_MONTH, isIsoDay, isMonth, monthOf, yearOf,
+  validateLeaveInput, accrualPlan, yearClosePlan, borrowCap, ledgerBalance, pendingDebit, splitLeave, sameSplit,
+  periodUsed, optionalUsed, limitBlock, overlaps, decideBlock, cancelBlock, resolveLeaveApprover, buildLeaveMail,
+  leaveMessageId, cleanAmount, cleanNote, cleanHoliday, leaveDbErrorCode, reclosePlan, splitBase, coveredFromOnChange,
+  holidayListMissing, noHolidayListMessage,
+} from './leave.js';   // Leave R1 (test/leave.test.mjs)
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 
@@ -498,12 +505,13 @@ const EMP_EMBED =
 async function getMe(url, auth, env) {
   const edges = await loadOrgEdges(env);
   const me = callerEmployee(edges, auth.userId);
-  const [sr, hiringOn, canCreateOpening, googleAdmin, panelOn] = await Promise.all([
+  const [sr, hiringOn, canCreateOpening, googleAdmin, panelOn, leaveNav] = await Promise.all([
     sb(`/rest/v1/settings?id=eq.1&select=comp_vault_enabled,min_tenure_days,exit_notice_days&limit=1`, env),
     hiringAccess(auth, me, env),
     hasPerm(auth, 'podium_hiring') ? Promise.resolve(true) : hasActiveReports(me, env),
     isGoogleAdmin(auth, env),
     panelSeat(me, env),
+    leaveNavState(auth, me, edges, env),
   ]);
   return ok({
     userId: auth.userId,
@@ -517,12 +525,16 @@ async function getMe(url, auth, env) {
     // podium_google_admin (display only) = podium.google_admin_access (J1, L3); every J1 handler re-checks.
     // podium_interviews_access (O2 D9, nav only) = a seat on any non-cancelled interview panel; the panel actions
     // self-scope on the caller's own panel row. It does NOT feed podium_hiring_access (a pure panelist sees only My interviews).
+    // podium_leave_access (Leave D15, nav only) = covered OR ≥1 active direct report OR HR; podium_leave_pending = the
+    // count of pending leave requests the caller may decide (the nav badge + dashboard tile). Every leave action self-scopes.
     permissions: { ...(auth.permissions || {}), podium_super_admin: !!auth.isSuperAdmin, podium_hiring_access: hiringOn,
-      podium_offer_templates: canComp(auth) || isAdmin(auth), podium_google_admin: googleAdmin, podium_interviews_access: panelOn },
+      podium_offer_templates: canComp(auth) || isAdmin(auth), podium_google_admin: googleAdmin, podium_interviews_access: panelOn,
+      podium_leave_access: leaveNav.access, podium_leave_pending: leaveNav.pending },
     employee_id: me?.id || null,
     settings: sr.data?.[0] || { comp_vault_enabled: false, min_tenure_days: 90, exit_notice_days: 30 },
     tier: { admin: isAdmin(auth), hr: isHr(auth), comp: canComp(auth), super_admin: !!auth.isSuperAdmin },
     hiring: { access: hiringOn, can_create: !!canCreateOpening, interviews: panelOn },
+    leave: { access: leaveNav.access, pending: leaveNav.pending },
   });
 }
 
@@ -833,7 +845,19 @@ const EMPLOYEE_FIELDS = [
   'gender', 'blood_group', 'pan_number',
   // J1b D5: the Google org unit Podium wants (pushed to Google; google_org_unit stays "what Google last said").
   'org_unit_path',
+  // Leave D1: coverage (null = not covered). Both writers are requireHr; cleanLeavePolicyField validates the value.
+  'leave_policy',
 ];
+
+// Leave D1: blank → null (not covered); otherwise one of LEAVE_POLICIES. Mutates `obj`; → null | the error response.
+function cleanLeavePolicyField(obj) {
+  if (!obj || !('leave_policy' in obj)) return null;
+  const v = obj.leave_policy == null ? '' : String(obj.leave_policy).trim();
+  if (!v) { obj.leave_policy = null; return null; }
+  if (!LEAVE_POLICIES.includes(v)) return errCode('bad_leave_policy', 'Leave policy must be empty or fraternitas', 400);
+  obj.leave_policy = v;
+  return null;
+}
 
 // J1b: the org unit picked on EmployeeForm. Blank clears; otherwise a path ('/…') that is not in (or under) one of
 // settings.directory_excluded_ous (400 ou_excluded). The value already stored is always accepted (EmployeeForm sends
@@ -913,6 +937,8 @@ async function createEmployee(body, auth, env, ctx) {
   if (!code) { code = await mintEmployeeCode(env); if (!code) return err('failed_to_mint_employee_code', 500); }
   const row = { employee_code: code, created_by: auth.userId, ...pickFields(body, EMPLOYEE_FIELDS) };
   { const pe = cleanPanField(row); if (pe) return pe; }
+  { const le = cleanLeavePolicyField(row); if (le) return le; }
+  { const cf = coveredFromOnChange(null, row.leave_policy, istToday()); if (cf) row.leave_covered_from = cf; }
   { const oe = await cleanOrgUnitField(row, env); if (oe) return oe; }
   const r = await sb(`/rest/v1/employees`, env, { method: 'POST', body: JSON.stringify([row]), headers: actorHeaders(auth) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
@@ -1044,12 +1070,27 @@ async function updateEmployee(body, auth, env, ctx) {
   }
   if (patch.work_email) { const held = await workEmailAwaitingJoining(env, patch.work_email); if (held) return held; }
   { const pe = cleanPanField(patch); if (pe) return pe; }
+  { const le = cleanLeavePolicyField(patch); if (le) return le; }
   { const oe = await cleanOrgUnitField(patch, env, body.employee_id); if (oe) return oe; }
+  // Leave D14: a coverage flip is logged (EmployeeForm sends every field, so only a real change counts).
+  let leaveFrom;
+  if ('leave_policy' in patch) {
+    const lr = await sb(`/rest/v1/employees?id=eq.${body.employee_id}&select=leave_policy&limit=1`, env);
+    if (!lr.ok) return err('db_error: employee lookup failed', 500);
+    const was = lr.data?.[0]?.leave_policy ?? null;
+    if (was !== patch.leave_policy) leaveFrom = was;
+    // Coverage history: off → on starts earning from this IST month, so the off gap never back-fills (leave.js).
+    const cf = coveredFromOnChange(was, patch.leave_policy, istToday());
+    if (cf) patch.leave_covered_from = cf;
+  }
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
   const r = await sb(`/rest/v1/employees?id=eq.${body.employee_id}`, env, { method: 'PATCH', body: JSON.stringify(patch), headers: actorHeaders(auth) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   const saved = r.data?.[0];
+  if (saved && leaveFrom !== undefined) {
+    await leaveEvent(env, auth, await meOf(auth, env), { employee_id: saved.id, event_type: 'coverage_changed', detail: { from: leaveFrom, to: saved.leave_policy ?? null } });
+  }
   // J1b D7: the update trigger marked them pending only if a pushed field changed (EmployeeForm sends every field,
   // the trigger compares IS DISTINCT FROM). Push inline; a Google failure comes back as google_sync, never an error.
   return ok(saved ? { ...saved, google_sync: await googleSyncAfterSave(env, auth, ctx, saved.id) } : saved);
@@ -9645,6 +9686,619 @@ async function submitInterviewFeedback(body, auth, env) {
 }
 // ── end O2
 
+// ────────────────────────────────────────────────────────────────────────────
+// Leave R1 — apply, approve, balances, holidays.
+// Plan: docs/superpowers/plans/2026-11-13-podium-leave-r1.md (D1–D15) · pure rules in src/leave.js · migration 0016.
+// Surfaces: the PERSON (covered: employees.leave_policy not null) · the CHAIN (descendantsOf the caller; deciding =
+// the snapshotted approver or that approver's manager, D9) · HR (isHr: everyone, settings, holidays, opening
+// balances, adjustments). Every leave action is in SELF_SERVE_*: a covered employee may hold no Podium role, and each
+// handler self-scopes. The ledger is the only balance; ensureLeaveCurrent writes the lazy accrual + year-end rows
+// before every balance read (D4 / D5). Mail goes from the CALLER's own work mailbox and never fails the action (D12).
+// ────────────────────────────────────────────────────────────────────────────
+
+const LEAVE_EMP_SELECT = 'id,employee_code,full_name,preferred_name,job_title,manager_id,status,gender,date_joined,date_exited,leave_policy,leave_covered_from,work_email';
+const LEAVE_REQ_SELECT = 'id,employee_id,leave_type,start_date,end_date,start_half,end_half,days,borrowed_days,lop_days,status,reason,'
+  + 'approver_employee_id,decided_by_employee_id,decided_at,decision_note,cancelled_at,cancel_note,created_at,updated_at';
+const LEAVE_STATUS = { not_covered: 403, forbidden: 403, no_self_approval: 403, not_found: 404, overlap: 409, period_used: 409,
+  optional_used: 409, balance_changed: 409, not_pending: 409, not_approved: 409, opening_exists: 409, cutover_locked: 409 };
+const leaveErr = (code, extra = null) => (extra
+  ? json({ ok: false, error: code, message: LEAVE_COPY[code] || code.replace(/_/g, ' '), ...extra }, LEAVE_STATUS[code] || 400)
+  : errCode(code, LEAVE_COPY[code] || code.replace(/_/g, ' '), LEAVE_STATUS[code] || 400));
+const LEAVE_PAGE = 5000;   // = db-max-rows; the ledger outgrows one page in ~2 years, so every ledger read pages
+const halfRound = (n) => Math.round(Number(n) * 2) / 2;
+const numRow = (r) => ({ ...r, days: Number(r.days), borrowed_days: Number(r.borrowed_days || 0), lop_days: Number(r.lop_days || 0) });
+
+// All rows of a PostgREST read, page by page (path must carry an order). → rows | null on any failed page
+async function sbPaged(env, path) {
+  const out = [];
+  for (let off = 0, g = 0; g < 40; g++, off += LEAVE_PAGE) {
+    const r = await sb(`${path}&limit=${LEAVE_PAGE}&offset=${off}`, env);
+    if (!r.ok || !Array.isArray(r.data)) return null;
+    out.push(...r.data);
+    if (r.data.length < LEAVE_PAGE) break;
+  }
+  return out;
+}
+async function loadLeaveSettings(env) {
+  const r = await sb(`/rest/v1/leave_settings?id=eq.1&select=cutover_month,updated_at&limit=1`, env);
+  if (!r.ok) return null;
+  return { cutover_month: r.data?.[0]?.cutover_month || DEFAULT_CUTOVER_MONTH, updated_at: r.data?.[0]?.updated_at || null };
+}
+async function loadHolidays(env, y1, y2) {
+  const r = await sb(`/rest/v1/holidays?date=gte.${y1}-01-01&date=lte.${y2}-12-31&select=date,name,kind&order=date.asc&limit=1000`, env);
+  return r.ok && Array.isArray(r.data) ? r.data : null;
+}
+async function loadLeaveEmployees(env, ids) {
+  const list = [...new Set((ids || []).filter(isUuid))];
+  if (!list.length) return [];
+  return sbInChunks(env, list, (c) => `/rest/v1/employees?id=in.(${c.join(',')})&select=${LEAVE_EMP_SELECT}`);
+}
+const leaveCovered = (e) => !!(e && e.leave_policy && e.status !== 'exited');
+
+// D4 + D5 — the lazy, idempotent writer. For the covered ids: insert the missing accrual rows through the current IST
+// month, then close every completed year ≥ the cutover year that has no leave_year_closes row and no pending PL / SL
+// request starting in it (lapse rows first, then the marker, so a half-done close recomputes to nothing new). A late
+// approve / cancel into a closed year is re-closed inside the RPC (podium.leave_reclose). Batched: one read + one insert per step, never per row.
+// pre: { settings, emps } already loaded. → { ok } | { ok: false, error }
+async function ensureLeaveCurrent(env, employeeIds, pre = {}) {
+  const ids = [...new Set((employeeIds || []).filter(isUuid))];
+  if (!ids.length) return { ok: true };
+  const settings = pre.settings || await loadLeaveSettings(env);
+  if (!settings) return { ok: false, error: 'settings' };
+  const emps = (pre.emps || await loadLeaveEmployees(env, ids)).filter(e => ids.includes(e.id) && e.leave_policy);
+  if (!emps.length) return { ok: true };
+  const today = istToday(), cur = monthOf(today), cy = yearOf(today), cutover = settings.cutover_month;
+  const idf = emps.map(e => e.id).join(',');
+  const have = await sbPaged(env, `/rest/v1/leave_ledger?employee_id=in.(${idf})&kind=eq.accrual&select=employee_id,leave_type,period&order=id.asc`);
+  if (!have) return { ok: false, error: 'accrual_read' };
+  const existing = {};
+  for (const r of have) (existing[r.employee_id] ||= new Set()).add(`${r.leave_type}:${r.period}`);
+  const rows = emps.flatMap(e => accrualPlan({ employee: e, cutoverMonth: cutover, currentMonth: cur, existing: existing[e.id] }));
+  const insertLedger = async (list) => {
+    for (let i = 0; i < list.length; i += 1000) {
+      const w = await sb(`/rest/v1/leave_ledger?on_conflict=employee_id,leave_type,kind,period`, env, { method: 'POST',
+        prefer: 'resolution=ignore-duplicates,return=minimal', body: JSON.stringify(list.slice(i, i + 1000)) });
+      if (!w.ok) return false;
+    }
+    return true;
+  };
+  if (rows.length && !(await insertLedger(rows))) return { ok: false, error: 'accrual_write' };
+  const cutY = Number(cutover.slice(0, 4));
+  if (cy <= cutY) return { ok: true };
+  const cr = await sb(`/rest/v1/leave_year_closes?employee_id=in.(${idf})&select=employee_id,year&limit=${LEAVE_PAGE}`, env);
+  if (!cr.ok) return { ok: false, error: 'close_read' };
+  const closed = {};
+  for (const r of cr.data || []) (closed[r.employee_id] ||= new Set()).add(Number(r.year));
+  const open = emps.filter(e => { for (let y = cutY; y < cy; y++) if (!closed[e.id]?.has(y)) return true; return false; });
+  if (!open.length) return { ok: true };
+  const oidf = open.map(e => e.id).join(',');
+  // A pending PL / SL request starting in an open year holds that year's close (yearClosePlan) until it is decided.
+  const [led, pend] = await Promise.all([
+    sbPaged(env, `/rest/v1/leave_ledger?employee_id=in.(${oidf})&select=employee_id,leave_type,delta,effective_date&order=id.asc`),
+    sbPaged(env, `/rest/v1/leave_requests?employee_id=in.(${oidf})&status=eq.pending&leave_type=in.(PL,SL)&start_date=lt.${cy}-01-01&select=employee_id,leave_type,status,start_date&order=id.asc`),
+  ]);
+  if (!led || !pend) return { ok: false, error: 'close_ledger_read' };
+  const byEmp = {}, pendByEmp = {};
+  for (const r of led) (byEmp[r.employee_id] ||= []).push(r);
+  for (const r of pend) (pendByEmp[r.employee_id] ||= []).push(r);
+  const lapses = [], marks = [];
+  for (const e of open) {
+    const plan = yearClosePlan({ employeeId: e.id, cutoverMonth: cutover, currentYear: cy, closedYears: closed[e.id] || new Set(), ledger: byEmp[e.id] || [],
+      requests: pendByEmp[e.id] || [] });
+    lapses.push(...plan.rows);
+    marks.push(...plan.years.map(y => ({ employee_id: e.id, year: y })));
+  }
+  if (lapses.length && !(await insertLedger(lapses))) return { ok: false, error: 'lapse_write' };
+  if (marks.length) {
+    const w = await sb(`/rest/v1/leave_year_closes?on_conflict=employee_id,year`, env, { method: 'POST',
+      prefer: 'resolution=ignore-duplicates,return=minimal', body: JSON.stringify(marks) });
+    if (!w.ok) return { ok: false, error: 'close_write' };
+  }
+  return { ok: true };
+}
+
+// Ledger + requests for a set of people (after ensureLeaveCurrent). Requests = every pending one (they hold balance)
+// + anything ending this year or later. → { ledger: {id: rows}, reqs: {id: rows} } | null
+async function leaveBooks(env, ids, cy) {
+  const list = [...new Set((ids || []).filter(isUuid))];
+  const ledger = {}, reqs = {};
+  if (!list.length) return { ledger, reqs };
+  const idf = list.join(',');
+  const [led, rq] = await Promise.all([
+    sbPaged(env, `/rest/v1/leave_ledger?employee_id=in.(${idf})&select=id,employee_id,leave_type,delta,kind,period,effective_date,request_id,note,created_at&order=id.asc`),
+    sbPaged(env, `/rest/v1/leave_requests?employee_id=in.(${idf})&or=(status.eq.pending,end_date.gte.${cy}-01-01)&select=${LEAVE_REQ_SELECT}&order=id.asc`),
+  ]);
+  if (!led || !rq) return null;
+  for (const r of led) (ledger[r.employee_id] ||= []).push({ ...r, delta: Number(r.delta) });
+  for (const r of rq) (reqs[r.employee_id] ||= []).push(numRow(r));
+  return { ledger, reqs };
+}
+
+// The person's balances as shown everywhere (getMyLeave, getTeamLeave, HR). cap = the D7 borrow cap for a leave in
+// the current year.
+function leaveBalances(emp, ledger, reqs, cutover, today) {
+  const cm = monthOf(today), cy = yearOf(today), out = {};
+  for (const t of LEDGER_TYPES) {
+    const balance = ledgerBalance(ledger, t), pending = pendingDebit(reqs, t);
+    out[t] = { balance, pending, available: halfRound(balance - pending),
+      cap: borrowCap({ leaveType: t, leaveYear: cy, currentMonth: cm, employee: emp, cutoverMonth: cutover }) };
+  }
+  out.PERIOD = { used_this_month: periodUsed(reqs, cm) };
+  out.OPTIONAL_HOLIDAY = { used_this_year: optionalUsed(reqs, cy) };
+  return out;
+}
+
+// D6 / D7 for one request input: validate, count, check overlap + the monthly / yearly limit, and split.
+// opts: { notice, settings, exceptId }. → { error } | { v, split, snapshot: {expected_balance, expected_pending} | null, balances }
+async function leaveQuote(env, emp, d, { notice = true, settings, exceptId = null } = {}) {
+  const today = istToday();
+  const y = isIsoDay(d?.start_date) ? yearOf(d.start_date) : yearOf(today);
+  const holidays = await loadHolidays(env, y, y);
+  if (!holidays) return { error: 'db' };
+  // The leave's year has no fixed holiday in Podium → its list was never added; refuse rather than count every weekday.
+  if (isIsoDay(d?.start_date) && holidayListMissing(holidays)) return { error: 'no_holiday_list', message: noHolidayListMessage(y) };
+  const vr = validateLeaveInput(d, { today, gender: emp.gender, holidays, notice });
+  if (vr.error) return { error: vr.error };
+  const v = vr.value;
+  const ens = await ensureLeaveCurrent(env, [emp.id], { settings, emps: [emp] });
+  if (!ens.ok) return { error: 'db' };
+  const books = await leaveBooks(env, [emp.id], yearOf(today));
+  if (!books) return { error: 'db' };
+  const ledger = books.ledger[emp.id] || [], reqs = books.reqs[emp.id] || [];
+  const balances = leaveBalances(emp, ledger, reqs, settings.cutover_month, today);
+  if (overlaps(reqs, v.start_date, v.end_date, exceptId)) return { error: 'overlap', v, balances };
+  const lim = limitBlock(v, reqs);
+  if (lim) return { error: lim, v, balances };
+  if (!LEDGER_TYPES.includes(v.leave_type)) {
+    return { v, split: { available: null, from_balance: v.days, borrowed_days: 0, lop_days: 0 }, snapshot: null, balances };
+  }
+  const balance = ledgerBalance(ledger, v.leave_type), pending = pendingDebit(reqs, v.leave_type, exceptId);
+  const cap = borrowCap({ leaveType: v.leave_type, leaveYear: yearOf(v.start_date), currentMonth: monthOf(today), employee: emp, cutoverMonth: settings.cutover_month });
+  const base = splitBase({ leaveType: v.leave_type, balance, leaveYear: yearOf(v.start_date), currentYear: yearOf(today) });
+  return { v, split: { ...splitLeave({ days: v.days, balance: base, pending, cap }), cap }, snapshot: { expected_balance: balance, expected_pending: pending }, balances };
+}
+
+// The approver's own manager (D9 cover) from the org edges.
+const approverManagerOf = (edges, approverId) => (approverId ? edges.find(e => e.id === approverId)?.manager_id || null : null);
+
+// Who the request is for: the caller, or (HR only) employee_id. → { emp, other } | { res }
+async function leaveTarget(auth, me, employeeId) {
+  const other = !!employeeId && employeeId !== me?.id;
+  if (other && !isHr(auth)) return { res: leaveErr('forbidden') };
+  const id = other ? employeeId : me?.id;
+  if (!isUuid(id)) return { res: leaveErr(other ? 'not_found' : 'not_covered') };
+  return { id, other };
+}
+
+// D12 — best effort, from the caller's own work mailbox. → 'sent' | 'failed' | 'skipped'
+async function leaveMail(env, { kind, senderId, toId, personId, request }) {
+  if (!isUuid(senderId) || !isUuid(toId) || senderId === toId) return 'skipped';
+  try {
+    const ids = [...new Set([senderId, toId, personId].filter(isUuid))];
+    const er = await sb(`/rest/v1/employees?id=in.(${ids.join(',')})&select=id,full_name,preferred_name,work_email,status`, env);
+    const by = Object.fromEntries(rowsOf(er).map(e => [e.id, e]));
+    const mailOf = (e) => {
+      const m = String(e?.work_email || '').trim().toLowerCase();
+      return e && e.status !== 'exited' && m.endsWith(`@${WORK_DOMAIN}`) && addressOk(m) ? m : null;
+    };
+    const from = mailOf(by[senderId]), to = mailOf(by[toId]);
+    if (!from || !to) return 'skipped';
+    const mail = buildLeaveMail({ kind, from, fromName: by[senderId].full_name, to,
+      toFirst: String(by[toId].preferred_name || '').trim() || firstName(by[toId].full_name),
+      personName: by[personId]?.full_name || '', request, link: `${podiumAppUrl(env)}/leave/`,
+      messageId: leaveMessageId(request.id, kind, crypto.randomUUID().slice(0, 8)) });
+    if (mail.error) return 'failed';
+    const g = await gmailSend(env, from, mail.raw);
+    if (!g.ok) { console.error('[leave-mail]', kind, g.status, g.error); return 'failed'; }
+    return 'sent';
+  } catch (e) {
+    console.error('[leave-mail]', kind, e?.message || e);
+    return 'failed';
+  }
+}
+
+async function leaveEvent(env, auth, me, row) {
+  try {
+    await sb(`/rest/v1/leave_events`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify([{
+      employee_id: null, request_id: null, detail: null, ...row, actor_user_id: auth.userId, actor_employee_id: me?.id || null }]) });
+  } catch (_e) { /* best-effort: the write already landed */ }
+}
+
+// D15 — getMe flags. access = covered OR ≥1 active direct report OR HR; pending = the pending requests the caller may
+// decide (approver, approver's manager, or HR — never their own). Reads go through rowsOf: before 0016 is applied both
+// read as nothing, so getMe never 500s on them.
+async function leaveNavState(auth, me, edges, env) {
+  const hr = isHr(auth);
+  if (!me && !hr) return { access: false, pending: 0 };
+  const reports = me ? edges.filter(e => e.manager_id === me.id).map(e => e.id) : [];
+  const [cov, hasReports, pr] = await Promise.all([
+    me ? sb(`/rest/v1/employees?id=eq.${me.id}&select=leave_policy,status&limit=1`, env) : Promise.resolve(null),
+    hasActiveReports(me, env),
+    hr ? sb(`/rest/v1/leave_requests?status=eq.pending&select=id,employee_id,approver_employee_id&limit=${LEAVE_PAGE}`, env)
+      : sb(`/rest/v1/leave_requests?status=eq.pending&approver_employee_id=in.(${[me.id, ...reports].join(',')})&select=id,employee_id,approver_employee_id&limit=${LEAVE_PAGE}`, env),
+  ]);
+  const covered = leaveCovered(rowsOf(cov)[0]);
+  const pending = rowsOf(pr).filter(r => !decideBlock({ req: r, meId: me?.id || null, hr, approverManagerId: approverManagerOf(edges, r.approver_employee_id) })).length;
+  return { access: covered || hasReports || hr, pending };
+}
+
+// ── The person ───────────────────────────────────────────────────────────────
+
+// GET getMyLeave — balances, my requests (this year + future, and any still pending), holidays this + next year.
+async function getMyLeave(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  if (!me) return leaveErr('not_covered');
+  const [settings, emps] = await Promise.all([loadLeaveSettings(env), loadLeaveEmployees(env, [me.id])]);
+  const emp = emps[0];
+  if (!settings) return err('db_error: leave settings', 500);
+  if (!leaveCovered(emp)) return leaveErr('not_covered');
+  const ens = await ensureLeaveCurrent(env, [emp.id], { settings, emps: [emp] });
+  if (!ens.ok) return err(`db_error: leave ${ens.error}`, 500);
+  const today = istToday(), cy = yearOf(today);
+  const [books, holidays, founders] = await Promise.all([
+    leaveBooks(env, [emp.id], cy), loadHolidays(env, cy, cy + 1), emp.manager_id ? Promise.resolve([]) : loadFounders(env),
+  ]);
+  if (!books || !holidays) return err('db_error: leave read', 500);
+  const reqs = books.reqs[emp.id] || [];
+  const approverId = resolveLeaveApprover(emp, founders);
+  const names = await empNames(env, [approverId, ...reqs.map(r => r.decided_by_employee_id)]);
+  return ok({
+    employee: { id: emp.id, full_name: emp.full_name, employee_code: emp.employee_code, leave_policy: emp.leave_policy },
+    today, cutover_month: settings.cutover_month,
+    balances: leaveBalances(emp, books.ledger[emp.id] || [], reqs, settings.cutover_month, today),
+    requests: [...reqs].sort((a, b) => (a.start_date < b.start_date ? 1 : a.start_date > b.start_date ? -1 : 0))
+      .map(r => ({ ...r, decided_by_name: names[r.decided_by_employee_id] || null })),
+    holidays,
+    can_period: emp.gender === 'f',
+    approver: approverId ? { id: approverId, full_name: names[approverId] || null } : null,
+    type_labels: TYPE_LABELS,
+  });
+}
+
+// POST previewLeave {leave_type, start_date, end_date, start_half, end_half, employee_id?} — no request is written.
+// → { days, split, refusal, refusal_message, balances } (a refusal is data, so the live preview can show it).
+async function previewLeave(body, auth, env) {
+  const d = body.data || body;
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const t = await leaveTarget(auth, me, d.employee_id);
+  if (t.res) return t.res;
+  const [settings, emps] = await Promise.all([loadLeaveSettings(env), loadLeaveEmployees(env, [t.id])]);
+  if (!settings) return err('db_error: leave settings', 500);
+  const emp = emps[0];
+  if (!leaveCovered(emp)) return leaveErr('not_covered');
+  const q = await leaveQuote(env, emp, d, { notice: !t.other, settings });
+  if (q.error === 'db') return err('db_error: leave read', 500);
+  return ok({ employee_id: emp.id, days: q.v?.days ?? null, start_half: q.v?.start_half ?? null, end_half: q.v?.end_half ?? null,
+    split: q.split || null, refusal: q.error || null, refusal_message: q.error ? (q.message || LEAVE_COPY[q.error] || q.error) : null,
+    balances: q.balances || null });
+}
+
+// POST applyLeave {…previewLeave, reason} — self, or HR for someone else (no notice rule then; it still needs the
+// approver). RPC podium.leave_apply under the per-employee lock; mail the approver. → { request, email }
+async function applyLeave(body, auth, env) {
+  const d = body.data || body;
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const t = await leaveTarget(auth, me, d.employee_id);
+  if (t.res) return t.res;
+  const [settings, emps] = await Promise.all([loadLeaveSettings(env), loadLeaveEmployees(env, [t.id])]);
+  if (!settings) return err('db_error: leave settings', 500);
+  const emp = emps[0];
+  if (!leaveCovered(emp)) return leaveErr('not_covered');
+  const q = await leaveQuote(env, emp, d, { notice: !t.other, settings });
+  if (q.error === 'db') return err('db_error: leave read', 500);
+  if (q.error) return leaveErr(q.error, q.message ? { message: q.message } : null);
+  const approverId = resolveLeaveApprover(emp, emp.manager_id ? [] : await loadFounders(env));
+  const r = await hiringRpc(env, 'leave_apply', {
+    employee_id: emp.id, ...q.v, borrowed_days: q.split.borrowed_days, lop_days: q.split.lop_days,
+    approver_employee_id: approverId, ...(q.snapshot || {}), actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+  });
+  const code = leaveDbErrorCode(r);
+  if (code) return leaveErr(code);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  const request = numRow(r.data);
+  const email = approverId ? await leaveMail(env, { kind: 'submitted', senderId: me?.id, toId: approverId, personId: emp.id, request }) : 'skipped';
+  return ok({ request, email });
+}
+
+// ── The chain ────────────────────────────────────────────────────────────────
+
+// GET getTeamLeave?from&to — pending requests the caller may decide (with the split as of now + balances), the team's
+// pending / approved requests in [from, to] (the "who's out" calendar) and the team's balances. Team = descendantsOf
+// the caller (HR: every covered person). Types and reasons are shown: this is the chain's own view (D11).
+async function getTeamLeave(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const hr = isHr(auth);
+  if (!me && !hr) return leaveErr('forbidden');
+  const today = istToday(), cy = yearOf(today);
+  const from = url.searchParams.get('from') || today, to = url.searchParams.get('to') || from;
+  if (!isIsoDay(from) || !isIsoDay(to) || to < from || yearOf(to) - yearOf(from) > 1) return leaveErr('bad_dates');
+  const settings = await loadLeaveSettings(env);
+  if (!settings) return err('db_error: leave settings', 500);
+  let team;
+  if (hr) {
+    const r = await sb(`/rest/v1/employees?leave_policy=not.is.null&status=neq.exited&select=${LEAVE_EMP_SELECT}&order=full_name.asc&limit=${LEAVE_PAGE}`, env);
+    if (!r.ok) return err('db_error: leave team', 500);
+    team = (r.data || []).filter(e => e.id !== me?.id);
+  } else {
+    team = (await loadLeaveEmployees(env, [...descendantsOf(edges, me.id)])).filter(leaveCovered);
+  }
+  const reports = me ? edges.filter(e => e.manager_id === me.id).map(e => e.id) : [];
+  const pr = hr
+    ? await sb(`/rest/v1/leave_requests?status=eq.pending&select=${LEAVE_REQ_SELECT}&order=start_date.asc&limit=${LEAVE_PAGE}`, env)
+    : await sb(`/rest/v1/leave_requests?status=eq.pending&approver_employee_id=in.(${[me.id, ...reports].join(',')})&select=${LEAVE_REQ_SELECT}&order=start_date.asc&limit=${LEAVE_PAGE}`, env);
+  if (!pr.ok) return err('db_error: leave pending', 500);
+  const toDecide = (pr.data || []).map(numRow)
+    .filter(r => !decideBlock({ req: r, meId: me?.id || null, hr, approverManagerId: approverManagerOf(edges, r.approver_employee_id) }));
+  const byId = Object.fromEntries(team.map(e => [e.id, e]));
+  const extra = toDecide.map(r => r.employee_id).filter(id => !byId[id]);
+  for (const e of await loadLeaveEmployees(env, extra)) byId[e.id] = e;
+  const people = Object.values(byId);
+  const ens = await ensureLeaveCurrent(env, people.map(e => e.id), { settings, emps: people });
+  if (!ens.ok) return err(`db_error: leave ${ens.error}`, 500);
+  const [books, inRange] = await Promise.all([
+    leaveBooks(env, people.map(e => e.id), cy),
+    team.length ? sbPaged(env, `/rest/v1/leave_requests?employee_id=in.(${team.map(e => e.id).join(',')})&status=in.(pending,approved)`
+      + `&start_date=lte.${to}&end_date=gte.${from}&select=${LEAVE_REQ_SELECT}&order=start_date.asc,id.asc`) : Promise.resolve([]),
+  ]);
+  if (!books || !inRange) return err('db_error: leave read', 500);
+  const canCancel = (r) => !cancelBlock({ mode: 'cancel', req: r, meId: me?.id || null, hr, approverManagerId: approverManagerOf(edges, r.approver_employee_id), today });
+  const person = (id) => { const e = byId[id]; return e ? { id: e.id, full_name: e.full_name, employee_code: e.employee_code, job_title: e.job_title } : { id }; };
+  const balOf = (id) => (byId[id] ? leaveBalances(byId[id], books.ledger[id] || [], books.reqs[id] || [], settings.cutover_month, today) : null);
+  return ok({
+    from, to, today,
+    to_decide: toDecide.map(r => {
+      const e = byId[r.employee_id];
+      let split = null;
+      if (e && LEDGER_TYPES.includes(r.leave_type)) {
+        const ledger = books.ledger[e.id] || [], reqs = books.reqs[e.id] || [];
+        split = splitLeave({ days: r.days, pending: pendingDebit(reqs, r.leave_type, r.id),
+          balance: splitBase({ leaveType: r.leave_type, balance: ledgerBalance(ledger, r.leave_type), leaveYear: yearOf(r.start_date), currentYear: cy }),
+          cap: borrowCap({ leaveType: r.leave_type, leaveYear: yearOf(r.start_date), currentMonth: monthOf(today), employee: e, cutoverMonth: settings.cutover_month }) });
+      } else split = { available: null, from_balance: r.days, borrowed_days: 0, lop_days: 0 };
+      return { ...r, employee: person(r.employee_id), split, split_changed: !sameSplit(split, r), balances: balOf(r.employee_id), can_cancel: canCancel(r) };
+    }),
+    // can_cancel = the cancelLeave rule (cancelBlock 'cancel'): the app shows Cancel only when it is true.
+    requests: inRange.map(r => { const n = numRow(r); return { ...n, employee: person(r.employee_id), can_cancel: canCancel(n) }; }),
+    people: team.map(e => ({ ...person(e.id), balances: balOf(e.id) })),
+    type_labels: TYPE_LABELS,
+  });
+}
+
+async function loadLeaveRequest(env, id) {
+  if (!isUuid(id)) return null;
+  const r = await sb(`/rest/v1/leave_requests?id=eq.${id}&select=${LEAVE_REQ_SELECT}&limit=1`, env);
+  return r.data?.[0] ? numRow(r.data[0]) : null;
+}
+
+// POST decideLeave {id, decision: approve|reject, note, expected_split: {borrowed_days, lop_days}} (D9). Approve
+// recomputes the split; a different one than the approver saw → 409 balance_changed with the current split. Reject
+// needs a note. RPC podium.leave_decide; mail the person. → { request, email }
+async function decideLeave(body, auth, env) {
+  const d = body.data || body;
+  const req = await loadLeaveRequest(env, d.id);
+  if (!req) return leaveErr('not_found');
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const block = decideBlock({ req, meId: me?.id || null, hr: isHr(auth), approverManagerId: approverManagerOf(edges, req.approver_employee_id) });
+  if (block) return leaveErr(block);
+  if (!['approve', 'reject'].includes(d.decision)) return leaveErr('bad_decision');
+  if (req.status !== 'pending') return leaveErr('not_pending');
+  const note = cleanNote(d.note, { required: d.decision === 'reject' });
+  if (note.error) return leaveErr(note.error);
+  const p = { request_id: req.id, decision: d.decision, note: note.value, actor_user_id: auth.userId, actor_employee_id: me?.id || null };
+  if (d.decision === 'approve' && LEDGER_TYPES.includes(req.leave_type)) {
+    const [settings, emps] = await Promise.all([loadLeaveSettings(env), loadLeaveEmployees(env, [req.employee_id])]);
+    if (!settings || !emps[0]) return err('db_error: leave read', 500);
+    const ens = await ensureLeaveCurrent(env, [req.employee_id], { settings, emps });
+    if (!ens.ok) return err(`db_error: leave ${ens.error}`, 500);
+    const today = istToday();
+    const books = await leaveBooks(env, [req.employee_id], yearOf(today));
+    if (!books) return err('db_error: leave read', 500);
+    const ledger = books.ledger[req.employee_id] || [], reqs = books.reqs[req.employee_id] || [];
+    const balance = ledgerBalance(ledger, req.leave_type), pending = pendingDebit(reqs, req.leave_type, req.id);
+    const split = splitLeave({ days: req.days, pending,
+      balance: splitBase({ leaveType: req.leave_type, balance, leaveYear: yearOf(req.start_date), currentYear: yearOf(today) }),
+      cap: borrowCap({ leaveType: req.leave_type, leaveYear: yearOf(req.start_date), currentMonth: monthOf(today), employee: emps[0], cutoverMonth: settings.cutover_month }) });
+    if (!sameSplit(split, d.expected_split)) return leaveErr('balance_changed', { split });
+    Object.assign(p, { borrowed_days: split.borrowed_days, lop_days: split.lop_days, expected_balance: balance, expected_pending: pending });
+  }
+  const r = await hiringRpc(env, 'leave_decide', p);
+  const code = leaveDbErrorCode(r);
+  if (code) return leaveErr(code);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  const request = numRow(r.data);
+  const email = await leaveMail(env, { kind: d.decision === 'approve' ? 'approved' : 'rejected', senderId: me?.id, toId: request.employee_id, personId: request.employee_id, request });
+  return ok({ request, email });
+}
+
+// D10 — withdraw (pending: the person / HR) and cancel (approved: the person before it starts; the approver, their
+// manager or HR otherwise). RPC podium.leave_cancel (cancel writes the +ledger row). Mail the person when someone
+// else did it. → { request, email }
+async function leaveCancelAction(body, auth, env, mode) {
+  const d = body.data || body;
+  const req = await loadLeaveRequest(env, d.id);
+  if (!req) return leaveErr('not_found');
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const block = cancelBlock({ mode, req, meId: me?.id || null, hr: isHr(auth), approverManagerId: approverManagerOf(edges, req.approver_employee_id), today: istToday() });
+  if (block) return leaveErr(block);
+  const note = cleanNote(d.note);
+  if (note.error) return leaveErr(note.error);
+  const r = await hiringRpc(env, 'leave_cancel', { request_id: req.id, mode, note: note.value, actor_user_id: auth.userId, actor_employee_id: me?.id || null });
+  const code = leaveDbErrorCode(r);
+  if (code) return leaveErr(code);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  const request = numRow(r.data);
+  const email = await leaveMail(env, { kind: mode === 'withdraw' ? 'withdrawn' : 'cancelled', senderId: me?.id, toId: request.employee_id, personId: request.employee_id, request });
+  return ok({ request, email });
+}
+async function withdrawLeave(body, auth, env) { return leaveCancelAction(body, auth, env, 'withdraw'); }
+async function cancelLeave(body, auth, env) { return leaveCancelAction(body, auth, env, 'cancel'); }
+
+// GET getLeaveLedger?employee_id — self / chain (descendantsOf) / HR; rows newest first + balances.
+async function getLeaveLedger(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const id = url.searchParams.get('employee_id') || me?.id;
+  if (!isUuid(id)) return leaveErr('not_found');
+  if (!(isHr(auth) || id === me?.id || (me && descendantsOf(edges, me.id).has(id)))) return leaveErr('forbidden');
+  const [settings, emps] = await Promise.all([loadLeaveSettings(env), loadLeaveEmployees(env, [id])]);
+  if (!settings) return err('db_error: leave settings', 500);
+  const emp = emps[0];
+  if (!emp) return leaveErr('not_found');
+  const ens = await ensureLeaveCurrent(env, [id], { settings, emps });
+  if (!ens.ok) return err(`db_error: leave ${ens.error}`, 500);
+  const today = istToday();
+  const books = await leaveBooks(env, [id], yearOf(today));
+  if (!books) return err('db_error: leave read', 500);
+  const rows = [...(books.ledger[id] || [])].sort((a, b) => (a.effective_date !== b.effective_date
+    ? (a.effective_date < b.effective_date ? 1 : -1) : (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0)));
+  return ok({ employee: { id: emp.id, full_name: emp.full_name, employee_code: emp.employee_code, leave_policy: emp.leave_policy },
+    rows, balances: leaveCovered(emp) ? leaveBalances(emp, books.ledger[id] || [], books.reqs[id] || [], settings.cutover_month, today) : null });
+}
+
+// ── HR (D13 / D14) ───────────────────────────────────────────────────────────
+
+// GET getLeaveAdmin — settings, holidays (all), covered people with balances + whether each opening is set, and the
+// non-exited people who are NOT covered (HR flips them on EmployeeForm).
+async function getLeaveAdmin(url, auth, env) {
+  if (!isHr(auth)) return leaveErr('forbidden');
+  const [settings, hr, er] = await Promise.all([
+    loadLeaveSettings(env),
+    sb(`/rest/v1/holidays?select=date,name,kind,updated_at&order=date.asc&limit=2000`, env),
+    sb(`/rest/v1/employees?status=neq.exited&select=${LEAVE_EMP_SELECT}&order=full_name.asc&limit=${LEAVE_PAGE}`, env),
+  ]);
+  if (!settings || !hr.ok || !er.ok) return err('db_error: leave admin', 500);
+  const covered = (er.data || []).filter(leaveCovered);
+  const ens = await ensureLeaveCurrent(env, covered.map(e => e.id), { settings, emps: covered });
+  if (!ens.ok) return err(`db_error: leave ${ens.error}`, 500);
+  const today = istToday();
+  const books = await leaveBooks(env, covered.map(e => e.id), yearOf(today));
+  if (!books) return err('db_error: leave read', 500);
+  return ok({
+    settings, today, holidays: hr.data || [],
+    people: covered.map(e => {
+      const ledger = books.ledger[e.id] || [];
+      return { id: e.id, employee_code: e.employee_code, full_name: e.full_name, job_title: e.job_title, date_joined: e.date_joined,
+        leave_policy: e.leave_policy,
+        opening_set: Object.fromEntries(LEDGER_TYPES.map(t => [t, ledger.some(r => r.kind === 'opening' && r.leave_type === t)])),
+        balances: leaveBalances(e, ledger, books.reqs[e.id] || [], settings.cutover_month, today) };
+    }),
+    not_covered: (er.data || []).filter(e => !e.leave_policy).map(e => ({ id: e.id, employee_code: e.employee_code, full_name: e.full_name })),
+  });
+}
+
+// POST setLeaveSettings {cutover_month} — the cutover may move later only while no accrual row predates it.
+async function setLeaveSettings(body, auth, env) {
+  if (!isHr(auth)) return leaveErr('forbidden');
+  const d = body.data || body;
+  if (!isMonth(d.cutover_month)) return leaveErr('bad_month');
+  const [cur, first] = await Promise.all([
+    loadLeaveSettings(env),
+    sb(`/rest/v1/leave_ledger?kind=eq.accrual&select=period&order=period.asc&limit=1`, env),
+  ]);
+  if (!cur || !first.ok) return err('db_error: leave settings', 500);
+  const earliest = first.data?.[0]?.period || null;
+  if (earliest && d.cutover_month > earliest) return leaveErr('cutover_locked');
+  const r = await sb(`/rest/v1/leave_settings?id=eq.1`, env, { method: 'PATCH',
+    body: JSON.stringify({ cutover_month: d.cutover_month, updated_by: auth.userId }) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await leaveEvent(env, auth, await meOf(auth, env), { event_type: 'settings_changed', detail: { cutover_month: { from: cur.cutover_month, to: d.cutover_month } } });
+  return ok({ cutover_month: d.cutover_month });
+}
+
+// Pending / approved requests whose range includes the date (D13: a holiday change does not recount them — R1).
+async function requestsOnDate(env, date) {
+  const r = await sb(`/rest/v1/leave_requests?status=in.(pending,approved)&start_date=lte.${date}&end_date=gte.${date}&select=id&limit=${LEAVE_PAGE}`, env);
+  return rowsOf(r).length;
+}
+
+// POST saveHoliday {date, name, kind} — add a FUTURE date, or rename an existing one (its kind changes only while
+// it is in the future). → { holiday, affected_requests }
+async function saveHoliday(body, auth, env) {
+  if (!isHr(auth)) return leaveErr('forbidden');
+  const h = cleanHoliday(body.data || body);
+  if (h.error) return leaveErr(h.error);
+  const ex = await sb(`/rest/v1/holidays?date=eq.${h.value.date}&select=date,name,kind&limit=1`, env);
+  if (!ex.ok) return err('db_error: holiday read', 500);
+  const old = ex.data?.[0] || null;
+  const future = h.value.date > istToday();
+  if ((!old || old.kind !== h.value.kind) && !future) return leaveErr('holiday_past');
+  const r = old
+    ? await sb(`/rest/v1/holidays?date=eq.${h.value.date}`, env, { method: 'PATCH', body: JSON.stringify({ name: h.value.name, kind: h.value.kind }) })
+    : await sb(`/rest/v1/holidays`, env, { method: 'POST', body: JSON.stringify([{ ...h.value, created_by: auth.userId }]) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await leaveEvent(env, auth, await meOf(auth, env), { event_type: 'holiday_saved', detail: { date: h.value.date, kind: h.value.kind, from: old } });
+  return ok({ holiday: r.data?.[0] || h.value, affected_requests: await requestsOnDate(env, h.value.date) });
+}
+
+// POST deleteHoliday {date} — future dates only. → { date, affected_requests }
+async function deleteHoliday(body, auth, env) {
+  if (!isHr(auth)) return leaveErr('forbidden');
+  const d = body.data || body;
+  if (!isIsoDay(d.date)) return leaveErr('bad_holiday');
+  if (d.date <= istToday()) return leaveErr('holiday_past');
+  const r = await sb(`/rest/v1/holidays?date=eq.${d.date}`, env, { method: 'DELETE' });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (!r.data?.length) return leaveErr('not_found');
+  await leaveEvent(env, auth, await meOf(auth, env), { event_type: 'holiday_deleted', detail: { date: d.date, name: r.data[0].name, kind: r.data[0].kind } });
+  return ok({ date: d.date, affected_requests: await requestsOnDate(env, d.date) });
+}
+
+// HR ledger writes share the target checks: a covered person, PL / SL, an effective date (default today, IST).
+async function hrLedgerTarget(auth, env, d) {
+  if (!isHr(auth)) return { res: leaveErr('forbidden') };
+  if (!isUuid(d.employee_id)) return { res: leaveErr('not_found') };
+  if (!LEDGER_TYPES.includes(d.leave_type)) return { res: leaveErr('bad_type') };
+  const eff = d.effective_date || istToday();
+  if (!isIsoDay(eff)) return { res: leaveErr('bad_dates') };
+  const emp = (await loadLeaveEmployees(env, [d.employee_id]))[0];
+  if (!emp) return { res: leaveErr('not_found') };
+  if (!leaveCovered(emp)) return { res: leaveErr('not_covered') };
+  return { emp, eff };
+}
+
+// POST setOpeningBalance {employee_id, leave_type, days, note?, effective_date?} — once per person × type (L5); a
+// second entry → 409 opening_exists (use adjustLeave). 0 is allowed (records "opening set").
+async function setOpeningBalance(body, auth, env) {
+  const d = body.data || body;
+  const t = await hrLedgerTarget(auth, env, d);
+  if (t.res) return t.res;
+  const amt = cleanAmount(d.days, { allowZero: true });
+  if (amt.error) return leaveErr(amt.error);
+  const note = cleanNote(d.note);
+  if (note.error) return leaveErr(note.error);
+  const r = await sb(`/rest/v1/leave_ledger`, env, { method: 'POST', body: JSON.stringify([{ employee_id: t.emp.id, leave_type: d.leave_type,
+    delta: amt.value, kind: 'opening', effective_date: t.eff, note: note.value, created_by: auth.userId }]) });
+  if (!r.ok) {
+    if (r.data?.code === '23505' || r.status === 409) return leaveErr('opening_exists');
+    return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  }
+  await leaveEvent(env, auth, await meOf(auth, env), { employee_id: t.emp.id, event_type: 'opening_set', detail: { leave_type: d.leave_type, days: amt.value } });
+  return ok({ row: r.data?.[0] || null });
+}
+
+// POST adjustLeave {employee_id, leave_type, delta, note, effective_date?} — ± in 0.5 steps, a note required.
+async function adjustLeave(body, auth, env) {
+  const d = body.data || body;
+  const t = await hrLedgerTarget(auth, env, d);
+  if (t.res) return t.res;
+  const amt = cleanAmount(d.delta);
+  if (amt.error) return leaveErr(amt.error);
+  const note = cleanNote(d.note, { required: true });
+  if (note.error) return leaveErr(note.error);
+  const r = await sb(`/rest/v1/leave_ledger`, env, { method: 'POST', body: JSON.stringify([{ employee_id: t.emp.id, leave_type: d.leave_type,
+    delta: amt.value, kind: 'adjustment', effective_date: t.eff, note: note.value, created_by: auth.userId }]) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await leaveEvent(env, auth, await meOf(auth, env), { employee_id: t.emp.id, event_type: 'adjusted', detail: { leave_type: d.leave_type, delta: amt.value } });
+  return ok({ row: r.data?.[0] || null });
+}
+// ── end Leave R1
+
 const GET_ACTIONS = {
   getMe, getSettings,
   getEmployees, getEmployee,
@@ -9694,6 +10348,8 @@ const GET_ACTIONS = {
   getCvImports, getCvImport, getCvImportFileUrl, getAiSettings,
   // O2 — interview rounds + feedback (chain reads + the panel's own surface)
   getOpeningRounds, getApplicationInterviews, getMyInterviews, getPanelInterview, getPanelDocUrl,
+  // Leave R1 — the person / the chain / HR (each self-scopes; all in SELF_SERVE_GET)
+  getMyLeave, getTeamLeave, getLeaveLedger, getLeaveAdmin,
 };
 
 const POST_ACTIONS = {
@@ -9754,6 +10410,9 @@ const POST_ACTIONS = {
   // O2 — interview rounds + feedback
   saveOpeningRound, setOpeningRoundActive, reorderOpeningRounds, scheduleInterview, updateInterview, cancelInterview,
   markInterviewNoShow, recordInterviewVerdict, remindPanelist, submitInterviewFeedback,
+  // Leave R1 — the person / the chain / HR (each self-scopes; all in SELF_SERVE_POST)
+  previewLeave, applyLeave, decideLeave, withdrawLeave, cancelLeave,
+  setLeaveSettings, saveHoliday, deleteHoliday, setOpeningBalance, adjustLeave,
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.
@@ -9800,6 +10459,9 @@ const SELF_SERVE_GET = new Set([
   // O2 — rounds / application interviews self-scope via openingRoles (canSeeOpening) like getOpening; the panel
   // reads (getMyInterviews / getPanelInterview / getPanelDocUrl) self-scope on the caller's own interview_panel row.
   'getOpeningRounds', 'getApplicationInterviews', 'getMyInterviews', 'getPanelInterview', 'getPanelDocUrl',
+  // Leave R1 — a covered employee may hold no Podium role. getMyLeave = the caller's own row; getTeamLeave = descendantsOf
+  // the caller (+ the requests they may decide) or HR; getLeaveLedger = self / chain / HR; getLeaveAdmin = isHr inside.
+  'getMyLeave', 'getTeamLeave', 'getLeaveLedger', 'getLeaveAdmin',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
@@ -9840,6 +10502,10 @@ const SELF_SERVE_POST = new Set([
   // caller's own panel row (see SELF_SERVE_GET).
   'saveOpeningRound', 'setOpeningRoundActive', 'reorderOpeningRounds', 'scheduleInterview', 'updateInterview',
   'cancelInterview', 'markInterviewNoShow', 'recordInterviewVerdict', 'remindPanelist', 'submitInterviewFeedback',
+  // Leave R1 — preview / apply = self (HR for others); decide = decideBlock (approver, their manager, HR; never self);
+  // withdraw / cancel = cancelBlock; the HR writes are isHr inside (see SELF_SERVE_GET).
+  'previewLeave', 'applyLeave', 'decideLeave', 'withdrawLeave', 'cancelLeave',
+  'setLeaveSettings', 'saveHoliday', 'deleteHoliday', 'setOpeningBalance', 'adjustLeave',
 ]);
 
 async function handleGet(url, request, env, ctx) {

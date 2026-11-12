@@ -1,7 +1,7 @@
 import {
   Users, Network, Briefcase, Building2, BarChart3, Settings, UserPlus,
   Star, Activity, ShieldCheck, UserCog, ClipboardCheck, BookOpen, Factory, Wallet,
-  TrendingUp, Target, ClipboardList, FileSignature, LogOut, ListChecks, IdCard, UserCheck, ScrollText, CalendarClock,
+  TrendingUp, Target, ClipboardList, FileSignature, LogOut, ListChecks, IdCard, UserCheck, ScrollText, CalendarClock, CalendarDays,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -17,6 +17,9 @@ export const NAV_GROUPS = [
       { id: 'exits',       label: 'Exits',       route: '/exits',       icon: LogOut,    requires: 'podium_hr' },
       // J2 — joiners' onboarding, the profile campaign, PAN / bank change requests, the XPayroll export (HR).
       { id: 'onboarding',  label: 'Onboarding',  route: '/onboarding',  icon: UserCheck, requires: 'podium_hr' },
+      // Leave R1 (D15): podium_leave_access = getMe's display flag (covered OR has direct reports OR HR); the worker
+      // self-scopes every leave action. The badge is podium_leave_pending (requests the caller may decide).
+      { id: 'leave',       label: 'Leave',       route: '/leave',       icon: CalendarDays, requires: 'podium_leave_access' },
     ],
   },
   {
@@ -75,6 +78,8 @@ export const NAV_GROUPS = [
       // J2 — the onboarding template + policies (HR / admin; the worker gates with isHr).
       { id: 'onboarding-checklist', label: 'Onboarding Checklist', route: '/admin/onboarding-checklist', icon: ListChecks, requires: 'podium_hr' },
       { id: 'policies', label: 'Policies', route: '/admin/policies', icon: ScrollText, requires: 'podium_hr' },
+      // Leave R1 (D14) — cutover month, holidays, opening balances, adjustments, ledgers (HR; the worker gates with isHr).
+      { id: 'leave-settings', label: 'Leave Settings', route: '/admin/leave', icon: CalendarDays, requires: 'podium_hr' },
     ],
   },
 ];

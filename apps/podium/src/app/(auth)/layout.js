@@ -47,6 +47,7 @@ const META = {
   '/org':               { crumb: 'People',      title: 'Org Chart' },
   '/exits':             { crumb: 'People',      title: 'Exits' },
   '/onboarding':        { crumb: 'People',      title: 'Onboarding' },
+  '/leave':             { crumb: 'People',      title: 'Leave' },
   '/welcome':           { crumb: 'Performance', title: 'My Profile' },
   '/me':                { crumb: 'Performance', title: 'My Performance' },
   '/team':              { crumb: 'Performance', title: 'Team' },
@@ -76,6 +77,7 @@ const META = {
   '/admin/exit-checklist':  { crumb: 'Admin',    title: 'Exit Checklist' },
   '/admin/onboarding-checklist': { crumb: 'Admin', title: 'Onboarding Checklist' },
   '/admin/policies':        { crumb: 'Admin',    title: 'Policies' },
+  '/admin/leave':           { crumb: 'Admin',    title: 'Leave Settings' },
 };
 function chromeFor(pathname) {
   const clean = (pathname || '').replace(/\/$/, '') || '/';
@@ -118,11 +120,23 @@ function AuthLayoutInner({ children }) {
     podiumopsGet('getMyInterviews', { count_only: '1' }, session).then(d => setOverdue(Number(d?.overdue_count) || 0)).catch(() => {});
   }, [session, interviewsOn, interviewsKey]);
 
+  // Leave R1 (D15): requests waiting for the caller → a badge on "Leave". getMe's podium_leave_pending on load;
+  // re-read from getMe on every visit to /leave (perms are loaded once per session, decisions change the count).
+  const [leavePending, setLeavePending] = useState(null);
+  const leaveKey = (pathname || '').startsWith('/leave') ? pathname : '';
+  const leaveOn = !!perms?.podium_leave_access;
+  useEffect(() => {
+    if (!session || !leaveOn || !leaveKey) return;
+    podiumopsGet('getMe', {}, session).then(d => setLeavePending(Number(d?.permissions?.podium_leave_pending) || 0)).catch(() => {});
+  }, [session, leaveOn, leaveKey]);
+  const leaveBadge = leavePending ?? (Number(perms?.podium_leave_pending) || 0);
+
   const navGroups = useMemo(() => {
     const groups = filterNavByPerms(NAV_GROUPS, perms || {});
-    if (!overdue) return groups;
-    return groups.map(g => g.flat ? g : ({ ...g, items: g.items.map(it => it.id === 'interviews' ? { ...it, badge: overdue } : it) }));
-  }, [perms, overdue]);
+    if (!overdue && !leaveBadge) return groups;
+    const badgeFor = (id) => (id === 'interviews' ? overdue : id === 'leave' ? leaveBadge : 0);
+    return groups.map(g => g.flat ? g : ({ ...g, items: g.items.map(it => badgeFor(it.id) ? { ...it, badge: badgeFor(it.id) } : it) }));
+  }, [perms, overdue, leaveBadge]);
 
   if (loading && !user) return <Spinner />;
 
