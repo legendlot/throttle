@@ -19,16 +19,22 @@ re-deriving them.
 | L3 | **Joiners:** joined on or before the 15th → that month's full 1.5 PL + 1 SL; after the 15th → nothing that month. |
 | L4 | **Leave beyond the balance** (the policy's "email approval from your manager" case) is approved **in Podium** and is **borrowed ahead**: the balance goes negative and later monthly accruals pay it back first. |
 | L5 | **Starting balances:** Afshaan gives them by hand once R1 is built; HR enters them as opening-balance rows. |
+| L6 | **Work week Mon–Fri.** |
+| L7 | **Interns are covered** by the same policy. |
+| L8 | **SL lapses at year end**; only PL carries (max 5). |
+| L9 | **Maternity as per the Act:** 26 weeks. |
+| L10 | **No substitute day** for a holiday that falls on a weekend. |
 
 ## The policy, as rules
 
 - **PL** 18/yr = 1.5 credited per month · **SL** 12/yr = 1 per month · calendar year (Jan–Dec).
-- **Year end:** up to 5 PL carry over; the rest lapses. **SL does not carry** (the policy names PL only) — confirm.
+- **Year end:** up to 5 PL carry over; the rest lapses. **SL lapses in full** (L8).
 - **Period leave:** 1 per month, women only, does not accumulate (unused at month end is gone).
-- **Maternity:** 26 weeks (policy text says 180 days; the Act says 26 weeks = 182) — granted by HR, not accrued.
+- **Maternity:** **26 weeks (182 calendar days) as per the Act** (L9) — granted by HR, not accrued.
   Eligibility per the Maternity Benefit Act (80 days worked in the 12 months before) is HR's check, recorded.
 - **Paternity:** 15 days, granted by HR, not accrued.
 - **Holidays:** the 10 fixed 2026 holidays + **one optional holiday per person per year** from the optional list.
+  A holiday on a weekend gets **no substitute day** (L10).
 - **WFH:** not leave and not counted; needs the **skip-level** manager's approval (today by email).
 
 ## Defaults I will build unless told otherwise (cheap to change before R1)
@@ -38,13 +44,13 @@ re-deriving them.
 | When accrual lands | On the **1st of each month** (so the month's leave is usable that month). |
 | Half days | Allowed (first half / second half); balances move in 0.5s. |
 | Sandwich rule | **None** — only working days in the range count; weekends and holidays inside it are free. |
-| Work week | **Mon–Fri.** ⚠️ Confirm — if Saturday is a working day, every count changes. |
+| Work week | **Mon–Fri** (L6). |
 | Borrow cap (L4) | You may borrow up to what you will still earn by 31 Dec. Beyond the cap = **unpaid (LOP)**, still needs manager approval. A negative PL balance at year end carries into next year. A negative balance at exit = LOP in F&F. |
 | Notice | PL: apply before the start date (HR can record a past PL). SL: may be applied up to 7 days after. |
 | Approver | Reporting manager; the manager's manager can also decide (cover for an absent manager — no cron needed). A founder's own leave: the other founder. |
 | Cancel | Before it starts: the employee withdraws. After approval: the employee asks, the approver confirms; days return to the balance. |
 | SL reason | Optional free text, visible to the approver + HR only. **No medical documents in R1** (health data, DPDP). |
-| Interns | **Covered?** ⚠️ Confirm — 5 interns are on RazorpayX. Default: same policy. |
+| Interns | **Covered, same policy** (L7). |
 
 ## Data model (hard to change later)
 
@@ -94,11 +100,7 @@ re-deriving them.
 
 Reminders ("request waiting 2 days"), month-start balance emails, a 1 Dec "use or lose your PL" nudge.
 
-## Open questions for Afshaan
+## Open questions
 
-1. Work week — Mon–Fri, or is Saturday a working day?
-2. Interns covered by the same policy?
-3. SL lapses at year end (the policy only carries PL) — confirm.
-4. Maternity: 180 days as written, or 26 weeks (182) as the Act says?
-5. Holiday sheet: Independence Day, Diwali and Kannada Rajyotsava fall on a weekend in 2026 — no substitute day?
-   The sheet's weekday labels are wrong for 1 May (Fri), 15 Aug (Sat), 2 Oct (Fri). 2027 list needed by December.
+None — all five answered 2026-11-13 (L6–L10). Still needed: the **2027 holiday list before 1 Jan 2027**; the holiday
+sheet's weekday labels are wrong for 1 May (Fri), 15 Aug (Sat), 2 Oct (Fri) — Podium stores dates, not labels.
