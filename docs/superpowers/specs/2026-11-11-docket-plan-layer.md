@@ -498,7 +498,8 @@ this build** — themes and milestones are entered by the founders, item by item
 | **R6 — review** ✅ SHIPPED 2026-11-12 (`9400a4f3` R6a, `030e82bd` R6b+c) | review pack (provisional/final) + staleness + export + snapshots · Saturday founders' page · level R (Associates) — as built: R links themes + own items only; Slack copy omits Founders'-space tasks and restricted milestones; hand-offs not in (P1 F7 work) |
 | R7 — Slack | Docket Slack app, identities, cron, reminders, shortcut, `/docket`, buttons |
 | **R8 — hand-offs** ✅ SHIPPED 2026-11-12 (`f1953ba7`) | fields + accept + pack section + Incoming — as built: receivers reach a hand-off by id / Incoming / pack / founders' page, not task lists (decisions); the giver can't accept |
-| R9 — | tree view · templates · measure auto-check · score trend · re-plan page · Programs retired |
+| **R9a — tree + templates** ✅ SHIPPED 2026-11-12 (`48d65901`) | tree view · templates — as built: a template milestone with a done-when is created agreed, else proposed (decisions); no seeds |
+| R9b — | measure auto-check · score trend · re-plan page · Programs retired |
 
 Order can change release to release; each is hostile-reviewed and smoked live before the next starts.
 
