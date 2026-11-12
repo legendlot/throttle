@@ -33,12 +33,15 @@
 import { istDateStr, isExpired, isDueOn, istHM, lateFlag, buildRegister } from './register-core.mjs';
 import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT_ACTIONS,
   linkError, effectiveLink, taskPlan, planLinkLabel, planDbError,
-  validateSplitPayload, validateProposal, validateDecision } from './plan-core.mjs';
+  validateSplitPayload, validateProposal, validateDecision, PROPOSAL_MAX } from './plan-core.mjs';
 import { normalizeMeasure, publicMetrics, metricByKey } from './plan-metrics.mjs';
 import { trendWeeksParam, trendWeekEnds, trendModel, replanMonth, weekEndsIn, readiness, REPLAN_RISK_DAYS, REPLAN_ACTION_DAYS } from './rhythm-core.mjs';
 import { buildTree, treeTaskItemIds, TREE_LEVELS } from './tree-core.mjs';
 import { templateListRow, templateNodesFor } from './template-core.mjs';
-import { slackEvents } from './slack-core.mjs';
+import { slackEvents, slackSignatureOk, parseForm, parseCommand, proposalFrom, parseQuickAdd, USAGE, UNLINKED, taskLink,
+  friendlyError, slackApi, slackRespond, resolveSlackPerson, slackEmployee, slackUserEmail, addReply, routeInteraction, taskModal, moveModal, commentModal, messageModal,
+  validateTaskSubmission, validateMoveSubmission, validateCommentSubmission, deadlineIso, mineMessage, planOptions,
+  lookupEmail } from './slack-core.mjs';
 import { WEEK_KEYS, normalizeWeekSettings, resolveWeekFilter, matchesWeek, planWindow, istMidnight, staleCutoff,
   buildPlanWeeks, ROWS_BY, istDate, isDateStr, weekEndOf, effectiveDue } from './weeks-core.mjs';
 import { buildReviewTeams, lastWorkingDay, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack, scoreBlock,
@@ -150,11 +153,26 @@ async function verifyJWT(authHeader, env) {
     });
     profile = (ins.ok && ins.data?.[0]) || { role: 'viewer', full_name: fname, active: true };
   }
-  if (!profile.active) return null;
+  const auth = await authForUser(user.id, user.email, env, { profile });
+  if (auth) auth.bearer = token;
+  return auth;
+}
+
+// A Supabase auth user → Docket's `auth` object (profile → Docket role → podium employee). Shared by verifyJWT
+// (after its /auth/v1/user call + self-provision) and the Slack path (F9 R7a), which calls it directly with
+// NO self-provision: a login with no users_profile row, or an inactive one, is refused (null).
+async function authForUser(userId, email, env, { profile } = {}) {
+  if (!isUuid(userId)) return null;
+  if (profile === undefined) {
+    const profileRes = await sbStore(
+      `/rest/v1/users_profile?id=eq.${userId}&select=role,full_name,active&limit=1`, env);
+    profile = (profileRes.ok && profileRes.data?.[0]) || null;
+  }
+  if (!profile || !profile.active) return null;
 
   // Permissions from Docket's own layer (RULE-DOCKET-002). No role → {} → baseline.
   const urRes = await sbStore(
-    `/rest/v1/docket_user_roles?user_id=eq.${user.id}&select=role_key&limit=1`, env);
+    `/rest/v1/docket_user_roles?user_id=eq.${userId}&select=role_key&limit=1`, env);
   const docketRole = (urRes.ok && urRes.data?.[0]?.role_key) || null;
   let permissions = {};
   if (docketRole) {
@@ -167,14 +185,14 @@ async function verifyJWT(authHeader, env) {
 
   // Resolve the caller's podium employee (for default owner + department scoping).
   const empRes = await sbPodium(
-    `/rest/v1/employees?auth_user_id=eq.${user.id}&select=id,full_name,department_id&limit=1`, env);
+    `/rest/v1/employees?auth_user_id=eq.${userId}&select=id,full_name,department_id,status&limit=1`, env);
   const emp = (empRes.ok && empRes.data?.[0]) || null;
 
   return {
-    userId: user.id, email: user.email, role: profile.role,
+    userId, email, role: profile.role,
     fullName: profile.full_name, permissions, docketRole,
     employeeId: emp?.id || null, departmentId: emp?.department_id || null,
-    bearer: token,
+    employeeActive: emp ? emp.status !== 'exited' : null,
   };
 }
 
@@ -4170,12 +4188,236 @@ async function handlePost(request, env) {
   catch (e) { return err(`server_error: ${e?.message || String(e)}`, 500); }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// F9 R7a — Docket from Slack (spec §9.1, §9.3): /slack/commands + /slack/interactive. Every action runs AS the
+// mapped person: the same `auth` object verifyJWT builds (authForUser — no self-provision), source 'slack', and
+// the SAME GET_ACTIONS / POST_ACTIONS handler the app calls, whose own permission checks decide. Slack wants a
+// 200 within 3 s: anything slow runs in ctx.waitUntil and answers through response_url / a DM.
+// ════════════════════════════════════════════════════════════════════════════
+const slackText = (text, status = 200) => new Response(JSON.stringify({ response_type: 'ephemeral', text }),
+  { status, headers: { 'Content-Type': 'application/json' } });
+const slackJson = (obj) => new Response(JSON.stringify(obj), { headers: { 'Content-Type': 'application/json' } });
+const slackAck = () => new Response('', { status: 200 });
+const SLACK_OOPS = "Docket couldn't finish that. Try it in Docket.";
+// The work to finish after the 200: on the platform, waitUntil; without a ctx (tests) it simply runs first.
+// A thrown job is logged and, where it can be, answered in plain words (never the raw error).
+async function later(ctx, work, onFail = null) {
+  const p = Promise.resolve().then(work).catch(async (e) => {
+    console.error('docketops slack job failed', e);
+    if (onFail) { try { await onFail(); } catch { /* nothing more to say */ } }
+  });
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(p); else await p;
+}
+// Signature on the RAW body (spec §9.1). No secret = not set up = refused (503), never "open".
+async function slackGate(request, env) {
+  const secret = env.SLACK_DOCKET_SIGNING_SECRET;
+  if (!secret) return { res: new Response('not_configured', { status: 503 }) };
+  const raw = await request.text();
+  if (!(await slackSignatureOk(request, raw, secret))) return { res: new Response('bad_signature', { status: 401 }) };
+  return { form: parseForm(raw) };
+}
+// The bot's own workspace (auth.test), once per isolate — a Slack user from any other team is never mapped.
+let slackBotTeam = null;
+async function botTeamId(env) {
+  if (!slackBotTeam) { const r = await slackApi('auth.test', {}, env); if (r.ok && r.team_id) slackBotTeam = r.team_id; }
+  return slackBotTeam;
+}
+function slackEmpDeps(env) {
+  return {
+    slackEmail: async (sid) => {
+      const [team, info] = await Promise.all([botTeamId(env), slackApi('users.info', { user: sid }, env)]);
+      return slackUserEmail(info, team);
+    },
+    employeesByEmail: async (email) => {
+      const e = lookupEmail(email);
+      if (!e) return [];
+      const r = await sbPodium(`/rest/v1/employees?work_email=ilike.${enc(e.replace(/_/g, '\\_'))}&status=eq.active&select=id,auth_user_id,status,work_email&limit=5`, env);
+      return (r.ok && Array.isArray(r.data)) ? r.data : [];
+    },
+  };
+}
+// Slack user → the Docket person acting. Fresh cached row first; else users.info → work email → active employee → login.
+function slackPerson(slackUserId, env) {
+  const forget = (sid) => sbDocket(`/rest/v1/slack_identities?slack_user_id=eq.${enc(sid)}`, env, { method: 'DELETE', prefer: 'return=minimal' }).catch(() => null);
+  return resolveSlackPerson(slackUserId, {
+    ...slackEmpDeps(env),
+    cached: async (sid) => {
+      const r = await sbDocket(`/rest/v1/slack_identities?slack_user_id=eq.${enc(sid)}&select=employee_id,auth_user_id,resolved_at&limit=1`, env);
+      return (r.ok && r.data?.[0]) || null;
+    },
+    forget,
+    // Best-effort cache. The Slack id is cleared first (it is UNIQUE — it may still sit on another employee's row),
+    // then the employee's row is upserted. On a failed write the person is still resolved (and re-resolved next time).
+    save: async (row) => {
+      await forget(row.slack_user_id);
+      await sbDocket(`/rest/v1/slack_identities?on_conflict=employee_id`, env, { method: 'POST',
+        prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify([{ ...row, resolved_at: nowIso() }]) }).catch(() => null);
+    },
+    authForUser: (uid) => authForUser(uid, null, env),
+  });
+}
+// Call an action handler as the person → { ok, data } | { ok:false, error, extra } (the Response read back).
+async function slackCall(handler, arg, auth, env) {
+  try {
+    const j = await (await handler(arg, auth, env)).json().catch(() => null);
+    return j && j.ok ? { ok: true, data: j.data } : { ok: false, error: (j && j.error) || 'error', extra: j || {} };
+  } catch { return { ok: false, error: 'server_error', extra: {} }; }
+}
+const slackGetUrl = (action, params = {}) => {
+  const u = new URL('https://docketops.internal/');
+  u.searchParams.set('action', action);
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+  return u;
+};
+async function slackDm(user, message, env) {
+  const im = await slackApi('conversations.open', { users: user }, env);
+  return slackApi('chat.postMessage', { channel: (im.ok && im.channel?.id) || user, ...message }, env);
+}
+// Reply through response_url (valid 30 min); if that is gone or refused, the same words by DM.
+async function slackReply(responseUrl, user, message, env) {
+  const r = responseUrl ? await slackRespond(responseUrl, message) : { ok: false };
+  return r.ok ? r : slackDm(user, message, env);
+}
+
+async function slackCommands(request, env, ctx) {
+  const g = await slackGate(request, env);
+  if (g.res) return g.res;
+  const f = g.form;
+  const cmd = parseCommand(f.text);
+  if (cmd.sub === 'help' || cmd.sub === 'unknown') {
+    return slackText(cmd.sub === 'unknown' ? `I don't know \`${String(cmd.text).split(/\s/)[0].slice(0, 30)}\`.\n${USAGE}` : USAGE);
+  }
+  const reply = (text, extra = {}) => slackReply(f.response_url, f.user_id, { text, ...extra }, env);
+  await later(ctx, async () => {
+    const who = await slackPerson(f.user_id, env);
+    if (who.error) return reply(UNLINKED);
+    const auth = who.auth;
+    if (cmd.sub === 'add') {
+      const emps = await slackCall(GET_ACTIONS.getEmployees, slackGetUrl('getEmployees'), auth, env);
+      const people = emps.ok ? emps.data : [];
+      const q = parseQuickAdd(cmd.text, { people, now: new Date() });
+      if (!q.title) return reply('Give the task a title: `/docket add <task>`.');
+      const r = await slackCall(POST_ACTIONS.createTask, { title: q.title, deadline: q.deadline || null, priority: q.priority || undefined,
+        owner_employee_id: q.owner_employee_id || null, assign_self: !q.owner_employee_id }, auth, env);
+      if (!r.ok) return reply(friendlyError(r.error, r.extra));
+      return reply(addReply(cmd.text, q, r.data, people, auth.employeeId));
+    }
+    if (cmd.sub === 'mine') {
+      const r = await slackCall(GET_ACTIONS.getMyTasks, slackGetUrl('getMyTasks'), auth, env);
+      if (!r.ok) return reply(friendlyError(r.error, r.extra));
+      return reply(null, mineMessage((r.data || []).filter(t => t._relation === 'owner')));
+    }
+    if (cmd.sub === 'propose') {
+      const p = proposalFrom(cmd.text, PROPOSAL_MAX);
+      if (p.error) return reply(friendlyError(p.error));
+      const r = await slackCall(POST_ACTIONS.proposePlanItem, p, auth, env);
+      return reply(r.ok ? 'Proposed. The founders will see it in the plan\'s proposals.' : friendlyError(r.error, r.extra));
+    }
+  }, () => reply(SLACK_OOPS));
+  return slackAck();
+}
+
+async function slackInteractive(request, env, ctx) {
+  const g = await slackGate(request, env);
+  if (g.res) return g.res;
+  let payload = null;
+  try { payload = JSON.parse(g.form.payload || ''); } catch { return new Response('bad_request', { status: 400 }); }
+  const r = routeInteraction(payload);
+  const user = r.user;
+  const dmOops = () => slackDm(user, { text: SLACK_OOPS }, env);
+
+  // ── open the task modal now (trigger_id lives 3 s); plan options / an unlinked notice follow by views.update ──
+  if (r.kind === 'open_task') {
+    const meta = r.channel && r.ts ? { channel: r.channel, ts: r.ts } : {};
+    const opened = await slackApi('views.open', { trigger_id: r.trigger_id, view: taskModal({ title: r.title, ownerSlackId: user, meta }) }, env);
+    if (opened.ok) await later(ctx, async () => {
+      const who = await slackPerson(user, env);
+      const view = opened.view || {};
+      if (who.error) return slackApi('views.update', { view_id: view.id, hash: view.hash, view: messageModal('Add to Docket', UNLINKED) }, env);
+      const plan = await slackCall(GET_ACTIONS.getPlan, slackGetUrl('getPlan'), who.auth, env);
+      const options = plan.ok ? planOptions(plan.data?.items || []) : [];
+      if (options.length) {
+        await slackApi('views.update', { view_id: view.id, hash: view.hash,
+          view: taskModal({ title: r.title, ownerSlackId: user, planOptions: options, meta }) }, env);
+      }
+    });
+    return slackAck();
+  }
+  if (r.kind === 'open_move' || r.kind === 'open_comment') {
+    const meta = { response_url: r.response_url };
+    await slackApi('views.open', { trigger_id: r.trigger_id, view: r.kind === 'open_move' ? moveModal(r.task_id, meta) : commentModal(r.task_id, meta) }, env);
+    return slackAck();
+  }
+
+  // ── a task modal submitted: only pure field checks before the ack (no I/O — Slack's 3 s); the modal closes,
+  //    then the person, owner and receiver are mapped and the task created; the outcome (or a pick that can't be
+  //    mapped) comes back by DM. ──
+  if (r.kind === 'submit_task') {
+    const v = validateTaskSubmission(r.values);
+    if (v.errors) return slackJson({ response_action: 'errors', errors: v.errors });
+    const title = v.value.title.replace(/[<>&]/g, '');
+    await later(ctx, async () => {
+      const dm = (text) => slackDm(user, { text }, env);
+      const [who, owner, handoff] = await Promise.all([slackPerson(user, env), slackEmployee(v.value.owner, slackEmpDeps(env)),
+        v.value.handoff ? slackEmployee(v.value.handoff, slackEmpDeps(env)) : null]);
+      if (who.error) return dm(UNLINKED);
+      const bad = [owner.error && 'the owner', handoff && handoff.error && 'the hand-off receiver'].filter(Boolean);
+      if (bad.length) return dm(`Docket didn't add “${title.slice(0, 80)}”: ${bad.join(' and ')} isn't an active Docket person. Pick someone else and try again.`);
+      const documents = [];
+      if (r.meta.channel && r.meta.ts) {
+        const pl = await slackApi('chat.getPermalink', { channel: r.meta.channel, message_ts: r.meta.ts }, env);
+        if (pl.ok && typeof pl.permalink === 'string' && pl.permalink.startsWith('https://')) documents.push({ title: 'Slack message', url: pl.permalink });
+      }
+      const res = await slackCall(POST_ACTIONS.createTask, { title: v.value.title, owner_employee_id: owner.employeeId,
+        deadline: v.value.date ? deadlineIso(v.value.date) : null, plan_item_id: v.value.plan || null,
+        handoff_to_employee_id: handoff ? handoff.employeeId : null, documents }, who.auth, env);
+      return dm(res.ok ? `Added <${taskLink(res.data.id)}|${res.data.task_no}> — ${title}`
+        : `Docket didn't add “${title.slice(0, 80)}”: ${friendlyError(res.error, res.extra)}`);
+    }, dmOops);
+    return slackAck();   // closes the modal
+  }
+  if (r.kind === 'submit_move' || r.kind === 'submit_comment') {
+    const v = r.kind === 'submit_move' ? validateMoveSubmission(r.values) : validateCommentSubmission(r.values);
+    if (v.errors) return slackJson({ response_action: 'errors', errors: v.errors });
+    const taskId = r.meta.task_id;
+    const say = (text) => slackReply(r.meta.response_url, user, { text }, env);
+    await later(ctx, async () => {
+      const who = await slackPerson(user, env);
+      if (who.error) return say(UNLINKED);
+      const res = r.kind === 'submit_move'
+        ? await slackCall(POST_ACTIONS.reviseDeadline, { id: taskId, new_deadline: deadlineIso(v.value.date), reason: v.value.reason }, who.auth, env)
+        : await slackCall(POST_ACTIONS.addComment, { id: taskId, body: v.value.body }, who.auth, env);
+      return say(res.ok ? (r.kind === 'submit_move' ? `Moved to ${v.value.date}. <${taskLink(taskId)}|Open in Docket>` : `Comment posted. <${taskLink(taskId)}|Open in Docket>`)
+        : friendlyError(res.error, res.extra));
+    }, () => say(SLACK_OOPS));
+    return slackAck();
+  }
+
+  // ── buttons that act straight away ──
+  if (r.kind === 'done' || r.kind === 'accept') {
+    const say = (text) => slackReply(r.response_url, user, { text }, env);
+    await later(ctx, async () => {
+      const who = await slackPerson(user, env);
+      if (who.error) return say(UNLINKED);
+      const res = r.kind === 'done'
+        ? await slackCall(POST_ACTIONS.changeStatus, { id: r.task_id, status: 'done' }, who.auth, env)
+        : await slackCall(POST_ACTIONS.acceptHandoff, { id: r.task_id }, who.auth, env);
+      return say(res.ok ? `${r.kind === 'done' ? 'Done' : 'Hand-off accepted'}. <${taskLink(r.task_id)}|Open in Docket>`
+        : friendlyError(res.error, res.extra));
+    }, () => say(SLACK_OOPS));
+    return slackAck();
+  }
+  return slackAck();   // anything else is acknowledged and ignored
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url = new URL(request.url);
     if (url.pathname === '/health' || url.pathname === '/healthz') return ok({ service: 'docketops', time: nowIso() });
     if (url.pathname === '/slack/events' && request.method === 'POST') return slackEvents(request, env);
+    if (url.pathname === '/slack/commands' && request.method === 'POST') return slackCommands(request, env, ctx);
+    if (url.pathname === '/slack/interactive' && request.method === 'POST') return slackInteractive(request, env, ctx);
     if (request.method === 'GET')  return handleGet(url, request, env);
     if (request.method === 'POST') return handlePost(request, env);
     return err('method_not_allowed', 405);
