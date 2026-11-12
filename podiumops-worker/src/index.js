@@ -98,7 +98,7 @@ import {
 } from './googlesync.js';   // J1b Podium → Google field sync (test/googlesync.test.mjs)
 import {
   LEDGER_TYPES, TYPE_LABELS, LEAVE_COPY, LEAVE_POLICIES, DEFAULT_CUTOVER_MONTH, isIsoDay, isMonth, monthOf, yearOf,
-  validateLeaveInput, accrualPlan, yearClosePlan, borrowCap, ledgerBalance, pendingDebit, splitLeave, sameSplit,
+  validateLeaveInput, accrualPlan, borrowCap, ledgerBalance, pendingDebit, splitLeave, sameSplit,
   periodUsed, optionalUsed, limitBlock, overlaps, decideBlock, cancelBlock, resolveLeaveApprover, buildLeaveMail,
   leaveMessageId, cleanAmount, cleanNote, cleanHoliday, leaveDbErrorCode, reclosePlan, splitBase, coveredFromOnChange,
   holidayListMissing, noHolidayListMessage,
@@ -1079,6 +1079,12 @@ async function updateEmployee(body, auth, env, ctx) {
     if (!lr.ok) return err('db_error: employee lookup failed', 500);
     const was = lr.data?.[0]?.leave_policy ?? null;
     if (was !== patch.leave_policy) leaveFrom = was;
+    // Accrual is lazy: write what was earned while covered BEFORE the flip, or an off → on (which moves
+    // leave_covered_from) would drop the months nobody read (Codex S453).
+    if (was && was !== patch.leave_policy) {
+      const ens = await ensureLeaveCurrent(env, [body.employee_id]);
+      if (!ens.ok) return err(`db_error: leave ${ens.error}`, 500);
+    }
     // Coverage history: off → on starts earning from this IST month, so the off gap never back-fills (leave.js).
     const cf = coveredFromOnChange(was, patch.leave_policy, istToday());
     if (cf) patch.leave_covered_from = cf;
@@ -9736,9 +9742,9 @@ async function loadLeaveEmployees(env, ids) {
 const leaveCovered = (e) => !!(e && e.leave_policy && e.status !== 'exited');
 
 // D4 + D5 — the lazy, idempotent writer. For the covered ids: insert the missing accrual rows through the current IST
-// month, then close every completed year ≥ the cutover year that has no leave_year_closes row and no pending PL / SL
-// request starting in it (lapse rows first, then the marker, so a half-done close recomputes to nothing new). A late
-// approve / cancel into a closed year is re-closed inside the RPC (podium.leave_reclose). Batched: one read + one insert per step, never per row.
+// month, then close every completed year ≥ the cutover year that has no leave_year_closes row (RPC
+// podium.leave_close_years, under the lock). A late approve / cancel into a closed year is re-closed inside the RPC
+// (podium.leave_reclose). Batched: one read + one insert per step, never per row.
 // pre: { settings, emps } already loaded. → { ok } | { ok: false, error }
 async function ensureLeaveCurrent(env, employeeIds, pre = {}) {
   const ids = [...new Set((employeeIds || []).filter(isUuid))];
@@ -9771,29 +9777,10 @@ async function ensureLeaveCurrent(env, employeeIds, pre = {}) {
   for (const r of cr.data || []) (closed[r.employee_id] ||= new Set()).add(Number(r.year));
   const open = emps.filter(e => { for (let y = cutY; y < cy; y++) if (!closed[e.id]?.has(y)) return true; return false; });
   if (!open.length) return { ok: true };
-  const oidf = open.map(e => e.id).join(',');
-  // A pending PL / SL request starting in an open year holds that year's close (yearClosePlan) until it is decided.
-  const [led, pend] = await Promise.all([
-    sbPaged(env, `/rest/v1/leave_ledger?employee_id=in.(${oidf})&select=employee_id,leave_type,delta,effective_date&order=id.asc`),
-    sbPaged(env, `/rest/v1/leave_requests?employee_id=in.(${oidf})&status=eq.pending&leave_type=in.(PL,SL)&start_date=lt.${cy}-01-01&select=employee_id,leave_type,status,start_date&order=id.asc`),
-  ]);
-  if (!led || !pend) return { ok: false, error: 'close_ledger_read' };
-  const byEmp = {}, pendByEmp = {};
-  for (const r of led) (byEmp[r.employee_id] ||= []).push(r);
-  for (const r of pend) (pendByEmp[r.employee_id] ||= []).push(r);
-  const lapses = [], marks = [];
-  for (const e of open) {
-    const plan = yearClosePlan({ employeeId: e.id, cutoverMonth: cutover, currentYear: cy, closedYears: closed[e.id] || new Set(), ledger: byEmp[e.id] || [],
-      requests: pendByEmp[e.id] || [] });
-    lapses.push(...plan.rows);
-    marks.push(...plan.years.map(y => ({ employee_id: e.id, year: y })));
-  }
-  if (lapses.length && !(await insertLedger(lapses))) return { ok: false, error: 'lapse_write' };
-  if (marks.length) {
-    const w = await sb(`/rest/v1/leave_year_closes?on_conflict=employee_id,year`, env, { method: 'POST',
-      prefer: 'resolution=ignore-duplicates,return=minimal', body: JSON.stringify(marks) });
-    if (!w.ok) return { ok: false, error: 'close_write' };
-  }
+  // The close runs in podium.leave_close_years under each person's leave lock, reading the ledger there — so an
+  // approve / cancel can never land between its read and its write (Codex S453). Pending requests do not hold it.
+  const cl = await hiringRpc(env, 'leave_close_years', { employee_ids: open.map(e => e.id), from_year: cutY, to_year: cy - 1 });
+  if (!cl.ok) return { ok: false, error: 'close_write' };
   return { ok: true };
 }
 
@@ -9853,9 +9840,17 @@ async function leaveQuote(env, emp, d, { notice = true, settings, exceptId = nul
     return { v, split: { available: null, from_balance: v.days, borrowed_days: 0, lop_days: 0 }, snapshot: null, balances };
   }
   const balance = ledgerBalance(ledger, v.leave_type), pending = pendingDebit(reqs, v.leave_type, exceptId);
-  const cap = borrowCap({ leaveType: v.leave_type, leaveYear: yearOf(v.start_date), currentMonth: monthOf(today), employee: emp, cutoverMonth: settings.cutover_month });
-  const base = splitBase({ leaveType: v.leave_type, balance, leaveYear: yearOf(v.start_date), currentYear: yearOf(today) });
-  return { v, split: { ...splitLeave({ days: v.days, balance: base, pending, cap }), cap }, snapshot: { expected_balance: balance, expected_pending: pending }, balances };
+  const split = leaveSplitFor({ emp, ledger, reqs, leaveType: v.leave_type, startDate: v.start_date, days: v.days, exceptId, cutover: settings.cutover_month, today });
+  return { v, split, snapshot: { expected_balance: balance, expected_pending: pending }, balances };
+}
+
+// D7 split for one PL / SL request, the same at preview, apply, the approver's list and decide. → split + cap
+function leaveSplitFor({ emp, ledger, reqs, leaveType, startDate, days, exceptId = null, cutover, today }) {
+  const cm = monthOf(today), cy = yearOf(today), ly = yearOf(startDate);
+  const capOf = (y) => borrowCap({ leaveType, leaveYear: y, currentMonth: cm, employee: emp, cutoverMonth: cutover });
+  const cap = capOf(ly);
+  const base = splitBase({ leaveType, ledger, leaveYear: ly, currentYear: cy, nextCap: ly === cy ? capOf(cy + 1) : 0 });
+  return { ...splitLeave({ days, balance: base, pending: pendingDebit(reqs, leaveType, exceptId), cap }), cap };
 }
 
 // The approver's own manager (D9 cover) from the org edges.
@@ -9926,7 +9921,8 @@ async function leaveNavState(auth, me, edges, env) {
 
 // GET getMyLeave — balances, my requests (this year + future, and any still pending), holidays this + next year.
 async function getMyLeave(url, auth, env) {
-  const edges = await loadOrgEdges(env);
+  const edges = await loadOrgEdgesStrict(env);
+  if (!edges) return err('db_error: org read', 500);   // fail closed: [] would read as "not me" (Codex S453)
   const me = callerEmployee(edges, auth.userId);
   if (!me) return leaveErr('not_covered');
   const [settings, emps] = await Promise.all([loadLeaveSettings(env), loadLeaveEmployees(env, [me.id])]);
@@ -9960,7 +9956,8 @@ async function getMyLeave(url, auth, env) {
 // → { days, split, refusal, refusal_message, balances } (a refusal is data, so the live preview can show it).
 async function previewLeave(body, auth, env) {
   const d = body.data || body;
-  const edges = await loadOrgEdges(env);
+  const edges = await loadOrgEdgesStrict(env);
+  if (!edges) return err('db_error: org read', 500);   // fail closed: [] would read as "not me" (Codex S453)
   const me = callerEmployee(edges, auth.userId);
   const t = await leaveTarget(auth, me, d.employee_id);
   if (t.res) return t.res;
@@ -9979,7 +9976,8 @@ async function previewLeave(body, auth, env) {
 // approver). RPC podium.leave_apply under the per-employee lock; mail the approver. → { request, email }
 async function applyLeave(body, auth, env) {
   const d = body.data || body;
-  const edges = await loadOrgEdges(env);
+  const edges = await loadOrgEdgesStrict(env);
+  if (!edges) return err('db_error: org read', 500);   // fail closed: [] would read as "not me" (Codex S453)
   const me = callerEmployee(edges, auth.userId);
   const t = await leaveTarget(auth, me, d.employee_id);
   if (t.res) return t.res;
@@ -10009,7 +10007,8 @@ async function applyLeave(body, auth, env) {
 // pending / approved requests in [from, to] (the "who's out" calendar) and the team's balances. Team = descendantsOf
 // the caller (HR: every covered person). Types and reasons are shown: this is the chain's own view (D11).
 async function getTeamLeave(url, auth, env) {
-  const edges = await loadOrgEdges(env);
+  const edges = await loadOrgEdgesStrict(env);
+  if (!edges) return err('db_error: org read', 500);   // fail closed: [] would read as "not me" (Codex S453)
   const me = callerEmployee(edges, auth.userId);
   const hr = isHr(auth);
   if (!me && !hr) return leaveErr('forbidden');
@@ -10054,10 +10053,8 @@ async function getTeamLeave(url, auth, env) {
       const e = byId[r.employee_id];
       let split = null;
       if (e && LEDGER_TYPES.includes(r.leave_type)) {
-        const ledger = books.ledger[e.id] || [], reqs = books.reqs[e.id] || [];
-        split = splitLeave({ days: r.days, pending: pendingDebit(reqs, r.leave_type, r.id),
-          balance: splitBase({ leaveType: r.leave_type, balance: ledgerBalance(ledger, r.leave_type), leaveYear: yearOf(r.start_date), currentYear: cy }),
-          cap: borrowCap({ leaveType: r.leave_type, leaveYear: yearOf(r.start_date), currentMonth: monthOf(today), employee: e, cutoverMonth: settings.cutover_month }) });
+        split = leaveSplitFor({ emp: e, ledger: books.ledger[e.id] || [], reqs: books.reqs[e.id] || [], leaveType: r.leave_type,
+          startDate: r.start_date, days: r.days, exceptId: r.id, cutover: settings.cutover_month, today });
       } else split = { available: null, from_balance: r.days, borrowed_days: 0, lop_days: 0 };
       return { ...r, employee: person(r.employee_id), split, split_changed: !sameSplit(split, r), balances: balOf(r.employee_id), can_cancel: canCancel(r) };
     }),
@@ -10081,7 +10078,8 @@ async function decideLeave(body, auth, env) {
   const d = body.data || body;
   const req = await loadLeaveRequest(env, d.id);
   if (!req) return leaveErr('not_found');
-  const edges = await loadOrgEdges(env);
+  const edges = await loadOrgEdgesStrict(env);
+  if (!edges) return err('db_error: org read', 500);   // fail closed: [] would read as "not me" (Codex S453)
   const me = callerEmployee(edges, auth.userId);
   const block = decideBlock({ req, meId: me?.id || null, hr: isHr(auth), approverManagerId: approverManagerOf(edges, req.approver_employee_id) });
   if (block) return leaveErr(block);
@@ -10100,9 +10098,8 @@ async function decideLeave(body, auth, env) {
     if (!books) return err('db_error: leave read', 500);
     const ledger = books.ledger[req.employee_id] || [], reqs = books.reqs[req.employee_id] || [];
     const balance = ledgerBalance(ledger, req.leave_type), pending = pendingDebit(reqs, req.leave_type, req.id);
-    const split = splitLeave({ days: req.days, pending,
-      balance: splitBase({ leaveType: req.leave_type, balance, leaveYear: yearOf(req.start_date), currentYear: yearOf(today) }),
-      cap: borrowCap({ leaveType: req.leave_type, leaveYear: yearOf(req.start_date), currentMonth: monthOf(today), employee: emps[0], cutoverMonth: settings.cutover_month }) });
+    const split = leaveSplitFor({ emp: emps[0], ledger, reqs, leaveType: req.leave_type, startDate: req.start_date, days: req.days,
+      exceptId: req.id, cutover: settings.cutover_month, today });
     if (!sameSplit(split, d.expected_split)) return leaveErr('balance_changed', { split });
     Object.assign(p, { borrowed_days: split.borrowed_days, lop_days: split.lop_days, expected_balance: balance, expected_pending: pending });
   }
@@ -10122,7 +10119,8 @@ async function leaveCancelAction(body, auth, env, mode) {
   const d = body.data || body;
   const req = await loadLeaveRequest(env, d.id);
   if (!req) return leaveErr('not_found');
-  const edges = await loadOrgEdges(env);
+  const edges = await loadOrgEdgesStrict(env);
+  if (!edges) return err('db_error: org read', 500);   // fail closed: [] would read as "not me" (Codex S453)
   const me = callerEmployee(edges, auth.userId);
   const block = cancelBlock({ mode, req, meId: me?.id || null, hr: isHr(auth), approverManagerId: approverManagerOf(edges, req.approver_employee_id), today: istToday() });
   if (block) return leaveErr(block);
@@ -10141,7 +10139,8 @@ async function cancelLeave(body, auth, env) { return leaveCancelAction(body, aut
 
 // GET getLeaveLedger?employee_id — self / chain (descendantsOf) / HR; rows newest first + balances.
 async function getLeaveLedger(url, auth, env) {
-  const edges = await loadOrgEdges(env);
+  const edges = await loadOrgEdgesStrict(env);
+  if (!edges) return err('db_error: org read', 500);   // fail closed: [] would read as "not me" (Codex S453)
   const me = callerEmployee(edges, auth.userId);
   const id = url.searchParams.get('employee_id') || me?.id;
   if (!isUuid(id)) return leaveErr('not_found');

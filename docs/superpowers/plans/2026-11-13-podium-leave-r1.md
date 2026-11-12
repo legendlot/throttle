@@ -39,6 +39,12 @@
   `carry_over` row of delta… delta must be ≠ 0, so the marker is a row in `leave_year_closes`
   (employee_id, year, closed_at) PK (employee_id, year). Close once; late changes to a closed year are an HR
   adjustment.
+  **Revised S453 (Codex pass, migration 0017 `podium_leave_v2`):** the close runs in RPC `podium.leave_close_years`
+  under the per-employee lock; a pending request does not hold it; a late approve / cancel re-closes the year
+  (`leave_reclose`); a past-year request splits on that year's pre-lapse closing, a next-year one on
+  min(pre, keep) + next-year rows, a this-year one stays inside next year's cap (`splitBase`); requests at most next
+  calendar year (`too_far`); deciders resolved with the strict org read + a login-matched self guard in `leave_decide`;
+  a coverage flip writes the earned accruals first.
 - **D6 Day count (pure `countLeaveDays`).** Mon–Fri (L6) minus `kind='fixed'` holidays in the range; a
   weekend holiday changes nothing (L10). Half days: `start_half` ∈ full|second, `end_half` ∈ full|first
   (single day: full|first|second). Result in 0.5 steps; 0 → refuse `no_working_days`. A request may not cross

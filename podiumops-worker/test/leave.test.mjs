@@ -373,19 +373,11 @@ test('accrual: an off → on gap earns nothing for the gap (leave_covered_from)'
   assert.deepEqual(earningMonths(emp({ date_joined: '2027-04-10', leave_covered_from: '2027-03-01' }), '2026-12', '2026-12', '2027-04'), ['2027-04']);
 });
 
-test('year close: a pending PL / SL request in the year holds the close (and the years after)', () => {
+test('year close: a pending request does not hold the close (Codex S453 #3)', () => {
   const ledger = [{ leave_type: 'PL', delta: 8, effective_date: '2026-12-01' }];
-  const pend = [{ leave_type: 'SL', status: 'pending', start_date: '2026-12-30' }];
-  assert.deepEqual(yearClosePlan({ employeeId: U(1), cutoverMonth: '2026-12', currentYear: 2028, ledger, requests: pend }), { years: [], rows: [] });
-  // decided (not pending) / a PERIOD / a next-year pending → it closes
-  for (const requests of [[{ ...pend[0], status: 'approved' }], [{ ...pend[0], leave_type: 'PERIOD' }], [{ ...pend[0], start_date: '2027-01-04' }]]) {
-    const p = yearClosePlan({ employeeId: U(1), cutoverMonth: '2026-12', currentYear: 2027, ledger, requests });
-    assert.deepEqual(p.years, [2026]);
-    assert.deepEqual(p.rows.map(r => r.delta), [-3]);
-  }
-  // 2026 closes, 2027 waits for its pending request
-  const two = yearClosePlan({ employeeId: U(1), cutoverMonth: '2026-12', currentYear: 2028, ledger, requests: [{ leave_type: 'PL', status: 'pending', start_date: '2027-12-27' }] });
-  assert.deepEqual(two.years, [2026]);
+  const p = yearClosePlan({ employeeId: U(1), cutoverMonth: '2026-12', currentYear: 2028, ledger, requests: [{ leave_type: 'SL', status: 'pending', start_date: '2026-12-30' }] });
+  assert.deepEqual(p.years, [2026, 2027]);
+  assert.deepEqual(p.rows.map(r => [r.period, r.delta]), [['2026', -3]]);
 });
 
 test('reclose (mirror of podium.leave_reclose): approve / cancel into a closed year moves its lapse', () => {
@@ -430,18 +422,63 @@ test('reclose (mirror of podium.leave_reclose): approve / cancel into a closed y
     [{ year: 2026, leave_type: 'PL', old: -5, new: null }, { year: 2027, leave_type: 'PL', old: -3, new: null }]);
 });
 
+// one ledger row per call: L('PL', 9, '2026-12-01') → an opening-like row of that type and date
+const L = (leave_type, delta, effective_date, kind = 'opening', period = null) => ({ leave_type, delta, effective_date, kind, period });
+const sb = (leaveType, ledger, leaveYear, currentYear, nextCap = 0) => splitBase({ leaveType, ledger, leaveYear, currentYear, nextCap });
+
 test('next-year split base: only what carries (PL ≤ 5, SL ≤ 0); this year unchanged', () => {
-  assert.equal(splitBase({ leaveType: 'PL', balance: 9, leaveYear: 2027, currentYear: 2026 }), 5);
-  assert.equal(splitBase({ leaveType: 'PL', balance: 3, leaveYear: 2027, currentYear: 2026 }), 3);
-  assert.equal(splitBase({ leaveType: 'PL', balance: -2, leaveYear: 2027, currentYear: 2026 }), -2);
-  assert.equal(splitBase({ leaveType: 'SL', balance: 4, leaveYear: 2027, currentYear: 2026 }), 0);
-  assert.equal(splitBase({ leaveType: 'SL', balance: -1, leaveYear: 2027, currentYear: 2026 }), -1);
-  assert.equal(splitBase({ leaveType: 'PL', balance: 9, leaveYear: 2026, currentYear: 2026 }), 9);
-  assert.equal(splitBase({ leaveType: 'SL', balance: '4.0', leaveYear: 2026, currentYear: 2026 }), 4);
+  assert.equal(sb('PL', [L('PL', 9, '2026-12-01')], 2027, 2026), 5);
+  assert.equal(sb('PL', [L('PL', 3, '2026-12-01')], 2027, 2026), 3);
+  assert.equal(sb('PL', [L('PL', -2, '2026-12-01')], 2027, 2026), -2);
+  assert.equal(sb('SL', [L('SL', 4, '2026-12-01')], 2027, 2026), 0);
+  assert.equal(sb('SL', [L('SL', -1, '2026-12-01')], 2027, 2026), -1);
+  assert.equal(sb('PL', [L('PL', 9, '2026-12-01')], 2026, 2026), 9);
+  assert.equal(sb('SL', [L('SL', '4.0', '2026-12-01')], 2026, 2026), 4);
+  assert.equal(sb('SL', [L('PL', 4, '2026-12-01')], 2026, 2026), 0);   // other type ignored
   // 9 PL today, 7 days in Jan next year, cap 18 → 5 from balance, 2 borrowed (not 7 from balance)
-  assert.deepEqual(splitLeave({ days: 7, balance: splitBase({ leaveType: 'PL', balance: 9, leaveYear: 2027, currentYear: 2026 }), pending: 0, cap: 18 }),
+  assert.deepEqual(splitLeave({ days: 7, balance: sb('PL', [L('PL', 9, '2026-12-01')], 2027, 2026), pending: 0, cap: 18 }),
     { available: 5, from_balance: 5, borrowed_days: 2, lop_days: 0 });
   // SL 4 today, 2 days next year: all borrowed
-  assert.deepEqual(splitLeave({ days: 2, balance: splitBase({ leaveType: 'SL', balance: 4, leaveYear: 2027, currentYear: 2026 }), pending: 0, cap: 12 }),
+  assert.deepEqual(splitLeave({ days: 2, balance: sb('SL', [L('SL', 4, '2026-12-01')], 2027, 2026), pending: 0, cap: 12 }),
     { available: 0, from_balance: 0, borrowed_days: 2, lop_days: 0 });
+});
+
+test('Codex S453 #1: two next-year requests cannot both borrow the full cap', () => {
+  const ledger = [L('SL', 12, '2027-11-01')];
+  const first = splitLeave({ days: 12, balance: sb('SL', ledger, 2028, 2027), pending: 0, cap: 12 });
+  assert.deepEqual(first, { available: 0, from_balance: 0, borrowed_days: 12, lop_days: 0 });
+  // approved → taken −12 dated in 2028; the second 12-day request is all unpaid
+  const after = [...ledger, L('SL', -12, '2028-01-10', 'taken')];
+  assert.equal(sb('SL', after, 2028, 2027), -12);
+  assert.deepEqual(splitLeave({ days: 12, balance: sb('SL', after, 2028, 2027), pending: 0, cap: 12 }),
+    { available: -12, from_balance: 0, borrowed_days: 0, lop_days: 12 });
+  // PL: 10 now, 3 already taken next year → base 5 − 3 = 2
+  assert.equal(sb('PL', [L('PL', 10, '2027-11-01'), L('PL', -3, '2028-01-05', 'taken')], 2028, 2027), 2);
+});
+
+test('this-year split base after a next-year leave: this year\'s days stay usable within next year\'s cap', () => {
+  // 10 PL, a 5-day Jan leave already approved (post −5), next-year cap 18 → all 10 usable now
+  assert.equal(sb('PL', [L('PL', 10, '2027-11-01'), L('PL', -5, '2028-01-05', 'taken')], 2027, 2027, 18), 10);
+  // next year fully borrowed (post −23): only the 5 above the carry are usable, so the carry still covers next year
+  assert.equal(sb('PL', [L('PL', 10, '2027-11-01'), L('PL', -23, '2028-01-05', 'taken')], 2027, 2027, 18), 5);
+  // SL 12 that would lapse, 12 next-year days borrowed against a 12 cap → all 12 usable now
+  assert.equal(sb('SL', [L('SL', 12, '2027-11-01'), L('SL', -12, '2028-01-05', 'taken')], 2027, 2027, 12), 12);
+  // no next-year rows → plain balance
+  assert.equal(sb('PL', [L('PL', 10, '2027-11-01'), L('PL', -2, '2027-11-20', 'taken')], 2027, 2027, 18), 8);
+});
+
+test('Codex S453 #3: a past-year request splits on that year\'s closing before its lapse', () => {
+  // 2026: SL 2, closed → lapse −2; Jan 2027 accrual +1. A pending 2-day Dec 2026 SL request is decided in Jan 2027.
+  const ledger = [L('SL', 2, '2026-12-01'), L('SL', -2, '2026-12-31', 'lapse', '2026'), L('SL', 1, '2027-01-01', 'accrual', '2027-01')];
+  assert.equal(sb('SL', ledger, 2026, 2027), 2);
+  assert.deepEqual(splitLeave({ days: 2, balance: sb('SL', ledger, 2026, 2027), pending: 0, cap: 0 }),
+    { available: 2, from_balance: 2, borrowed_days: 0, lop_days: 0 });
+  // an earlier year's lapse still counts (period differs)
+  assert.equal(sb('PL', [L('PL', 9, '2026-12-01'), L('PL', -4, '2026-12-31', 'lapse', '2026'), L('PL', 18, '2027-12-01')], 2027, 2028), 23);
+});
+
+test('validate: at most next calendar year', () => {
+  const base = { leave_type: 'PL', start_half: 'full', end_half: 'full' };
+  assert.equal(validateLeaveInput({ ...base, start_date: '2028-01-05', end_date: '2028-01-05' }, { today: '2026-12-10', notice: false }).error, 'too_far');
+  assert.equal(validateLeaveInput({ ...base, start_date: '2027-01-05', end_date: '2027-01-05' }, { today: '2026-12-10' }).error, undefined);
 });

@@ -38,6 +38,7 @@ export const LEAVE_COPY = {
   not_covered: 'Leave in Podium is not set up for this person',
   no_working_days: 'Those dates have no working days (weekends and holidays are free)',
   crosses_year: 'A request cannot cross 31 December — apply for each year separately',
+  too_far: 'Leave can be applied at most for next calendar year',
   overlap: 'You already have a pending or approved request on those dates',
   notice: 'This leave must be applied for before it starts (sick leave: up to 7 days after)',
   period_not_eligible: 'Period leave is not available for this person',
@@ -148,6 +149,8 @@ export function validateLeaveInput(d, { today, gender = null, holidays = [], not
   const start = d?.start_date, end = d?.end_date || d?.start_date;
   if (!isIsoDay(start) || !isIsoDay(end) || end < start) return { error: 'bad_dates' };
   if (start.slice(0, 4) !== end.slice(0, 4)) return { error: 'crosses_year' };
+  // At most next calendar year — the split's carry view (splitBase) looks one year ahead, never two.
+  if (isIsoDay(today) && Number(start.slice(0, 4)) > Number(today.slice(0, 4)) + 1) return { error: 'too_far' };
   const hv = normaliseHalves(start, end, d?.start_half, d?.end_half);
   if (hv.error) return hv;
   const reason = d?.reason == null ? null : String(d.reason).trim() || null;
@@ -215,17 +218,16 @@ export function accrualPlan({ employee, cutoverMonth, currentMonth, existing = n
 // For each completed calendar year Y ≥ the cutover year not yet closed: closing(type) = Σ delta with
 // effective_date ≤ Y-12-31 (including the lapse rows this plan adds for earlier years). PL > 5 → lapse −(closing−5);
 // SL > 0 → lapse −closing; a negative closing carries as is (no row). → { years: [Y…], rows: [lapse rows] }
-// A year is NOT closed while the person has a PENDING PL / SL request starting on or before Y-12-31 (requests:
-// [{leave_type, status, start_date}]) — its decision would move the closing; a later read closes it. Later years wait
-// too (their closing chains on this one's lapse). A change after the close is re-closed in the RPC (leave_reclose).
-export function yearClosePlan({ employeeId, cutoverMonth, currentYear, closedYears = new Set(), ledger = [], requests = [] }) {
+// Pure mirror of podium.leave_close_years (0017), which does the real close under the per-employee lock. A pending
+// request does NOT hold the close (Codex S453: an old pending request kept expired credit spendable forever): its
+// later approve / cancel re-closes the year in the RPC (leave_reclose), and its split uses the pre-lapse closing
+// (splitBase, past year).
+export function yearClosePlan({ employeeId, cutoverMonth, currentYear, closedYears = new Set(), ledger = [] }) {
   const years = [], rows = [];
   if (!isMonth(cutoverMonth)) return { years, rows };
   const running = (ledger || []).map(r => ({ leave_type: r.leave_type, delta: r.delta, effective_date: String(r.effective_date).slice(0, 10) }));
-  const pendingStarts = (requests || []).filter(r => r.status === 'pending' && LEDGER_TYPES.includes(r.leave_type)).map(r => String(r.start_date).slice(0, 10));
   for (let y = Number(cutoverMonth.slice(0, 4)); y < currentYear; y++) {
     if (closedYears.has(y)) continue;
-    if (pendingStarts.some(d => d <= `${y}-12-31`)) break;
     const end = `${y}-12-31`;
     for (const t of LEDGER_TYPES) {
       const h = running.filter(r => r.leave_type === t && r.effective_date <= end).reduce((s, r) => s + toHalves(r.delta), 0);
@@ -279,13 +281,29 @@ export function borrowCap({ leaveType, leaveYear, currentMonth, employee, cutove
   return fromHalves(earningMonths(employee, cutoverMonth, from, to).length * toHalves(ACCRUAL_RATE[leaveType]));
 }
 
-// The base balance a split starts from. A leave in a LATER calendar year than today (IST) sees only what will carry
-// into that year: PL min(balance, 5), SL min(balance, 0) — a negative balance stays negative. The snapshot the RPC
-// re-checks is still the raw ledger balance; only the split uses this.
-export function splitBase({ leaveType, balance, leaveYear, currentYear }) {
-  const b = Number(balance) || 0;
-  if (!(leaveYear > currentYear)) return b;
-  return Math.min(b, leaveType === 'PL' ? PL_CARRY_MAX : 0);
+// The base balance a split starts from, per the leave's calendar year Y vs today's year C. pre = Σ rows dated ≤ C-12-31,
+// post = Σ rows dated after (next-year leave already taken), keep = 5 PL / 0 SL.
+// · Y < C (a pending request from a closed year, or an SL backdate): Y's own closing BEFORE its lapse — Σ rows
+//   dated ≤ Y-12-31 except Y's lapse row. Approving it re-closes Y (leave_reclose), so the lapse shrinks to match.
+// · Y = C: pre, but no more than keeps next year inside its cap: using x now leaves min(pre − x, keep) + post for
+//   next year, which must stay ≥ −nextCap → x ≤ max(pre − keep, pre + post + nextCap). No post rows → just pre.
+// · Y = C + 1: what carries plus next year's own rows: min(pre, keep) + post (Codex S453: clamping the raw sum let
+//   two next-year requests both borrow the full cap).
+// The snapshot the RPC re-checks is still the raw balance; only the split uses this. nextCap = borrowCap for C + 1.
+export function splitBase({ leaveType, ledger = [], leaveYear, currentYear, nextCap = 0 }) {
+  const rows = (ledger || []).filter(r => r.leave_type === leaveType)
+    .map(r => ({ h: toHalves(r.delta), d: String(r.effective_date).slice(0, 10), kind: r.kind, period: r.period == null ? null : String(r.period) }));
+  const sum = (f) => rows.filter(f).reduce((s, r) => s + r.h, 0);
+  const keep = leaveType === 'PL' ? toHalves(PL_CARRY_MAX) : 0;
+  if (leaveYear < currentYear) {
+    const end = `${leaveYear}-12-31`, per = String(leaveYear);
+    return fromHalves(sum(r => r.d <= end && !(r.kind === 'lapse' && r.period === per)));
+  }
+  const end = `${currentYear}-12-31`;
+  const pre = sum(r => r.d <= end), post = sum(r => r.d > end);
+  if (leaveYear > currentYear) return fromHalves(Math.min(pre, keep) + post);
+  if (!rows.some(r => r.d > end)) return fromHalves(pre);
+  return fromHalves(Math.min(pre, Math.max(pre - keep, pre + post + Math.max(0, toHalves(nextCap)))));
 }
 
 // Σ delta of ledger rows of one type.
