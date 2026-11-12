@@ -500,7 +500,7 @@ Measured 2026-11-11:
 - **Also lands here:** "no accepted Podium offer → blocked" (decision 10). A Google account can't be created
   for anyone without one. An HR override needs a written reason and is logged.
 
-### J1b — Podium → Google sync (Podium is the source of truth; Afshaan 2026-11-11)
+### J1b — Podium → Google sync (Podium is the source of truth; Afshaan 2026-11-11) — ✅ LIVE 2026-11-13 (throttle 73d2ee4d, worker a3b26582, `podium_google_field_sync_v1`; plan `plans/2026-11-12-podium-j1b-google-sync.md`)
 
 Afshaan: Google should replicate whatever Podium has. **Done in the backend, not by hand.** Mirroring by hand
 drifts the first time someone forgets.

@@ -1,0 +1,76 @@
+<p class="lead">Podium is the source of truth for a person&rsquo;s core details, and it now sends them to the company Google account for you. This chapter explains what Podium writes to Google, when, who it skips, and the Directory screen (<strong>Sync from Google</strong>) that HR and the three Google admins use to bring in new joiners and to check Google against Podium.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Keeping Google in line with Podium.</div></div>
+  <div class="g-cell"><div class="g-lbl">Direction</div><div class="g-val">Podium to Google, one way.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role hr">HR</span> <span class="role adm">Admin</span> (push: Google admins)</div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Directory &rarr; Sync from Google; a person&rsquo;s page.</div></div>
+</div>
+
+<h2 class="sec">Podium wins: the seven fields</h2>
+<p>Podium owns these Google fields: <strong>name</strong>, <strong>job title</strong>, <strong>department</strong>, <strong>manager</strong>, <strong>personal phone</strong>, <strong>employee code</strong> and <strong>org unit</strong>. Podium never copies them back from Google.</p>
+<div class="callout warn">
+  <div class="c-title">&#9888; Editing these in Google is pointless</div>
+  <p>If you change one of the seven in Google, Podium&rsquo;s next change to that person overwrites it, and the Google vs Podium tab will show it as <em>differs</em>. Make the change in Podium instead. Anything not in the list (passwords, suspension, groups, the sign-in address) is never touched by Podium.</p>
+</div>
+<p>A field that is blank in Podium leaves Google&rsquo;s value alone. The one exception is the manager: a person with no manager in Podium has their manager removed in Google.</p>
+
+<h2 class="sec">What happens when you save a person</h2>
+<p>When HR (or the person, on their own profile) saves a change, Podium sends <strong>only the fields that changed</strong> to Google, within seconds. The save itself never fails because of Google.</p>
+<ul>
+  <li><strong>Google sync pending</strong> (a small chip on the person&rsquo;s page): the update is on its way.</li>
+  <li><strong>Not synced to Google</strong> (chip): this person is skipped; hover for the reason (see below).</li>
+  <li><strong>Google not updated, retry</strong> (red banner): Google could not be reached or refused the change. The banner gives the reason and the time of the next try. Podium retries on its own after <strong>1, 5 and 30 minutes</strong>. A <strong>Google admin</strong> sees a <strong>Retry</strong> button to try straight away; everyone else sees the banner only.</li>
+</ul>
+
+<h2 class="sec">Who is never written to Google</h2>
+<ul>
+  <li><strong>Founders</strong> and super-admins, always, in full.</li>
+  <li>People who have <strong>exited</strong>.</li>
+  <li>Addresses on the <strong>ignore list</strong>.</li>
+  <li>Anyone in an <strong>excluded org unit</strong> (shared and system accounts).</li>
+  <li>People with no Google account, a suspended one, or whose work email is only an alias in Google.</li>
+</ul>
+
+<h2 class="sec">Org unit on the person form</h2>
+<p>The <strong>Google org unit</strong> picker sits beside Department in the Role &amp; Reporting section of the person form.</p>
+<ul>
+  <li>When you change the department, the picker <strong>suggests that department&rsquo;s usual org unit</strong> (marked &ldquo;usual for this department&rdquo;), but only if the org unit is blank or still the old department&rsquo;s suggestion. One you chose yourself is never replaced.</li>
+  <li>It <strong>cannot pick an excluded org unit</strong>; the list leaves them out and a save with one is refused.</li>
+  <li><strong>Org units with nobody in them yet don&rsquo;t appear.</strong> If you need a brand-new one, ask a Google admin to move the first person in Google.</li>
+  <li><em>Not set</em> means Google keeps whatever org unit the person already has.</li>
+</ul>
+
+<h2 class="sec">Directory &rarr; Sync from Google</h2>
+<p>HR and admins open it from the Directory. It has two tabs.</p>
+
+<h3>Tab 1: From Google</h3>
+<p>Now only for three jobs: <strong>new joiners</strong> (create them in Podium), <strong>departures</strong> and the <strong>ignore list</strong>.</p>
+<ul>
+  <li><strong>New people</strong>: tick Import (joining date required) or Ignore. Department and manager can be set here for the new row.</li>
+  <li><strong>Exit started outside Podium</strong>: people active in Podium whose Google account is suspended or gone. This is an alert only; use <strong>Start the exit here</strong> on their page to record the exit with its reason and last working day.</li>
+  <li>It <strong>no longer updates departments or managers from Google</strong>. Those differences are handled on the second tab, in Podium&rsquo;s favour.</li>
+</ul>
+
+<h3>Tab 2: Google vs Podium</h3>
+<p><span class="role adm">Google admins only</span> can push; HR can read the comparison. Every synced person and field gets a state:</p>
+<ul>
+  <li><strong>Same</strong>: Google already matches Podium.</li>
+  <li><strong>Differs</strong>: Google has a different value. Ticked by default.</li>
+  <li><strong>Blank in Podium</strong>: nothing to push; Google keeps its value.</li>
+  <li><strong>Changed in Google</strong>: someone edited Google after Podium last pushed it. Unticked by default, so you look before Podium&rsquo;s value overwrites it.</li>
+</ul>
+<ol class="steps">
+  <li><span class="s-title">Tick what you want</span> person by person and field by field. &ldquo;Show people with no differences&rdquo; widens the list.</li>
+  <li><span class="s-title">Click Preview</span>. It shows exactly what would be sent to Google; nothing is changed yet.</li>
+  <li><span class="s-title">Click Push to Google</span> and confirm. <strong>Push only works after a Preview</strong> of the same ticks, and sends in batches of eight people.</li>
+</ol>
+<div class="callout warn">
+  <div class="c-title">&#9888; Stale, and no automatic retry</div>
+  <p>If someone changes a value between Preview and Push, that person is refused as <strong>stale</strong> (the others in the batch still go). Preview again for them. A <strong>failed admin push is not retried automatically</strong>; the screen lists who was not pushed and why, and you preview and push again.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Personal phone is visible in Google</div>
+  <p>The personal phone goes to Google as the mobile number, so it shows in the Workspace directory unless your Google contact-sharing settings are restricted. Check that setting with a Google admin before relying on it staying private.</p>
+</div>

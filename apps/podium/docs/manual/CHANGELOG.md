@@ -3,6 +3,22 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.7.0] - 2026-11-13
+### Added
+- New "Google Directory Sync" chapter (People part, after Directory): Podium is now the
+  source of truth for name, job title, department, manager, personal phone, employee
+  code and org unit; saving a person pushes only the changed fields to Google within
+  seconds; the "Google not updated, retry" banner, pending chip and 1 / 5 / 30 minute
+  retries (Google admins can Retry); who is never written (founders, exited, ignored,
+  excluded org units); the Org unit picker (department suggestion, no excluded units,
+  empty units hidden); Directory "From Google" (new joiners, departures, ignore list
+  only) and "Google vs Podium" (states, tick, Preview, Push only after Preview, stale
+  refusals, no automatic retry of admin pushes); personal phone visibility warning.
+### Changed
+- Directory: the Sync from Google callout no longer says the sync updates people or
+  exits them; departures are alerts only and Google no longer updates departments or
+  managers.
+
 ## [1.6.0] - 2026-11-12
 ### Added
 - New "Interviews" chapter in the Hiring part (after Candidates & Pipeline): who does
