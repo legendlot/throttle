@@ -496,7 +496,7 @@ this build** — themes and milestones are entered by the founders, item by item
 | **R4 — weeks** ✅ SHIPPED 2026-11-12 (`1468205e`) | week-ending group-by + Week filter (all views) · three-week view + warnings (§7.2) |
 | **R5 — the score** ✅ SHIPPED 2026-11-12 (`30213876`) | transactional deadline RPC · `week_commitments` cohort · `week_score()` · connector `score` |
 | **R6 — review** ✅ SHIPPED 2026-11-12 (`9400a4f3` R6a, `030e82bd` R6b+c) | review pack (provisional/final) + staleness + export + snapshots · Saturday founders' page · level R (Associates) — as built: R links themes + own items only; Slack copy omits Founders'-space tasks and restricted milestones; hand-offs not in (P1 F7 work) |
-| R7 — Slack | Docket Slack app, identities, cron, reminders, shortcut, `/docket`, buttons |
+| R7 — Slack | Docket Slack app, identities, cron, reminders, shortcut, `/docket`, buttons — **R7a shipped 2026-11-12** (app, identities, `/docket`, shortcuts, buttons); R7b = cron + reminders |
 | **R8 — hand-offs** ✅ SHIPPED 2026-11-12 (`f1953ba7`) | fields + accept + pack section + Incoming — as built: receivers reach a hand-off by id / Incoming / pack / founders' page, not task lists (decisions); the giver can't accept |
 | **R9a — tree + templates** ✅ SHIPPED 2026-11-12 (`48d65901`) | tree view · templates — as built: a template milestone with a done-when is created agreed, else proposed (decisions); no seeds |
 | **R9b** ✅ SHIPPED 2026-11-12 (`c9e06a7c`) | measure auto-check · score trend · re-plan page · Programs retired — as built: trailing-30-day readings, ceilings reach only at due, Odo net revenue not auto-checked (decisions) |
