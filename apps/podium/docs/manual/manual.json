@@ -2,7 +2,7 @@
   "title": "Podium",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to Legend of Toys' people & performance system: profiles, the org chart, observations, wins, 1:1s, OKRs, appraisals and the people-data that stays private by design.",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "date": "2026-11-12",
   "app_url": "podium.legendoftoys.com",
   "owner": "Legend of Toys",
@@ -150,6 +150,18 @@
           "route": "/hiring",
           "file": "hiring-candidates.html",
           "roles": [
+            "mgr",
+            "hr",
+            "adm"
+          ]
+        },
+        {
+          "id": "interviews",
+          "title": "Interviews",
+          "route": "/hiring/interviews",
+          "file": "hiring-interviews.html",
+          "roles": [
+            "emp",
             "mgr",
             "hr",
             "adm"

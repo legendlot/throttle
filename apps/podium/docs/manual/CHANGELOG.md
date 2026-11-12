@@ -3,6 +3,20 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.6.0] - 2026-11-12
+### Added
+- New "Interviews" chapter in the Hiring part (after Candidates & Pipeline): who does
+  what, rounds and scorecards, scheduling (IST, 30 days back to a year ahead, JD and
+  open opening required, candidate moves to Interviewing), editing the panel, My
+  interviews (Feedback owed / Upcoming / Done, overdue count) and what an interviewer
+  does and does not see, blind submit-once feedback, Remind (own work mailbox, once
+  per 12 hours), verdicts, cancel and no-show. No automatic reminders yet.
+### Changed
+- Candidates & Pipeline: scheduling an interview moves a New or Screening candidate
+  to Interviewing; closing a candidate cancels their scheduled interviews; new
+  Interviews block on the application.
+- Openings: the Interview rounds card (round plan, default interviewers, scorecard).
+
 ## [1.5.0] - 2026-11-12
 ### Added
 - New "Hiring" part (6 chapters): Openings (create, JD-first rule, band requested

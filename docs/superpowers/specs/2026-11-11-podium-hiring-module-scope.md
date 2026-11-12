@@ -29,7 +29,7 @@ join; nothing is re-keyed.
 | C3 | Offer letter: template, statutory calculator, revisions, approval, PDF, manual send | Core | C1, C2 | 2 sessions |
 | C4 | Bulk CV upload → candidates (OpenAI extraction, review-and-confirm) — ✅ LIVE 2026-11-12 | Core | C2 + `OPENAI_API_KEY` | 1 session |
 | O1 | Offer email + acceptance link (accept / decline / question → confirmation email → joining documents) | Optional, **build right after C3** | C3 + Workspace scope | 2 sessions |
-| O2 | Interview rounds + feedback | Optional | C1, C2 | 1–2 sessions |
+| O2 | Interview rounds + feedback — ✅ LIVE 2026-11-12 (plan `plans/2026-11-12-podium-o2-interviews.md`; reminders manual, no cron) | Optional | C1, C2 | 1–2 sessions |
 | O3 | One-click Calendar scheduling (Podium link) | Optional | O2 + Workspace scope | 1 session |
 
 Scope: **Fraternitas (white-collar) hires, including interns.** Blue-collar contract labour via Silverton is
