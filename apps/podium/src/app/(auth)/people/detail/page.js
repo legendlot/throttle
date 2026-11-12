@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { ArrowLeft, Pencil, Download, Trash2, Lock } from 'lucide-react';
+import { ArrowLeft, Pencil, Download, Trash2, Lock, AlertTriangle, RefreshCw } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
 import EmployeeForm from '../../../../components/EmployeeForm.js';
 import DocumentUploader from '../../../../components/DocumentUploader.js';
@@ -28,12 +28,15 @@ export default function PersonDetailPage() {
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
   const [tab, setTab] = useState('profile');
+  const [syncKey, setSyncKey] = useState(0);
 
   const load = useCallback(() => {
     if (!session || !id) return;
     podiumopsGet('getEmployee', { id }, session).then(setData).catch(() => setData(false));
+    setSyncKey(k => k + 1);
   }, [session, id]);
   useEffect(() => { load(); }, [load]);
+  const sync = useGoogleSync(session, id, !!(perms?.podium_hr || perms?.podium_google_admin), syncKey);
 
   if (data === false) return <div style={{ color: 'var(--text-3)' }}>Not found.</div>;
   if (!data) return <Spinner />;
@@ -51,6 +54,7 @@ export default function PersonDetailPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 24, fontWeight: 700, letterSpacing: '0.03em' }}>{e.full_name}</h1>
             <StatusBadge status={e.status} onNotice={e.on_notice} />
+            <GoogleSyncChip sync={sync.state} />
           </div>
           <div style={{ color: 'var(--text-2)', fontSize: 13 }}>
             <span style={{ color: 'var(--podium-accent)', fontWeight: 600 }}>{e.employee_code}</span>
@@ -62,6 +66,7 @@ export default function PersonDetailPage() {
       </header>
 
       {!full && <div style={notice}><Lock size={13} /> Limited view — full profile is visible to HR, the person, and their managers.</div>}
+      <GoogleSyncBanner sync={sync} />
 
       <div style={tabBar}>
         {TABS.map(t => (
@@ -242,6 +247,76 @@ function CompCard({ employeeId, session, canManage }) {
     </Card>
   );
 }
+
+// J1b D7: the Google push state for this person (HR / Google admins). A failed push shows "Google not updated" with
+// Retry (Google admins); pending / skipped show as a chip. getGoogleSyncStatus also drains the queue.
+function useGoogleSync(session, employeeId, allowed, key) {
+  const { showToast } = useToast();
+  const [state, setState] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!session || !employeeId || !allowed) return;
+    let live = true;
+    // A save pushes inline, but a fan-out drains after the response: read again shortly after a change.
+    const read = () => podiumopsGet('getGoogleSyncStatus', { employee_id: employeeId }, session)
+      .then(r => { if (live) setState(r); }).catch(() => {});
+    read();
+    const t = setTimeout(read, 6000);
+    return () => { live = false; clearTimeout(t); };
+  }, [session, employeeId, allowed, key]);
+  async function retry() {
+    setBusy(true);
+    try {
+      const r = await podiumopsPost('retryGoogleSync', { employee_id: employeeId }, session);
+      const gs = r?.google_sync;
+      if (gs?.status === 'ok') showToast('Google updated', 'success');
+      else if (gs?.status === 'failed') showToast(`Google not updated: ${gs.error || 'push failed'}`, 'error');
+      else if (gs?.status === 'skipped') showToast(`Not pushed: ${SKIP_LABEL[gs.skip_reason] || gs.skip_reason}`, 'error');
+      else showToast('Google update pending', 'success');
+      const s = await podiumopsGet('getGoogleSyncStatus', { employee_id: employeeId }, session);
+      setState(s);
+    } catch (err) { showToast(err.message || 'Retry failed', 'error'); }
+    finally { setBusy(false); }
+  }
+  return { state, busy, retry };
+}
+
+const SKIP_LABEL = {
+  exited: 'exited', status_out_of_scope: 'status not synced', no_work_email: 'no legendoftoys.com work email',
+  founder_or_super_admin: 'founders and super-admins are never synced', directory_ignored: 'on the Directory ignore list',
+  no_google_account: 'no Google account for the work email', alias_mismatch: 'the work email is an alias in Google, not the primary address',
+  suspended: 'suspended in Google', excluded_ou: 'in an excluded Google org unit', target_ou_excluded: 'the chosen org unit is excluded',
+  target_ou_unknown: 'the chosen org unit does not exist in Google', not_found: 'not found',
+};
+
+function GoogleSyncChip({ sync }) {
+  const st = sync?.sync?.status;
+  if (st === 'pending') return <span style={chip('var(--state-warning-bg)', 'var(--state-warning-fg)')} title="Podium will push the latest values to Google shortly">Google sync pending</span>;
+  if (st === 'skipped') return <span style={chip('var(--surface-2)', 'var(--text-3)')} title={SKIP_LABEL[sync.sync.skip_reason] || sync.sync.skip_reason || ''}>Not synced to Google</span>;
+  return null;
+}
+
+function GoogleSyncBanner({ sync }) {
+  const s = sync.state?.sync;
+  if (!s || s.status !== 'failed') return null;
+  return (
+    <div style={{ ...notice, background: 'var(--state-error-bg)', color: 'var(--state-error-fg)', border: '1px solid var(--state-error)', justifyContent: 'space-between' }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <AlertTriangle size={13} /> Google not updated: {s.last_error || 'the push failed'}.
+        {s.next_attempt_at ? ` Podium retries automatically after ${fmtTime(s.next_attempt_at)}.` : ''}
+      </span>
+      {sync.state?.can_retry && (
+        <button onClick={sync.retry} disabled={sync.busy} style={{ ...editBtn, padding: '4px 10px' }}>
+          <RefreshCw size={12} /> {sync.busy ? 'Retrying…' : 'Retry'}
+        </button>
+      )}
+    </div>
+  );
+}
+function fmtTime(iso) {
+  try { return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }); } catch { return ''; }
+}
+const chip = (bg, fg) => ({ fontSize: 10.5, fontWeight: 600, padding: '2px 8px', borderRadius: 'var(--radius-full)', background: bg, color: fg, whiteSpace: 'nowrap' });
 
 function Avatar({ emp }) {
   const initials = (emp.full_name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();

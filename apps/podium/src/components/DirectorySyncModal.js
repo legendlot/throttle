@@ -1,21 +1,43 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { X, RefreshCw, UserPlus, AlertTriangle, Ban, ArrowLeftRight, Check } from 'lucide-react';
+import { X, RefreshCw, UserPlus, AlertTriangle, Ban, ArrowLeftRight, Eye, Upload } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
 
-// On-demand Google Directory sync — review-and-confirm. Proposes new joiners (import / ignore,
-// dept/manager editable) and moves. X1: people suspended / missing in Google are ALERTS only — an exit
-// is started on the person's page (the worker refuses an exit list: exits_are_recorded_in_podium).
+// On-demand Google Directory sync. Two tabs:
+// · From Google: review-and-confirm new joiners (import / ignore, dept/manager editable). X1: people suspended /
+//   missing in Google are ALERTS only; an exit is started on the person's page (the worker refuses an exit list).
+// · Google vs Podium (J1b D11): Podium is the source of truth for name, title, department, manager, phone, code and
+//   org unit, and pushes them to Google. Per person × field diff, Preview (dry run) then Push in chunks of 8.
+//   The old "moved / differing" review is gone: the worker refuses update / dismiss / baseline (podium_owns_these_fields).
 export default function DirectorySyncModal({ session, onClose, onDone }) {
+  const [tab, setTab] = useState('google');
+  return (
+    <div style={overlay} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={modal} role="dialog" aria-modal="true" aria-label="Google Directory">
+        <div style={head}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><RefreshCw size={15} /> Google Directory</span>
+          <button onClick={onClose} style={iconBtn}><X size={16} /></button>
+        </div>
+        <div style={tabBar}>
+          <button style={tabBtn(tab === 'google')} onClick={() => setTab('google')}><UserPlus size={12} /> From Google</button>
+          <button style={tabBtn(tab === 'diff')} onClick={() => setTab('diff')}><ArrowLeftRight size={12} /> Google vs Podium</button>
+        </div>
+        {tab === 'google'
+          ? <FromGoogle session={session} onClose={onClose} onDone={onDone} />
+          : <GoogleVsPodium session={session} onClose={onClose} />}
+      </div>
+    </div>
+  );
+}
+
+function FromGoogle({ session, onClose, onDone }) {
   const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
   const [rows, setRows] = useState([]);          // new candidates (editable)
   const [departed, setDeparted] = useState([]);  // exit_started_outside_podium alerts (read-only)
-  const [moves, setMoves] = useState([]);        // existing people whose Google signal changed
-  const [baseline, setBaseline] = useState([]);  // nothing to review — just record the OU we saw
   const [submitting, setSubmitting] = useState(false);
 
   async function load() {
@@ -36,16 +58,6 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
       })));
       // X1: alerts only — never exited from here (the S363 sync-day-date history is why exits moved to Podium).
       setDeparted(r.departed || []);
-      // A 'moved' row (Google's OU actually changed) defaults to Update with Google's
-      // suggestion pre-filled. A 'differs' row defaults to NO action — Podium is finer
-      // grained than Google, so a standing disagreement is usually Podium being right.
-      setBaseline(r.baseline || []);
-      setMoves((r.changed || []).map(c => ({
-        ...c,
-        action: c.tier === 'moved' ? 'update' : 'none',
-        department_id: c.dept_suggested_id || c.dept_current_id || '',
-        manager_id: c.mgr_suggested_id || c.mgr_current_id || '',
-      })));
     } catch (e) {
       setError(e.message || 'Sync failed');
     } finally { setLoading(false); }
@@ -54,9 +66,6 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
 
   function setRow(email, patch) {
     setRows(prev => prev.map(r => (r.email === email ? { ...r, ...patch } : r)));
-  }
-  function setMove(id, patch) {
-    setMoves(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)));
   }
 
   async function submit() {
@@ -68,23 +77,12 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
       showToast(`Joining date required for ${undatedJoins.map(r => r.full_name).join(', ')}`, 'error');
       return;
     }
-    const update = moves.filter(m => m.action === 'update')
-      .map(m => ({ id: m.id, department_id: m.department_id || null, manager_id: m.manager_id || null, org_unit: m.org_unit }));
-    // S369: `mgr_google_email` is what makes a MANAGER-ONLY dismissal stick. Sending only the org
-    // unit left the worker nothing to bank for a row that was flagged purely on the manager, so
-    // Dismiss silenced it for exactly zero syncs. Undefined on OU-only rows, and the worker
-    // deliberately does not blank the baseline when it is absent.
-    const dismiss = moves.filter(m => m.action === 'dismiss')
-      .map(m => ({ id: m.id, org_unit: m.org_unit, mgr_google_email: m.mgr_google_email || null }));
-    if (!create.length && !ignore.length && !update.length && !dismiss.length && !baseline.length) { showToast('Nothing selected', 'error'); return; }
+    if (!create.length && !ignore.length) { showToast('Nothing selected', 'error'); return; }
     if (create.length > 20) { showToast('Import at most 20 at a time', 'error'); return; }
     setSubmitting(true);
     try {
-      const res = await podiumopsPost('importDirectoryCandidates', { data: { create, ignore, update, dismiss, baseline } }, session);
-      const parts = [`${res.created?.length || 0} added`, `${res.ignored?.length || 0} ignored`];
-      if (update.length || dismiss.length) parts.push(`${res.updated?.length || 0} updated`, `${res.dismissed?.length || 0} dismissed`);
-      if (res.baselined) parts.push(`${res.baselined} recorded`);
-      const msg = parts.join(' · ');
+      const res = await podiumopsPost('importDirectoryCandidates', { data: { create, ignore } }, session);
+      const msg = [`${res.created?.length || 0} added`, `${res.ignored?.length || 0} ignored`].join(' · ');
       showToast(res.errors?.length ? `${msg} · ${res.errors.length} error(s)` : msg, res.errors?.length ? 'error' : 'success');
       onDone && onDone();
       onClose();
@@ -94,13 +92,7 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
 
   const c = data?.counts;
   return (
-    <div style={overlay} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={modal} role="dialog" aria-modal="true" aria-label="Sync from Google Directory">
-        <div style={head}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><RefreshCw size={15} /> Sync from Google Directory</span>
-          <button onClick={onClose} style={iconBtn}><X size={16} /></button>
-        </div>
-
+    <>
         <div style={body}>
           {loading ? <div style={{ padding: 40 }}><Spinner /></div>
           : error ? (
@@ -117,19 +109,11 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
             <>
               <div style={summary}>
                 <b>{c?.google_total ?? 0}</b> in Google · <b>{c?.excluded_ou ?? 0}</b> shared (skipped) ·
-                <b style={{ color: 'var(--podium-accent)' }}> {c?.new ?? 0}</b> new · <b>{c?.departed ?? 0}</b> departed ·
-                <b style={{ color: 'var(--podium-accent)' }}> {c?.moved ?? 0}</b> moved · <b>{c?.differs ?? 0}</b> differing
+                <b style={{ color: 'var(--podium-accent)' }}> {c?.new ?? 0}</b> new · <b>{c?.departed ?? 0}</b> departed
               </div>
 
-              {rows.length === 0 && departed.length === 0 && moves.length === 0 && (
-                <div style={{ padding: 20, color: 'var(--text-3)' }}>Everyone in Google is already in Podium, in the same department, under the same manager. Nothing to review.</div>
-              )}
-
-              {baseline.length > 0 && (
-                <div style={{ fontSize: 11.5, color: 'var(--text-3)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', marginBottom: 10, lineHeight: 1.5 }}>
-                  Applying will also record the current Google org unit for <b>{baseline.length}</b> {baseline.length === 1 ? 'person who matches' : 'people who match'} Podium already.
-                  This writes nothing but that org unit — no department, no manager, nobody moves. It is what lets a future change be recognised as a real move rather than a disagreement.
-                </div>
+              {rows.length === 0 && departed.length === 0 && (
+                <div style={{ padding: 20, color: 'var(--text-3)' }}>Everyone in Google is already in Podium. Nothing to import. Department, manager and org unit differences are on the Google vs Podium tab.</div>
               )}
 
               {rows.length > 0 && (
@@ -192,60 +176,6 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
                 </>
               )}
 
-              {moves.length > 0 && (
-                <>
-                  <div style={{ ...sectionTitle, marginTop: 16 }}><ArrowLeftRight size={13} /> Moved / differing ({moves.length})</div>
-                  <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginBottom: 8, lineHeight: 1.5 }}>
-                    <b style={{ color: 'var(--podium-accent)' }}>Moved</b> = this person’s Google org unit actually changed since the last sync — a real move, pre-filled and set to update.
-                    <b> Differing</b> = Google simply disagrees with Podium; Podium’s departments are finer-grained than Google’s, so this is usually Podium being right. Those default to no action —
-                    set the correct department/manager yourself, or dismiss to stop it being reported again.
-                  </div>
-                  <table style={table}>
-                    <thead><tr>
-                      <th style={th}>Action</th><th style={th}>Person</th><th style={th}>What changed</th>
-                      <th style={th}>Department</th><th style={th}>Manager</th>
-                    </tr></thead>
-                    <tbody>
-                      {moves.map(m => (
-                        <tr key={m.id} style={{ opacity: m.action === 'dismiss' ? 0.45 : 1 }}>
-                          <td style={td}>
-                            <div style={{ display: 'flex', gap: 4 }}>
-                              <button title="Apply the department / manager shown" style={pill(m.action === 'update', 'var(--podium-accent)', '#1f1f1f')} onClick={() => setMove(m.id, { action: 'update' })}><Check size={12} /></button>
-                              <button title="Leave Podium as it is (and stop reporting this)" style={pill(m.action === 'dismiss', 'var(--surface-3)', 'var(--text-2)')} onClick={() => setMove(m.id, { action: 'dismiss' })}><Ban size={12} /></button>
-                            </div>
-                            {m.action === 'none' && <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 3 }}>no action</div>}
-                          </td>
-                          <td style={td}>
-                            <div style={{ fontWeight: 600 }}>{m.full_name}</div>
-                            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>{m.email}</div>
-                          </td>
-                          <td style={{ ...td, fontSize: 11, color: 'var(--text-3)', maxWidth: 240 }}>
-                            <span style={{
-                              display: 'inline-block', marginBottom: 3, padding: '1px 6px', borderRadius: 3, fontSize: 9.5,
-                              fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
-                              background: m.tier === 'moved' ? 'var(--podium-accent)' : 'var(--surface-3)',
-                              color: m.tier === 'moved' ? '#1f1f1f' : 'var(--text-2)',
-                            }}>{m.tier === 'moved' ? 'Moved' : 'Differs'}</span>
-                            {(m.reasons || []).map((x, i) => <div key={i}>{x}</div>)}
-                            <div style={{ marginTop: 3 }}>Now in Podium: {m.dept_current_name || '—'} · {m.mgr_current_name || 'no manager'}</div>
-                          </td>
-                          <td style={td}>
-                            <Combobox value={m.department_id || ''} disabled={m.action === 'dismiss'} onChange={v => setMove(m.id, { department_id: v, action: m.action === 'none' ? 'update' : m.action })}
-                              style={comboCell} inputStyle={comboCellInp} placeholder="Search…" portal
-                              options={(data.departments || []).map(d => ({ value: d.id, label: d.name }))} />
-                          </td>
-                          <td style={td}>
-                            <Combobox value={m.manager_id || ''} disabled={m.action === 'dismiss'} onChange={v => setMove(m.id, { manager_id: v, action: m.action === 'none' ? 'update' : m.action })}
-                              style={comboCell} inputStyle={comboCellInp} placeholder="Search…" portal
-                              options={(data.managers || []).filter(x => x.id !== m.id).map(x => ({ value: x.id, label: x.full_name }))} />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </>
-              )}
-
               {departed.length > 0 && (
                 <>
                   <div style={{ ...sectionTitle, marginTop: 16, color: 'var(--state-error-fg)' }}><AlertTriangle size={13} /> Exit started outside Podium ({departed.length})</div>
@@ -284,8 +214,256 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
             </button>
           )}
         </div>
+    </>
+  );
+}
+
+// ── Google vs Podium (J1b D11) ───────────────────────────────────────────────
+const FIELD_LABEL = { name: 'Name', title: 'Job title', department: 'Department', manager: 'Manager', phone: 'Phone (mobile)',
+  employee_code: 'Employee code', org_unit: 'Org unit' };
+const STATE_LABEL = { differs: 'Differs', changed_in_google: 'Changed in Google', podium_blank: 'Blank in Podium', equal: 'Same' };
+const SKIP_LABEL = {
+  founder_or_super_admin: 'Founder or super-admin (never synced)', directory_ignored: 'On the ignore list', no_google_account: 'No Google account',
+  alias_mismatch: 'Work email is an alias in Google', suspended: 'Suspended in Google', excluded_ou: 'In an excluded org unit',
+  target_ou_excluded: 'Chosen org unit is excluded', target_ou_unknown: 'Chosen org unit not in Google', no_work_email: 'No work email',
+  status_out_of_scope: 'Status not synced', exited: 'Exited', not_found: 'Not found',
+};
+const RESULT_LABEL = { would_push: 'Would push', no_change: 'No change', skipped: 'Skipped', failed: 'Failed', ok: 'Pushed', pending: 'Pushed, more pending',
+  in_progress: 'In progress elsewhere', stale_preview: 'Changed since the preview, not pushed' };
+
+function showVal(field, v, state) {
+  if (field === 'manager' && state === 'podium_blank') return 'manager has no work email';
+  if (field === 'name') {
+    if (!v) return 'blank';
+    return v.givenName === v.familyName ? v.givenName : `${v.givenName} ${v.familyName}`;
+  }
+  if (field === 'manager' && v === null) return 'no manager';
+  return v || 'blank';
+}
+
+// Group the picked person × field cells into calls: people with the same field set share a call, ≤ chunk per call.
+function planCalls(picked, chunk) {
+  const groups = new Map();
+  for (const [id, fields] of picked) {
+    if (!fields.length) continue;
+    const key = [...fields].sort().join(',');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(id);
+  }
+  const calls = [];
+  for (const [key, ids] of groups) for (let i = 0; i < ids.length; i += chunk) calls.push({ fields: key.split(','), employee_ids: ids.slice(i, i + chunk) });
+  return calls;
+}
+
+function GoogleVsPodium({ session, onClose }) {
+  const { showToast } = useToast();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [data, setData] = useState(null);
+  const [pick, setPick] = useState({});          // `${id}:${field}` → true
+  const [showAll, setShowAll] = useState(false);
+  const [preview, setPreview] = useState(null);  // { key, results }
+  const [busy, setBusy] = useState(null);        // 'preview' | 'push' | null
+  const [progress, setProgress] = useState('');
+  const [notPushed, setNotPushed] = useState([]); // after a Push: stale / failed / in progress rows, and org units skipped
+
+  async function load() {
+    setLoading(true); setError(null); setPreview(null);
+    try {
+      const r = await podiumopsGet('getGoogleDiff', {}, session);
+      setData(r);
+      // Podium is the truth: a plain difference starts ticked. "Changed in Google" (someone edited Google after our
+      // last push) starts unticked, so HR looks at it before Podium's value overwrites it.
+      const p = {};
+      for (const person of r.people || []) for (const f of r.fields || []) if (person.fields[f]?.state === 'differs') p[`${person.id}:${f}`] = true;
+      setPick(p);
+    } catch (e) { setError(e.message || 'Could not load the diff'); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const picked = useMemo(() => {
+    const m = new Map();
+    for (const [k, on] of Object.entries(pick)) {
+      if (!on) continue;
+      const [id, f] = k.split(':');
+      if (!m.has(id)) m.set(id, []);
+      m.get(id).push(f);
+    }
+    return m;
+  }, [pick]);
+  const pickKey = useMemo(() => [...picked].map(([id, fs]) => `${id}:${[...fs].sort().join(',')}`).sort().join('|'), [picked]);
+  const chunk = data?.push_chunk || 8;
+  const cellCount = [...picked.values()].reduce((n, fs) => n + fs.length, 0);
+
+  async function run(dryRun) {
+    // Push is bound to the preview and is one-shot: only the people the preview says would change are sent, each with
+    // the hash of the exact body previewed. The worker refuses anyone whose body has changed since (stale_preview,
+    // 409; the others in that batch are still pushed), and a failed push is NOT retried automatically.
+    const hashOf = Object.fromEntries((preview?.results || []).filter(r => r.status === 'would_push' && r.hash).map(r => [r.employee_id, r.hash]));
+    const sendPick = dryRun ? picked : new Map([...picked].filter(([id]) => hashOf[id]));
+    const calls = planCalls(sendPick, chunk);
+    if (!calls.length) { showToast(dryRun ? 'Tick at least one field' : 'The preview has nothing to push', 'error'); return; }
+    const sendCells = [...sendPick.values()].reduce((n, fs) => n + fs.length, 0);
+    if (!dryRun && !window.confirm(`Push Podium's values to Google for ${sendPick.size} ${sendPick.size === 1 ? 'person' : 'people'} (${sendCells} fields)?`)) return;
+    setBusy(dryRun ? 'preview' : 'push');
+    setNotPushed([]);
+    const results = [];
+    try {
+      for (let i = 0; i < calls.length; i++) {
+        setProgress(`${dryRun ? 'Previewing' : 'Pushing'} batch ${i + 1} of ${calls.length}`);
+        const data = { ...calls[i], dry_run: dryRun };
+        if (!dryRun) data.preview_hashes = Object.fromEntries(calls[i].employee_ids.map(id => [id, hashOf[id]]));
+        try {
+          const r = await podiumopsPost('pushGoogleFields', { data }, session);
+          results.push(...(r.results || []));
+        } catch (e) {
+          if (e.body?.error !== 'stale_preview') throw e;
+          results.push(...(e.body.results || []));
+        }
+      }
+      if (dryRun) setPreview({ key: pickKey, results });
+      else {
+        const n = (s) => results.filter(x => x.status === s).length;
+        const msg = `${n('ok') + n('pending')} pushed · ${n('skipped')} skipped · ${n('failed')} failed${n('stale_preview') ? ` · ${n('stale_preview')} changed since the preview` : ''}`;
+        showToast(msg, n('failed') || n('stale_preview') ? 'error' : 'success');
+        await load();
+        setPreview(null);   // a preview is spent once pushed; preview again for anything left
+        setNotPushed(results.filter(x => ['failed', 'stale_preview', 'in_progress'].includes(x.status) || Object.keys(x.field_skips || {}).length));
+      }
+    } catch (e) { showToast(e.message || (dryRun ? 'Preview failed' : 'Push failed'), 'error'); }
+    finally { setBusy(null); setProgress(''); }
+  }
+
+  const people = (data?.people || []).filter(p => showAll || p.differing.length || (data.fields || []).some(f => pick[`${p.id}:${f}`]));
+  const previewFresh = preview && preview.key === pickKey;
+  const toggle = (id, f) => setPick(prev => ({ ...prev, [`${id}:${f}`]: !prev[`${id}:${f}`] }));
+
+  return (
+    <>
+      <div style={body}>
+        {loading ? <div style={{ padding: 40 }}><Spinner /></div>
+        : error ? (
+          <div style={{ padding: 20 }}>
+            <p style={{ color: 'var(--state-error-fg)', marginBottom: 6 }}>{error}</p>
+            <button style={btnSecondary} onClick={load}>Retry</button>
+          </div>
+        ) : (
+          <>
+            <div style={summary}>
+              <b>{data.counts.in_scope}</b> synced · <b style={{ color: 'var(--podium-accent)' }}>{data.counts.differing}</b> with differences ·
+              <b> {data.counts.skipped}</b> not synced · <b>{cellCount}</b> fields ticked
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginBottom: 8, lineHeight: 1.5 }}>
+              Podium is the source of truth. Ticked fields get Podium&apos;s value in Google. <b>Changed in Google</b> = someone edited it in Google after
+              Podium last pushed it; check it before ticking. A field blank in Podium is never pushed (Google keeps its value), except the manager:
+              no manager in Podium removes Google&apos;s. Preview shows the exact change; Push sends it, {chunk} people per batch.
+            </div>
+            {notPushed.length > 0 && (
+              <div style={{ fontSize: 12, color: 'var(--state-warning-fg)', background: 'var(--state-warning-bg)', border: '1px solid var(--state-warning)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', marginBottom: 10, lineHeight: 1.5 }}>
+                <div style={{ fontWeight: 600, marginBottom: 2 }}>Not everything was pushed. A failed push is not retried automatically: preview and push again.</div>
+                {notPushed.map(x => {
+                  const pp = (data.people || []).find(q => q.id === x.employee_id);   // push results carry ids only
+                  const who = pp?.full_name || pp?.work_email || x.employee_id;
+                  const skips = Object.values(x.field_skips || {});
+                  const why = x.status === 'stale_preview' ? 'Google or Podium changed after the preview'
+                    : x.status === 'failed' ? `Failed${x.error ? `: ${x.error}` : ''}`
+                    : x.status === 'in_progress' ? 'Being synced right now, try again in a minute'
+                    : `Pushed, but the org unit was not moved: ${skips.map(r => SKIP_LABEL[r] || r).join(', ')}`;
+                  return <div key={x.employee_id}>{who}: {why}</div>;
+                })}
+              </div>
+            )}
+            <label style={{ fontSize: 12, color: 'var(--text-2)', display: 'inline-flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+              <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} /> Show people with no differences
+            </label>
+
+            {people.length === 0 ? (
+              <div style={{ padding: 20, color: 'var(--text-3)' }}>Google already matches Podium for everyone synced.</div>
+            ) : (
+              <table style={table}>
+                <thead><tr><th style={th}>Person</th><th style={th}>Field</th><th style={th}>Podium</th><th style={th}>Google</th><th style={th}>State</th><th style={th}>Push</th></tr></thead>
+                <tbody>
+                  {people.map(p => {
+                    const fs = (data.fields || []).filter(f => showAll || p.fields[f].state !== 'equal');
+                    return fs.map((f, i) => {
+                      const cell = p.fields[f];
+                      const pushable = cell.state === 'differs' || cell.state === 'changed_in_google';
+                      return (
+                        <tr key={`${p.id}:${f}`}>
+                          {i === 0 && (
+                            <td style={td} rowSpan={fs.length}>
+                              <div style={{ fontWeight: 600 }}>{p.full_name}</div>
+                              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>{p.work_email}</div>
+                              {p.sync?.status === 'failed' && <div style={{ fontSize: 10.5, color: 'var(--state-error-fg)', marginTop: 2 }}>Last push failed: {p.sync.last_error}</div>}
+                            </td>
+                          )}
+                          <td style={{ ...td, fontSize: 12 }}>{FIELD_LABEL[f]}</td>
+                          <td style={{ ...td, fontSize: 12 }}>{showVal(f, cell.podium, cell.state)}</td>
+                          <td style={{ ...td, fontSize: 12, color: 'var(--text-3)' }}>{showVal(f, cell.google)}</td>
+                          <td style={{ ...td, fontSize: 11, color: cell.state === 'changed_in_google' ? 'var(--state-warning-fg)' : 'var(--text-3)' }}>{STATE_LABEL[cell.state]}</td>
+                          <td style={td}>{pushable && <input type="checkbox" checked={!!pick[`${p.id}:${f}`]} onChange={() => toggle(p.id, f)} aria-label={`Push ${FIELD_LABEL[f]} for ${p.full_name}`} />}</td>
+                        </tr>
+                      );
+                    });
+                  })}
+                </tbody>
+              </table>
+            )}
+
+            {previewFresh && (
+              <>
+                <div style={{ ...sectionTitle, marginTop: 16 }}><Eye size={13} /> Preview: what Push would send ({preview.results.length})</div>
+                <table style={table}>
+                  <thead><tr><th style={th}>Person</th><th style={th}>Result</th><th style={th}>Google request</th></tr></thead>
+                  <tbody>
+                    {preview.results.map(r => (
+                      <tr key={r.employee_id}>
+                        <td style={td}><div style={{ fontWeight: 600 }}>{r.full_name || r.employee_id}</div><div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>{r.work_email}</div></td>
+                        <td style={{ ...td, fontSize: 12 }}>{RESULT_LABEL[r.status] || r.status}{r.skip_reason ? `: ${SKIP_LABEL[r.skip_reason] || r.skip_reason}` : ''}{r.error ? `: ${r.error}` : ''}</td>
+                        <td style={td}>{r.body ? <pre style={pre}>{JSON.stringify(r.body, null, 2)}</pre> : <span style={{ fontSize: 12, color: 'var(--text-3)' }}>nothing to send</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+
+            {data.skipped?.length > 0 && (
+              <details style={{ marginTop: 14 }}>
+                <summary style={{ ...sectionTitle, cursor: 'pointer' }}><Ban size={13} /> Not synced ({data.skipped.length})</summary>
+                <table style={table}>
+                  <tbody>
+                    {data.skipped.map(x => (
+                      <tr key={x.id}><td style={td}>{x.full_name}<div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>{x.work_email || 'no work email'}</div></td>
+                        <td style={{ ...td, fontSize: 12, color: 'var(--text-3)' }}>{SKIP_LABEL[x.reason] || x.reason}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+            )}
+          </>
+        )}
       </div>
-    </div>
+      <div style={foot}>
+        {progress && <span style={{ fontSize: 12, color: 'var(--text-3)', marginRight: 'auto', alignSelf: 'center' }}>{progress}</span>}
+        <button style={btnSecondary} onClick={onClose} disabled={!!busy}>Close</button>
+        {!loading && !error && data?.can_push && (
+          <>
+            <button style={{ ...btnSecondary, opacity: busy ? 0.6 : 1 }} onClick={() => run(true)} disabled={!!busy || !cellCount}>
+              <Eye size={12} /> {busy === 'preview' ? 'Previewing…' : 'Preview'}
+            </button>
+            <button style={{ ...btnPrimary, opacity: busy || !previewFresh ? 0.6 : 1 }} onClick={() => run(false)} disabled={!!busy || !previewFresh}
+              title={previewFresh ? '' : 'Preview the ticked fields first'}>
+              <Upload size={12} /> {busy === 'push' ? 'Pushing…' : 'Push to Google'}
+            </button>
+          </>
+        )}
+        {!loading && !error && data && !data.can_push && (
+          <span style={{ fontSize: 12, color: 'var(--text-3)', alignSelf: 'center' }}>Only a Google admin can push.</span>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -309,6 +487,11 @@ const td = { padding: '7px 8px', borderBottom: '1px solid var(--border)', vertic
 const sel = { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '4px 6px', fontSize: 12, minWidth: 130, maxWidth: 170 };
 const comboCell = { minWidth: 130, maxWidth: 180 };
 const comboCellInp = { fontSize: 12, padding: '4px 6px' };
+const tabBar = { display: 'flex', gap: 4, padding: '0 16px', borderBottom: '1px solid var(--border)' };
+const tabBtn = (on) => ({ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'transparent', border: 'none',
+  borderBottom: `2px solid ${on ? 'var(--podium-accent)' : 'transparent'}`, color: on ? 'var(--text-1)' : 'var(--text-3)',
+  padding: '8px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer', marginBottom: -1 });
+const pre = { margin: 0, fontFamily: 'var(--font-mono)', fontSize: 10.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: 420, color: 'var(--text-2)' };
 const iconBtn = { background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', display: 'inline-flex' };
 const btnBase = { borderRadius: 'var(--radius-sm)', padding: '7px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', cursor: 'pointer' };
 const btnPrimary = { ...btnBase, background: 'var(--podium-accent)', color: '#1f1f1f', border: '1px solid var(--podium-accent)' };

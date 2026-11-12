@@ -91,6 +91,11 @@ import {
   verdictBlock, checkFeedback, feedbackBlock, remindAllowed, panelView, interviewSummary, myInterviewBuckets,
   panelDocs, buildReminderMail, reminderMessageId, interviewDbErrorCode, panelSelfBlock, seatState,
 } from './interviews.js';   // O2 interview rounds + feedback (test/interviews.test.mjs)
+import {
+  SYNC_FIELDS, DRAIN_CAP as GSYNC_CAP, GOOGLE_CALL_TIMEOUT_MS, SYNC_LEASE_MS, IDENTITY_RETRY_ATTEMPTS, desiredGoogleFields,
+  googleFieldsOf, mergeGoogleUser, bodyFields, scopeOf, diffPerson, nextLastPushed, nextAttemptAt, syncClaimFilter,
+  cleanSyncFields, ouExcluded, fieldsToPush, leaseHeld, previewHash, needsOuCheck, effectiveFields, identityChanged,
+} from './googlesync.js';   // J1b Podium → Google field sync (test/googlesync.test.mjs)
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 
@@ -529,7 +534,8 @@ async function getSettings(url, auth, env) {
 
 // Directory list. Everyone with podium_view sees it; rows the caller can't see in
 // full are projected down to the public subset.
-async function getEmployees(url, auth, env) {
+async function getEmployees(url, auth, env, ctx) {
+  kickGoogleSync(env, auth, ctx);   // J1b D7: opening the People list drains the Google push queue
   const status = url.searchParams.get('status');
   const department = url.searchParams.get('department_id');
   const search = (url.searchParams.get('search') || '').trim();
@@ -565,7 +571,8 @@ async function openExitEmployeeIds(env) {
   return new Set(r.ok && Array.isArray(r.data) ? r.data.map(x => x.employee_id).filter(id => UUID_RE.test(id)) : []);
 }
 
-async function getEmployee(url, auth, env) {
+async function getEmployee(url, auth, env, ctx) {
+  kickGoogleSync(env, auth, ctx);   // J1b D7: opening a person's page drains the Google push queue
   const id = url.searchParams.get('id');
   const code = url.searchParams.get('code');
   if (!id && !code) return err('id or code required', 400);
@@ -824,7 +831,31 @@ const EMPLOYEE_FIELDS = [
   'legal_entity', 'work_location', 'date_joined', 'probation_end_date', 'confirmed_at',
   'date_exited', 'exit_reason', 'status', 'photo_url',
   'gender', 'blood_group', 'pan_number',
+  // J1b D5: the Google org unit Podium wants (pushed to Google; google_org_unit stays "what Google last said").
+  'org_unit_path',
 ];
+
+// J1b: the org unit picked on EmployeeForm. Blank clears; otherwise a path ('/…') that is not in (or under) one of
+// settings.directory_excluded_ous (400 ou_excluded). The value already stored is always accepted (EmployeeForm sends
+// every field on every save, so an unchanged OU must not block saving someone). Whether the OU exists in Google is
+// decided at push time (target_ou_unknown). Mutates `obj`; → null | the error response.
+async function cleanOrgUnitField(obj, env, employeeId = null) {
+  if (!obj || !('org_unit_path' in obj)) return null;
+  const raw = obj.org_unit_path;
+  if (raw === null || raw === undefined || String(raw).trim() === '') { obj.org_unit_path = null; return null; }
+  const v = String(raw).trim();
+  if (!v.startsWith('/') || v.length > 300) return errCode('bad_org_unit', 'Pick an org unit from the list', 400);
+  obj.org_unit_path = v;
+  const [sr, cr] = await Promise.all([
+    sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
+    isUuid(employeeId) ? sb(`/rest/v1/employees?id=eq.${employeeId}&select=org_unit_path&limit=1`, env) : Promise.resolve({ ok: true, data: [] }),
+  ]);
+  if (!sr.ok || !cr.ok) return err('db_error: settings lookup failed', 500);
+  if (cr.data?.[0]?.org_unit_path === v) return null;
+  const excluded = sr.data?.[0]?.directory_excluded_ous || ['/Admin and general'];
+  if (ouExcluded(v, excluded)) return errCode('ou_excluded', 'That org unit is excluded from Podium (shared / admin accounts). Pick another', 400);
+  return null;
+}
 
 // ⭐ ONE date validator for all three write paths (S363 hostile review). The first version of this
 // change guarded the sync and `updateEmployee` and MISSED `createEmployee` — because it was found by
@@ -869,7 +900,7 @@ function cleanPanField(obj) {
   return null;
 }
 
-async function createEmployee(body, auth, env) {
+async function createEmployee(body, auth, env, ctx) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!body.full_name) return err('full_name required', 400);
   // X1: nobody is CREATED exited (or on notice) — an exit only happens through the exit flow, which
@@ -882,9 +913,12 @@ async function createEmployee(body, auth, env) {
   if (!code) { code = await mintEmployeeCode(env); if (!code) return err('failed_to_mint_employee_code', 500); }
   const row = { employee_code: code, created_by: auth.userId, ...pickFields(body, EMPLOYEE_FIELDS) };
   { const pe = cleanPanField(row); if (pe) return pe; }
-  const r = await sb(`/rest/v1/employees`, env, { method: 'POST', body: JSON.stringify([row]) });
+  { const oe = await cleanOrgUnitField(row, env); if (oe) return oe; }
+  const r = await sb(`/rest/v1/employees`, env, { method: 'POST', body: JSON.stringify([row]), headers: actorHeaders(auth) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  return ok(r.data?.[0]);
+  const created = r.data?.[0];
+  // J1b D7: the insert trigger marked them pending; push inline (never fails the save).
+  return ok(created ? { ...created, google_sync: await googleSyncAfterSave(env, auth, ctx, created.id) } : created);
 }
 
 // ── Auto-reassign reports when a manager exits (S306) ────────────────────────
@@ -949,7 +983,7 @@ async function reassignReportsOnExit(exitingId, auth, env) {
     } else if (movable.length) {
       const ids = movable.map(e => e.id).filter(id => UUID_RE.test(id));
       const pr = await sb(`/rest/v1/employees?id=in.(${ids.join(',')})&status=neq.exited&select=id`, env,
-        { method: 'PATCH', body: JSON.stringify({ manager_id: heir.id, updated_at: nowIso() }) });
+        { method: 'PATCH', body: JSON.stringify({ manager_id: heir.id, updated_at: nowIso() }), headers: actorHeaders(auth) });
       if (!pr.ok) out.errors.push(`reassign: ${JSON.stringify(pr.data)}`);
       else {
         out.to_manager = { id: heir.id, full_name: heir.full_name };
@@ -990,7 +1024,7 @@ async function reassignReportsOnExit(exitingId, auth, env) {
   return out;
 }
 
-async function updateEmployee(body, auth, env) {
+async function updateEmployee(body, auth, env, ctx) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!body.employee_id) return err('employee_id required', 400);
   const patch = pickPatch(body, EMPLOYEE_FIELDS);
@@ -1010,11 +1044,15 @@ async function updateEmployee(body, auth, env) {
   }
   if (patch.work_email) { const held = await workEmailAwaitingJoining(env, patch.work_email); if (held) return held; }
   { const pe = cleanPanField(patch); if (pe) return pe; }
+  { const oe = await cleanOrgUnitField(patch, env, body.employee_id); if (oe) return oe; }
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
-  const r = await sb(`/rest/v1/employees?id=eq.${body.employee_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  const r = await sb(`/rest/v1/employees?id=eq.${body.employee_id}`, env, { method: 'PATCH', body: JSON.stringify(patch), headers: actorHeaders(auth) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  return ok(r.data?.[0]);
+  const saved = r.data?.[0];
+  // J1b D7: the update trigger marked them pending only if a pushed field changed (EmployeeForm sends every field,
+  // the trigger compares IS DISTINCT FROM). Push inline; a Google failure comes back as google_sync, never an error.
+  return ok(saved ? { ...saved, google_sync: await googleSyncAfterSave(env, auth, ctx, saved.id) } : saved);
 }
 
 const DEPARTMENT_FIELDS = ['name', 'code', 'parent_department_id', 'head_employee_id', 'description', 'active'];
@@ -1028,14 +1066,16 @@ async function createDepartment(body, auth, env) {
   return ok(r.data?.[0]);
 }
 
-async function updateDepartment(body, auth, env) {
+async function updateDepartment(body, auth, env, ctx) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!body.department_id) return err('department_id required', 400);
   const patch = pickPatch(body, DEPARTMENT_FIELDS);
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
-  const r = await sb(`/rest/v1/departments?id=eq.${body.department_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  const r = await sb(`/rest/v1/departments?id=eq.${body.department_id}`, env, { method: 'PATCH', body: JSON.stringify(patch), headers: actorHeaders(auth) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  // J1b D6/D7: a rename marked its members pending (trigger); they drain after the response, 8 at a time.
+  kickGoogleSync(env, auth, ctx);
   return ok(r.data?.[0]);
 }
 
@@ -1629,52 +1669,15 @@ async function assignPodiumRole(body, auth, env) {
 const DEPT_ALIAS = { 'd2c': 'D2C / Website' }; // OU leaf → podium department name
 // Guards client-supplied ids before they reach a PostgREST `in.()` filter.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// '' and NULL must be indistinguishable for a Google org unit — see collectChange. Never
-// persist ''; it reads back falsy and permanently breaks move detection for that person.
-function normOu(s) { return (s === undefined || s === null || s === '') ? null : String(s); }
-
-// Email as a comparison key. Same falsy-empty-string discipline as normOu: '' and NULL must mean
-// the same thing, or a blank baseline reads as "dismissed" against a blank Google value.
+// Email as a comparison key. '' and NULL must mean the same thing (the falsy-empty-string class), or a
+// blank baseline reads as "dismissed" against a blank Google value. (normOu went with the J1b D10 move tiers.)
 export function normEmail(s) {
   if (s === undefined || s === null) return null;
   const t = String(s).trim().toLowerCase();
   return t === '' ? null : t;
 }
 
-/**
- * Does Google's manager disagree with Podium's, in a way a human has NOT already dismissed?
- *
- * S369 — the manager-side twin of the `google_org_unit` baseline. Before this, "Dismiss" wrote
- * only the org unit, so a row that entered `changed` SOLELY because the manager differed had
- * nothing to baseline and returned on every single sync (found by the S306 hostile review).
- *
- * ⚠️ The baseline records only GOOGLE's side, exactly as `google_org_unit` does. The consequence
- * worth knowing: after a dismissal, editing PODIUM's manager to a third person does NOT re-raise
- * the row, because Google still names the same person we already declined. That is deliberate —
- * the dismissal means "we are not taking Google's answer for this person", and re-asking because
- * we changed our own mind is the noise Dismiss exists to stop. Google naming someone ELSE is new
- * information and does re-raise it.
- *
- * @param gMgrId          Podium employee id resolved from Google's manager email (null if none/exited)
- * @param empManagerId    the employee's current manager_id in Podium
- * @param empId           the employee's own id — never propose someone as their own manager
- * @param googleMgrEmail  the manager email Google reports right now
- * @param baselineEmail   `employees.google_manager_email` — what was dismissed before, if anything
- */
-export function mgrDisagrees(gMgrId, empManagerId, empId, googleMgrEmail, baselineEmail) {
-  if (!gMgrId) return false;                       // Google has no usable manager for this person
-  if (gMgrId === empManagerId) return false;       // we already agree
-  if (gMgrId === empId) return false;              // self-management is never a suggestion
-  const live = normEmail(googleMgrEmail);
-  const seen = normEmail(baselineEmail);
-  // Dismissed, and Google has not changed its mind since.
-  if (seen && live && seen === live) return false;
-  return true;
-}
-
-function ouExcluded(ou, excluded) {
-  return (excluded || []).some(x => ou === x || (ou || '').startsWith(x + '/'));
-}
+// ouExcluded lives in src/googlesync.js (J1b scope shares it).
 function mapOuToDept(ou, deptByName) {
   if (!ou || ou === '/') return null;
   const leaf = ou.split('/').filter(Boolean).pop() || '';
@@ -1708,7 +1711,7 @@ async function getDirectorySyncPreview(url, auth, env) {
   const [sres, igRes, eRes, dRes, podiumMade] = await Promise.all([
     sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
     sb(`/rest/v1/directory_ignored?select=email`, env),
-    sb(`/rest/v1/employees?select=id,full_name,work_email,status,department_id,manager_id,google_org_unit,google_manager_email&limit=5000`, env),
+    sb(`/rest/v1/employees?select=id,full_name,work_email,status&limit=5000`, env),
     sb(`/rest/v1/departments?select=id,name&limit=500`, env),
     podiumMadeAccounts(env),
   ]);
@@ -1724,89 +1727,16 @@ async function getDirectorySyncPreview(url, auth, env) {
   const gEmails = new Set();
   const gSuspended = new Set();
   let excludedCount = 0;
-  // How many Google accounts actually carry a manager relation. Reported because it cannot be
-  // inferred from the review rows: `mgr_suggested` is null BOTH when Google has no manager AND
-  // when Google's manager already matches Podium's — an S306 claim was wrongly derived that way.
+  // How many Google accounts actually carry a manager relation (reported; an S306 claim was once wrongly
+  // inferred from the review rows instead).
   let gWithManager = 0;
   const newCands = [];
-  const changed = [];
-  const baseline = [];
-  const deptNameById = new Map(depts.map(d => [d.id, d.name]));
-  const empById = new Map(emps.map(e => [e.id, e]));
 
-  // MOVE detection for people already in Podium (S306).
-  //
-  // ⚠️ The load-bearing distinction: Podium's 21 departments are FINER-GRAINED than the
-  // Google OU tree, so "Google says a different department" is the NORMAL steady state for
-  // a correctly-filed employee, not evidence of a move. Proposing every disagreement would
-  // flatten Podium's granularity onto Google's on the first careless Apply. So two tiers:
-  //   · 'moved'   — the OU actually CHANGED since we last baselined it. A real event.
-  //   · 'differs' — Google disagrees but nothing changed (or we never baselined). Needs a
-  //                 human to say which system is right; defaults to no action in the UI.
-  // `google_org_unit` is the baseline, written only when HR resolves a row (update OR
-  // dismiss) — so dismissing teaches the sync to stop re-reporting that disagreement.
-  function collectChange(emp, gu) {
-    // ⚠️ '' and NULL must mean the SAME thing here, or an OU-less Google account poisons the
-    // baseline permanently: we would store '', read it back as falsy (⇒ prevOu null again),
-    // re-baseline it on EVERY sync forever, and — because `ouMoved` needs a truthy prevOu —
-    // that person's real moves would be downgraded to `differs` for good. Normalise both
-    // sides and never store ''. (Same falsy-empty-string class as `Number('') === 0`.)
-    const liveOu = normOu(gu.orgUnitPath);
-    const prevOu = normOu(emp.google_org_unit);
-    // A vanished OU (had one, now none) is not a department move — don't cry wolf.
-    const ouMoved = !!prevOu && !!liveOu && prevOu !== liveOu;
-
-    const suggestedDeptId = mapOuToDept(liveOu, deptByName);
-    const deptDiffers = !!suggestedDeptId && suggestedDeptId !== emp.department_id;
-
-    // String() because a non-string `value` from the API would throw on .toLowerCase() and
-    // take the whole preview down with a 500.
-    const rel = (gu.relations || []).find(r => r.type === 'manager' && r.value);
-    // ⚠️ Never suggest an EXITED manager: `emps` is unfiltered by status, and proposing one
-    // would recreate the dangling-manager class (reports pointing at an exited row, floating
-    // to the top of the org chart as pseudo-roots) that S306 had to repair by hand.
-    const gMgrRaw = rel ? empByEmail.get(String(rel.value).toLowerCase()) : null;
-    const gMgr = gMgrRaw && gMgrRaw.status !== 'exited' ? gMgrRaw : null;
-    const gMgrEmail = rel ? normEmail(rel.value) : null;
-    const mgrDiffers = mgrDisagrees(gMgr?.id, emp.manager_id, emp.id, gMgrEmail, emp.google_manager_email);
-
-    if (!ouMoved && !deptDiffers && !mgrDiffers) {
-      // Nothing for a human to decide — but if we have never recorded this person's OU we
-      // must record it now, or their FIRST real move can never be recognised as a move
-      // (prevOu NULL ⇒ ouMoved false ⇒ it lands in the low-confidence `differs` tier).
-      // Someone who simply agrees with Google never enters `changed`, so this is the only
-      // place their baseline can be written. Also self-heals people added via New Person.
-      // Only ever baseline a REAL org unit — recording '' is what created the loop above.
-      if (liveOu && prevOu !== liveOu) baseline.push({ id: emp.id, org_unit: liveOu });
-      return;
-    }
-
-    const reasons = [];
-    if (ouMoved) reasons.push(`Google OU changed: ${prevOu || '—'} → ${liveOu || '—'}`);
-    if (deptDiffers) reasons.push('Google OU maps to a different department');
-    if (mgrDiffers) reasons.push('Google manager differs');
-
-    changed.push({
-      id: emp.id,
-      email: emp.work_email,
-      full_name: emp.full_name,
-      org_unit: liveOu,
-      prev_org_unit: prevOu,
-      tier: ouMoved ? 'moved' : 'differs',
-      reasons,
-      dept_current_id: emp.department_id || null,
-      dept_current_name: emp.department_id ? (deptNameById.get(emp.department_id) || '—') : null,
-      dept_suggested_id: deptDiffers ? suggestedDeptId : null,
-      dept_suggested_name: deptDiffers ? (deptNameById.get(suggestedDeptId) || null) : null,
-      mgr_current_id: emp.manager_id || null,
-      mgr_current_name: emp.manager_id ? (empById.get(emp.manager_id)?.full_name || '—') : null,
-      mgr_suggested_id: mgrDiffers ? gMgr.id : null,
-      mgr_suggested_name: mgrDiffers ? gMgr.full_name : null,
-      // The value Dismiss must bank to make a manager-only row stay dismissed. Without it the
-      // client has nothing to send back and the row returns on the next sync (S369).
-      mgr_google_email: mgrDiffers ? gMgrEmail : null,
-    });
-  }
+  // ⭐ J1b D10: the S306 MOVE tiers ('moved' / 'differs') are gone. Podium is now the source of truth for
+  // department, manager and org unit, and pushes them to Google (plan 2026-11-12-podium-j1b-google-sync), so a
+  // Google-side difference is no longer a proposal to change Podium: it is shown, per field, on the Google vs Podium
+  // tab (getGoogleDiff), where HR pushes Podium's value. The import keeps new joiners, departure alerts, the ignore
+  // list and the excluded OUs; importDirectoryCandidates refuses update / dismiss / baseline.
   for (const gu of gusers) {
     const email = (gu.primaryEmail || '').toLowerCase();
     if (!email) continue;
@@ -1815,11 +1745,7 @@ async function getDirectorySyncPreview(url, auth, env) {
     if (gu.suspended) gSuspended.add(email);
     if (ouExcluded(gu.orgUnitPath, excluded)) { excludedCount++; continue; }
     if (ignored.has(email)) continue;
-    const known = empByEmail.get(email);
-    if (known) {                             // already an employee → check for a MOVE
-      if (known.status !== 'exited') collectChange(known, gu);
-      continue;
-    }
+    if (empByEmail.has(email)) continue;     // already an employee: their fields are pushed FROM Podium (J1b)
     if (gu.suspended) continue;              // suspended & not in Podium → not a new active hire
     const deptId = mapOuToDept(gu.orgUnitPath, deptByName);
     const rel = (gu.relations || []).find(r => r.type === 'manager' && r.value);
@@ -1854,14 +1780,9 @@ async function getDirectorySyncPreview(url, auth, env) {
     reason: gSuspended.has(e.work_email.toLowerCase()) ? 'suspended in Google' : 'no Google account',
   }));
 
-  const tierRank = { moved: 0, differs: 1 };
-  changed.sort((a, b) => (tierRank[a.tier] - tierRank[b.tier]) || a.full_name.localeCompare(b.full_name));
-
   return ok({
     new_candidates: newCands.sort((a, b) => a.full_name.localeCompare(b.full_name)),
     departed,
-    changed,
-    baseline,
     departments: depts,
     managers: emps.filter(e => e.status === 'active').map(e => ({ id: e.id, full_name: e.full_name }))
                   .sort((a, b) => a.full_name.localeCompare(b.full_name)),
@@ -1869,17 +1790,29 @@ async function getDirectorySyncPreview(url, auth, env) {
       google_total: gusers.length, excluded_ou: excludedCount, new: newCands.length, departed: departed.length,
       google_with_manager: gWithManager,
       active_in_podium: emps.filter(e => e.status !== 'exited').length,
-      moved: changed.filter(c => c.tier === 'moved').length,
-      differs: changed.filter(c => c.tier === 'differs').length,
-      baseline: baseline.length,
     },
   });
 }
 
-async function importDirectoryCandidates(body, auth, env) {
+// J1b D10: update[] / dismiss[] / baseline[] (the S306 move review) are refused. Podium owns department, manager
+// and org unit and PUSHES them to Google; writing Google's values (or a Google baseline) back into Podium would
+// undo Podium's own change. A non-empty list is refused outright: silently ignoring it would let an old client
+// believe it had applied it. Pure (exported for test/directory-sync.test.mjs). → null | error code
+export function refusedImportPayload(d) {
+  const has = (k) => Array.isArray(d?.[k]) && d[k].length > 0;
+  return has('update') || has('dismiss') || has('baseline') ? 'podium_owns_these_fields' : null;
+}
+
+export async function importDirectoryCandidates(body, auth, env, ctx) {
   const gate = requireHr(auth); if (gate) return gate;
-  if (!googleConfigured(env)) return err('google_not_configured', 400);
   const d = body.data || body;
+  // ⭐ X1: the sync no longer exits anyone. Exits are recorded in Podium (reason, checklist, LWD — the exit
+  // flow), and the S363 history of this list (sync-day dates, ~₹3.36L of phantom SG&A) is why: Google knows
+  // THAT an account went, never why or when the person last worked. A non-empty `exit` is refused outright —
+  // silently ignoring it would let an old client believe it had exited people.
+  if (Array.isArray(d.exit) && d.exit.length) return x1Err('exits_are_recorded_in_podium', 400);
+  { const refused = refusedImportPayload(d); if (refused) return j1bErr(refused, 400); }
+  if (!googleConfigured(env)) return err('google_not_configured', 400);
   // ⭐ `date_joined` IS REQUIRED on every import (S363) — the mirror of the (former) exit-date rule.
   // This path created people with NO joining date at all, and a NULL `date_joined` is not neutral:
   // `sales.f_podium_salary_run` and `_coverage` both gate on `(e.date_joined IS NULL OR
@@ -1895,21 +1828,8 @@ async function importDirectoryCandidates(body, auth, env) {
   // they start (a 2 Sep start recorded in August is exactly how `eligible` moved 65→64). So this
   // validates the format only and deliberately does NOT cap at today.
   const create = Array.isArray(d.create) ? d.create : []; // [{email, date_joined, department_id, manager_id, job_title}]
-  // ⭐ X1: the sync no longer exits anyone. Exits are recorded in Podium (reason, checklist, LWD — the exit
-  // flow), and the S363 history of this list (sync-day dates, ~₹3.36L of phantom SG&A) is why: Google knows
-  // THAT an account went, never why or when the person last worked. A non-empty `exit` is refused outright —
-  // silently ignoring it would let an old client believe it had exited people.
-  if (Array.isArray(d.exit) && d.exit.length) return x1Err('exits_are_recorded_in_podium', 400);
+  // X1 exit[] and the J1b move-review lists (update / dismiss / baseline) are refused above.
   const ignore = Array.isArray(d.ignore) ? d.ignore : [];  // [email,...]
-  // S306 move-review. `update` = HR-confirmed department/manager changes for people ALREADY
-  // in Podium; `dismiss` = "Podium is right, stop reporting this" — writes no org data, only
-  // baselines the OU. Both carry `org_unit` so the next preview can tell a real move from
-  // Google's coarser granularity. Never auto-applied: a row reaches here only because a human
-  // picked it in the modal (RULE-PODIUM-007, amended).
-  const update = Array.isArray(d.update) ? d.update : [];  // [{id, department_id, manager_id, org_unit}]
-  const dismiss = Array.isArray(d.dismiss) ? d.dismiss : []; // [{id, org_unit}]
-  // Bookkeeping only — the OU observed for people with nothing to review (see below).
-  const baselineIn = Array.isArray(d.baseline) ? d.baseline : []; // [{id, org_unit}]
   if (create.length > 20) return err('import at most 20 people per sync (subrequest limit) — run again for the rest', 400);
   // Validate every import BEFORE writing any of them: a half-applied
   // batch would leave some people created and others not, with no way to tell which from here.
@@ -1919,72 +1839,7 @@ async function importDirectoryCandidates(body, auth, env) {
     const e = badDate(c.date_joined, `Joining date for ${c.email}`, { allowFuture: true });
     if (e) return err(`${e} — Google knows when it made the account, not when they started`, 400);
   }
-  if (update.length + dismiss.length > 60) return err('resolve at most 60 changes per sync — run again for the rest', 400);
-  if (baselineIn.length > 2000) return err('baseline list too large', 400);
-  const result = { created: [], ignored: [], updated: [], dismissed: [], baselined: 0, errors: [] };
-
-  for (const u of update) {
-    if (!u || !u.id) { result.errors.push('update: missing employee id'); continue; }
-    const patch = { updated_at: nowIso(), synced_from_google_at: nowIso() };
-    if ('department_id' in u) patch.department_id = u.department_id || null;
-    if ('manager_id' in u) patch.manager_id = u.manager_id || null;
-    if (normOu(u.org_unit) !== null) patch.google_org_unit = normOu(u.org_unit);
-    // Never let a sync make someone their own manager (mirrors the EmployeeForm guard).
-    if (patch.manager_id && String(patch.manager_id) === String(u.id)) {
-      result.errors.push(`update ${u.id}: cannot report to self`); continue;
-    }
-    const r = await sb(`/rest/v1/employees?id=eq.${encodeURIComponent(u.id)}&status=neq.exited`, env,
-      { method: 'PATCH', prefer: 'return=representation', body: JSON.stringify(patch) });
-    if (r.ok && r.data?.length) result.updated.push({ id: u.id, full_name: r.data[0].full_name });
-    else result.errors.push(`update ${u.id}: ${JSON.stringify(r.data)}`);
-  }
-
-  // Baseline: record the OU we just observed for people with nothing to review. Writes
-  // `google_org_unit` and NOTHING else — no department, no manager — so it can never move
-  // anyone. Grouped by OU so ~59 people cost ~15 subrequests, not 59.
-  // ⚠️ ids come from the client, so they are UUID-shape-validated before going into a
-  // PostgREST `in.()` filter.
-  if (baselineIn.length) {
-    const byOu = new Map();
-    for (const b of baselineIn) {
-      const ou = b ? normOu(b.org_unit) : null;
-      if (!b || !UUID_RE.test(String(b.id || '')) || ou === null) continue;
-      if (!byOu.has(ou)) byOu.set(ou, []);
-      byOu.get(ou).push(b.id);
-    }
-    for (const [ou, ids] of byOu) {
-      for (let i = 0; i < ids.length; i += 100) {
-        const slice = ids.slice(i, i + 100);
-        // `select=id` + return=representation so the reported count is rows ACTUALLY written,
-        // not rows attempted — the `status=neq.exited` filter can legitimately match fewer.
-        const r = await sb(`/rest/v1/employees?id=in.(${slice.join(',')})&status=neq.exited&select=id`, env,
-          { method: 'PATCH', body: JSON.stringify({ google_org_unit: ou, updated_at: nowIso() }) });
-        if (r.ok) result.baselined += Array.isArray(r.data) ? r.data.length : 0;
-        else result.errors.push(`baseline ${ou}: ${JSON.stringify(r.data)}`);
-      }
-    }
-  }
-
-  for (const x of dismiss) {
-    if (!x || !x.id) { result.errors.push('dismiss: missing employee id'); continue; }
-    // S369: bank BOTH baselines. `google_org_unit` alone left a manager-only disagreement with
-    // nothing to remember, so Dismiss silenced it for exactly zero syncs. Only write the manager
-    // baseline when the caller actually sends one — a plain OU dismissal must not blank it.
-    // ⚠️ S369 hostile review: the "never blank a baseline" guard was applied to the NEW column
-    // only — the line being edited — while `google_org_unit` was still written unconditionally.
-    // Dismissing a row whose Google account has no orgUnitPath then wiped a good OU baseline, and
-    // a null `prevOu` permanently downgrades that person's next real move to `differs` (the exact
-    // poison the comment in collectChange warns about). The UPDATE path already guarded this.
-    // N−1 of N sites, PATTERN-218.
-    const patch = { updated_at: nowIso() };
-    const dismissedOu = normOu(x.org_unit);
-    if (dismissedOu !== null) patch.google_org_unit = dismissedOu;
-    const dismissedMgr = normEmail(x.mgr_google_email);
-    if (dismissedMgr) patch.google_manager_email = dismissedMgr;
-    const r = await sb(`/rest/v1/employees?id=eq.${encodeURIComponent(x.id)}&status=neq.exited`, env,
-      { method: 'PATCH', body: JSON.stringify(patch) });
-    if (r.ok) result.dismissed.push(x.id); else result.errors.push(`dismiss ${x.id}: ${JSON.stringify(r.data)}`);
-  }
+  const result = { created: [], ignored: [], errors: [] };
 
   if (ignore.length) {
     const rows = ignore.map(em => ({ email: String(em).toLowerCase(), ignored_by: auth.userId }));
@@ -2027,14 +1882,18 @@ async function importDirectoryCandidates(body, auth, env) {
         status: 'active',
         auth_user_id: authMap[em] || null,
         google_user_id: gu.id || null,
-        google_org_unit: gu.orgUnitPath || null, // baseline the OU at creation → future moves are detectable
+        google_org_unit: gu.orgUnitPath || null, // what Google said at creation
+        // J1b D5: Podium owns the OU from now on; start from where Google has them so the first push moves nobody.
+        org_unit_path: gu.orgUnitPath || null,
         synced_from_google_at: nowIso(),
         created_by: auth.userId,
       };
-      const ins = await sb(`/rest/v1/employees`, env, { method: 'POST', body: JSON.stringify([row]) });
+      const ins = await sb(`/rest/v1/employees`, env, { method: 'POST', body: JSON.stringify([row]), headers: actorHeaders(auth) });
       if (ins.ok) { existing.add(em); result.created.push({ email: gu.primaryEmail, employee_code: row.employee_code }); }
       else result.errors.push(`${c.email}: ${JSON.stringify(ins.data)}`);
     }
+    // J1b: each new row was marked pending by the insert trigger; push them after the response.
+    if (result.created.length) kickGoogleSync(env, auth, ctx);
   }
   return ok(result);
 }
@@ -4110,8 +3969,9 @@ async function findCandidateDuplicates(url, auth, env) {
 // Multi-row writes run as ONE transaction in Postgres (migrations/0007_hiring_atomic_rpcs.sql). The
 // functions trust their caller: every authorization check stays in the handler, before the call.
 // Codes (OPN-NNN / CAN-NNNN) are minted inside them via podium.next_hiring_seq.
-async function hiringRpc(env, name, p) {
-  return sb(`/rest/v1/rpc/${name}`, env, { method: 'POST', body: JSON.stringify({ p }) });
+// opts.headers: extra request headers (J1b: X-Podium-Actor, read by the 0015 dirty trigger via request.headers).
+async function hiringRpc(env, name, p, opts = {}) {
+  return sb(`/rest/v1/rpc/${name}`, env, { method: 'POST', body: JSON.stringify({ p }), ...(opts.headers ? { headers: opts.headers } : {}) });
 }
 // A function's own `raise exception '<code>'` comes back as PostgREST { message: '<code>' }.
 function rpcError(r) { return r && !r.ok ? (r.data?.message || null) : null; }
@@ -6547,7 +6407,7 @@ const alreadyCopied = (r) => r.status === 409 || String(r.data?.statusCode) === 
 // (+ the issued offer PDF) under <employee_id>/hiring/, then ONE transaction (hiring_confirm_joining).
 // Re-running is safe: employee_id is allocated once and stored, copies treat "already exists" as done,
 // and the RPC returns the existing employee for an application already joined.
-async function confirmJoining(body, auth, env) {
+async function confirmJoining(body, auth, env, ctx) {
   const d = body.data || body;
   const c = await offerAppCtx(auth, env, d.application_id);
   if (c.res) return c.res;
@@ -6557,9 +6417,11 @@ async function confirmJoining(body, auth, env) {
   let wa = await loadWorkAccount(env, `application_id=eq.${app.id}`);
   if (app.status === 'joined') {
     if (!wa?.employee_id) return j1Err('not_accepted');
-    const r = await hiringRpc(env, 'hiring_confirm_joining', { application_id: app.id, employee_id: wa.employee_id, ...actor });
+    const r = await hiringRpc(env, 'hiring_confirm_joining', { application_id: app.id, employee_id: wa.employee_id, ...actor }, { headers: actorHeaders(auth) });
+    if (r.ok) await seedJoinerOrgUnit(env, wa.employee_id, wa, auth);
     return r.ok ? ok({ ...(r.data || {}), ...(await onboardingAfterJoining(env, wa.employee_id, auth.userId)),
-      ...(await copyCandidateBankOnJoining(env, app.candidate_id, wa.employee_id)) }) : j1DbError(r);
+      ...(await copyCandidateBankOnJoining(env, app.candidate_id, wa.employee_id)),
+      google_sync: await googleSyncAfterSave(env, auth, ctx, wa.employee_id) }) : j1DbError(r);
   }
   if (app.status !== 'accepted') return j1Err('not_accepted');
   if (!wa || wa.status !== 'created') return j1Err('no_work_account');
@@ -6611,10 +6473,23 @@ async function confirmJoining(body, auth, env) {
     application_id: app.id, employee_id: empId, start_date: d.start_date, offer_id: off.id, terms_hash: off.terms_hash,
     components: off.annexure ? componentsContract(off.annexure, off) : null,
     documents: docs.map(({ src, ...rest }) => rest), ...actor,
-  });
+  }, { headers: actorHeaders(auth) });
   if (!r.ok) return j1DbError(r);
+  // J1b D5: Podium owns the org unit; the joiner's is the one their account was created in (never overwrites one set).
+  await seedJoinerOrgUnit(env, empId, wa, auth);
+  // J1b: the new employee row was marked pending by the insert trigger; push title / department / manager / code now.
   return ok({ ...(r.data || {}), ...(await onboardingAfterJoining(env, empId, auth.userId)),
-    ...(await copyCandidateBankOnJoining(env, app.candidate_id, empId)) });
+    ...(await copyCandidateBankOnJoining(env, app.candidate_id, empId)),
+    google_sync: await googleSyncAfterSave(env, auth, ctx, empId) });
+}
+
+// J1b D5: a joiner's org_unit_path = the OU their work account was created in, only while it is unset. Best-effort.
+async function seedJoinerOrgUnit(env, employeeId, wa, auth) {
+  if (!isUuid(employeeId) || !wa?.org_unit_path) return;
+  try {
+    await sb(`/rest/v1/employees?id=eq.${employeeId}&org_unit_path=is.null`, env, { method: 'PATCH', prefer: 'return=minimal',
+      body: JSON.stringify({ org_unit_path: wa.org_unit_path, google_org_unit: wa.org_unit_path }), headers: actorHeaders(auth) });
+  } catch (_e) { /* best-effort: the push leaves Google's OU alone when Podium's is blank */ }
 }
 
 // O1 (D3): the bank details the candidate gave through the offer link → employee_private, ONLY when that row has
@@ -6721,6 +6596,510 @@ async function suspendWorkAccount(body, auth, env) {
   if (!pr.ok || !pr.data?.length) return j1Err('record_failed', 500);
   return ok({ id: wa.id, status: 'suspended' });
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// J1b — PODIUM → GOOGLE FIELD SYNC (plan docs/superpowers/plans/2026-11-12-podium-j1b-google-sync.md, D1–D11).
+// One way: name / title / department / manager / personal phone / employee code / org unit go FROM Podium TO
+// Google; Google values are only ever displayed (getGoogleDiff). Dirty-marking is in the database (0015 triggers on
+// employees + departments → google_sync_state.dirty_fields), and a drain pushes ONLY those fields: a save that
+// changed the title pushes the title, nothing else. Every field is pushed only through pushGoogleFields (HR's
+// reviewed bulk push, D11).
+// Push timing (no cron): the save that touched one person pushes them inline (8 s budget, googleSyncAfterSave);
+// fan-out and leftovers drain after the response (kickGoogleSync → ctx.waitUntil), ≤ 8 people per drain, each
+// row claimed with a 2-minute lease; failures retry with backoff 1 / 5 / 30 min. Every push = ownership check →
+// GET (full) → merge (src/googlesync.js, never clobbers) → ownership check → PUT only when something changes, each
+// Google call aborted after 20 s. Logged in google_admin_log (actor = who made the change, else the caller).
+// Founders and super-admins are excluded entirely (users_profile.role = super_admin, EMP-001 / EMP-002, Google
+// isAdmin, the impersonated admin). Pure rules: src/googlesync.js.
+// ────────────────────────────────────────────────────────────────────────────
+
+const J1B_COPY = {
+  podium_owns_these_fields: 'Podium owns department, manager and org unit now and pushes them to Google. Change them on the person in Podium',
+  bad_fields: 'Pick fields from: name, title, department, manager, phone, employee_code, org_unit',
+  too_many: `Push at most ${GSYNC_CAP} people at a time`,
+  employee_ids_required: 'Pick at least one person',
+  preview_required: 'Preview first: Push needs the preview of every person it sends',
+  stale_preview: 'Google or Podium changed since the preview for some people. They were not pushed. Preview again',
+  google_write_not_configured: 'Google writes are not configured on the worker',
+  google_not_configured: 'Google sync is not configured on the worker',
+  context_failed: 'Could not load who is excluded from the sync. Nothing was pushed',
+};
+const j1bErr = (code, status = 409, extra = {}) => json({ ok: false, error: code, message: J1B_COPY[code] || code.replace(/_/g, ' '), ...extra }, status);
+const GSYNC_INLINE_MS = 8000;
+const SYNC_EMP_SELECT = 'id,employee_code,auth_user_id,full_name,work_email,phone,job_title,status,department_id,manager_id,'
+  + 'org_unit_path,google_user_id,google_org_unit,department:department_id(name),manager:manager_id(work_email)';
+const gsyncReady = (env) => googleWriteConfigured(env) && googleConfigured(env);
+// D8/M: who made the change. 0015's gsync_actor() reads this header (PostgREST's request.headers) inside the dirty
+// trigger, so google_sync_state.dirtied_by names the saver however the write reached the table.
+const actorHeaders = (auth) => (isUuid(auth?.userId) ? { 'X-Podium-Actor': auth.userId } : {});
+
+// What Google should hold for an employee row loaded with SYNC_EMP_SELECT.
+function desiredFor(e) {
+  return desiredGoogleFields(e, { departmentName: e?.department?.name || null, managerEmail: e?.manager?.work_email || null,
+    hasManager: !!e?.manager_id });
+}
+
+// Who is excluded (D4). FAILS CLOSED: null when any lookup fails, and callers push nothing — a push without the
+// super-admin list could write to a founder's account. `gusers` (optional) = the live list for the OU check;
+// without it the live OUs load lazily, once, only when a push would MOVE someone (loadLiveOus).
+async function googleSyncContext(env, gusers = null) {
+  const [sres, igRes, saRes] = await Promise.all([
+    sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
+    sb(`/rest/v1/directory_ignored?select=email`, env),
+    sbStore(`/rest/v1/users_profile?role=eq.super_admin&select=id`, env),
+  ]);
+  if (!sres.ok || !igRes.ok || !saRes.ok || !Array.isArray(igRes.data) || !Array.isArray(saRes.data)) return null;
+  const c = {
+    excludedOus: sres.data?.[0]?.directory_excluded_ous || ['/Admin and general'],
+    ignored: new Set(igRes.data.map(r => String(r.email || '').toLowerCase())),
+    // + the FOUNDER_CODES deny-list inside scopeOf (src/googlesync.js).
+    superAdminAuthIds: new Set(saRes.data.map(p => p.id)),
+    liveOus: gusers ? new Set(liveOus(gusers)) : null,
+    impersonateEmail: env.GOOGLE_ADMIN_IMPERSONATE_EMAIL || null,
+  };
+  let p = null;
+  c.loadLiveOus = () => (p ||= fetchGoogleUsers(env).then(us => { c.liveOus = new Set(liveOus(us)); }));
+  return c;
+}
+
+// A Directory call that cannot outlive the claim's lease (GOOGLE_CALL_TIMEOUT_MS each, lease 2 min). R5: the deadline
+// stays armed while the BODY is read, and the parsed body is returned — a response whose body stalls is aborted and
+// surfaces as an AbortError (→ google_timeout, a retryable failure). Callers never read the body themselves.
+// → { ok, status, data }   (throws on network error / timeout)
+export async function googleFetch(url, opts = {}, timeoutMs = GOOGLE_CALL_TIMEOUT_MS) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { ...opts, signal: ac.signal });
+    const text = await r.text();
+    let data;
+    try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+    return { ok: r.ok, status: r.status, data };
+  } finally { clearTimeout(t); }
+}
+const googleCallError = (x) => (x?.name === 'AbortError' ? 'google_timeout' : String(x?.message || x).slice(0, 300));
+
+async function googleGetUser(token, email) {
+  try {
+    const r = await googleFetch(`${GDIR_USERS}/${encodeURIComponent(email)}?projection=full`, { headers: { Authorization: `Bearer ${token}` } });
+    if (r.status === 404) return { user: null };
+    if (!r.ok) return { error: r.data?.error?.message || `HTTP ${r.status}` };
+    return { user: r.data };
+  } catch (x) { return { error: googleCallError(x) }; }
+}
+
+// Does this attempt still own the row, with `needMs` of lease left? (cheap select; see leaseHeld)
+async function gsyncStillOwner(env, employeeId, attemptId, needMs) {
+  const r = await sb(`/rest/v1/google_sync_state?employee_id=eq.${employeeId}&select=attempt_id,attempt_started_at&limit=1`, env);
+  return !!(r.ok && leaseHeld(r.data?.[0], attemptId, Date.now(), needMs));
+}
+
+// R2 — the check right before a PUT: still the owner (with time for the PUT), AND the person is still who the attempt
+// loaded (status, work email, Google user id re-read) and still in scope. → null = go | the outcome to stop with.
+async function gsyncPrePutCheck(env, e, attemptId, gUser, sctx) {
+  const [sr, er] = await Promise.all([
+    sb(`/rest/v1/google_sync_state?employee_id=eq.${e.id}&select=attempt_id,attempt_started_at&limit=1`, env),
+    sb(`/rest/v1/employees?id=eq.${e.id}&select=status,work_email,google_user_id&limit=1`, env),
+  ]);
+  if (!sr.ok || !leaseHeld(sr.data?.[0], attemptId, Date.now(), GOOGLE_CALL_TIMEOUT_MS + 5000)) return { outcome: 'lost_claim' };
+  const fresh = er.ok ? er.data?.[0] : null;
+  if (identityChanged(e, fresh) || !scopeOf({ ...e, ...fresh }, gUser, sctx).ok) {
+    return { outcome: 'failed', error: 'identity_changed', retry_attempts: IDENTITY_RETRY_ATTEMPTS };
+  }
+  return null;
+}
+
+// One person: scope → (ownership) → GET → merge → [preview hash] → (ownership + identity) → PUT, unless a dry run or
+// nothing changes.
+// opts.fields = the SYNC_FIELDS to merge (omitted = all, for the admin's full preview / push).
+// opts.attemptId = the claim (absent on a dry run: nothing is written).
+// opts.expectHash = an admin push's claimed_hash (R1): the final body must hash to it, or no PUT (stale_preview).
+// → { outcome: ok | failed | skipped | would_push | no_change | lost_claim | stale_preview, body?, user?, after?,
+//     desired?, error?, skip_reason?, backfill_ou?, fieldSkips?, retry_attempts? }
+//     after = the users.update response (or the GET when nothing was sent)
+export async function pushOneToGoogle(env, token, e, sctx, { fields, dryRun = false, attemptId = null, expectHash = null } = {}) {
+  // Everything decidable without Google first: a founder / ignored / exited person never reaches a Google call.
+  const pre = scopeOf(e, null, sctx);
+  if (pre.reason !== 'no_google_account') return { outcome: 'skipped', skip_reason: pre.reason };
+  // The GET as late as possible: right after the ownership check, right before the merge and PUT.
+  if (attemptId && !(await gsyncStillOwner(env, e.id, attemptId, 2 * GOOGLE_CALL_TIMEOUT_MS + 5000))) return { outcome: 'lost_claim' };
+  const g = await googleGetUser(token, e.work_email);
+  if (g.error) return { outcome: 'failed', error: g.error };
+  const sc = scopeOf(e, g.user, sctx);
+  if (!sc.ok) return { outcome: 'skipped', skip_reason: sc.reason, user: g.user };
+  // R6: only an attempt that pushes org_unit AND moves the person needs the live OU list (D4: never into an OU Google
+  // does not have). A bad TARGET OU drops the org_unit field only; the other fields still go.
+  if (needsOuCheck(e, g.user, fields) && !sctx.liveOus) {
+    try { await sctx.loadLiveOus(); } catch (x) { return { outcome: 'failed', error: 'google_ou_list_failed', user: g.user }; }
+  }
+  const eff = effectiveFields(e, g.user, fields, sctx);
+  // D5 backfill (read-only from Google): an unset org_unit_path takes Google's live OU, without dirtying anyone.
+  const backfill_ou = !e.org_unit_path && g.user.orgUnitPath ? g.user.orgUnitPath : null;
+  const desired = desiredFor(e);
+  const body = mergeGoogleUser(g.user, desired, { fields: eff.fields });
+  const extra = { user: g.user, desired, backfill_ou, fieldSkips: eff.fieldSkips };
+  if (dryRun) return { outcome: body ? 'would_push' : 'no_change', body, ...extra };
+  // R1: an admin push sends exactly what HR previewed, or nothing.
+  if (expectHash !== null && (await previewHash(body || null)) !== expectHash) return { outcome: 'stale_preview', body, ...extra };
+  if (!body) return { outcome: 'ok', body: null, after: g.user, ...extra };
+  const stop = await gsyncPrePutCheck(env, e, attemptId, g.user, sctx);
+  if (stop) return { ...stop, body: stop.outcome === 'lost_claim' ? null : body, ...extra };
+  // users.get returns the resource's `etag`; it is sent as If-Match so a user changed in Google since our GET is not
+  // overwritten. Whether Directory users.update enforces If-Match is not documented: a 412 is handled (retryable, the
+  // next drain re-GETs), and an ignored header changes nothing. Verify on the synthetic account (plan step 5).
+  const headers = { ...gJson, Authorization: `Bearer ${token}`, ...(g.user.etag ? { 'If-Match': g.user.etag } : {}) };
+  try {
+    const r = await googleFetch(`${GDIR_USERS}/${encodeURIComponent(g.user.id)}`, { method: 'PUT', headers, body: JSON.stringify(body) });
+    if (r.status === 412) return { outcome: 'failed', error: 'google_changed_since_read', body, attempted: true, ...extra };
+    if (!r.ok) return { outcome: 'failed', error: r.data?.error?.message || `HTTP ${r.status}`, body, attempted: true, ...extra };
+    return { outcome: 'ok', body, after: r.data, attempted: true, ...extra };
+  } catch (x) { return { outcome: 'failed', error: googleCallError(x), body, attempted: true, ...extra }; }
+}
+
+// The google_sync_record row for one claimed person (fs = the fields this attempt was asked to push). null = record
+// nothing. oneShot (an admin push, R1): every outcome but ok only RELEASES the claim — the row is left untouched and
+// no retry is scheduled for the picked fields (the admin re-previews and pushes again).
+function syncRecordRow(row, o, fs, { oneShot = false } = {}) {
+  if (o.outcome === 'lost_claim') return null;   // another attempt owns the row now; it records its own result
+  const base = { employee_id: row.employee_id, rev: row.rev, ...(o.backfill_ou ? { backfill_ou: o.backfill_ou } : {}) };
+  if (o.outcome === 'ok') {
+    // G: what Google holds now = the users.update response (or the GET, when nothing needed sending).
+    const g = googleFieldsOf(o.after);
+    const pushed = fs.filter(f => !o.fieldSkips?.[f]);
+    // R6: a field-only skip (bad target OU) still counts as done (a drain must not retry it on every page view): it
+    // leaves dirty_fields, is not recorded in last_pushed, and is noted in skip_reason (the person page shows it).
+    const skip = Object.entries(o.fieldSkips || {}).map(([f, why]) => `${f}:${why}`).join(',') || null;
+    return { ...base, outcome: 'ok', done_fields: fs, skip_reason: skip, last_pushed: nextLastPushed(row.last_pushed, o.desired, pushed, g),
+      google_org_unit: g.org_unit, google_manager_email: g.manager, google_user_id: o.user?.id || null };
+  }
+  if (oneShot) return { ...base, outcome: 'release' };
+  if (o.outcome === 'skipped') return { ...base, outcome: 'skipped', skip_reason: o.skip_reason };
+  return { ...base, outcome: 'failed', error: String(o.error || 'failed').slice(0, 500),
+    next_attempt_at: nextAttemptAt(o.retry_attempts || Number(row.attempts || 0) + 1) };
+}
+
+// Best-effort, one insert per drain (the Google writes already happened). Each row carries its own actor (NOT NULL).
+async function googleAdminLogMany(env, rows) {
+  const list = rows.filter(e => isUuid(e?.actor));
+  if (!list.length) return;
+  try {
+    await sb(`/rest/v1/google_admin_log`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(list.map(e => ({
+      actor: e.actor, actor_email: e.actor_email || null, action: e.action, target_email: e.target_email,
+      google_user_id: e.google_user_id || null, work_account_id: null, request: e.request || null,
+      ok: !!e.ok, error: e.error ? String(e.error).slice(0, 500) : null,
+    }))) });
+  } catch (_e) { /* best-effort */ }
+}
+
+// The log rows for an attempt: only pushes that reached Google (a PUT was sent). actor = who made the change
+// (dirtied_by) for a save / drain / retry, the admin for an admin push; request = { trigger, caller, body }.
+function gsyncLogRows(rows, outs, emails, auth, trigger) {
+  return rows.map((row, i) => {
+    const o = outs[i];
+    const target = emails.get(row.employee_id);
+    if (!target || !o.attempted) return null;
+    const actor = trigger !== 'push' && isUuid(row.dirtied_by) ? row.dirtied_by : auth.userId;
+    return { actor, actor_email: actor === auth.userId ? auth.email : null, action: o.outcome === 'ok' ? 'sync_fields' : 'sync_fields_failed',
+      target_email: target, google_user_id: o.user?.id, ok: o.outcome === 'ok', error: o.error,
+      request: { trigger, caller: auth.userId, body: o.body } };
+  }).filter(Boolean);
+}
+
+// The drain: claim ≤ 8 due rows (oldest change first) in ONE guarded PATCH, push each person's dirty fields, record
+// every result in ONE RPC (google_sync_record). Never throws.
+// opts.ids limits it to those people · opts.trigger = save | drain | retry (for the log).
+// → { configured, results: [{ employee_id, status, error?, skip_reason?, fields }] }
+async function drainGoogleSync(env, auth, { ids = null, trigger = 'drain' } = {}) {
+  if (!gsyncReady(env)) return { configured: false, results: [] };
+  if (!auth?.userId) return { configured: true, results: [] };
+  try {
+    let idf = '';
+    if (ids) {
+      const list = [...new Set(ids.filter(isUuid))].slice(0, GSYNC_CAP);
+      if (!list.length) return { configured: true, results: [] };
+      idf = `employee_id=in.(${list.join(',')})&`;
+    }
+    const due = await sb(`/rest/v1/google_sync_state?${idf}${syncClaimFilter()}&select=employee_id&order=dirty_at.asc&limit=${GSYNC_CAP}`, env);
+    if (!due.ok || !due.data?.length) return { configured: true, results: [] };
+    const attemptId = crypto.randomUUID();
+    // One UPDATE, so its row order does not matter. The remaining deadlock risk against the dirty trigger / the record
+    // (0015, R4) is Postgres-detected: 40P01 aborts one transaction, nothing hangs, and the loser is redone later.
+    // A drain claim never carries a preview hash (claimed_hash is only an admin push's, R1).
+    const claim = await sb(`/rest/v1/google_sync_state?employee_id=in.(${due.data.map(x => x.employee_id).join(',')})&${syncClaimFilter()}`, env,
+      { method: 'PATCH', body: JSON.stringify({ attempt_id: attemptId, attempt_started_at: nowIso(), claimed_fields: null, claimed_hash: null }) });
+    const rows = claim.ok && Array.isArray(claim.data) ? claim.data : [];
+    if (!rows.length) return { configured: true, results: [] };
+
+    const [er, sctx, tok] = await Promise.all([
+      sb(`/rest/v1/employees?id=in.(${rows.map(r => r.employee_id).join(',')})&select=${SYNC_EMP_SELECT}`, env),
+      googleSyncContext(env),
+      googleWriteToken(env, 'directory').then(t => ({ t }), x => ({ error: String(x?.message || x) })),
+    ]);
+    const fsOf = rows.map(row => fieldsToPush(row.dirty_fields, row.claimed_fields));
+    let outs;
+    if (!er.ok || !Array.isArray(er.data) || !sctx) outs = rows.map(() => ({ outcome: 'failed', error: 'context_failed' }));
+    else if (tok.error) outs = rows.map(() => ({ outcome: 'failed', error: tok.error }));
+    else {
+      const byId = new Map(er.data.map(e => [e.id, e]));
+      outs = await Promise.all(rows.map((row, i) => {
+        const e = byId.get(row.employee_id);
+        return e ? pushOneToGoogle(env, tok.t, e, sctx, { fields: fsOf[i], attemptId }) : Promise.resolve({ outcome: 'skipped', skip_reason: 'not_found' });
+      }));
+    }
+    const emails = new Map((er.data || []).map(e => [e.id, e.work_email]));
+    const recs = rows.map((row, i) => syncRecordRow(row, outs[i], fsOf[i])).filter(Boolean);
+    const rec = recs.length ? await hiringRpc(env, 'google_sync_record', { attempt_id: attemptId, results: recs }) : { ok: true };
+    await googleAdminLogMany(env, gsyncLogRows(rows, outs, emails, auth, trigger));
+    return {
+      configured: true, recorded: !!rec.ok,
+      results: rows.map((row, i) => ({ employee_id: row.employee_id, status: outs[i].outcome === 'lost_claim' ? 'pending' : outs[i].outcome,
+        error: outs[i].error || null, skip_reason: outs[i].skip_reason || null, fields: bodyFields(outs[i].body) })),
+    };
+  } catch (e) {
+    console.error('[google-sync drain]', e?.message || e);
+    return { configured: true, results: [], error: String(e?.message || e).slice(0, 300) };
+  }
+}
+
+// Drain after the response (fan-out: a renamed department, a manager's new email, reassigned reports, leftovers).
+function kickGoogleSync(env, auth, ctx) {
+  if (!ctx?.waitUntil || !gsyncReady(env) || !auth?.userId) return;
+  ctx.waitUntil(drainGoogleSync(env, auth).catch(() => null));
+}
+
+// D7: the save that touched ONE person pushes them inline (8 s budget), then the rest drains after the response.
+// Never throws, never fails the save. → { status, error?, skip_reason? } | null
+//   status: ok | failed | skipped | pending (still going / claimed elsewhere / backing off / fields left) | none
+//           (never dirty) | not_configured
+async function googleSyncAfterSave(env, auth, ctx, employeeId, trigger = 'save') {
+  try {
+    if (!isUuid(employeeId)) return null;
+    if (!gsyncReady(env)) return { status: 'not_configured' };
+    const run = drainGoogleSync(env, auth, { ids: [employeeId], trigger });
+    if (ctx?.waitUntil) ctx.waitUntil(run.then(() => drainGoogleSync(env, auth)).catch(() => null));
+    let timer;
+    const r = await Promise.race([run, new Promise(res => { timer = setTimeout(() => res(null), GSYNC_INLINE_MS); })]);
+    clearTimeout(timer);
+    if (!r) return { status: 'pending' };
+    const mine = (r.results || []).find(x => x.employee_id === employeeId);
+    const st = await sb(`/rest/v1/google_sync_state?employee_id=eq.${employeeId}&select=status,last_error,skip_reason&limit=1`, env);
+    const row = st.data?.[0];
+    // The row is the truth (an ok push with fields still dirty is `pending`); the drain result carries the error.
+    if (row) return { status: row.status, error: mine?.error || row.last_error || null, skip_reason: mine?.skip_reason || row.skip_reason || null };
+    return mine ? { status: mine.status, error: mine.error || null, skip_reason: mine.skip_reason || null } : { status: 'none' };
+  } catch (e) {
+    return { status: 'failed', error: String(e?.message || e).slice(0, 300) };
+  }
+}
+
+// Retry (google_sync_queue): make the ALREADY-dirty fields due now. Adds no field (R1: admin pushes are one-shot).
+async function queueGoogleSyncRetry(env, ids) {
+  return hiringRpc(env, 'google_sync_queue', { ids, fields: [] });
+}
+
+// D5 backfill outside a drain (the diff / preview reads): one RPC, never dirties. Best-effort.
+async function backfillOrgUnits(env, items) {
+  if (!items.length) return;
+  try { await hiringRpc(env, 'google_sync_backfill_ou', { items }); } catch (_e) { /* best-effort */ }
+}
+
+const SYNC_STATE_SELECT = 'employee_id,status,dirty_fields,attempts,last_attempt_at,next_attempt_at,last_error,last_pushed_at,skip_reason,dirty_at';
+
+// GET getGoogleSyncStatus?employee_id= — the person page's banner / chip (HR or a Google admin). Without
+// employee_id: the counts + the failed list (Directory screen). Opening it also drains (D7).
+async function getGoogleSyncStatus(url, auth, env, ctx) {
+  const gAdmin = await isGoogleAdmin(auth, env);
+  if (!isHr(auth) && !gAdmin) return err('forbidden', 403);
+  kickGoogleSync(env, auth, ctx);
+  const id = url.searchParams.get('employee_id');
+  if (id) {
+    if (!isUuid(id)) return err('employee_id required', 400);
+    const r = await sb(`/rest/v1/google_sync_state?employee_id=eq.${id}&select=${SYNC_STATE_SELECT}&limit=1`, env);
+    if (!r.ok) return err('db_error', 500);
+    return ok({ employee_id: id, configured: gsyncReady(env), can_retry: gAdmin, sync: r.data?.[0] || null });
+  }
+  const r = await sb(`/rest/v1/google_sync_state?status=neq.ok&select=${SYNC_STATE_SELECT},employee:employee_id(full_name,work_email)&order=dirty_at.asc&limit=500`, env);
+  if (!r.ok) return err('db_error', 500);
+  const rows = r.data || [];
+  const counts = { pending: 0, failed: 0, skipped: 0 };
+  for (const x of rows) if (x.status in counts) counts[x.status]++;
+  return ok({ configured: gsyncReady(env), can_retry: gAdmin, counts,
+    failed: rows.filter(x => x.status === 'failed').map(x => ({ employee_id: x.employee_id, full_name: x.employee?.full_name || null,
+      work_email: x.employee?.work_email || null, last_error: x.last_error, attempts: x.attempts, next_attempt_at: x.next_attempt_at })) });
+}
+
+// POST retryGoogleSync {employee_id} — Google admin: push this person's dirty fields now, backoff or not.
+async function retryGoogleSync(body, auth, env, ctx) {
+  const gate = await requireGoogleAdmin(auth, env); if (gate) return gate;
+  if (!gsyncReady(env)) return j1bErr('google_write_not_configured', 400);
+  const d = body.data || body;
+  if (!isUuid(d.employee_id)) return err('employee_id required', 400);
+  const q = await queueGoogleSyncRetry(env, [d.employee_id]);
+  if (!q.ok) return err('db_error', 500);
+  return ok({ employee_id: d.employee_id, google_sync: await googleSyncAfterSave(env, auth, ctx, d.employee_id, 'retry') });
+}
+
+// The dry run for these people: GET + merge (fields = the pick, or every field), the exact body and its hash.
+// Nothing is written to Google; an unset org_unit_path is backfilled from the GET (D5). → { res } | { results }
+async function previewGooglePush(env, ids, fields) {
+  const [er, sctx, tok] = await Promise.all([
+    sb(`/rest/v1/employees?id=in.(${ids.join(',')})&select=${SYNC_EMP_SELECT}`, env),
+    googleSyncContext(env),
+    googleWriteToken(env, 'directory').then(t => ({ t }), x => ({ error: String(x?.message || x) })),
+  ]);
+  if (!er.ok || !Array.isArray(er.data) || !sctx) return { res: j1bErr('context_failed', 500) };
+  if (tok.error) return { res: err('google_write_not_configured: ' + tok.error, 502) };
+  const byId = new Map(er.data.map(e => [e.id, e]));
+  const outs = await Promise.all(ids.map(id => byId.get(id)
+    ? pushOneToGoogle(env, tok.t, byId.get(id), sctx, { fields: fields || undefined, dryRun: true })
+    : Promise.resolve({ outcome: 'skipped', skip_reason: 'not_found' })));
+  await backfillOrgUnits(env, ids.map((id, i) => (outs[i].backfill_ou ? { employee_id: id, ou: outs[i].backfill_ou } : null)).filter(Boolean));
+  const hashes = await Promise.all(outs.map(o => previewHash(o.body || null)));
+  return { results: ids.map((id, i) => ({ employee_id: id, full_name: byId.get(id)?.full_name || null,
+    work_email: byId.get(id)?.work_email || null, status: outs[i].outcome, skip_reason: outs[i].skip_reason || null,
+    error: outs[i].error || null, fields: bodyFields(outs[i].body), body: outs[i].body || null, hash: hashes[i] })) };
+}
+
+// R1 — the admin push: ONE-SHOT and bound to the preview. Claims each person (google_sync_claim: claimed_fields = the
+// pick, claimed_hash = the preview's hash), then claim → GET → merge → the body must hash to claimed_hash → PUT.
+// Nothing is queued and nothing is added to dirty_fields. On success the record removes the pushed fields from
+// dirty_fields as usual (ok only when none is left); every other outcome just releases the claim (no retry is
+// scheduled for the picked fields: the admin previews and pushes again). → { results } | { res }
+async function adminPushGoogle(env, auth, ids, fields, hashes) {
+  const picked = fields || SYNC_FIELDS;
+  const attemptId = crypto.randomUUID();
+  const claim = await hiringRpc(env, 'google_sync_claim', { attempt_id: attemptId, fields: picked, lease_ms: SYNC_LEASE_MS,
+    items: ids.map(id => ({ employee_id: id, hash: hashes[id] })) });
+  if (!claim.ok || !Array.isArray(claim.data)) return { res: err('db_error: claim failed', 500) };
+  const rows = claim.data;
+  const out = new Map();
+  if (rows.length) {
+    const [er, sctx, tok] = await Promise.all([
+      sb(`/rest/v1/employees?id=in.(${rows.map(r => r.employee_id).join(',')})&select=${SYNC_EMP_SELECT}`, env),
+      googleSyncContext(env),
+      googleWriteToken(env, 'directory').then(t => ({ t }), x => ({ error: String(x?.message || x) })),
+    ]);
+    let outs;
+    if (!er.ok || !Array.isArray(er.data) || !sctx) outs = rows.map(() => ({ outcome: 'failed', error: 'context_failed' }));
+    else if (tok.error) outs = rows.map(() => ({ outcome: 'failed', error: tok.error }));
+    else {
+      const byId = new Map(er.data.map(e => [e.id, e]));
+      outs = await Promise.all(rows.map(row => {
+        const e = byId.get(row.employee_id);
+        return e ? pushOneToGoogle(env, tok.t, e, sctx, { fields: fieldsToPush(picked, row.claimed_fields), attemptId, expectHash: row.claimed_hash })
+          : Promise.resolve({ outcome: 'skipped', skip_reason: 'not_found' });
+      }));
+    }
+    const recs = rows.map((row, i) => syncRecordRow(row, outs[i], fieldsToPush(picked, row.claimed_fields), { oneShot: true })).filter(Boolean);
+    if (recs.length) await hiringRpc(env, 'google_sync_record', { attempt_id: attemptId, results: recs });
+    await googleAdminLogMany(env, gsyncLogRows(rows, outs, new Map((er.data || []).map(e => [e.id, e.work_email])), auth, 'push'));
+    rows.forEach((row, i) => out.set(row.employee_id, outs[i]));
+  }
+  return { results: ids.map(id => {
+    const o = out.get(id);
+    // Not claimed = another attempt holds the person right now.
+    if (!o) return { employee_id: id, status: 'in_progress', error: null, skip_reason: null, fields: [] };
+    const status = o.outcome === 'lost_claim' ? 'in_progress' : o.outcome;
+    return { employee_id: id, status, error: o.error || null, skip_reason: o.skip_reason || null, fields: o.attempted ? bodyFields(o.body) : [],
+      field_skips: o.fieldSkips || {} };
+  }) };
+}
+
+// POST pushGoogleFields {employee_ids (≤ 8), fields?, dry_run, preview_hashes} — Google admin.
+// dry_run: the exact users.update body per person + its hash (nothing written to Google, nothing logged).
+// Push (R1): preview_hashes {employee_id: hash} is REQUIRED for every person (400 preview_required); one-shot via
+// adminPushGoogle. Anyone whose body no longer matches the preview is not pushed (stale_preview); the response is
+// 409 stale_preview when any are, with every person's result.
+async function pushGoogleFields(body, auth, env, ctx) {
+  const gate = await requireGoogleAdmin(auth, env); if (gate) return gate;
+  if (!gsyncReady(env)) return j1bErr('google_write_not_configured', 400);
+  const d = body.data || body;
+  const ids = [...new Set((Array.isArray(d.employee_ids) ? d.employee_ids : []).filter(isUuid))];
+  if (!ids.length) return j1bErr('employee_ids_required', 400);
+  if (ids.length > GSYNC_CAP) return j1bErr('too_many', 400);
+  const fc = cleanSyncFields(d.fields);
+  if (fc.error) return j1bErr(fc.error, 400);
+
+  if (d.dry_run) {
+    const pv = await previewGooglePush(env, ids, fc.fields);
+    return pv.res || ok({ dry_run: true, results: pv.results });
+  }
+  const hashes = d.preview_hashes && typeof d.preview_hashes === 'object' ? d.preview_hashes : null;
+  if (!hashes || ids.some(id => typeof hashes[id] !== 'string' || !/^[0-9a-f]{64}$/.test(hashes[id]))) return j1bErr('preview_required', 400);
+  const r = await adminPushGoogle(env, auth, ids, fc.fields, hashes);
+  if (r.res) return r.res;
+  kickGoogleSync(env, auth, ctx);
+  const stale = r.results.filter(x => x.status === 'stale_preview').map(x => x.employee_id);
+  if (stale.length) return j1bErr('stale_preview', 409, { results: r.results, stale });
+  return ok({ dry_run: false, results: r.results });
+}
+
+// GET getGoogleDiff — the Google vs Podium tab (D11, HR). Per person × field: Podium's value, Google's, and the state
+// (equal / differs / podium_blank / changed_in_google). Nothing is written to Google; an unset org_unit_path is
+// backfilled from the live list (D5, without dirtying anyone).
+async function getGoogleDiff(url, auth, env, ctx) {
+  const gate = requireHr(auth); if (gate) return gate;
+  if (!googleConfigured(env)) return j1bErr('google_not_configured', 400);
+  let gusers;
+  try { gusers = await fetchGoogleUsers(env); }
+  catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
+  const [er, sr, sctx, gAdmin] = await Promise.all([
+    sb(`/rest/v1/employees?status=neq.exited&select=${SYNC_EMP_SELECT}&order=full_name.asc&limit=5000`, env),
+    sb(`/rest/v1/google_sync_state?select=employee_id,status,dirty_fields,last_error,skip_reason,last_pushed,last_pushed_at&limit=5000`, env),
+    googleSyncContext(env, gusers),
+    isGoogleAdmin(auth, env),
+  ]);
+  if (!er.ok || !sr.ok || !sctx) return j1bErr('context_failed', 500);
+  kickGoogleSync(env, auth, ctx);
+  const gByEmail = new Map(gusers.map(u => [String(u.primaryEmail || '').toLowerCase(), u]));
+  const stateById = new Map((sr.data || []).map(x => [x.employee_id, x]));
+  const people = [], skipped = [], backfill = [];
+  for (const e of er.data || []) {
+    const g = gByEmail.get(String(e.work_email || '').toLowerCase()) || null;
+    const sc = scopeOf(e, g, sctx);
+    if (!sc.ok) { skipped.push({ id: e.id, full_name: e.full_name, work_email: e.work_email, reason: sc.reason }); continue; }
+    if (!e.org_unit_path && g.orgUnitPath) { backfill.push({ employee_id: e.id, ou: g.orgUnitPath }); e.org_unit_path = g.orgUnitPath; }
+    const st = stateById.get(e.id) || null;
+    const fields = diffPerson(desiredFor(e), googleFieldsOf(g), st?.last_pushed || null);
+    people.push({
+      id: e.id, full_name: e.full_name, employee_code: e.employee_code, work_email: e.work_email, fields,
+      differing: SYNC_FIELDS.filter(f => fields[f].state === 'differs' || fields[f].state === 'changed_in_google'),
+      sync: st ? { status: st.status, dirty_fields: st.dirty_fields, last_error: st.last_error, last_pushed_at: st.last_pushed_at } : null,
+    });
+  }
+  await backfillOrgUnits(env, backfill);
+  return ok({
+    fields: SYNC_FIELDS, people, skipped, can_push: gAdmin, push_chunk: GSYNC_CAP,
+    counts: { in_scope: people.length, differing: people.filter(p => p.differing.length).length, skipped: skipped.length, backfilled_ou: backfill.length },
+  });
+}
+
+// GET getOrgUnitOptions — EmployeeForm's Org unit picker (HR): Google's live OUs minus the excluded ones, and the
+// L2 suggestion per department: defaultOu over the department's active people, by org_unit_path (what Podium
+// owns), falling back to google_org_unit. Never '/' (that is "no suggestion"). Empty when Google is not set up.
+// R7: the OU list is the OUs Google users sit in (fetchGoogleUsers), not orgunits.list — no new Directory scope for
+// J1b. So an empty OU is not offered (the form says so), and a stored OU
+// Google no longer has is a push-time skip of the org_unit FIELD only (effectiveFields → target_ou_unknown).
+async function getOrgUnitOptions(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  if (!googleConfigured(env)) return ok({ configured: false, ous: [], default_by_department: {} });
+  let gusers;
+  try { gusers = await fetchGoogleUsers(env); }
+  catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
+  const [sres, er] = await Promise.all([
+    sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
+    sb(`/rest/v1/employees?status=eq.active&select=department_id,status,org_unit_path,google_org_unit&limit=5000`, env),
+  ]);
+  if (!sres.ok || !er.ok) return err('db_error', 500);
+  const excluded = sres.data?.[0]?.directory_excluded_ous || ['/Admin and general'];
+  const ous = liveOus(gusers).filter(ou => !ouExcluded(ou, excluded));
+  const rows = (er.data || []).map(x => ({ department_id: x.department_id, status: x.status, google_org_unit: x.org_unit_path || x.google_org_unit || null }));
+  const deptIds = [...new Set(rows.map(x => x.department_id).filter(Boolean))];
+  const def = {};
+  for (const id of deptIds) { const ou = defaultOu(id, rows); if (ou && ou !== '/' && ous.includes(ou)) def[id] = ou; }
+  return ok({ configured: true, ous, default_by_department: def });
+}
+// ── end J1b
 
 // ────────────────────────────────────────────────────────────────────────────
 // X1 — EXITS + NO-DUES (plan docs/superpowers/plans/2026-11-11-podium-x1-exits.md, spec "X1" + L4–L8).
@@ -7104,7 +7483,7 @@ async function cancelExit(body, auth, env) {
 
 // POST closeExit {exit_id} (HR) — the only path to `exited`. The blockers are computed here first and returned
 // verbatim; exit_close re-checks under the lock (and is the authority). Then reports are reassigned.
-async function closeExit(body, auth, env) {
+async function closeExit(body, auth, env, ctx) {
   const d = body.data || body;
   const c = await exitWriteCtx(auth, env, d.exit_id);
   if (c.res) return c.res;
@@ -7115,10 +7494,12 @@ async function closeExit(body, auth, env) {
   if (!l.ok) return x1Err('live_check_failed', 502);
   const blockers = closeBlockers(c.exit, items, { assets: l.assets.length, tasks: l.tasks.length }, istToday());
   if (blockers.length) return x1Err('exit_blocked', 409, { blockers });
-  const r = await hiringRpc(env, 'exit_close', { exit_id: c.exit.id, actor_user_id: auth.userId });
+  const r = await hiringRpc(env, 'exit_close', { exit_id: c.exit.id, actor_user_id: auth.userId }, { headers: actorHeaders(auth) });
   if (!r.ok) return x1DbError(r);
   // Exiting someone must never leave their reports pointing at an exited row (RULE-PODIUM-010).
   const reassigned = await reassignReportsOnExit(c.emp.id, auth, env);
+  // J1b: the reassigned reports were marked pending (manager_id changed); their new manager goes to Google after the response.
+  kickGoogleSync(env, auth, ctx);
   return ok({ ...(r.data || {}), reassigned });
 }
 
@@ -7575,7 +7956,7 @@ async function getMyProfile(url, auth, env) {
 
 // POST saveMyProfile {fields} — whitelist only (onboarding.js PROFILE_*_FIELDS). Validated + normalised here;
 // profile_save_self writes first fills and turns a change to a filled PAN / bank field into a change request.
-async function saveMyProfile(body, auth, env) {
+async function saveMyProfile(body, auth, env, ctx) {
   const d = body.data || body;
   const m = await myOnboardingEmployee(auth, env);
   if (m.res) return m.res;
@@ -7584,8 +7965,10 @@ async function saveMyProfile(body, auth, env) {
   if (v.errors.length) return j2Err('invalid_fields', 400, { errors: v.errors });
   if (!Object.keys(v.employee).length && !Object.keys(v.private).length) return ok({ written: [], change_requests: [] });
   const r = await hiringRpc(env, 'profile_save_self', { employee_id: m.emp.id, actor_user_id: auth.userId,
-    employee: v.employee, private: v.private });
-  return r.ok ? ok(r.data) : j2DbError(r);
+    employee: v.employee, private: v.private }, { headers: actorHeaders(auth) });
+  if (!r.ok) return j2DbError(r);
+  // J1b D7/D8: a changed phone was marked pending by the trigger; the self-save pushes it (the person is the actor).
+  return ok({ ...(r.data || {}), google_sync: await googleSyncAfterSave(env, auth, ctx, m.emp.id) });
 }
 
 // POST createMyDocumentUploadUrl {doc_type, file_name, file_size} — the person's own ID / address / bank proof (+
@@ -9281,6 +9664,8 @@ const GET_ACTIONS = {
   getCompAccess, getCompAccessLog,
   // Google Directory sync
   getDirectorySyncPreview,
+  // J1b — Podium → Google field sync (status: HR or Google admin; diff + OU options: HR)
+  getGoogleSyncStatus, getGoogleDiff, getOrgUnitOptions,
   getGoogleWriteCheck,
   // Appraisal engine
   getAppraisalConfig, getMyAppraisals, getAppraisal, getTeamAppraisals,
@@ -9331,6 +9716,8 @@ const POST_ACTIONS = {
   addCompAccess, removeCompAccess,
   // Google Directory sync
   importDirectoryCandidates,
+  // J1b — Podium → Google field sync (Google admins; requireGoogleAdmin inside)
+  retryGoogleSync, pushGoogleFields,
   // Appraisal engine
   createAppraisalCycle, setCycleStatus, enrollAppraisalCycle,
   submitSelfReview, submitManagerReview, acknowledgeAppraisal,
@@ -9455,7 +9842,7 @@ const SELF_SERVE_POST = new Set([
   'cancelInterview', 'markInterviewNoShow', 'recordInterviewVerdict', 'remindPanelist', 'submitInterviewFeedback',
 ]);
 
-async function handleGet(url, request, env) {
+async function handleGet(url, request, env, ctx) {
   const action = url.searchParams.get('action');
   if (!action) return err('action_required', 400);
   if (action === 'ping') return ok({ pong: true });
@@ -9465,11 +9852,13 @@ async function handleGet(url, request, env) {
   const handler = GET_ACTIONS[action];
   if (!handler) return err(`unknown_action: ${action}`, 400);
   if (!auth.permissions?.podium_view && !SELF_SERVE_GET.has(action)) return err('forbidden_podium_view', 403);
-  try { return await handler(url, auth, env); }
+  // J1b: ctx (the Worker ExecutionContext) is an optional 4th argument — handlers that drain the Google sync after
+  // the response use ctx.waitUntil; every other handler ignores it.
+  try { return await handler(url, auth, env, ctx); }
   catch (e) { return err(`server_error: ${e?.message || String(e)}`, 500); }
 }
 
-async function handlePost(request, env) {
+async function handlePost(request, env, ctx) {
   const auth = await verifyJWT(request.headers.get('Authorization'), env);
   if (!auth) return err('unauthorized', 401);
 
@@ -9480,7 +9869,7 @@ async function handlePost(request, env) {
   const handler = POST_ACTIONS[action];
   if (!handler) return err(`unknown_action: ${action}`, 400);
   if (!auth.permissions?.podium_view && !SELF_SERVE_POST.has(action)) return err('forbidden_podium_view', 403);
-  try { return await handler(body, auth, env); }
+  try { return await handler(body, auth, env, ctx); }
   catch (e) { return err(`server_error: ${e?.message || String(e)}`, 500); }
 }
 
@@ -9489,7 +9878,7 @@ async function handlePost(request, env) {
 // ────────────────────────────────────────────────────────────────────────────
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url = new URL(request.url);
 
@@ -9506,8 +9895,8 @@ export default {
       }
     }
 
-    if (request.method === 'GET')  return handleGet(url, request, env);
-    if (request.method === 'POST') return handlePost(request, env);
+    if (request.method === 'GET')  return handleGet(url, request, env, ctx);
+    if (request.method === 'POST') return handlePost(request, env, ctx);
     return err('method_not_allowed', 405);
   },
 };

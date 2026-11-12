@@ -13,6 +13,9 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
   const [depts, setDepts] = useState([]);
   const [roles, setRoles] = useState([]);
   const [people, setPeople] = useState([]);
+  // J1b D5: the Google org unit Podium owns. Options = Google's live OUs minus the excluded ones (getOrgUnitOptions);
+  // the department's usual OU is suggested when the department changes.
+  const [ouOpts, setOuOpts] = useState(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -22,9 +25,30 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
       podiumopsGet('getJobRoles', {}, session).catch(() => ({ job_roles: [] })),
       podiumopsGet('getEmployees', { status: 'all', limit: 2000 }, session).catch(() => ({ employees: [] })),
     ]).then(([d, r, e]) => { setDepts(d.departments || []); setRoles(r.job_roles || []); setPeople(e.employees || []); });
+    podiumopsGet('getOrgUnitOptions', {}, session)
+      .then(o => setOuOpts(o || { ous: [], default_by_department: {} }))
+      .catch(() => setOuOpts({ ous: [], default_by_department: {}, error: true }));
   }, [session]);
 
   function set(k, v) { setF(prev => ({ ...prev, [k]: v })); }
+  // A department change pre-fills its usual org unit, but only over a blank OU or the OLD department's suggestion:
+  // an OU HR picked by hand is never replaced. HR can still pick another one.
+  function setDepartment(v) {
+    setF(prev => {
+      if (v === prev.department_id) return prev;
+      const byDept = ouOpts?.default_by_department || {};
+      const oldSug = prev.department_id ? byDept[prev.department_id] || null : null;
+      const sug = v ? byDept[v] || null : null;
+      const take = !!sug && (!prev.org_unit_path || prev.org_unit_path === oldSug);
+      return { ...prev, department_id: v, ...(take ? { org_unit_path: sug } : {}) };
+    });
+  }
+  const ouSuggested = f.department_id ? ouOpts?.default_by_department?.[f.department_id] || null : null;
+  const ouList = (() => {
+    const l = [...(ouOpts?.ous || [])];
+    if (f.org_unit_path && !l.includes(f.org_unit_path)) l.unshift(f.org_unit_path);   // keep the current value visible
+    return l;
+  })();
 
   async function save() {
     if (!f.full_name?.trim()) { showToast('Full name is required', 'error'); return; }
@@ -32,12 +56,12 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
     try {
       const payload = clean(f);
       if (editing) {
-        await podiumopsPost('updateEmployee', { employee_id: initial.id, patch: payload }, session);
-        showToast('Saved', 'success');
+        const r = await podiumopsPost('updateEmployee', { employee_id: initial.id, patch: payload }, session);
+        toastSaved(showToast, 'Saved', r?.google_sync);
         onSaved && onSaved(initial.id);
       } else {
         const r = await podiumopsPost('createEmployee', payload, session);
-        showToast('Employee created', 'success');
+        toastSaved(showToast, 'Employee created', r?.google_sync);
         onSaved && onSaved(r?.id);
       }
     } catch (e) {
@@ -66,7 +90,18 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
       <Section title="Role & Reporting">
         <Grid>
           <Field label="Job title"><Input value={f.job_title} onChange={e => set('job_title', e.target.value)} placeholder="e.g. Account Manager" /></Field>
-          <Field label="Department"><Combobox value={f.department_id || ''} onChange={v => set('department_id', v)} inputStyle={comboInp} placeholder="Search department…" options={depts.map(d => ({ value: d.id, label: d.name }))} /></Field>
+          <Field label="Department"><Combobox value={f.department_id || ''} onChange={setDepartment} inputStyle={comboInp} placeholder="Search department…" options={depts.map(d => ({ value: d.id, label: d.name }))} /></Field>
+          <Field label="Google org unit">
+            {ouOpts && ouList.length > 0 ? (
+              <Select value={f.org_unit_path || ''} onChange={e => set('org_unit_path', e.target.value)}>
+                <option value="">Not set (Google keeps its own)</option>
+                {ouList.map(ou => <option key={ou} value={ou}>{ou}{ou === ouSuggested ? '  (usual for this department)' : ''}</option>)}
+              </Select>
+            ) : (
+              <Input value={f.org_unit_path || ''} disabled placeholder={ouOpts ? 'Google org units unavailable' : 'Loading…'} />
+            )}
+            <div style={{ fontSize: 11, color: 'var(--t4)', marginTop: 4 }}>Podium pushes this to Google on save. Org units with nobody in them yet don&apos;t appear.</div>
+          </Field>
           <Field label="Job role"><Combobox value={f.job_role_id || ''} onChange={v => set('job_role_id', v)} inputStyle={comboInp} placeholder="Search role…" options={roles.map(r => ({ value: r.id, label: r.title, hint: r.level || '' }))} /></Field>
           <Field label="Manager"><Combobox value={f.manager_id || ''} onChange={v => set('manager_id', v)} inputStyle={comboInp} placeholder="Search manager…" options={people.filter(p => p.id !== initial?.id).map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} /></Field>
           <Field label="Secondary manager (dotted line)"><Combobox value={f.secondary_manager_id || ''} onChange={v => set('secondary_manager_id', v)} inputStyle={comboInp} placeholder="Search dotted-line manager…" options={people.filter(p => p.id !== initial?.id && p.id !== f.manager_id).map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} /></Field>
@@ -128,7 +163,7 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
 }
 
 const FIELDS = ['full_name', 'preferred_name', 'work_email', 'personal_email', 'phone', 'date_of_birth', 'gender', 'blood_group', 'pan_number', 'photo_url',
-  'job_title', 'department_id', 'job_role_id', 'manager_id', 'secondary_manager_id', 'employment_type', 'legal_entity', 'work_location',
+  'job_title', 'department_id', 'org_unit_path', 'job_role_id', 'manager_id', 'secondary_manager_id', 'employment_type', 'legal_entity', 'work_location',
   'date_joined', 'probation_end_date', 'confirmed_at', 'status', 'date_exited', 'exit_reason',
   'emergency_contact_name', 'emergency_contact_phone'];
 
@@ -144,6 +179,13 @@ function clean(f) {
   const o = {};
   for (const k of FIELDS) if (!READ_ONLY.has(k)) o[k] = f[k] === '' ? null : f[k];
   return o;
+}
+
+// J1b D7: the save never fails because Google did; say so when the push did not go through.
+function toastSaved(showToast, msg, gs) {
+  if (gs?.status === 'failed') showToast(`${msg}. Google not updated: ${gs.error || 'push failed'}. Retry from the profile.`, 'error');
+  else if (gs?.status === 'pending') showToast(`${msg}. Google update pending.`, 'success');
+  else showToast(msg, 'success');
 }
 
 function Section({ title, children }) {
