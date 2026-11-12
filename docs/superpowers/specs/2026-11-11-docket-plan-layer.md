@@ -499,7 +499,7 @@ this build** — themes and milestones are entered by the founders, item by item
 | R7 — Slack | Docket Slack app, identities, cron, reminders, shortcut, `/docket`, buttons |
 | **R8 — hand-offs** ✅ SHIPPED 2026-11-12 (`f1953ba7`) | fields + accept + pack section + Incoming — as built: receivers reach a hand-off by id / Incoming / pack / founders' page, not task lists (decisions); the giver can't accept |
 | **R9a — tree + templates** ✅ SHIPPED 2026-11-12 (`48d65901`) | tree view · templates — as built: a template milestone with a done-when is created agreed, else proposed (decisions); no seeds |
-| R9b — | measure auto-check · score trend · re-plan page · Programs retired |
+| **R9b** ✅ SHIPPED 2026-11-12 (`c9e06a7c`) | measure auto-check · score trend · re-plan page · Programs retired — as built: trailing-30-day readings, ceilings reach only at due, Odo net revenue not auto-checked (decisions) |
 
 Order can change release to release; each is hostile-reviewed and smoked live before the next starts.
 
