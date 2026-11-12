@@ -1,8 +1,8 @@
 # Docket Slack app — setup (F9 R7)
 
 The app is created and installed by a **Slack workspace admin** (spec §9.1: Afshaan). Docket's code for it
-(R7) is built after the app exists; until then the `/slack/*` routes on docketops don't exist and Slack
-will show "dispatch_failed" if anyone tries the command — so install it, hand over the secrets, and don't
+(R7) is built after the app exists; until then only `/slack/events` exists (it answers Slack's URL check)
+and Slack will show "dispatch_failed" if anyone tries the command or a shortcut — so install it, hand over the secrets, and don't
 announce it yet.
 
 ## 1. Create the app (≈ 3 minutes, admin)
