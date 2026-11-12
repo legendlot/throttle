@@ -5,7 +5,7 @@ import { zipSync, strToU8 } from 'fflate';
 import {
   CV_SCHEMA, DRAFT_FIELDS, buildExtractRequest, parseExtractResponse, readUsage, validateExtraction,
   quoteFound, foldText, cleanText, docxXmlToText, costInr, estimateInr, importItemPath, checkImportItemPath,
-  pickDraft, MAX_TEXT_CHARS, fileExtOf,
+  pickDraft, MAX_TEXT_CHARS, fileExtOf, binds, phoneRuns, numbersIn,
 } from '../src/cvimport.js';
 import { cvText } from '../src/cvtext.js';
 
@@ -165,4 +165,32 @@ test('cvText: real PDF text layer and real DOCX', async () => {
   const docx = zipSync({ 'word/document.xml': strToU8('<w:document><w:p><w:t>Hello CV</w:t></w:p></w:document>'), '[Content_Types].xml': strToU8('<x/>') });
   assert.equal((await cvText(docx, 'docx')).text, 'Hello CV\n');
   assert.equal((await cvText(new Uint8Array([1, 2]), 'doc')).text, '');
+});
+
+test('hostile: label-only quotes and cross-run digits are dropped (review finding 2)', () => {
+  const T = `Ravi Example\nExpected CTC: negotiable. CTC: as per industry\nNotice period: to be discussed\nExperience\nAcme 2015-2019, Beta 2019-2023\nravi@example.com`;
+  const v = validateExtraction({ ...GOOD, full_name: 'Ravi Example', email: 'ravi@example.com', phone: '1520192019', linkedin_url: null,
+    expected_ctc_inr: 2500000, expected_ctc_evidence: 'Expected CTC', current_ctc_inr: 900000, current_ctc_evidence: 'CTC:',
+    notice_period_days: 90, notice_evidence: 'Notice period', total_experience_years: 12, experience_evidence: 'Experience' }, T);
+  assert.equal(v.fields.expected_ctc, null);
+  assert.equal(v.fields.current_ctc, null);
+  assert.equal(v.fields.notice_period_days, null);
+  assert.equal(v.fields.total_experience_years, null);
+  assert.equal(v.fields.phone, null);
+  assert.ok(v.warnings.length >= 5);
+});
+
+test('binds: value must be stated by its quote', () => {
+  assert.ok(binds('current_ctc', 900000, 'Current CTC 9 LPA'));
+  assert.ok(binds('current_ctc', 1200000, 'CTC: 12,00,000'));
+  assert.ok(binds('expected_ctc', 15000000, 'Expected 1.5 Cr'));
+  assert.ok(!binds('expected_ctc', 2500000, 'Expected CTC 9 LPA'));
+  assert.ok(binds('notice_period_days', 60, 'Notice: 2 months'));
+  assert.ok(binds('notice_period_days', 0, 'Immediate joiner'));
+  assert.ok(!binds('notice_period_days', 90, 'Notice period: 30 days'));
+  assert.ok(binds('total_experience_years', 8, '8+ years of experience'));
+  assert.ok(binds('total_experience_years', 7.5, 'Jun 2018 - Present', 2026));
+  assert.ok(!binds('total_experience_years', 12, 'Jun 2018 - Present', 2026));
+  assert.deepEqual(numbersIn('12,00,000 or 1.5'), [1200000, 1.5]);
+  assert.deepEqual(phoneRuns('Call +91 98765-43210 or 2015-2019'), ['919876543210', '20152019']);
 });

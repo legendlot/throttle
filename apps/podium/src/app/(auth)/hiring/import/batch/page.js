@@ -56,6 +56,17 @@ function BatchInner() {
       ? prev : { ...prev, [it.id]: { ...draftOf(it), __seeded: it.status } });
   }, []);
 
+  // Fresh duplicate answers (per item, from read / save) are merged in, so the check never goes stale.
+  const mergeDupes = useCallback((dp) => {
+    if (!dp) return;
+    setData(d => {
+      if (!d) return d;
+      const byId = new Map((d.duplicates || []).map(m => [m.id, m]));
+      for (const m of dp.matches || []) byId.set(m.id, m);
+      return { ...d, duplicates: [...byId.values()], hidden_keys: [...new Set([...(d.hidden_keys || []), ...(dp.hidden_keys || [])])] };
+    });
+  }, []);
+
   const load = useCallback(async () => {
     if (!session || !id) return;
     try {
@@ -78,16 +89,17 @@ function BatchInner() {
       upsertItem({ ...it, status: 'extracting' });
       podiumopsPost('cvImportExtract', { item_id: it.id }, session)
         .then(r => {
-          if (r.retry) coolUntil.current[it.id] = Date.now() + RETRY_MS;
+          if (r.retry || r.busy) coolUntil.current[it.id] = Date.now() + RETRY_MS;
           upsertItem(r.item);
-          if (r.busy) setTimeout(() => setTick(t => t + 1), RETRY_MS);
+          mergeDupes(r.duplicates);
         })
         .catch(e => { coolUntil.current[it.id] = Date.now() + RETRY_MS; upsertItem({ ...it, last_error: errText(e) }); })
         .finally(() => { inflight.current.delete(it.id); setTick(t => t + 1); });
     }
-    const waiting = items.some(it => it.status === 'uploaded' && coolUntil.current[it.id] > now);
-    if (waiting) { const t = setTimeout(() => setTick(x => x + 1), RETRY_MS); return () => clearTimeout(t); }
-  }, [items, session, tick, upsertItem]);
+    // Re-check later: items cooling down, and reads another tab started (picked up once they go stale).
+    const waiting = items.some(it => (it.status === 'uploaded' && coolUntil.current[it.id] > now) || (it.status === 'extracting' && !inflight.current.has(it.id)));
+    if (waiting) { const t = setTimeout(() => setTick(x => x + 1), 30000); return () => clearTimeout(t); }
+  }, [items, session, tick, upsertItem, mergeDupes]);
 
   async function addFiles(fileList) {
     const files = [...fileList];
@@ -125,6 +137,8 @@ function BatchInner() {
     for (const m of dupesBy.byPhone[normPhone(draft?.phone)] || []) out.set(m.id, m);
     return [...out.values()];
   }
+  // Someone the caller can't see has this email / phone (they learn that, not who).
+  const hiddenFor = (draft) => { const k = new Set(data?.hidden_keys || []); return k.has(normEmail(draft?.email)) || k.has(normPhone(draft?.phone)); };
   function batchDupeFor(it, draft) {
     const e = normEmail(draft?.email), p = normPhone(draft?.phone);
     const other = items.find(o => o.id !== it.id && o.status !== 'skipped' && (
@@ -140,11 +154,21 @@ function BatchInner() {
     finally { setBusyIds(b => { const n = { ...b }; delete n[it.id]; return n; }); }
   }
   const payload = (it) => { const { __seeded, __edited, ...d } = drafts[it.id] || draftOf(it); return draftPayload(d); };
-  const accept = (it, candidateId) => act(it, async () => {
-    const r = await podiumopsPost('cvImportAccept', { item_id: it.id, draft: payload(it), candidate_id: candidateId || undefined }, session);
-    upsertItem(r);
+  const accept = (it, candidateId, { ask = true } = {}) => act(it, async () => {
+    const body = { item_id: it.id, draft: payload(it), candidate_id: candidateId || undefined };
+    try {
+      upsertItem(await podiumopsPost('cvImportAccept', body, session));
+    } catch (e) {
+      // The server's duplicate guard: confirm once, then force. Bulk accept never forces.
+      if (e?.body?.error === 'duplicate' && ask && window.confirm(`${e.body.message}\n\nCreate a new candidate anyway?`)) {
+        upsertItem(await podiumopsPost('cvImportAccept', { ...body, force: true }, session));
+      } else { await load(); throw e; }
+    }
   });
-  const save = (it) => act(it, async () => { upsertItem(await podiumopsPost('cvImportSaveItem', { item_id: it.id, draft: payload(it) }, session)); showToast('Saved', 'success'); });
+  const save = (it) => act(it, async () => {
+    const r = await podiumopsPost('cvImportSaveItem', { item_id: it.id, draft: payload(it) }, session);
+    upsertItem(r.item); mergeDupes(r.duplicates); showToast('Saved', 'success');
+  });
   const skip = (it) => act(it, async () => upsertItem(await podiumopsPost('cvImportSkip', { item_id: it.id }, session)));
   const open = (it) => act(it, async () => {
     const d = await podiumopsGet('getCvImportFileUrl', { item_id: it.id }, session);
@@ -152,9 +176,9 @@ function BatchInner() {
   });
 
   const clean = items.filter(it => it.status === 'extracted' && !it.warnings?.length && !matchesFor(drafts[it.id]).length
-    && !batchDupeFor(it, drafts[it.id]) && String(drafts[it.id]?.full_name || '').trim());
+    && !hiddenFor(drafts[it.id]) && !batchDupeFor(it, drafts[it.id]) && String(drafts[it.id]?.full_name || '').trim());
   async function acceptClean() {
-    for (const it of clean) await accept(it);
+    for (const it of [...clean]) await accept(it, undefined, { ask: false });
   }
   async function discard() {
     if (!window.confirm('Delete every CV in this batch that hasn\'t been accepted? Accepted candidates stay.')) return;
@@ -210,7 +234,7 @@ function BatchInner() {
       {!shown.length ? <div style={muted}>Nothing here.</div> : shown.map(it => (
         <CvItemCard key={it.id} item={it} draft={drafts[it.id]} canSeeSalary={data.can_see_salary}
           onDraft={d => setDrafts(p => ({ ...p, [it.id]: { ...d, __edited: true } }))}
-          matches={matchesFor(drafts[it.id])} batchDupe={batchDupeFor(it, drafts[it.id])} busy={!!busyIds[it.id]}
+          matches={matchesFor(drafts[it.id])} hiddenMatch={hiddenFor(drafts[it.id])} batchDupe={batchDupeFor(it, drafts[it.id])} busy={!!busyIds[it.id]}
           onOpen={() => open(it)} onSave={() => save(it)} onAccept={() => accept(it)} onAttach={cid => accept(it, cid)} onSkip={() => skip(it)} />
       ))}
     </div>

@@ -45,7 +45,7 @@ import {
   PURGE_AFTER_DAYS as CV_PURGE_AFTER_DAYS, fileExtOf as cvFileExt, cleanText as cleanCvText,
   buildExtractRequest as buildCvExtractRequest, readUsage as readCvUsage, parseExtractResponse as parseCvExtractResponse,
   validateExtraction as validateCvExtraction, costInr as cvCostInr, estimateInr as cvEstimateInr, pickDraft as pickCvDraft,
-  importItemPath, checkImportItemPath,
+  importItemPath, checkImportItemPath, SCAN_MAX_BYTES as CV_SCAN_MAX_BYTES,
 } from './cvimport.js';   // C4 bulk CV import (test/cvimport.test.mjs)
 import { cvText } from './cvtext.js';   // C3 CTC calculator (test/offer-calc.test.mjs)
 import {
@@ -8131,22 +8131,22 @@ async function purgeStaleCvImports(env) {
   const cutoff = new Date(Date.now() - CV_PURGE_AFTER_DAYS * 86400000).toISOString();
   const ir = await sb(`/rest/v1/cv_imports?updated_at=lt.${cutoff}&select=id&limit=5`, env);
   for (const imp of ir.data || []) {
-    const it = await sb(`/rest/v1/cv_import_items?import_id=eq.${imp.id}&select=id,status,storage_path`, env);
-    const items = it.data || [];
-    const drop = items.filter(i => !['accepted', 'accepting'].includes(i.status));
-    if (!(await storageDeletePaths(env, drop.map(i => i.storage_path)))) continue;
-    if (drop.length) await sb(`/rest/v1/cv_import_items?id=in.(${drop.map(i => i.id).join(',')})`, env, { method: 'DELETE', prefer: 'return=minimal' });
-    if (drop.length === items.length) await sb(`/rest/v1/cv_imports?id=eq.${imp.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+    // Conditional delete: only rows no accept has touched (candidate_id null), re-checked in the DELETE itself.
+    const del = await sb(`/rest/v1/cv_import_items?import_id=eq.${imp.id}&candidate_id=is.null&status=neq.accepted`, env, { method: 'DELETE' });
+    if (!del.ok) continue;
+    await storageDeletePaths(env, (del.data || []).map(i => i.storage_path));
+    const left = await sb(`/rest/v1/cv_import_items?import_id=eq.${imp.id}&select=id&limit=1`, env);
+    if (left.ok && !(left.data || []).length) await sb(`/rest/v1/cv_imports?id=eq.${imp.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
     else await touchCvImport(env, imp.id);   // keep the accepted record; don't re-scan it every load
   }
 }
 
 // GET getCvImports — the caller's batches (HR / podium_hiring: all), newest first, + this month's AI spend.
 async function getCvImports(url, auth, env) {
-  try { await purgeStaleCvImports(env); } catch (e) { console.error('[cv-purge]', e?.message || e); }
   const edges = await loadOrgEdges(env);
   const me = callerEmployee(edges, auth.userId);
   if (!(await hiringAccess(auth, me, env))) return err('forbidden', 403);
+  try { await purgeStaleCvImports(env); } catch (e) { console.error('[cv-purge]', e?.message || e); }
   const ir = await sb(`/rest/v1/cv_imports?select=*&order=created_at.desc&limit=100`, env);
   const imps = ir.data || [];
   const ops = await loadOpeningsWithRoles(auth, me, env, { ids: [...new Set(imps.map(i => i.opening_id))] });
@@ -8165,28 +8165,36 @@ async function getCvImports(url, auth, env) {
   });
 }
 
-// Existing candidates matching any item's email / phone, limited to people the caller may see.
-async function cvImportDuplicates(auth, me, env, items) {
+// Existing candidates matching these drafts' email / phone. matches = people the caller may see;
+// hidden_keys = the email / phone keys that match someone they can't see (they learn THAT, not who —
+// the findCandidateDuplicates rule). Throws on a DB error: an empty answer must never mean "couldn't check".
+async function cvImportDuplicates(auth, me, env, drafts) {
   const emails = new Set(), phones = new Set();
-  for (const it of items) {
-    const f = it.final || it.extracted?.fields || {};
-    const e = normEmailKey(f.email); if (e) emails.add(e.replace(/[,()"]/g, ''));
-    const p = normPhoneKey(f.phone); if (p && p.length >= 6) phones.add(p);
+  for (const f of drafts) {
+    const e = normEmailKey(f?.email); if (e) emails.add(e.replace(/["\\]/g, ''));
+    const p = normPhoneKey(f?.phone); if (p && p.length >= 6) phones.add(p);
   }
-  if (!emails.size && !phones.size) return [];
+  if (!emails.size && !phones.size) return { matches: [], hidden_keys: [] };
   const ors = [];
-  if (emails.size) ors.push(`email_norm.in.(${[...emails].map(e => `"${e}"`).join(',')})`);
+  if (emails.size) ors.push(`email_norm.in.(${[...emails].map(e => encodeURIComponent(`"${e}"`)).join(',')})`);
   if (phones.size) ors.push(`phone_norm.in.(${[...phones].join(',')})`);
   const cr = await sb(`/rest/v1/candidates?or=(${ors.join(',')})&merged_into_id=is.null&select=id,candidate_code,full_name,email_norm,phone_norm&limit=500`, env);
-  const hits = cr.data || [];
-  if (!hits.length) return [];
-  if (isHr(auth) || hasPerm(auth, 'podium_hiring')) return hits;
+  if (!cr.ok || !Array.isArray(cr.data)) throw new Error('duplicate check failed');
+  const hits = cr.data;
+  const view = (h) => ({ id: h.id, candidate_code: h.candidate_code, full_name: h.full_name, email_norm: h.email_norm, phone_norm: h.phone_norm });
+  if (!hits.length) return { matches: [], hidden_keys: [] };
+  if (isHr(auth) || hasPerm(auth, 'podium_hiring')) return { matches: hits.map(view), hidden_keys: [] };
   const ar = await sb(`/rest/v1/applications?candidate_id=in.(${hits.map(h => h.id).join(',')})&select=candidate_id,opening_id`, env);
   const apps = ar.data || [];
   const ops = await loadOpeningsWithRoles(auth, me, env, { ids: [...new Set(apps.map(a => a.opening_id))] });
   const vis = new Set(ops.filter(x => canSeeOpening(x.roles)).map(x => x.o.id));
-  return hits.filter(h => apps.some(a => a.candidate_id === h.id && vis.has(a.opening_id)));
+  const seen = hits.filter(h => apps.some(a => a.candidate_id === h.id && vis.has(a.opening_id)));
+  const hidden = hits.filter(h => !seen.includes(h));
+  const keys = new Set();
+  for (const h of hidden) { if (emails.has(h.email_norm)) keys.add(h.email_norm); if (phones.has(h.phone_norm)) keys.add(h.phone_norm); }
+  return { matches: seen.map(view), hidden_keys: [...keys] };
 }
+const itemDraft = (i) => i.final || i.extracted?.fields || {};
 
 // GET getCvImport?id= — the batch, its items (salary-stripped when needed) and duplicate matches.
 async function getCvImport(url, auth, env) {
@@ -8194,14 +8202,14 @@ async function getCvImport(url, auth, env) {
   if (c.res) return c.res;
   const it = await sb(`/rest/v1/cv_import_items?import_id=eq.${c.imp.id}&select=*&order=created_at.asc&limit=${CV_MAX_ITEMS}`, env);
   const items = it.data || [];
-  const dupes = await cvImportDuplicates(auth, c.me, env, items);
+  const dupes = await cvImportDuplicates(auth, c.me, env, items.map(itemDraft));
   const o = c.x.o;
   return ok({
     import: c.imp,
     opening: { id: o.id, opening_code: o.opening_code, designation: o.designation, status: o.status },
     can_see_salary: c.salary,
     items: items.map(i => cvItemView(i, c.salary)),
-    duplicates: dupes.map(d => ({ id: d.id, candidate_code: d.candidate_code, full_name: d.full_name, email_norm: d.email_norm, phone_norm: d.phone_norm })),
+    duplicates: dupes.matches, hidden_keys: dupes.hidden_keys,
     spend: await aiMonthSpend(env),
     ai_ready: !!env.OPENAI_API_KEY,
   });
@@ -8241,9 +8249,12 @@ async function cvImportUploadUrl(body, auth, env) {
   if (c.res) return c.res;
   const fe = fileOk(d.file_name, CV_IMPORT_EXTS, d.file_size);
   if (fe) return err(fe === 'bad_file_type' ? 'Only PDF, Word or image files' : 'Files must be under 15 MB', 400);
-  const cr = await sb(`/rest/v1/cv_import_items?import_id=eq.${c.imp.id}&status=neq.skipped&select=id&limit=${CV_MAX_ITEMS}`, env);
-  if ((cr.data || []).length >= CV_MAX_ITEMS) return errCode('import_full', `A batch holds up to ${CV_MAX_ITEMS} CVs — start another batch`, 409);
-  return signUpload(importItemPath(c.imp.id, d.file_name), env);
+  // Every row counts (skipped too) so the batch read (limit CV_MAX_ITEMS) always shows all of them.
+  const cr = await sb(`/rest/v1/cv_import_items?import_id=eq.${c.imp.id}&select=id&limit=${CV_MAX_ITEMS}`, env);
+  if (!cr.ok) return err('db_error', 500);
+  if ((cr.data || []).length >= CV_MAX_ITEMS) return errCode('import_full', `A batch holds up to ${CV_MAX_ITEMS} CVs (skipped ones included) — start another batch`, 409);
+  // Microsecond-ish stamp so two same-named files signed in one millisecond don't collide.
+  return signUpload(importItemPath(c.imp.id, d.file_name, Date.now() * 1000 + Math.floor(Math.random() * 1000)), env);
 }
 
 // POST cvImportFileDone {import_id, storage_path, file_name} — size + type read from storage, not trusted.
@@ -8286,17 +8297,29 @@ async function cvImportExtract(body, auth, env) {
   if (c.res) return c.res;
   const item = c.item;
   const stale = new Date(Date.now() - CV_STALE_EXTRACT_MS).toISOString();
+  const claimable = `or=(status.eq.uploaded,and(status.eq.extracting,extracting_since.lt.${stale}))`;
+  // A run that died mid-read (OOM / CPU) never reached retryOrManual: past 3 attempts it goes to manual, no 4th call.
+  if ((item.attempts || 0) >= 3) {
+    const rows = await setCvItem(env, item.id, { status: 'needs_manual', extract_mode: 'manual', extracting_since: null,
+      last_error: 'This file could not be read after 3 tries — enter by hand' }, `&${claimable}`);
+    if (rows === null) return err('db_error', 502);
+    return ok({ item: cvItemView(rows[0] || item, c.salary), busy: !rows.length });
+  }
   const claimed = await setCvItem(env, item.id, { status: 'extracting', extracting_since: nowIso(), attempts: (item.attempts || 0) + 1 },
-    `&or=(status.eq.uploaded,and(status.eq.extracting,extracting_since.lt.${stale}))`);
-  if (!claimed?.length) return ok({ item: cvItemView(item, c.salary), busy: true });
+    `&${claimable}&attempts=lt.3`);
+  if (claimed === null) return err('db_error', 502);
+  if (!claimed.length) return ok({ item: cvItemView(item, c.salary), busy: true });
   const it = claimed[0];
+  // Every closing write is guarded on status=extracting: a late original run can't overwrite a reclaimed one.
+  const MINE = '&status=eq.extracting';
+  const dupesFor = async (fields) => { try { return await cvImportDuplicates(auth, c.me, env, [fields || {}]); } catch { return null; } };
   const manual = async (reason) => {
-    const rows = await setCvItem(env, it.id, { status: 'needs_manual', extract_mode: 'manual', extracting_since: null, last_error: reason });
+    const rows = await setCvItem(env, it.id, { status: 'needs_manual', extract_mode: 'manual', extracting_since: null, last_error: reason }, MINE);
     return ok({ item: cvItemView(rows?.[0] || it, c.salary) });
   };
   const retryOrManual = async (reason) => {
     if ((it.attempts || 0) >= 3) return manual(`${reason} — gave up after 3 tries`);
-    const rows = await setCvItem(env, it.id, { status: 'uploaded', extracting_since: null, last_error: reason });
+    const rows = await setCvItem(env, it.id, { status: 'uploaded', extracting_since: null, last_error: reason }, MINE);
     return ok({ item: cvItemView(rows?.[0] || it, c.salary), retry: true });
   };
 
@@ -8311,8 +8334,8 @@ async function cvImportExtract(body, auth, env) {
     const hit = (await sb(`/rest/v1/cv_import_items?sha256=eq.${sha}&model=eq.${encodeURIComponent(model)}&prompt_version=eq.${CV_PROMPT_VERSION}&extracted=not.is.null&id=neq.${it.id}&select=extracted,warnings&limit=1`, env)).data?.[0];
     if (hit) {
       const rows = await setCvItem(env, it.id, { sha256: sha, status: 'extracted', extract_mode: 'cache', model, prompt_version: CV_PROMPT_VERSION,
-        extracted: hit.extracted, warnings: hit.warnings || [], extracting_since: null, last_error: null });
-      return ok({ item: cvItemView(rows?.[0] || it, c.salary) });
+        extracted: hit.extracted, warnings: hit.warnings || [], extracting_since: null, last_error: null }, MINE);
+      return ok({ item: cvItemView(rows?.[0] || it, c.salary), duplicates: await dupesFor(hit.extracted?.fields) });
     }
     await setCvItem(env, it.id, { sha256: sha });
 
@@ -8333,6 +8356,7 @@ async function cvImportExtract(body, auth, env) {
     } else {
       return manual('Unsupported file type');
     }
+    if (file && bytes.length > CV_SCAN_MAX_BYTES) return manual('Scanned CVs over 5 MB can\'t be read — enter by hand, or upload a smaller copy');
 
     if (!env.OPENAI_API_KEY) return manual('AI reading isn\'t set up yet — enter by hand');
     if (!st?.enabled) return manual(AI_ERR.podium_ai_disabled);
@@ -8380,9 +8404,9 @@ async function cvImportExtract(body, auth, env) {
     const warnings = [...v.warnings];
     if (truncated) warnings.push('Very long CV — only the first part was read');
     const rows = await setCvItem(env, it.id, { status: 'extracted', extract_mode: mode, model, prompt_version: CV_PROMPT_VERSION,
-      ai_call_id: callId, extracted: { fields: v.fields, evidence: v.evidence }, warnings, extracting_since: null, last_error: null });
+      ai_call_id: callId, extracted: { fields: v.fields, evidence: v.evidence }, warnings, extracting_since: null, last_error: null }, MINE);
     await touchCvImport(env, it.import_id);
-    return ok({ item: cvItemView(rows?.[0] || it, c.salary) });
+    return ok({ item: cvItemView(rows?.[0] || it, c.salary), duplicates: await dupesFor(v.fields) });
   } catch (e) {
     console.error('[cv-extract]', e?.message || e);
     return retryOrManual(`Something went wrong reading this file (${String(e?.message || e).slice(0, 120)})`);
@@ -8399,7 +8423,10 @@ async function cvImportSaveItem(body, auth, env) {
   if (!c.salary) { const { current_ctc, expected_ctc, ...rest } = draft; draft = { ...rest, current_ctc: c.item.final?.current_ctc ?? null, expected_ctc: c.item.final?.expected_ctc ?? null }; }
   const rows = await setCvItem(env, c.item.id, { final: draft }, '&status=in.(extracted,needs_manual)');
   if (!rows?.length) return errCode('not_editable', 'This CV is already done', 409);
-  return ok(cvItemView(rows[0], c.salary));
+  await touchCvImport(env, c.imp.id);
+  let duplicates = null;
+  try { duplicates = await cvImportDuplicates(auth, c.me, env, [draft]); } catch { duplicates = null; }
+  return ok({ item: cvItemView(rows[0], c.salary), duplicates });
 }
 
 async function callAction(fn, data, auth, env) {
@@ -8418,11 +8445,16 @@ async function cvImportAccept(body, auth, env) {
   const d = body.data || body;
   const c = await cvItemCtx(auth, env, d.item_id);
   if (c.res) return c.res;
-  const prev = c.item.status;
-  if (!['extracted', 'needs_manual'].includes(prev)) return errCode('not_acceptable', 'This CV is already done', 409);
+  // An accept that died mid-way (tab closed, worker killed) leaves `accepting`; after 5 minutes it can be re-run.
+  const staleIso = new Date(Date.now() - CV_STALE_EXTRACT_MS).toISOString();
+  const stuck = c.item.status === 'accepting' && Date.parse(c.item.updated_at) < Date.now() - CV_STALE_EXTRACT_MS;
+  const prev = stuck ? 'extracted' : c.item.status;
+  if (!stuck && !['extracted', 'needs_manual'].includes(prev)) return errCode('not_acceptable', 'This CV is already done', 409);
   if (d.candidate_id && !isUuid(d.candidate_id)) return err('bad candidate_id', 400);
-  const claimed = await setCvItem(env, c.item.id, { status: 'accepting' }, `&status=eq.${prev}`);
-  if (!claimed?.length) return errCode('busy', 'Someone else is working on this CV', 409);
+  const claimed = await setCvItem(env, c.item.id, { status: 'accepting' },
+    stuck ? `&status=eq.accepting&updated_at=lt.${staleIso}` : `&status=eq.${prev}`);
+  if (claimed === null) return err('db_error', 502);
+  if (!claimed.length) return errCode('busy', 'Someone else is working on this CV', 409);
   let item = claimed[0];
   const fail = async (msg, status = 400, code = null) => {
     await setCvItem(env, item.id, { status: prev, last_error: String(msg).slice(0, 300) });
@@ -8435,6 +8467,9 @@ async function cvImportAccept(body, auth, env) {
     let candidateId = item.candidate_id, applicationId = item.application_id;
     if (!candidateId) {
       if (d.candidate_id) {
+        const mc = await sb(`/rest/v1/candidates?id=eq.${d.candidate_id}&select=merged_into_id&limit=1`, env);
+        if (!mc.data?.[0]) return fail('That candidate no longer exists', 404);
+        if (mc.data[0].merged_into_id) return fail('That candidate was merged into another — attach to the surviving record', 409);
         const a = await callAction(addApplication, { ...appData, candidate_id: d.candidate_id }, auth, env);
         if (a.j.ok) applicationId = a.j.data.id;
         else if (a.j.error === 'already_active') {
@@ -8443,11 +8478,22 @@ async function cvImportAccept(body, auth, env) {
         candidateId = d.candidate_id;
       } else {
         if (!String(draft.full_name || '').trim()) return fail('Enter the candidate\'s name first');
+        // Server-side duplicate guard: the page's list can be stale; "Accept anyway" sends force.
+        if (!d.force) {
+          const dp = await cvImportDuplicates(auth, c.me, env, [draft]);
+          if (dp.matches.length || dp.hidden_keys.length) {
+            return fail(dp.matches.length ? `Already in Podium: ${dp.matches.map(m => `${m.full_name} (${m.candidate_code})`).join(', ')} — attach to them, or accept anyway`
+              : 'Someone with this email or phone is already in Podium on an opening you can\'t see — ask HR, or accept anyway', 409, 'duplicate');
+          }
+        }
         const r = await callAction(createCandidate, { ...appData, ...draft }, auth, env);
         if (!r.j.ok) return fail(r.j.message || r.j.error || 'Could not create the candidate', r.status, r.j.error === 'jd_required' || r.j.error === 'opening_not_open' ? r.j.error : null);
         candidateId = r.j.data.candidate.id; applicationId = r.j.data.application.id;
       }
-      item = (await setCvItem(env, item.id, { candidate_id: candidateId, application_id: applicationId, final: draft }))?.[0] || item;
+      const upd = await setCvItem(env, item.id, { candidate_id: candidateId, application_id: applicationId, final: draft });
+      // Fatal: without candidate_id on the item a retry would create the person twice (the duplicate guard is the backstop).
+      if (!upd?.length) return fail('The candidate was created but this CV couldn\'t be linked — refresh before trying again', 500);
+      item = upd[0];
     }
 
     if (!item.document_id) {
@@ -8456,12 +8502,19 @@ async function cvImportAccept(body, auth, env) {
       const mv = await storageFetch(`/object/move`, env, { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ bucketId: DOC_BUCKET, sourceKey: item.storage_path, destinationKey: dest }) });
       if (!mv.ok && !(await storageHead(env, dest)).ok) return fail('Could not file the CV — try again', 502);
-      const dr = await sb(`/rest/v1/candidate_documents`, env, { method: 'POST', body: JSON.stringify([{
-        candidate_id: candidateId, application_id: applicationId || null, doc_type: 'cv', title: item.file_name, storage_path: dest,
-        file_name: item.file_name, mime_type: item.mime_type || null, file_size: Number(item.file_size), uploaded_by: auth.userId, source: 'cv_import' }]) });
-      if (!dr.ok) return fail(`Could not record the CV (${JSON.stringify(dr.data).slice(0, 120)})`, 400);
-      await hiringEvents(env, auth, c.me, [{ candidate_id: candidateId, application_id: applicationId || null, event_type: 'document_added', detail: { doc_type: 'cv', source: 'cv_import' } }]);
-      item = (await setCvItem(env, item.id, { document_id: dr.data[0].id }))?.[0] || item;
+      // A retry after the row was written but not linked finds it by its (unique) path instead of re-inserting.
+      let docId = (await sb(`/rest/v1/candidate_documents?storage_path=eq.${encodeURIComponent(dest)}&select=id&limit=1`, env)).data?.[0]?.id || null;
+      if (!docId) {
+        const dr = await sb(`/rest/v1/candidate_documents`, env, { method: 'POST', body: JSON.stringify([{
+          candidate_id: candidateId, application_id: applicationId || null, doc_type: 'cv', title: item.file_name, storage_path: dest,
+          file_name: item.file_name, mime_type: item.mime_type || null, file_size: Number(item.file_size), uploaded_by: auth.userId, source: 'cv_import' }]) });
+        if (!dr.ok) return fail(`Could not record the CV (${JSON.stringify(dr.data).slice(0, 120)})`, 400);
+        docId = dr.data[0].id;
+        await hiringEvents(env, auth, c.me, [{ candidate_id: candidateId, application_id: applicationId || null, event_type: 'document_added', detail: { doc_type: 'cv', source: 'cv_import' } }]);
+      }
+      const upd = await setCvItem(env, item.id, { document_id: docId });
+      if (!upd?.length) return fail('The CV was filed but couldn\'t be linked — press Accept again', 500);
+      item = upd[0];
     }
     const rows = await setCvItem(env, item.id, { status: 'accepted', last_error: null });
     await touchCvImport(env, item.import_id);
@@ -8477,8 +8530,9 @@ async function cvImportSkip(body, auth, env) {
   const d = body.data || body;
   const c = await cvItemCtx(auth, env, d.item_id);
   if (c.res) return c.res;
-  const rows = await setCvItem(env, c.item.id, { status: 'skipped', extracting_since: null }, '&status=in.(uploaded,extracted,needs_manual)');
-  if (!rows?.length) return errCode('not_skippable', 'This CV is already done or being read', 409);
+  // Never once an accept created the person (candidate_id set) — finish that accept instead.
+  const rows = await setCvItem(env, c.item.id, { status: 'skipped', extracting_since: null }, '&status=in.(uploaded,extracted,needs_manual)&candidate_id=is.null');
+  if (!rows?.length) return errCode('not_skippable', c.item.candidate_id ? 'This person was already added — press Accept to finish filing the CV' : 'This CV is already done or being read', 409);
   await storageDeletePaths(env, [c.item.storage_path]);
   await touchCvImport(env, c.imp.id);
   return ok(cvItemView(rows[0], c.salary));
@@ -8489,14 +8543,16 @@ async function discardCvImport(body, auth, env) {
   const d = body.data || body;
   const c = await cvImportCtx(auth, env, d.import_id);
   if (c.res) return c.res;
-  const it = await sb(`/rest/v1/cv_import_items?import_id=eq.${c.imp.id}&select=id,status,storage_path`, env);
-  const items = it.data || [];
-  if (items.some(i => ['extracting', 'accepting'].includes(i.status))) return errCode('busy', 'A CV is still being read or saved — try again in a minute', 409);
-  const drop = items.filter(i => i.status !== 'accepted');
-  if (!(await storageDeletePaths(env, drop.map(i => i.storage_path)))) return err('Could not delete the files — try again', 502);
-  if (drop.length) await sb(`/rest/v1/cv_import_items?id=in.(${drop.map(i => i.id).join(',')})`, env, { method: 'DELETE', prefer: 'return=minimal' });
-  if (drop.length === items.length) await sb(`/rest/v1/cv_imports?id=eq.${c.imp.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
-  return ok({ discarded: drop.length, kept: items.length - drop.length });
+  // The status test lives in the DELETE itself, so an accept / read that claims a row meanwhile keeps it.
+  const stale = new Date(Date.now() - CV_STALE_EXTRACT_MS).toISOString();
+  const del = await sb(`/rest/v1/cv_import_items?import_id=eq.${c.imp.id}&candidate_id=is.null`
+    + `&or=(status.in.(uploaded,extracted,needs_manual,skipped),and(status.in.(extracting,accepting),updated_at.lt.${stale}))`, env, { method: 'DELETE' });
+  if (!del.ok) return err('db_error', 502);
+  const gone = del.data || [];
+  await storageDeletePaths(env, gone.map(i => i.storage_path));
+  const left = (await sb(`/rest/v1/cv_import_items?import_id=eq.${c.imp.id}&select=id`, env)).data || [];
+  if (!left.length) await sb(`/rest/v1/cv_imports?id=eq.${c.imp.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  return ok({ discarded: gone.length, kept: left.length });
 }
 
 // GET getAiSettings — HR reads; super_admin edits (updateAiSettings).

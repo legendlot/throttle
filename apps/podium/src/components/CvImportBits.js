@@ -48,7 +48,7 @@ export function draftPayload(d) {
 }
 
 // One CV: status, warnings, the editable fields, and the actions.
-export function CvItemCard({ item, draft, onDraft, canSeeSalary, matches, batchDupe, busy, onOpen, onSave, onAccept, onAttach, onSkip }) {
+export function CvItemCard({ item, draft, onDraft, canSeeSalary, matches, hiddenMatch, batchDupe, busy, onOpen, onSave, onAccept, onAttach, onSkip }) {
   const st = ITEM_STATUS[item.status] || { label: item.status, tone: 'neutral' };
   const editable = ['extracted', 'needs_manual'].includes(item.status);
   const fields = canSeeSalary ? [...FIELDS, ...CTC_FIELDS] : FIELDS;
@@ -72,6 +72,7 @@ export function CvItemCard({ item, draft, onDraft, canSeeSalary, matches, batchD
         </ul>
       )}
       {batchDupe && editable && <div style={{ fontSize: 12, marginTop: 6, color: 'var(--warn-fg)' }}>Looks like the same person as another CV in this batch ({batchDupe}).</div>}
+      {hiddenMatch && editable && <div style={{ fontSize: 12, marginTop: 6, color: 'var(--warn-fg)' }}>Someone with this email or phone is already in Podium on an opening you can't see — check with HR before accepting.</div>}
       {!!matches?.length && editable && (
         <div style={{ fontSize: 12, marginTop: 6 }}>
           Already in Podium: {matches.map(m => <a key={m.id} href={`/hiring/detail/?id=${m.id}`} style={{ marginRight: 8 }}>{m.full_name} ({m.candidate_code})</a>)}

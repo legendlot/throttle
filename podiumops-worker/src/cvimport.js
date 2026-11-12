@@ -193,7 +193,7 @@ export function validateExtraction(raw, text) {
     const digits = phone.replace(/\D/g, '');
     const last10 = digits.slice(-10);
     if (digits.length < 10 || digits.length > 13) w.push('Phone looked invalid — dropped');
-    else if (canCheck && !String(text).replace(/\D/g, '').includes(last10)) w.push('Phone not found in the CV text — dropped');
+    else if (canCheck && !phoneRuns(text).some(r => r.includes(last10))) w.push('Phone not found in the CV text — dropped');
     else f.phone = phone;
   }
 
@@ -225,7 +225,7 @@ export function validateExtraction(raw, text) {
     if (n == null) return;
     if (!ok(n)) { w.push(`${label} looked wrong — dropped`); return; }
     const q = str(quote, 200);
-    if (canCheck && !(q && quoteFound(q, text))) { w.push(`${label} couldn't be traced to the CV — dropped`); return; }
+    if (canCheck && !(q && quoteFound(q, text) && binds(key, n, q))) { w.push(`${label} couldn't be traced to the CV — dropped`); return; }
     f[key] = round(n);
     ev[key === 'total_experience_years' ? 'experience' : key === 'notice_period_days' ? 'notice' : key] = q;
   };
@@ -239,6 +239,33 @@ export function validateExtraction(raw, text) {
   return { fields: f, evidence: ev, warnings: w };
 }
 
+// Digit runs that read as one number (spaces, dots, dashes, brackets, + between digits), digits only.
+export function phoneRuns(text) {
+  return (String(text || '').match(/\+?\d[\d\s().-]{7,}\d/g) || []).map(r => r.replace(/\D/g, ''));
+}
+// Numbers written in a quote: "9 LPA" → 9, "12,00,000" → 1200000, "1.5" → 1.5.
+export function numbersIn(q) {
+  return (String(q || '').match(/\d[\d,]*(\.\d+)?/g) || []).map(x => Number(x.replace(/,/g, ''))).filter(Number.isFinite);
+}
+const near = (a, b, tol) => Math.abs(a - b) <= tol;
+// The quote must actually state the value (D5): a label alone ("Expected CTC") binds nothing.
+export function binds(key, v, q, nowYear = new Date().getFullYear()) {
+  const ns = numbersIn(q);
+  if (key === 'notice_period_days') {
+    if (v === 0 && /immediate/i.test(q)) return true;
+    return ns.some(n => n === v || n * 30 === v || n * 7 === v);
+  }
+  if (key === 'current_ctc' || key === 'expected_ctc') {
+    return ns.some(n => [1, 1e3, 1e5, 1e7].some(m => near(n * m, v, v * 0.02)));
+  }
+  if (key === 'total_experience_years') {
+    if (ns.some(n => near(n, v, 0.5))) return true;                    // "8 years of experience"
+    const years = ns.filter(n => Number.isInteger(n) && n >= 1950 && n <= nowYear);
+    return years.length > 0 && v <= nowYear - Math.min(...years) + 1;  // a date range: can't exceed the span to today
+  }
+  return true;
+}
+
 // ── Cost (D6) ── prices are USD per 1M tokens; fx = ₹ per $.
 export function costInr(usage, price, fx) {
   const p = price || {};
@@ -247,8 +274,10 @@ export function costInr(usage, price, fx) {
   return Math.round(usd * fx * 10000) / 10000;
 }
 // Worst case for one call: the whole input uncached + the full output budget.
+// File / image mode can't count tokens up front: a high floor (≈ a 15-page scan), and scans are capped at 5 MB.
+export const SCAN_MAX_BYTES = 5 * 1024 * 1024;
 export function estimateInr(textChars, price, fx) {
-  const inTok = textChars == null ? 20000 : Math.ceil(textChars / 3) + 1500;
+  const inTok = textChars == null ? 60000 : Math.ceil(textChars / 3) + 1500;
   return costInr({ input_tokens: inTok, cached_tokens: 0, output_tokens: MAX_OUTPUT_TOKENS }, price, fx);
 }
 

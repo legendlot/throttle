@@ -12,7 +12,12 @@ export async function cvText(bytes, ext) {
     return { text: Array.isArray(text) ? text.join('\n') : String(text || ''), pages: totalPages || 0 };
   }
   if (ext === 'docx') {
-    const files = unzipSync(u8, { filter: f => f.name === 'word/document.xml' });
+    // Zip-bomb guard: refuse to inflate a document.xml claiming more than 5 MB.
+    const files = unzipSync(u8, { filter: f => {
+      if (f.name !== 'word/document.xml') return false;
+      if (f.originalSize > 5 * 1024 * 1024) throw new Error('docx too large to read');
+      return true;
+    } });
     const xml = files['word/document.xml'];
     return { text: xml ? docxXmlToText(strFromU8(xml)) : '', pages: 0 };
   }
