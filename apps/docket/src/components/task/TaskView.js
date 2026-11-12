@@ -40,6 +40,7 @@ import { useCommandSource } from '../../lib/commandSources.js';
 import { readMode, writeMode, goFull, leaveFull, readReturn, readOrder, claimFull } from './taskViewMode.js';
 import { usePlanItems } from '../plan/PlanPicker.js';
 import { planErrorText } from '../../lib/plan.js';
+import { handoffErrorText } from '../../lib/handoff.js';
 
 const MODE_META = {
   modal: { label: 'Modal', icon: SquareStack },
@@ -90,7 +91,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   const [depAnchor, setDepAnchor] = useState(null);   // F7 add flow: the ref it opens against, or null
   const [sections, setSections] = useState({});       // collapsed sections
   const [nav, setNav] = useState({ prev: null, next: null });
-  const refs = useMemo(() => ({ status: createRef(), owner: createRef(), collab: createRef(), deadline: createRef(), priority: createRef(), team: createRef(), program: createRef(), plan: createRef(), space: createRef() }), []);
+  const refs = useMemo(() => ({ status: createRef(), owner: createRef(), collab: createRef(), deadline: createRef(), priority: createRef(), team: createRef(), program: createRef(), plan: createRef(), handoff: createRef(), handoffPerson: createRef(), space: createRef() }), []);
   const planItems = usePlanItems(session);   // F9 R2: the Plan picker's items (getPlan, shared)
   const rootRef = useRef(null);
   const titleRef = useRef(null);
@@ -175,7 +176,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   async function saveField(field, value) {
     setBusy(true);
     try { await docketopsPost('updateTask', { id: task.id, [field]: value || null }, session); await mutated(); }
-    catch (e) { showToast(planErrorText(e) || 'Save failed', 'error'); load(true); }
+    catch (e) { showToast(handoffErrorText(e) || 'Save failed', 'error'); load(true); }   // a team change can hit handoff_same_team
     finally { setBusy(false); }
   }
   async function setStatus(status) {
@@ -241,7 +242,22 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
     catch (e) { showToast(planErrorText(e) || 'Failed', 'error'); }
     finally { setBusy(false); }
   }
-  const actions = { saveField, setStatus, commitDeadline, doAbandon, addCollab, removeCollab, createProgramInline, moveToSpace };
+  // F9 R8: the hand-off pair is one write (team + person together, so a person never outlives their team).
+  async function saveHandoff(departmentId, employeeId) {
+    setBusy(true);
+    try {
+      await docketopsPost('updateTask', { id: task.id, handoff_to_department_id: departmentId || null, handoff_to_employee_id: departmentId ? (employeeId || null) : null }, session);
+      await mutated();
+    } catch (e) { showToast(handoffErrorText(e), 'error'); load(true); }
+    finally { setBusy(false); }
+  }
+  async function acceptHandoff() {
+    setBusy(true);
+    try { await docketopsPost('acceptHandoff', { id: task.id }, session); await mutated(); showToast('Hand-off accepted', 'success'); }
+    catch (e) { showToast(handoffErrorText(e), 'error'); load(true); }
+    finally { setBusy(false); }
+  }
+  const actions = { saveField, setStatus, commitDeadline, doAbandon, addCollab, removeCollab, createProgramInline, moveToSpace, saveHandoff, acceptHandoff };
 
   const opts = useMemo(() => ({
     teamOpts: [{ value: '', label: '— No team —' }, ...departments.map(d => ({ value: d.id, label: d.name, dot: personColor(d.id) }))],
@@ -251,6 +267,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
     spaceOpts: spaces.map(s => ({ value: s.id, label: s.name + (s.is_private ? '' : ' · open') })),
     collabOpts: task ? employees.filter(e => !(task.collaborators || []).some(c => c.employee_id === e.id) && e.id !== task.owner_employee_id).map(e => ({ value: e.id, label: e.full_name })) : [],
     planItems,
+    departments, employees,   // F9 R8: the hand-off team / person pickers
   }), [departments, employees, programs, spaces, task, planItems]);
   const revisions = (task?.history || []).filter(h => h.event_type === 'deadline_revised').length;
 

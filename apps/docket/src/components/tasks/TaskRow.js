@@ -13,6 +13,7 @@ import { Avatar, OptionList, personColor } from '../primitives.js';
 import { AvatarStack, GhostCell, Menu, MenuItem, MenuSeparator, Popover, Button } from '../ui/index.js';
 import { EditableSelect, StatusCircle, StatusCell, PriorityFlag, DeadlineCell, AbandonForm, PlanCell, stop, contain } from './TaskCells.js';
 import { DepsBadge } from '../task/Dependencies.js';
+import { HandoffChip } from '../task/Handoff.js';
 
 export const ROW_SELECTOR = '.tl-row[tabindex="0"]';
 
@@ -162,6 +163,7 @@ export const TaskRow = memo(function TaskRow({
           {showIds && !nested && <span className="tl-id">{task.task_no}</span>}
           {hasKids && <span className="tl-kids" title="Sub-tasks done">{task.child_done ?? 0}/{task.child_count ?? 0}</span>}
           <DepsBadge task={task} getSession={actions.getSession} editable={ed} onOpen={openDrawer} onChanged={actions.depsChanged} />
+          <HandoffChip task={task} />
           <span className="tl-row-acts">
             {canAddSub && (
               <button type="button" className="tl-act" aria-label="Add sub-task" title="Add sub-task  (s)" onClick={(e) => { stop(e); startAddSub(); }}><Plus size={13} /></button>

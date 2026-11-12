@@ -26,6 +26,8 @@ import { NewTaskCapture } from '../../../components/tasks/GroupHeader.js';
 import { CaptureProvider } from '../../../components/tasks/QuickCapture.js';
 import { GridTriage } from '../../../components/tasks/GridTriage.js';
 import { StaleSweep } from '../../../components/tasks/StaleSweep.js';
+import { IncomingSection } from '../../../components/task/Handoff.js';
+import { handoffErrorText } from '../../../lib/handoff.js';
 import { BulkBar } from '../../../components/tasks/BulkBar.js';
 import { ROW_SELECTOR } from '../../../components/tasks/TaskRow.js';
 import { useTaskViewState, visibleColumns, COLUMNS } from '../../../components/tasks/useTaskViewState.js';
@@ -82,6 +84,7 @@ function TasksBoard() {
   const { status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, q, planFilter, week } = f;
 
   const [tasks, setTasks] = useState([]);
+  const [incomingKey, setIncomingKey] = useState(0);   // F9 R8: My Tasks → Incoming re-reads only after a task-view write
   const [departments, setDepartments] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [programs, setPrograms] = useState([]);
@@ -193,6 +196,8 @@ function TasksBoard() {
     finally { setLoading(false); }
   }, [session, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, week, showToast]);
   useEffect(() => { load(); }, [load]);
+  // The task view's onMutated: the list re-reads, and so does Incoming (an accept there changes it).
+  const onDrawerMutated = useCallback(() => { setIncomingKey(k => k + 1); return load(); }, [load]);
 
   // F4: My tasks' "Clean up N" — my stale count (count_only: no hydration). Re-read after
   // each load so it follows the list. view_all keeps the button at 0: Everyone lives there.
@@ -270,7 +275,7 @@ function TasksBoard() {
         // The plan chip is the worker's projection — re-read rather than guess it here.
         if (field === 'plan_item_id') load();
       }
-    } catch (e) { showToast(planErrorText(e) || 'Save failed', 'error'); load(); }
+    } catch (e) { showToast(handoffErrorText(e) || 'Save failed', 'error'); load(); }   // plan_* + handoff_* (a team change)
   }
   async function abandonInline(task, reason) {
     if (!reason || !reason.trim()) return;
@@ -571,7 +576,7 @@ function TasksBoard() {
       showToast(`Updated ${updated}${skipped ? ` · skipped ${skipped}` : ''}`, updated ? 'success' : 'info');
       clearSelection();
       await load();
-    } catch (e) { showToast(e.message || 'Bulk update failed', 'error'); }
+    } catch (e) { showToast(handoffErrorText(e) || 'Bulk update failed', 'error'); }
   }
   // The three S153 actions that are NOT plain field writes, so they each have their own
   // worker handler rather than riding bulkUpdateTasks. One shared reporter: every handler
@@ -736,6 +741,9 @@ function TasksBoard() {
       <NewTaskCapture create={(t, x) => live.current.createInGroup(t, undefined, undefined, x)} alwaysOpen={isEmpty && !boardMode && !(loading && tasks.length === 0)}
         placeholder={inProgramMode ? "New task — it's tagged to this program" : 'New task'}>{programSpacePicker}</NewTaskCapture>
 
+      {/* F9 R8: hand-offs to me / my team, above My tasks (hidden when there are none). */}
+      {mineMode && <IncomingSection session={session} myEmployeeId={myEmployeeId} onOpen={actions.openDrawer} refreshKey={incomingKey} />}
+
       {loading && tasks.length === 0 ? <Spinner /> : boardMode ? (
         <div style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity var(--base) var(--ease)' }}>
           <KanbanBoard rows={kanbanRows} axis={kanbanAxis} ctx={boardCtx} />
@@ -777,7 +785,7 @@ function TasksBoard() {
         // Opened from triage: pinned to the modal so the "full page" preference can't navigate
         // away and drop the triage session underneath.
         <TaskView id={drawerId} mode={triage ? 'modal' : undefined} session={session} departments={departments} employees={employees}
-          onClose={closeTask} onOpen={setDrawerId} getOrder={domTaskOrder} onMutated={load}
+          onClose={closeTask} onOpen={setDrawerId} getOrder={domTaskOrder} onMutated={onDrawerMutated}
           fromLink={drawerId === linkTaskId} refreshKey={tasks} />
       )}
       {newSpaceOpen && (

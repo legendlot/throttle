@@ -55,5 +55,8 @@ export const EVENT_LABEL = {
   link_removed: 'Dependency removed',
   unblocked: 'Unblocked',
   plan_item_id_changed: 'Plan link changed',   // F9 R2 — the worker renders the item through the viewer's level
+  handoff_set: 'Hand-off set',               // F9 R8 — new_value = receiving department id, note = receiver
+  handoff_cleared: 'Hand-off cleared',
+  handoff_accepted: 'Hand-off accepted',
 };
 export function eventLabel(ev) { return EVENT_LABEL[ev] || ev; }

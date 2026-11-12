@@ -14,7 +14,7 @@ test('every tool parse() returns { ok, value } on success (the shape the core pa
     odo_funnel: { report: 'history' }, odo_amazon: { report: 'geo' }, odo_inventory: { report: 'thresholds' }, odo_pnl: { report: 'product_costs' }, odo_lookup: { report: 'channels' },
     docket_tasks: { report: 'my_tasks' }, docket_create_task: { title: 'x' }, docket_update_task: { id: U, priority: 'P1' }, docket_set_status: { id: U, status: 'done' },
     docket_revise_deadline: { id: U, new_deadline: '2026-11-20', reason: 'r' }, docket_add_comment: { id: U, body: 'b' }, docket_abandon_task: { id: U, reason: 'r' },
-    docket_plan: { report: 'themes' }, docket_propose: { title: 'x', why: 'y' }, docket_founder_focus: { items: [] },
+    docket_plan: { report: 'themes' }, docket_propose: { title: 'x', why: 'y' }, docket_founder_focus: { items: [] }, docket_accept_handoff: { id: U },
     snorkel_procurement: { report: 'pos' }, snorkel_requests: { report: 'requests', mine: true }, snorkel_sales: { report: 'orders' }, snorkel_assets: { report: 'assets', category_id: 3 },
     garage_store: { report: 'stock', q: 'screw' }, redline_production: { report: 'dashboard' }, depot_dispatch: { report: 'pipeline' } };
   for (const t of TOOLS) {
@@ -168,7 +168,7 @@ test('docket: visible only with a docket grant; writes are the only non-read too
   assert.ok(names.includes('docket_tasks') && names.includes('docket_create_task') && !names.includes('odo_sales'));
   assert.ok(!toolsFor({ systems: ['odo'], odo_perms: { sales_view: true } }).map(t => t.name).some(n => n.startsWith('docket_')));
   const writes = TOOLS.filter(t => t.write).map(t => t.name).sort();
-  assert.deepEqual(writes, ['docket_abandon_task', 'docket_add_comment', 'docket_create_task', 'docket_founder_focus', 'docket_propose', 'docket_revise_deadline', 'docket_set_status', 'docket_update_task']);
+  assert.deepEqual(writes, ['docket_abandon_task', 'docket_accept_handoff', 'docket_add_comment', 'docket_create_task', 'docket_founder_focus', 'docket_propose', 'docket_revise_deadline', 'docket_set_status', 'docket_update_task']);
   assert.equal(findTool('docket_abandon_task').annotations.destructiveHint, true);
 });
 test('docket writes: one fixed action, POST {action,data}, as the person, fields whitelisted', async () => {
@@ -243,11 +243,11 @@ test('hostile 2026-11-09: abandoned tasks are read-only; a second deadline is re
   assert.equal((await st.run({ env: routed(AB, { status: 200, body: { ok: true, data: { id: U, status: 'in_progress' } } }, seen2), sbAccess: 'J', input: st.parse({ id: U, status: 'in_progress' }, NOW).value })).ok, true);
   assert.equal(seen2.length, 1);
 });
-test('the write actions are exactly these eight; reads drop LOT user ids', async () => {
+test('the write actions are exactly these nine; reads drop LOT user ids', async () => {
   assert.deepEqual(Object.fromEntries(TOOLS.filter(t => t.write).map(t => [t.name, t.action])), {
     docket_create_task: 'createTask', docket_update_task: 'updateTask', docket_set_status: 'changeStatus',
     docket_revise_deadline: 'reviseDeadline', docket_add_comment: 'addComment', docket_abandon_task: 'abandonTask',
-    docket_propose: 'proposePlanItem', docket_founder_focus: 'setFounderFocus' });
+    docket_propose: 'proposePlanItem', docket_founder_focus: 'setFounderFocus', docket_accept_handoff: 'acceptHandoff' });
   const rd = findTool('docket_tasks');
   const mk = d => ({ DOCKETOPS: { fetch: async () => new Response(JSON.stringify({ ok: true, data: d }), { status: 200 }) } });
   const people = await rd.run({ env: mk([{ id: U, full_name: 'A B', department_id: null, auth_user_id: 'secret-uid' }]), sbAccess: 'J', input: rd.parse({ report: 'people' }, NOW).value });
@@ -571,4 +571,48 @@ test('docket_founder_focus: the write result never carries founder_user_id (DOCK
   assert.equal(r.ok, true);
   assert.ok(!JSON.stringify(r.data).includes('uid-7'), JSON.stringify(r.data));
   assert.ok(JSON.stringify(r.data).includes('founder_name'));
+});
+
+// ---- Docket R8, 2026-11-12: hand-offs
+test('docket hand-off fields on create/update: uuid or null (clears), never the acceptance', async () => {
+  const c = findTool('docket_create_task'), u = findTool('docket_update_task');
+  assert.deepEqual(c.parse({ title: 'x', handoff_to_department_id: U, handoff_to_employee_id: U }, NOW).value,
+    { title: 'x', handoff_to_department_id: U, handoff_to_employee_id: U, assign_self: true });
+  assert.deepEqual(u.parse({ id: U, handoff_to_department_id: null }, NOW).value, { id: U, handoff_to_department_id: null });
+  assert.deepEqual(u.parse({ id: U, handoff_to_employee_id: U }, NOW).value, { id: U, handoff_to_employee_id: U });
+  for (const bad of [{ id: U, handoff_to_department_id: 'Sales' }, { id: U, handoff_accepted_at: '2026-11-12T00:00:00Z' },
+    { id: U, handoff_accepted_by: U }]) assert.equal(u.parse(bad, NOW).ok, false, JSON.stringify(bad));
+  assert.equal(c.parse({ title: 'x', handoff_accepted_at: 'now' }, NOW).ok, false);
+  const seen = [];
+  const env = { DOCKETOPS: { fetch: async (url, init = {}) => { seen.push({ url: new URL(url), init });
+    return new Response(JSON.stringify({ ok: true, data: init.method === 'POST' ? { id: U } : { id: U, status: 'in_progress' } }), { status: 200 }); } } };
+  await u.run({ env, sbAccess: 'J', input: u.parse({ id: U, handoff_to_department_id: null }, NOW).value });
+  const post = seen.find(x => x.init.method === 'POST');
+  assert.deepEqual(JSON.parse(post.init.body), { action: 'updateTask', data: { id: U, handoff_to_department_id: null } });
+});
+test('docket_accept_handoff: id only, one POST as the person; refusals surface plainly', async () => {
+  const t = findTool('docket_accept_handoff');
+  assert.equal(t.write, true); assert.equal(t.annotations.readOnlyHint, false); assert.equal(t.annotations.destructiveHint, false);
+  assert.equal(t.parse({}, NOW).ok, false);
+  assert.equal(t.parse({ id: U, handoff_to_employee_id: U }, NOW).ok, false);   // nothing but the id
+  const seen = [];
+  const r = await t.run({ env: docketEnv(seen), sbAccess: 'JWT', input: t.parse({ id: U }, NOW).value });
+  assert.equal(r.ok, true); assert.equal(seen.length, 1);
+  assert.deepEqual(JSON.parse(seen[0].init.body), { action: 'acceptHandoff', data: { id: U } });
+  const env = (status, body) => ({ DOCKETOPS: { fetch: async () => new Response(JSON.stringify(body), { status }) } });
+  assert.deepEqual(await t.run({ env: env(409, { ok: false, error: 'handoff_closed' }), sbAccess: 'J', input: { id: U } }), { ok: false, userError: 'handoff_closed' });
+  assert.deepEqual(await t.run({ env: env(403, { ok: false, error: 'not_receiver' }), sbAccess: 'J', input: { id: U } }), { ok: false, reason: 'docket denied' });
+});
+test('docket_tasks report=incoming → getIncoming with scope me|team|all; handoff_accepted_by dropped, names kept', async () => {
+  const rd = findTool('docket_tasks');
+  assert.equal(rd.reports.incoming.action, 'getIncoming');
+  for (const scope of ['me', 'team', 'all']) assert.equal(rd.parse({ report: 'incoming', scope }, NOW).ok, true, scope);
+  assert.equal(rd.parse({ report: 'incoming', scope: 'everyone' }, NOW).ok, false);
+  const seen = [];
+  const env = { DOCKETOPS: { fetch: async (u) => { seen.push(new URL(u)); return new Response(JSON.stringify({ ok: true, data: {
+    tasks: [{ id: U, title: 'x', handoff_accepted_by: 'uid-acc', handoff_accepted_by_name: 'Acc', giver_name: 'G' }], counts: { me: 1, team: 0, unaccepted: 0 } } }), { status: 200 }); } } };
+  const r = await rd.run({ env, sbAccess: 'J', input: rd.parse({ report: 'incoming', scope: 'me' }, NOW).value });
+  assert.deepEqual(Object.fromEntries(seen[0].searchParams), { action: 'getIncoming', scope: 'me' });
+  assert.doesNotMatch(JSON.stringify(r.data), /uid-acc/);
+  assert.match(JSON.stringify(r.data), /"handoff_accepted_by_name":"Acc"/);
 });

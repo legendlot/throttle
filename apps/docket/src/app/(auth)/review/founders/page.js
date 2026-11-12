@@ -15,6 +15,7 @@ import { docketopsGet, docketopsPost } from '../../../../lib/docketopsFetch.js';
 import { Button, IconButton, EmptyState, Pill, Popover } from '../../../../components/ui/index.js';
 import { PlanPicker, usePlanItems } from '../../../../components/plan/PlanPicker.js';
 import { DepSearch } from '../../../../components/task/Dependencies.js';
+import { HandoffRows } from '../../../../components/task/Handoff.js';
 import { fmtPlanStamp, effectiveDue, planErrorText } from '../../../../lib/plan.js';
 import { STATUS_MAP, effectiveDeadline } from '../../../../lib/tasks.js';
 import {
@@ -100,6 +101,14 @@ function FoundersInner() {
             </div>
           ))}
         </article>
+
+        {/* R8: open cross-team hand-offs due this week or next with no one named or not accepted. */}
+        {Array.isArray(data.handoffs) && (
+          <article className="rv-team">
+            <h2 className="rv-team-h">Hand-offs between teams{data.handoffs.length > 0 && <span className="pl-count">{data.handoffs.length}</span>}</h2>
+            {data.handoffs.length === 0 ? <p className="rv-none">No unowned hand-offs due this week or next</p> : <HandoffRows rows={data.handoffs} />}
+          </article>
+        )}
 
         <div className="rv-focus">
           {focus.length === 0 && <p className="rv-none">No founders found.</p>}

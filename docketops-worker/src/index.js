@@ -38,6 +38,7 @@ import { normalizeMeasure, publicMetrics } from './plan-metrics.mjs';
 import { WEEK_KEYS, normalizeWeekSettings, resolveWeekFilter, matchesWeek, planWindow, istMidnight, staleCutoff,
   buildPlanWeeks, ROWS_BY, istDate, isDateStr, weekEndOf, effectiveDue } from './weeks-core.mjs';
 import { buildReviewTeams, lastWorkingDay, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack, scoreBlock,
+  handoffBucket, foundersHandoffs, isHandoff,
   validateFocusItems, buildAsks, foundersToSlack } from './review-core.mjs';
 
 
@@ -222,10 +223,24 @@ function canEditTask(auth, task) {
     || (auth.employeeId && task.owner_employee_id === auth.employeeId)
     || (auth.employeeId && task.assignee_employee_id === auth.employeeId);
 }
-// See a task: view-all, the above, own department, or a collaborator.
+// F9 R8 (spec §4.6): a hand-off's receiving side — the named receiver, or anyone in the receiving department —
+// never its owner (the giver can't receive, so can't accept, their own hand-off). Also the accept right.
+function isHandoffReceiver(auth, task) {
+  return !!task?.handoff_to_department_id && !(auth.employeeId && task.owner_employee_id === auth.employeeId) && (
+    (!!auth.employeeId && task.handoff_to_employee_id === auth.employeeId) ||
+    (!!auth.departmentId && task.handoff_to_department_id === auth.departmentId));
+}
+// …which widens VISIBILITY only in the General (default) space: in a private space the receiver still needs
+// membership (the space gate is never overridden — RULE-DOCKET-003). The task's space row must be known
+// (loadTaskFor / keepAccessible / knowSpaces); an unknown space widens nothing. Used by canSeeTask and the two
+// batched baselines (visibleTaskRows, the stale sweep's parent crumbs) ONLY — the SQL list / search / card
+// functions are deliberately unchanged (a receiver reaches a hand-off through Incoming, a link, the pack).
+function receiverSees(auth, task) { return !!spaceOf(auth, task)?.is_default && isHandoffReceiver(auth, task); }
+// See a task: view-all, the above, own department, a hand-off's receiving side (General), or a collaborator.
 async function canSeeTask(auth, task, env) {
   if (canViewAll(auth) || canEditTask(auth, task)) return true;
   if (auth.departmentId && task.department_id === auth.departmentId) return true;
+  if (receiverSees(auth, task)) return true;
   if (!auth.employeeId) return false;
   const c = await sbDocket(
     `/rest/v1/task_collaborators?task_id=eq.${task.id}&employee_id=eq.${auth.employeeId}&select=task_id&limit=1`, env);
@@ -691,9 +706,9 @@ async function logUnblocked(ids, auth, env) {
 
 async function hydrateTasks(rows, auth, env) {
   if (!rows.length) return rows;
-  const deptIds = uniq(rows.map(t => t.department_id));
+  const deptIds = uniq(rows.flatMap(t => [t.department_id, t.handoff_to_department_id]));
   const taskIds = uniq(rows.map(t => t.id));
-  const userIds = uniq(rows.map(t => t.created_by_user_id));
+  const userIds = uniq(rows.flatMap(t => [t.created_by_user_id, t.handoff_accepted_by]));
   // Every id list goes through sbIn (≤150 per request) — a big list would overflow the URL.
   // F9 R2: the plan link (one batched projection call) and the rows' spaces (canEditTask) ride along.
   const [deptRes, childRes, collabRes, docRes, commRes, creatorRes, linkRaw, planCtx] = await Promise.all([
@@ -709,7 +724,7 @@ async function hydrateTasks(rows, auth, env) {
   ]);
   const linkN = linkCounts(linkRaw);
   // Employee names: owners + every collaborator (collaborator ids are only known after collabRes).
-  const empIds = uniq([...rows.map(t => t.owner_employee_id), ...(collabRes.data || []).map(c => c.employee_id)]);
+  const empIds = uniq([...rows.flatMap(t => [t.owner_employee_id, t.handoff_to_employee_id]), ...(collabRes.data || []).map(c => c.employee_id)]);
   const empRes = await sbIn(sbPodium, empIds, l => `/rest/v1/employees?id=in.${l}&select=id,full_name`, env);
   const progIds = uniq(rows.map(t => t.program_id));
   const progRes = await sbIn(sbDocket, progIds, l => `/rest/v1/programs?id=in.${l}&select=id,name,color`, env);
@@ -739,9 +754,17 @@ async function hydrateTasks(rows, auth, env) {
     collab_count: (collabByTask[t.id] || []).length, doc_count: docs[t.id] || 0, comment_count: comm[t.id] || 0,
     waiting_open: linkN[t.id]?.waiting_open || 0, waiting_total: linkN[t.id]?.waiting_total || 0,
     blocking_open: linkN[t.id]?.blocking_open || 0, related_count: linkN[t.id]?.related_count || 0,
+    ...handoffNames(t, deptName, empName, creatorName),
     _can_edit: canEditTask(auth, t),
   }));
 }
+// F9 R8: the receiving side's names on every task payload (ids stay; handoff_accepted_by is an auth user id).
+function handoffNames(t, deptName, empName, userName) {
+  return { handoff_to_department_name: t.handoff_to_department_id ? (deptName[t.handoff_to_department_id] || null) : null,
+    handoff_to_employee_name: t.handoff_to_employee_id ? (empName[t.handoff_to_employee_id] || null) : null,
+    handoff_accepted_by_name: t.handoff_accepted_by ? (userName[t.handoff_accepted_by] || null) : null };
+}
+const handoffOpen = (t) => isOpenStatus(t.status) && !t.archived_at;
 
 // F9 R4 — weeks (spec §6). The week settings (docket.settings week_end_dow / working_days / holidays,
 // migration 0020), normalised; a failed read falls back to the defaults (Sunday, Mon–Sat, no holidays).
@@ -949,7 +972,7 @@ async function getStaleTasks(url, auth, env) {
   const pr = await sbIn(sbDocket, parentIds, l => `/rest/v1/tasks?id=in.${l}&select=*`, env);
   const parents = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
   await knowSpaces(auth, parents, env);   // canEditTask reads the parent's space (no-op: same spaces as the rows)
-  const quick = (p) => canViewAll(auth) || canEditTask(auth, p) || (auth.departmentId && p.department_id === auth.departmentId);
+  const quick = (p) => canViewAll(auth) || canEditTask(auth, p) || (auth.departmentId && p.department_id === auth.departmentId) || receiverSees(auth, p);
   const needCollab = parents.filter(p => !quick(p)).map(p => p.id);
   const collabOk = new Set();
   if (needCollab.length && auth.employeeId) {
@@ -1025,21 +1048,24 @@ async function getTask(url, auth, env) {
   ]);
 
   // Resolve all employee names referenced (owner/assignee/collaborators/children-assignees) in one read.
+  // R8: hand-off history rows carry ids (new/old_value = department, note = receiver) — named here.
+  const hoHist = (histRes.data || []).filter(h => h.field === 'handoff');
   const empIds = uniq([
-    task.owner_employee_id,
+    task.owner_employee_id, task.handoff_to_employee_id,
     ...(collabRes.data || []).map(c => c.employee_id),
     ...(childRes.data || []).map(c => c.owner_employee_id),
+    ...hoHist.map(h => h.note).filter(v => isUuid(v || '')),
   ]);
-  const deptRes = task.department_id
-    ? await sbPodium(`/rest/v1/departments?id=eq.${enc(task.department_id)}&select=id,name&limit=1`, env)
-    : { data: [] };
+  const deptRes = await sbIn(sbPodium, uniq([task.department_id, task.handoff_to_department_id,
+    ...hoHist.flatMap(h => [h.old_value, h.new_value]).filter(v => isUuid(v || ''))]), l => `/rest/v1/departments?id=in.${l}&select=id,name`, env);
+  const deptName = {}; (deptRes.data || []).forEach(x => { deptName[x.id] = x.name; });
   const empRes = empIds.length
     ? await sbPodium(`/rest/v1/employees?id=in.${inList(empIds)}&select=id,full_name`, env) : { data: [] };
   const empName = {}; (empRes.data || []).forEach(e => { empName[e.id] = e.full_name; });
 
   // Resolve LOT user names for the creator + comment authors + history actors (store.users_profile).
   const userIds = uniq([
-    task.created_by_user_id,
+    task.created_by_user_id, task.handoff_accepted_by,
     ...(commRes.data || []).map(c => c.author_user_id),
     ...(histRes.data || []).map(h => h.actor_user_id),
   ]);
@@ -1068,9 +1094,11 @@ async function getTask(url, auth, env) {
     : null;
   return ok({
     ...planned,
-    department_name: deptRes.data?.[0]?.name || null,
+    department_name: deptName[task.department_id] || null,
     owner_name: empName[task.owner_employee_id] || null,
     creator_name: userName[task.created_by_user_id] || null,
+    ...handoffNames(task, deptName, empName, userName),
+    can_accept_handoff: isHandoffReceiver(auth, task) && handoffOpen(task) && !task.handoff_accepted_at && !space.archived_at,
     space: { id: space.id, name: space.name, is_private: space.is_private, is_founders: !!space.is_founders },
     program: prog || null,
     parent: parentRes.data?.[0] || null,
@@ -1085,6 +1113,8 @@ async function getTask(url, auth, env) {
       ...h, actor_name: userName[h.actor_user_id] || null,
       ...(h.field === 'dependency' ? { old_value: depLabel(h.old_value), new_value: depLabel(h.new_value) } : {}),
       ...(h.field === 'plan_item_id' ? { old_value: planLabel(h.old_value), new_value: planLabel(h.new_value) } : {}),
+      ...(h.field === 'handoff' ? { old_value: deptName[h.old_value] || (h.old_value ? 'a team' : null), new_value: deptName[h.new_value] || (h.new_value ? 'a team' : null),
+        note: isUuid(h.note || '') ? (empName[h.note] || 'someone') : h.note } : {}),
       // done-vs-abandoned of a blocker you can't open is not yours to know (hostile review #5).
       ...(h.event_type === 'unblocked' && !depCards[h.new_value]?.visible ? { note: null } : {}),
     })),
@@ -1611,6 +1641,62 @@ async function mintTaskNo(env) {
   return r.data; // 'DKT-N'
 }
 
+// F9 R8 (spec §4.6) — the hand-off fields a create / update asks for, validated against the task they land on.
+// `cur` = the task's current hand-off and own side { dept, emp, own, owner } (create: {}); `next` = its own side
+// AFTER the write { own: department, owner: owner employee }. Body keys: handoff_to_department_id /
+// handoff_to_employee_id — undefined = untouched, null / '' = clear; ids are lowercased before any comparison
+// (PostgREST stores them lowercase, so 'D2' ≠ 'd2' would slip past the same-team check). Clearing the department
+// clears all four (the 0027 trigger nulls the rest). A receiver with no department → the receiver's department;
+// a receiver from another department → handoff_receiver_team; an exited one → handoff_receiver_inactive (checked
+// only when the receiving side CHANGES, so an edit that touches nothing else never fails on a receiver who has
+// since left). A changed department with no receiver given drops the old receiver (they were the old team's).
+// The giving side is the task's department, else its OWNER's department; it must differ from the receiving one
+// (handoff_same_team) — re-checked when only the own side moves, with the named receiver left alone. The owner
+// can't be the named receiver. handoff_accepted_at / _by are NEVER taken from a body — only acceptHandoff
+// writes them (and the trigger voids them when the receiver changes).
+// → { none: true } (not touched) | { fields: { handoff_to_department_id, handoff_to_employee_id } } | { error }
+const HANDOFF_KEYS = ['handoff_to_department_id', 'handoff_to_employee_id'];
+const lcId = (v) => (v == null || v === '' ? null : String(v).toLowerCase());
+async function resolveHandoff(d, cur, next, isSub, env) {
+  const has = (k) => d[k] !== undefined;
+  for (const k of HANDOFF_KEYS) if (has(k) && lcId(d[k]) !== null && !isUuid(String(d[k]))) return { error: err('bad_handoff', 400) };
+  const curDept = lcId(cur.dept), curEmp = lcId(cur.emp), own = lcId(next.own), owner = lcId(next.owner);
+  let dept = has('handoff_to_department_id') ? lcId(d.handoff_to_department_id) : curDept;
+  const emp = has('handoff_to_employee_id') ? lcId(d.handoff_to_employee_id)
+    : (has('handoff_to_department_id') && dept !== curDept ? null : curEmp);
+  if (has('handoff_to_department_id') && dept === null) return { fields: { handoff_to_department_id: null, handoff_to_employee_id: null } };
+  const recvChanged = dept !== curDept || emp !== curEmp;
+  const ownMoved = cur.own !== undefined && (own !== lcId(cur.own) || (!own && owner !== lcId(cur.owner)));
+  if (!recvChanged && !(ownMoved && curDept)) return { none: true };
+  // One read for the new receiver and (no task department) the owner, whose department is the giving side.
+  const ids = uniq([recvChanged ? emp : null, own ? null : owner]);
+  const er = ids.length ? await sbPodium(`/rest/v1/employees?id=in.${inList(ids)}&select=id,department_id,status`, env) : { ok: true, data: [] };
+  if (!er.ok) return { error: err('db_error', 500) };
+  const empRow = (id) => (er.data || []).find(x => lcId(x.id) === id) || null;
+  if (emp && recvChanged) {
+    const e = empRow(emp);
+    if (!e) return { error: err('bad_handoff', 400) };
+    if (!dept) dept = lcId(e.department_id);
+    if (!dept) return { error: err('bad_handoff', 400) };            // a receiver with no team names no receiving side
+    if (lcId(e.department_id) !== dept) return { error: err('handoff_receiver_team', 400) };
+    if (e.status !== 'active') return { error: err('handoff_receiver_inactive', 400) };
+  } else if (dept && dept !== curDept) {
+    const dr = await sbPodium(`/rest/v1/departments?id=eq.${enc(dept)}&select=id&limit=1`, env);
+    if (!dr.ok) return { error: err('db_error', 500) };
+    if (!dr.data?.[0]) return { error: err('bad_handoff', 400) };
+  }
+  if (!dept) return { fields: { handoff_to_department_id: null, handoff_to_employee_id: null } };
+  if (isSub) return { error: err('handoff_top_level', 400) };
+  const giving = own || lcId(empRow(owner)?.department_id);
+  if ((giving && giving === dept) || (emp && owner && emp === owner)) return { error: err('handoff_same_team', 400) };
+  return { fields: { handoff_to_department_id: dept, handoff_to_employee_id: emp } };
+}
+// The history row for a hand-off change (ids only; getTask names them): handoff_set / handoff_cleared.
+function handoffHistory(before, after) {
+  if ((before.dept || null) === (after.handoff_to_department_id || null) && (before.emp || null) === (after.handoff_to_employee_id || null)) return null;
+  if (!after.handoff_to_department_id) return ['handoff_cleared', { field: 'handoff', old: before.dept }];
+  return ['handoff_set', { field: 'handoff', old: before.dept || null, new: after.handoff_to_department_id, note: after.handoff_to_employee_id || null }];
+}
 async function createTaskCore(d, auth, env) {
   // Quick-capture: only a title is required. Everything else (team/owner/assignee/
   // deadline) is optional and enriched later — the task lands in "The Grid" until it
@@ -1658,6 +1744,10 @@ async function createTaskCore(d, auth, env) {
   if (!space) return err('space_not_found', 404);
   if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
   if (planItemId) { const c = await checkLinkTarget(auth, planItemId, space, env); if (c.error) return c.error; }
+  // R8: an optional hand-off (validated; never an acceptance — that is acceptHandoff's alone).
+  const ho = await resolveHandoff(d, {}, { own: d.department_id || null, owner: d.owner_employee_id || null }, !!parentId, env);
+  if (ho.error) return ho.error;
+  const hoFields = ho.fields && ho.fields.handoff_to_department_id ? ho.fields : null;
   const task_no = await mintTaskNo(env);
   const ins = await sbDocket(`/rest/v1/tasks`, env, {
     method: 'POST',
@@ -1670,6 +1760,8 @@ async function createTaskCore(d, auth, env) {
       deadline: d.deadline || null, custom_fields: d.custom_fields || {},
       space_id: spaceId, program_id: d.program_id || null, plan_item_id: planItemId,
       is_recurring: isRecurring, recurrence: isRecurring ? d.recurrence : null,
+      handoff_to_department_id: hoFields ? hoFields.handoff_to_department_id : null,
+      handoff_to_employee_id: hoFields ? hoFields.handoff_to_employee_id : null,
     }]),
   });
   if (!ins.ok || !ins.data?.[0]) return taskWriteErr('create_failed: ', ins);
@@ -1691,6 +1783,7 @@ async function createTaskCore(d, auth, env) {
   if (d.deadline && !isRecurring) await logHistory(env, task.id, auth, 'deadline_set', { field: 'deadline', new: d.deadline });
   // The link's history row stores the item id only (rendered through the projection at read time).
   if (planItemId) await logHistory(env, task.id, auth, 'plan_item_id_changed', { field: 'plan_item_id', new: planItemId });
+  if (hoFields) await logHistory(env, task.id, auth, ...handoffHistory({}, hoFields));
   return ok({ id: task.id, task_no: task.task_no });
 }
 async function createTask(body, auth, env)    { return createTaskCore(body.data || body, auth, env); }
@@ -2019,6 +2112,15 @@ async function updateTask(body, auth, env) {
       updates.plan_item_id = next; planChange = [task.plan_item_id || null, next];
     }
   }
+  // F9 R8: the hand-off — same edit right as any field; validated against the task's department / owner AFTER
+  // this write (moving the task can make an existing hand-off same-team).
+  const hoBefore = { dept: task.handoff_to_department_id || null, emp: task.handoff_to_employee_id || null,
+    own: task.department_id || null, owner: task.owner_employee_id || null };
+  const after = (f) => (updates[f] !== undefined ? (updates[f] || null) : (task[f] || null));
+  const ho = await resolveHandoff(d, hoBefore, { own: after('department_id'), owner: after('owner_employee_id') }, !!task.parent_task_id, env);
+  if (ho.error) return ho.error;
+  const hoHist = ho.fields ? handoffHistory(hoBefore, ho.fields) : null;
+  if (hoHist) Object.assign(updates, ho.fields);
   if (!Object.keys(updates).length && !deadlineSet) return ok({ id: task.id, unchanged: true });
   if (deadlineSet) { const s = await setDeadline([task.id], d.deadline, null, auth, env); if (s.error) return s.error; }
   if (Object.keys(updates).length) {
@@ -2028,7 +2130,73 @@ async function updateTask(body, auth, env) {
     for (const [f, oldV, newV] of changes) await logHistory(env, task.id, auth, `${f}_changed`, { field: f, old: oldV, new: newV });
   }
   if (planChange) await logHistory(env, task.id, auth, 'plan_item_id_changed', { field: 'plan_item_id', old: planChange[0], new: planChange[1] });
-  return ok({ id: task.id, updated: [...changes.map(c => c[0]), ...(deadlineSet ? ['deadline'] : []), ...(planChange ? ['plan_item_id'] : [])] });
+  if (hoHist) await logHistory(env, task.id, auth, ...hoHist);
+  return ok({ id: task.id, updated: [...changes.map(c => c[0]), ...(deadlineSet ? ['deadline'] : []), ...(planChange ? ['plan_item_id'] : []),
+    ...(hoHist ? ['handoff'] : [])] });
+}
+
+// ── F9 R8: accepting a hand-off (spec §4.6) ──────────────────────────────────
+// POST { action: 'acceptHandoff', id } — the named receiver, or anyone in the receiving department. Loaded
+// through loadTaskFor (the space gate: a private-space hand-off needs membership, like any by-id action), and
+// nothing but `id` is read from the body. Not a hand-off → 400; caller not a receiver (the owner never is) → 403;
+// done / abandoned / archived, or in an archived space → 409; already accepted → 200 no-op. With no named receiver the acceptor becomes it (the receiving
+// side now has an owner), in the SAME write as the acceptance, so the 0027 reset trigger keeps it.
+async function acceptHandoff(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(String(d.id || ''))) return err('id required', 400);
+  const task = await loadTaskFor(d.id, auth, env);
+  if (!task) return err('not_found', 404);
+  if (!task.handoff_to_department_id) return err('not_a_handoff', 400);
+  if (!isHandoffReceiver(auth, task)) return err('not_receiver', 403);
+  if (!handoffOpen(task) || TASK_SPACE.get(task)?.archived_at) return err('handoff_closed', 409);
+  if (task.handoff_accepted_at) return ok({ unchanged: true });
+  const now = nowIso();
+  const patch = { handoff_accepted_at: now, handoff_accepted_by: auth.userId, updated_by: auth.userId, updated_at: now,
+    ...(task.handoff_to_employee_id ? {} : { handoff_to_employee_id: auth.employeeId }) };
+  // Conditional on "still open, not archived, not accepted, same receiver", so two receivers racing can't both
+  // win and a task closed between the read and the write is never accepted.
+  const recv = task.handoff_to_employee_id ? `handoff_to_employee_id=eq.${enc(task.handoff_to_employee_id)}` : 'handoff_to_employee_id=is.null';
+  const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(task.id)}&${PW_OPEN}&archived_at=is.null&handoff_accepted_at=is.null&handoff_to_department_id=eq.${enc(task.handoff_to_department_id)}&${recv}`, env,
+    { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return taskWriteErr('update_failed: ', r);
+  if (!Array.isArray(r.data) || !r.data.length) {   // it changed under us: accepted by someone else → no-op; else closed / moved
+    const now2 = await loadTask(task.id, env);
+    return now2?.handoff_accepted_at ? ok({ unchanged: true }) : err('handoff_closed', 409);
+  }
+  const row = r.data[0];
+  await logHistory(env, task.id, auth, 'handoff_accepted', { field: 'handoff', new: row.handoff_to_department_id, note: row.handoff_to_employee_id });
+  TASK_SPACE.set(row, TASK_SPACE.get(task));
+  const [hydrated] = await hydrateTasks([row], auth, env);
+  return ok({ task: hydrated });
+}
+
+// GET ?action=getIncoming&scope=me|team|all (default all = me ∪ my team) — open hand-offs whose receiving side
+// is the caller (named) or the caller's department, through the space gate (keepAccessible; archived spaces
+// out, as every list). Not-accepted first, then by effective deadline (no date last). Counts cover `all`.
+const INCOMING_SCOPES = ['me', 'team', 'all'];
+async function getIncoming(url, auth, env) {
+  const scope = url.searchParams.get('scope') || 'all';
+  if (!INCOMING_SCOPES.includes(scope)) return err('bad_scope', 400);
+  const ors = [];
+  if (auth.employeeId) ors.push(`handoff_to_employee_id.eq.${auth.employeeId}`);
+  if (auth.departmentId) ors.push(`handoff_to_department_id.eq.${auth.departmentId}`);
+  if (!ors.length) return ok({ tasks: [], counts: { me: 0, team: 0, unaccepted: 0 } });
+  const [tr, ar] = await Promise.all([
+    sbAll(sbDocket, `/rest/v1/tasks?handoff_to_department_id=not.is.null&archived_at=is.null&${PW_OPEN}&or=(${ors.join(',')})&select=*&order=id.asc`, env),
+    sbAll(sbDocket, `/rest/v1/spaces?archived_at=not.is.null&select=id&order=id.asc`, env),
+  ]);
+  if (!tr.ok || !ar.ok) return err('db_error', 500);
+  const archived = new Set((ar.data || []).map(x => x.id));
+  const all = (await keepAccessible(auth, (tr.data || []).filter(t => !archived.has(t.space_id)), env)).filter(t => isHandoffReceiver(auth, t));
+  const mine = (t) => !!auth.employeeId && t.handoff_to_employee_id === auth.employeeId;
+  const ours = (t) => !!auth.departmentId && t.handoff_to_department_id === auth.departmentId;
+  const counts = { me: all.filter(mine).length, team: all.filter(ours).length, unaccepted: all.filter(t => !t.handoff_accepted_at).length };
+  const rows = all.filter(t => scope === 'all' || (scope === 'me' ? mine(t) : ours(t)));
+  const eff = (t) => { const e = Date.parse(t.revised_deadline || t.deadline || ''); return Number.isFinite(e) ? e : Infinity; };
+  rows.sort((a, b) => (!!a.handoff_accepted_at - !!b.handoff_accepted_at) || (eff(a) - eff(b))
+    || String(a.task_no).localeCompare(String(b.task_no), undefined, { numeric: true }));
+  const hydrated = await hydrateTasks(rows, auth, env);
+  return ok({ tasks: hydrated.map(t => ({ ...t, giver_name: t.owner_name, giver_team_name: t.department_name })), counts });
 }
 
 const STATUSES = ['not_started','in_progress','done','blocked','abandoned'];
@@ -2336,6 +2504,7 @@ async function setParent(body, auth, env) {
     if (parent.status === 'abandoned') return abandonedRO();
     const kids = await sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(task.id)}&select=id&limit=1`, env);
     if (kids.ok && kids.data?.length) return err('one_level_only: this task already has sub-tasks', 422);
+    if (task.handoff_to_department_id) return err('handoff_top_level', 400);   // R8: clear the hand-off first
   }
   // F9 R2: a sub-task carries no link of its own (it follows its parent) — clear it in the same write.
   const clearsLink = !!(newParent && task.plan_item_id);
@@ -2962,6 +3131,10 @@ async function getProposals(url, auth, env) {
 const planErr = (code, extra = {}) => json({ ok: false, error: code, ...extra }, planErrStatus(code));
 // A refused task write: the R2 trigger / CHECK codes come back as themselves, anything else as before.
 function taskWriteErr(prefix, r) {
+  // R8 (0027 checks): a sub-task hand-off / a malformed receiver, should a write ever get past the worker's own check.
+  const msg = String(r.data?.message || '');
+  if (/tasks_handoff_top_level/.test(msg)) return err('handoff_top_level', 400);
+  if (/tasks_handoff_shape|handoff_to_(department|employee)_id_fkey/.test(msg)) return err('bad_handoff', 400);
   const m = planDbError(r.data);
   return m ? planErr(m.code, m.detail ? { detail: m.detail } : {}) : err(prefix + JSON.stringify(r.data), 400);
 }
@@ -3020,7 +3193,7 @@ async function checkLinkTarget(auth, itemId, space, env) {
 async function visibleTaskRows(auth, rows, env) {
   const inSpace = await keepAccessible(auth, rows, env);
   const general = (t) => !!spaceOf(auth, t)?.is_default;
-  const quick = (t) => canViewAll(auth) || canEditTask(auth, t) || (auth.departmentId && t.department_id === auth.departmentId);
+  const quick = (t) => canViewAll(auth) || canEditTask(auth, t) || (auth.departmentId && t.department_id === auth.departmentId) || receiverSees(auth, t);
   const need = inSpace.filter(t => general(t) && !quick(t)).map(t => t.id);
   const collab = new Set();
   if (need.length && auth.employeeId) {
@@ -3040,7 +3213,8 @@ async function visibleTaskRows(auth, rows, env) {
 // below F only tasks the viewer can open count, and nothing about the rest is said. Default scope: a plan
 // admin all teams, everyone else their own department. Every list read is paginated (sbInAll / sbAll) — a
 // clipped history read would mark a fresh task stale.
-const PW_TASK_COLS = 'id,task_no,title,status,priority,owner_employee_id,assignee_employee_id,created_by_user_id,department_id,deadline,revised_deadline,space_id,plan_item_id,parent_task_id,created_at';
+const PW_TASK_COLS = 'id,task_no,title,status,priority,owner_employee_id,assignee_employee_id,created_by_user_id,department_id,deadline,revised_deadline,space_id,plan_item_id,parent_task_id,created_at,'
+  + 'handoff_to_department_id,handoff_to_employee_id,handoff_accepted_at,handoff_accepted_by';   // R8: the receiver clause reads these
 const PW_OPEN = 'status=in.(not_started,in_progress,blocked)';
 // sbIn (chunked ids) × sbAll (paged): an in.(…) read that neither a long id list nor max-rows can clip.
 // `build` must carry an order= so the pages are stable.
@@ -3258,18 +3432,23 @@ async function buildReviewPack(weekParam, teamParam, auth, env) {
   const linkIds = uniq([...horizonIds, ...fo.filter(i => i.kind === 'result' && live(i) && horizonIds.includes(i.parent_id)).map(i => i.id)]);
   const inNext = `or=(and(revised_deadline.gte.${iso(next.start)},revised_deadline.lt.${iso(next.end)}),and(revised_deadline.is.null,deadline.gte.${iso(next.start)},deadline.lt.${iso(next.end)}))`;
 
+  // R8: open hand-offs the team(s) GIVE or RECEIVE (any date — overdue is any age; the lists are cut in
+  // review-core). Through the same one gate as every other row below. A task with no department gives from
+  // its owner's department, so those are read too and placed once the owners are known.
+  const hoTeam = teamId ? `&or=(department_id.eq.${enc(teamId)},handoff_to_department_id.eq.${enc(teamId)},department_id.is.null)` : '';
   // ── 2. every task row the pack reads, then ONE gate over all of them ──
-  const [cr, nr, lr, hr, ppr] = await Promise.all([
+  const [cr, nr, lr, hr, ppr, hor] = await Promise.all([
     sbInAll(sbDocket, cohortIds, l => `/rest/v1/tasks?id=in.${l}&select=${PW_TASK_COLS}&order=id.asc`, env),
     sbAll(sbDocket, `/rest/v1/tasks?${topLive}&${PW_OPEN}${team}&${inNext}&select=${PW_TASK_COLS}&order=id.asc`, env),
     sbInAll(sbDocket, linkIds, l => `/rest/v1/tasks?plan_item_id=in.${l}&${topLive}&${PW_OPEN}&select=${PW_TASK_COLS}&order=id.asc`, env),
     sbInAll(sbDocket, fo.map(i => i.id), l => `/rest/v1/plan_item_history?item_id=in.${l}&event=eq.redated&at=gte.${iso(bounds.start)}&at=lt.${iso(bounds.end)}&select=item_id,event,old,new,note,at&order=id.asc`, env),
     isSuper ? sbAll(sbDocket, `/rest/v1/plan_proposals?or=(status.eq.submitted,and(created_at.gte.${iso(bounds.start)},created_at.lt.${iso(bounds.end)}))&select=id,title,kind_hint,status,created_at,proposer_user_id&order=created_at.desc,id.asc`, env)
             : Promise.resolve({ ok: true, data: [] }),
+    sbAll(sbDocket, `/rest/v1/tasks?archived_at=is.null&parent_task_id=is.null&handoff_to_department_id=not.is.null&${PW_OPEN}${hoTeam}&select=${PW_TASK_COLS}&order=id.asc`, env),
   ]);
-  if (!cr.ok || !nr.ok || !lr.ok || !hr.ok || !ppr.ok) return { error: err('db_error', 500) };
+  if (!cr.ok || !nr.ok || !lr.ok || !hr.ok || !ppr.ok || !hor.ok) return { error: err('db_error', 500) };
   const byId = new Map();
-  for (const t of [...(cr.data || []), ...(or.data || []), ...(nr.data || []), ...(lr.data || [])]) byId.set(t.id, t);
+  for (const t of [...(cr.data || []), ...(or.data || []), ...(nr.data || []), ...(lr.data || []), ...(hor.data || [])]) byId.set(t.id, t);
   const gated = await visibleTaskRows(auth, [...byId.values()].filter(t => !archived.has(t.space_id)), env);
   const visible = new Set(gated.filter(t => isSuper || !founders.has(t.space_id)).map(t => t.id));
 
@@ -3277,7 +3456,17 @@ async function buildReviewPack(weekParam, teamParam, auth, env) {
   const counted = (rows) => (isSuper ? rows : rows.filter(r => visible.has(r.task_id)));
   const scoped = (rows) => (teamId ? rows.filter(r => (r.department_id || null) === teamId) : rows);
   const thisRows = scoped(counted(rowsOf(s0))), lastRows = scoped(counted(rowsOf(s1)));
-  const hidden = isSuper ? uniq([...thisRows, ...lastRows].map(r => r.task_id)).filter(id => !visible.has(id)).length : 0;
+  // R8: hand-offs — listed only when visible; one a plan admin can't open is counted with the hidden rows.
+  const hoCtx = { now: Date.now(), start: bounds.start, end: istMidnight(addDays(weekEnd, 15)) };
+  const owr = await sbIn(sbPodium, uniq((hor.data || []).filter(t => !t.department_id).map(t => t.owner_employee_id)),
+    l => `/rest/v1/employees?id=in.${l}&select=id,department_id`, env);
+  if (!owr.ok) return { error: err('db_error', 500) };
+  const ownerDept = Object.fromEntries((owr.data || []).map(e => [e.id, e.department_id || null]));
+  const giving = (t) => t.department_id || ownerDept[t.owner_employee_id] || null;
+  const hoAll = (hor.data || []).filter(t => handoffBucket(t, hoCtx)
+    && (!teamId || giving(t) === teamId || t.handoff_to_department_id === teamId));
+  const handoffRows = hoAll.filter(t => visible.has(t.id));
+  const hidden = isSuper ? uniq([...thisRows, ...lastRows].map(r => r.task_id).concat(hoAll.map(t => t.id))).filter(id => !visible.has(id)).length : 0;
   const openTasks = (or.data || []).filter(t => visible.has(t.id));
   // Open tasks due in the two weeks after the pack's week (the read filters; this re-checks, so a widened
   // read can never list a done task or one dated outside the window).
@@ -3294,7 +3483,8 @@ async function buildReviewPack(weekParam, teamParam, auth, env) {
   const since = iso(lwd ? Math.min(bounds.start, istMidnight(lwd)) : bounds.start);
   const proposals = ppr.data || [];
   const empIds = uniq([...thisRows, ...lastRows].map(r => r.owner_employee_id)
-    .concat(openTasks.map(t => t.owner_employee_id), nextTasks.map(t => t.owner_employee_id), fo.map(i => i.owner_employee_id)));
+    .concat(openTasks.map(t => t.owner_employee_id), nextTasks.map(t => t.owner_employee_id), fo.map(i => i.owner_employee_id),
+      handoffRows.flatMap(t => [t.owner_employee_id, t.handoff_to_employee_id])));
   const [rvr, uhr, ucr, er, pnames] = await Promise.all([
     sbInAll(sbDocket, slippedIds, l => `/rest/v1/task_history?task_id=in.${l}&event_type=eq.deadline_revised&select=task_id,created_at,old_value,new_value,note,source&order=created_at.asc,id.asc`, env),
     sbInAll(sbDocket, updIds, l => `/rest/v1/task_history?task_id=in.${l}&created_at=gte.${since}&created_at=lt.${iso(bounds.end)}&select=task_id,created_at,source&order=id.asc`, env),
@@ -3338,13 +3528,14 @@ async function buildReviewPack(weekParam, teamParam, auth, env) {
     return (i.state !== 'dropped' && d && d >= weekStart && d <= horizonEnd) || (hr.data || []).some(h => h.item_id === i.id);
   }).map(i => i.team_id);
   const teamIds = teamId ? [teamId] : uniq([...thisRows, ...lastRows, ...openTasks, ...nextTasks].map(r => r.department_id)
-      .concat(winItemTeams).map(d => d || 'none'))
+      .concat(winItemTeams, handoffRows.flatMap(t => [giving(t), t.handoff_to_department_id])).map(d => d || 'none'))
     .map(k => (k === 'none' ? null : k))
     .sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || String(deptNames[a] || '').localeCompare(String(deptNames[b] || '')));
   const taskPlan = {}; for (const id of thisRows.map(r => r.task_id)) taskPlan[id] = byId.get(id)?.plan_item_id || null;
   const teams = buildReviewTeams({
     teamIds, deptNames, shown: visible, revisions, items, itemHistory: hr.data || [], linked, metrics: publicMetrics(),
     openTasks, nextTasks, updates, taskPlan, names, ownLatest, lastSeen, lwd, lookbackStart: ownSince,
+    handoffs: handoffRows, ownerDept, now: hoCtx.now,
     seenOnly: isSuper ? null : auth.employeeId || '',
     week: { week_start: weekStart, week_end: weekEnd, final: !!s0.final, rows: thisRows },
     last: { week_end: s1.week_end || addDays(weekEnd, -7), final: !!s1.final, rows: lastRows },
@@ -3506,24 +3697,36 @@ async function getFoundersReview(url, auth, env) {
   const iso = (ms) => new Date(ms).toISOString();
   const win = `or=(and(revised_deadline.gte.${iso(start)},revised_deadline.lt.${iso(end)}),and(revised_deadline.is.null,deadline.gte.${iso(start)},deadline.lt.${iso(end)}))`;
   const cols = `${PW_TASK_COLS},archived_at`;
-  const [ar, dr, focus] = await Promise.all([
+  const [ar, dr, focus, xr] = await Promise.all([
     sbAll(sbDocket, `/rest/v1/tasks?archived_at=is.null&parent_task_id=is.null&${PW_OPEN}&${win}&select=${cols}&order=id.asc`, env),
     sbPodium(`/rest/v1/departments?select=id,name`, env),
     focusEntries(wk.week_end, auth, env),
+    sbAll(sbDocket, `/rest/v1/spaces?archived_at=not.is.null&select=id&order=id.asc`, env),
   ]);
-  if (!ar.ok || !dr.ok || !focus) return err('db_error', 500);
-  const blocked = ar.data || [];
+  if (!ar.ok || !dr.ok || !focus || !xr.ok) return err('db_error', 500);
+  // A task in an ARCHIVED space is no ask and no hand-off (as the review pack).
+  const archived = new Set((xr.data || []).map(x => x.id));
+  const blocked = (ar.data || []).filter(t => !archived.has(t.space_id));
   const lr = await sbInAll(sbDocket, blocked.map(t => t.id), l => `/rest/v1/task_links?kind=eq.blocks&to_task_id=in.${l}&select=id,from_task_id,to_task_id&order=id.asc`, env);
   if (!lr.ok) return err('db_error', 500);
   const links = lr.data || [];
   const br = await sbInAll(sbDocket, uniq(links.map(l => l.from_task_id)), l => `/rest/v1/tasks?id=in.${l}&archived_at=is.null&select=${cols}&order=id.asc`, env);   // a deleted blocker is no ask
   if (!br.ok) return err('db_error', 500);
-  const blockers = br.data || [];
+  const blockers = (br.data || []).filter(t => !archived.has(t.space_id));
   const keep = new Set((await keepAccessible(auth, [...blocked, ...blockers], env)).map(t => t.id));
-  const names = await nameMap(sbPodium, 'employees', [...blocked, ...blockers].filter(t => keep.has(t.id)).map(t => t.owner_employee_id), env);
-  const { asks, hidden_asks } = buildAsks({ links, blocked, blockers, keep, names, start, end,
-    deptNames: Object.fromEntries((dr.data || []).map(d => [d.id, d.name])) });
-  const out = { week: { week_end: wk.week_end, week_start: wk.week_start }, asks, hidden_asks, focus };
+  const names = await nameMap(sbPodium, 'employees', [...blocked, ...blockers].filter(t => keep.has(t.id))
+    .flatMap(t => [t.owner_employee_id, t.handoff_to_employee_id]), env);
+  const deptNames = Object.fromEntries((dr.data || []).map(d => [d.id, d.name]));
+  const { asks, hidden_asks } = buildAsks({ links, blocked, blockers, keep, names, start, end, deptNames });
+  // R8: open cross-team hand-offs due this week or next, no named receiver or not accepted — from the same
+  // window read (every open top-level task due in it), the same keepAccessible gate; hidden ones are counted.
+  const owr = await sbIn(sbPodium, uniq(blocked.filter(t => isHandoff(t) && !t.department_id).map(t => t.owner_employee_id)),
+    l => `/rest/v1/employees?id=in.${l}&select=id,department_id`, env);
+  if (!owr.ok) return err('db_error', 500);
+  const ownerDept = Object.fromEntries((owr.data || []).map(e => [e.id, e.department_id || null]));
+  const ho = foundersHandoffs({ rows: blocked, keep, names, deptNames, ownerDept, start, end });
+  const out = { week: { week_end: wk.week_end, week_start: wk.week_start }, asks, hidden_asks: hidden_asks + ho.hidden,
+    handoffs: ho.handoffs, focus };
   return ok({ ...out, slack: foundersToSlack(out) });
 }
 // POST { action: 'setFounderFocus', week: this|next|YYYY-MM-DD, items: [...] } — replaces the CALLER's top 5
@@ -3585,6 +3788,7 @@ const GET_ACTIONS = {
   getDocketRoles, getDocketUsers, getDashboardSharing,
   getPlan, getPlanItem, getProposals, getPlanWeeks, getWeekScore,
   getReviewPack, getReviewSnapshots, getFoundersReview,
+  getIncoming,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,
@@ -3605,6 +3809,7 @@ const POST_ACTIONS = {
   createPlanItem, updatePlanItem, planItemAction,
   proposePlanItem, decideProposal,
   holdReview, setFounderFocus,
+  acceptHandoff,
 };
 
 // task_history.source (F9 R6a, §8.3): the MCP gateway marks every call it makes; anything else is the app.

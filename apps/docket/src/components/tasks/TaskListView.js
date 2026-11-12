@@ -12,6 +12,7 @@ import { PriorityFlag, contain } from './TaskCells.js';
 import { TaskRow } from './TaskRow.js';
 import { GroupHeader, FootCapture } from './GroupHeader.js';
 import { DepsBadge } from '../task/Dependencies.js';
+import { HandoffChip } from '../task/Handoff.js';
 import { COLUMNS, gridTemplate, gridMinWidth } from './useTaskViewState.js';
 
 export function TaskListView({
@@ -186,6 +187,7 @@ function GridCard({ task, ctx }) {
         <span className="id">{task.task_no}</span>
       </button>
       <DepsBadge task={task} getSession={getSession} editable={ed} onOpen={openDrawer} onChanged={depsChanged} />
+      <HandoffChip task={task} />
       <PriorityFlag priority={task.priority} />
       <span className="gsetup">
         <NeedChip task={task} kind="owner" ed={ed} ownerOpts={ownerCellOpts} saveField={saveField} />

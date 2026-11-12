@@ -8,6 +8,7 @@ import { AlertTriangle, Target, Inbox } from 'lucide-react';
 import { Pill } from '../../../components/ui/index.js';
 import { fmtPlanDate, fmtPlanStamp } from '../../../lib/plan.js';
 import { STATUS_MAP } from '../../../lib/tasks.js';
+import { HandoffRows } from '../../../components/task/Handoff.js';
 import { shortDay } from '../../../lib/weeks.js';
 import { fmtPct, missLabel, sourceNote, movedText, touchedText, tsDay, barPct, seenText, updateText } from '../../../lib/review.js';
 
@@ -137,6 +138,19 @@ function TeamReview({ team, final }) {
           ))}
         </>}
       </Sec>
+
+      {/* §8.1 #5 (R8). null on a final snapshot (rebuilt from the score) → no section. */}
+      {team.handoffs && (
+        <Sec title="Hand-offs" count={(team.handoffs.unowned || []).length + (team.handoffs.overdue || []).length}>
+          {(team.handoffs.unowned || []).length === 0 && (team.handoffs.overdue || []).length === 0
+            ? <p className="rv-none">No unowned or overdue hand-offs</p> : <>
+            {(team.handoffs.overdue || []).length > 0 && <div className="rv-group-h ho-sub">Overdue</div>}
+            <HandoffRows rows={team.handoffs.overdue} />
+            {(team.handoffs.unowned || []).length > 0 && <div className="rv-group-h ho-sub">Unowned — no one named, or not accepted (next two weeks)</div>}
+            <HandoffRows rows={team.handoffs.unowned} />
+          </>}
+        </Sec>
+      )}
 
       <Sec title="Staleness">
         {/* null for any week but the current one — the banner is about yesterday. */}

@@ -97,6 +97,7 @@ function stub({ superAdmin = false, dept = D1, snapshot = null } = {}) {
     }
     if (u.pathname === '/rest/v1/tasks' && method === 'GET') {
       if (q.get('plan_item_id')) return body([]);                      // linked tasks
+      if (q.get('handoff_to_department_id')) return body([]);          // R8 hand-offs (handoffs-gate.test.mjs)
       // The next-two-weeks read MUST carry its window as a real `or=` filter (not a bare key PostgREST ignores);
       // the stub hands back a done task and an out-of-window one anyway, so the worker's own re-check is proven.
       if (q.get('or')) {

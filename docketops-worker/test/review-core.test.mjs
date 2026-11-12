@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { scoreBlock, lastWorkingDay, groupByPerson, noDataSource, buildReviewTeams, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack,
-  validateFocusItems, buildAsks, foundersToSlack }
+  validateFocusItems, buildAsks, foundersToSlack, handoffBucket, teamHandoffs, foundersHandoffs }
   from '../src/review-core.mjs';
 
 const S = { week_end_dow: 7, working_days: [1, 2, 3, 4, 5, 6], holidays: [] };
@@ -283,4 +283,88 @@ test('foundersToSlack: asks + hidden count + each founder\'s top 5; a null ref s
   assert.match(txt, /\*Vinay's top 5\*\nNot set yet\./);
   assert.doesNotMatch(txt, /[0-9a-f]{8}-[0-9a-f]{4}-/);
   assert.match(foundersToSlack({ week: { week_end: '2026-11-15' }, asks: [], focus: [] }), /No cross-team asks due this week or next\./);
+});
+
+// ---- F9 R8 (2026-11-12): hand-offs — the pack's buckets, the per-team direction, the founders' list, the Slack blocks
+const HO = (n, o) => ({ id: `h${n}`, task_no: `DKT-${n}`, title: `ZZ ho ${n}`, status: 'in_progress', department_id: 'd1',
+  handoff_to_department_id: 'd2', handoff_to_employee_id: null, handoff_accepted_at: null, owner_employee_id: 'e1',
+  deadline: '2026-11-20T06:30:00.000Z', revised_deadline: null, archived_at: null, parent_task_id: null, ...o });
+const NOWMS = Date.parse('2026-11-12T06:00:00Z');
+const HCTX = { now: NOWMS, start: Date.parse('2026-11-08T18:30:00Z'), end: Date.parse('2026-11-30T18:30:00Z') };   // Mon 9 → Mon 30 (IST)
+
+test('handoffBucket: overdue (any age, accepted or not) wins; unowned = in [start,end) and no receiver or not accepted', () => {
+  assert.equal(handoffBucket(HO(1), HCTX), 'unowned');                                                     // no receiver
+  assert.equal(handoffBucket(HO(2, { handoff_to_employee_id: 'e2' }), HCTX), 'unowned');                 // named, not accepted
+  assert.equal(handoffBucket(HO(3, { handoff_to_employee_id: 'e2', handoff_accepted_at: 'x' }), HCTX), null);   // owned
+  assert.equal(handoffBucket(HO(4, { deadline: '2026-10-01T06:30:00Z', handoff_to_employee_id: 'e2', handoff_accepted_at: 'x' }), HCTX), 'overdue');
+  assert.equal(handoffBucket(HO(5, { deadline: '2026-11-20T06:30:00Z', revised_deadline: '2026-11-11T06:30:00Z' }), HCTX), 'overdue');   // the effective date
+  assert.equal(handoffBucket(HO(6, { deadline: '2026-12-20T06:30:00Z' }), HCTX), null);                   // beyond the two weeks
+  assert.equal(handoffBucket(HO(7, { deadline: null }), HCTX), null);
+  for (const o of [{ status: 'done' }, { status: 'abandoned' }, { archived_at: 'x' }, { handoff_to_department_id: null }])
+    assert.equal(handoffBucket(HO(8, { ...o, deadline: '2026-10-01T06:30:00Z' }), HCTX), null, JSON.stringify(o));
+});
+
+test('teamHandoffs: the giving team sees it "out", the receiving team "in", anyone else not at all; names, sorted', () => {
+  const rows = [HO(1, { deadline: '2026-11-25T06:30:00Z' }), HO(2, { deadline: '2026-11-15T06:30:00Z', handoff_to_employee_id: 'e2' }),
+    HO(3, { department_id: 'd3', deadline: '2026-11-01T06:30:00Z' })];
+  const ctx = { ...HCTX, deptNames: { d1: 'Ops', d2: 'Sales', d3: 'Design' }, names: { e1: 'Giver', e2: 'Recv' } };
+  const d1 = teamHandoffs(rows, 'd1', ctx), d2 = teamHandoffs(rows, 'd2', ctx), d4 = teamHandoffs(rows, 'd4', ctx);
+  assert.deepEqual(d1.unowned.map(h => [h.task_id, h.direction]), [['h2', 'out'], ['h1', 'out']]);
+  assert.deepEqual(d1.overdue, []);
+  assert.deepEqual(d2.unowned.map(h => [h.task_id, h.direction]), [['h2', 'in'], ['h1', 'in']]);
+  assert.deepEqual(d2.overdue.map(h => [h.task_id, h.direction]), [['h3', 'in']]);
+  assert.deepEqual(d4, { unowned: [], overdue: [] });
+  assert.deepEqual(d2.unowned[0], { task_id: 'h2', task_no: 'DKT-2', title: 'ZZ ho 2', direction: 'in', from_team_id: 'd1', from_team_name: 'Ops',
+    to_team_id: 'd2', to_team_name: 'Sales', giver_name: 'Giver', receiver_name: 'Recv', accepted: false,
+    effective_deadline: '2026-11-15T06:30:00Z', status: 'in_progress' });
+});
+
+test('foundersHandoffs: open, top-level, cross-team, in [start,end), not owned; outside keep counted, never listed', () => {
+  const rows = [HO(1), HO(2, { handoff_to_employee_id: 'e2', handoff_accepted_at: 'x' }), HO(3, { department_id: 'd2' }),
+    HO(4, { deadline: '2026-12-20T06:30:00Z' }), HO(5, { status: 'done' }), HO(6, { parent_task_id: 'p' }), HO(7, { handoff_to_department_id: null }),
+    HO(8, { title: 'ZZ secret' }), HO(9, { department_id: null, deadline: '2026-11-10T06:30:00Z' })];
+  const r = foundersHandoffs({ rows, keep: new Set(rows.map(t => t.id).filter(id => id !== 'h8')), deptNames: { d1: 'Ops', d2: 'Sales' },
+    names: { e1: 'Giver' }, start: HCTX.start, end: HCTX.end });
+  assert.deepEqual(r.handoffs.map(h => h.task_id), ['h9', 'h1']);   // a no-team giver is cross-team; by date
+  assert.equal(r.hidden, 1);
+  assert.ok(!('direction' in r.handoffs[0]));
+  assert.doesNotMatch(JSON.stringify(r.handoffs), /ZZ secret/);
+});
+
+test('packToSlack: a Hand-offs block per team — overdue first, max 10 then "+N more", never an omitted (Founders\') task, no ids', () => {
+  const row = (n, o) => ({ task_id: `00000000-0000-4000-8000-0000000001${String(n).padStart(2, '0')}`, task_no: `DKT-${n}`, title: `ZZ <ho> ${n}`,
+    direction: 'out', from_team_name: 'Ops', to_team_name: 'Sales', receiver_name: null, accepted: false, effective_deadline: '2026-11-20T06:30:00.000Z', ...o });
+  const unowned = Array.from({ length: 10 }, (_, i) => row(i + 1, i === 0 ? { direction: 'in', receiver_name: 'Recv' } : {}));
+  const pack = { week: { week_end: '2026-11-15', final: false }, teams: [{ department_id: 'd1', team_name: 'Ops',
+    this_week: { cohort: 0, on_time: 0, miss: 0, due: 0, pct: null }, slipped: [], milestones: { due: [] },
+    handoffs: { unowned, overdue: [row(50, { title: 'Founders deal', task_no: 'DKT-50' }), row(51, { title: 'ZZ late', task_no: 'DKT-51' })] } }],
+    slack_omit: { tasks: [row(50).task_id], items: [] } };
+  const txt = packToSlack(pack).teams[0].text;
+  assert.match(txt, /\*Hand-offs\*\n• ⚠ overdue: DKT-51 ZZ late — to Sales — no named receiver — due /);
+  assert.match(txt, /• DKT-1 ZZ &lt;ho&gt; 1 — from Ops — Recv \(not accepted\) — due /);
+  assert.equal((txt.split('*Hand-offs*')[1].match(/^• /gm) || []).length, 10);
+  assert.match(txt, /… \+1 more/);   // 11 left after the omit, 10 shown
+  assert.doesNotMatch(txt, /Founders deal|DKT-50\b/);
+  assert.doesNotMatch(txt, /[0-9a-f]{8}-[0-9a-f]{4}-/);
+  // no hand-offs → no block
+  assert.doesNotMatch(packToSlack({ ...pack, teams: [{ ...pack.teams[0], handoffs: { unowned: [], overdue: [] } }] }).teams[0].text, /Hand-offs/);
+});
+
+test('foundersToSlack: a "Hand-offs to land" block (giver, receiving team, receiver state, date); none → no block', () => {
+  const base = { week: { week_end: '2026-11-15' }, asks: [], hidden_asks: 0, focus: [] };
+  const txt = foundersToSlack({ ...base, handoffs: [{ task_id: 'x', task_no: 'DKT-9', title: 'ZZ brief', from_team_name: 'Ops', giver_name: 'Giver',
+    to_team_name: 'Sales', receiver_name: 'Recv', accepted: false, effective_deadline: '2026-11-20T06:30:00.000Z' }] });
+  assert.match(txt, /\*Hand-offs to land\*\n• DKT-9 ZZ brief \(Ops, Giver\) → Sales — Recv \(not accepted\) — due Fri 20 Nov/);
+  assert.doesNotMatch(foundersToSlack({ ...base, handoffs: [] }), /Hand-offs/);
+});
+
+test('hand-offs with no task department give from the OWNER\'s team (ownerDept): direction, from_team, cross-team', () => {
+  const rows = [HO(1, { department_id: null, owner_employee_id: 'e1' }), HO(2, { department_id: null, owner_employee_id: 'e2' }),
+    HO(3, { department_id: null, owner_employee_id: 'e9' })];
+  const ownerDept = { e1: 'd1', e2: 'd2' };
+  const ctx = { ...HCTX, deptNames: { d1: 'Ops', d2: 'Sales' }, names: {}, ownerDept };
+  assert.deepEqual(teamHandoffs(rows, 'd1', ctx).unowned.map(h => [h.task_id, h.direction, h.from_team_name]), [['h1', 'out', 'Ops']]);
+  assert.deepEqual(teamHandoffs(rows, null, ctx).unowned.map(h => h.task_id), ['h3']);            // owner with no team → No team card
+  const f = foundersHandoffs({ rows, keep: new Set(['h1', 'h2', 'h3']), ownerDept, start: HCTX.start, end: HCTX.end });
+  assert.deepEqual(f.handoffs.map(h => h.task_id).sort(), ['h1', 'h3']);                           // h2: owner in the receiving team
 });

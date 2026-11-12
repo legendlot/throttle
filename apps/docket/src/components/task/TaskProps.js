@@ -5,7 +5,7 @@
 // TaskView actions — the same docketops calls + payloads the old drawer made.
 import { useEffect, useState } from 'react';
 import { Combobox } from '@throttle/ui';
-import { CircleDot, User, Users, Calendar, Flag, Network, Layers, Hash, Clock, CheckCheck, Repeat, Plus, X, Check, Ban, Target } from 'lucide-react';
+import { CircleDot, User, Users, Calendar, Flag, Network, Layers, Hash, Clock, CheckCheck, Repeat, Plus, X, Check, Ban, Target, ArrowRightLeft } from 'lucide-react';
 import { PlanPicker, PlanChip } from '../plan/PlanPicker.js';
 import { StatusBadge } from '../StatusBadge.js';
 import { DatePicker } from '../DatePicker.js';
@@ -15,6 +15,7 @@ import { PriorityFlag, AbandonForm, contain } from '../tasks/TaskCells.js';
 import { SETTABLE_STATUSES, effectiveDeadline } from '../../lib/tasks.js';
 import { fmtDateTime } from '../../lib/format.js';
 import { recurrenceSummary } from '../../lib/recurrence.js';
+import { isHandoff, handoffStatus, teamOptions, receiverOptions } from '../../lib/handoff.js';
 
 function Prop({ icon: Ic, label, children }) {
   return (
@@ -178,6 +179,36 @@ export function TaskProps({ task, canEdit, busy, edit, setEdit, refs, abandonMod
             onPick={(v) => { actions.saveField('plan_item_id', v); close(); }} />)}
         </>}
       </Prop>
+
+      {/* F9 R8: hand-off — top-level tasks only (the worker refuses a sub-task: handoff_top_level). The task
+          stays the giver's; the receiving team (and optionally a person in it) accepts. Changing the team
+          clears the person (and the worker clears an acceptance). */}
+      {!task.parent_task_id && (canEdit || isHandoff(task)) && (
+        <Prop icon={ArrowRightLeft} label="Hand-off to">
+          <div className="ho-prop">
+            <span className="ho-prop-v">
+              <Trigger field="handoff" label="Hand-off to team" {...{ refs, edit, setEdit, canEdit }}>
+                {isHandoff(task) ? <span className="tv-person"><span className="tv-dot" style={{ background: personColor(task.handoff_to_department_id) }} />{task.handoff_to_department_name || 'A team'}</span> : <Empty>Not a hand-off</Empty>}
+              </Trigger>
+              {isHandoff(task) && <>
+                <span className="tv-sub-inline">/</span>
+                <Trigger field="handoffPerson" label="Hand-off to person" {...{ refs, edit, setEdit, canEdit }}>
+                  {task.handoff_to_employee_name ? <span className="tv-person">{task.handoff_to_employee_name}</span> : <Empty>Anyone in the team</Empty>}
+                </Trigger>
+              </>}
+            </span>
+            {handoffStatus(task) && <span className={'ho-status ' + handoffStatus(task).tone}>{handoffStatus(task).text}</span>}
+            {task.can_accept_handoff && !task.handoff_accepted_at && (
+              <Button size="sm" variant="neutral" icon={Check} loading={busy} onClick={actions.acceptHandoff}>Accept hand-off</Button>
+            )}
+          </div>
+          {canEdit && pop('handoff', 240, <OptionList options={teamOptions(opts.departments, task.department_id)} value={task.handoff_to_department_id || ''} searchable
+            onPick={(v) => { actions.saveHandoff(v || null, null); close(); }} />)}
+          {canEdit && isHandoff(task) && pop('handoffPerson', 240, <OptionList searchable value={task.handoff_to_employee_id || ''}
+            options={receiverOptions(opts.employees, task.handoff_to_department_id, task.handoff_to_department_name || 'the team')}
+            onPick={(v) => { actions.saveHandoff(task.handoff_to_department_id, v || null); close(); }} />)}
+        </Prop>
+      )}
 
       <Prop icon={Hash} label="Space">
         <Trigger field="space" label="Space" {...{ refs, edit, setEdit, canEdit }}>

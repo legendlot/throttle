@@ -14,7 +14,8 @@ import { getAs, postAs, scrub, capPayload } from '../workers.js';
 // LOT user ids carried by task rows; the names ride alongside (creator_name, author_name, actor_name).
 const DOCKET_DROP = ['auth_user_id', 'created_by_user_id', 'updated_by', 'abandoned_by', 'author_user_id', 'actor_user_id', 'added_by',
   'proposer_user_id', 'decided_by',    // F9 R3 proposals (docketops already strips them; belt and braces)
-  'founder_user_id'];                   // F9 R6b founders' top 5 (is_me + founder_name ride alongside)
+  'founder_user_id',                    // F9 R6b founders' top 5 (is_me + founder_name ride alongside)
+  'handoff_accepted_by'];               // F9 R8 hand-offs (handoff_accepted_by_name rides alongside)
 
 // The Docket app makes an abandoned task read-only (TaskView `canEdit = _can_edit && status !== 'abandoned'`,
 // decisions 2026-11-09), but docketops' single-task endpoints don't enforce it, so the gateway does: these
@@ -69,6 +70,10 @@ const FOCUS_ITEMS = {
 // F9 R2: a task's plan link. Docket decides who may set it (edit right on the task + the item visible to you
 // as its owner, a theme, or a super admin; live items only) — the gateway only shapes it.
 const PLAN_ITEM = { ...T.uuid, nullable: true, schema: { type: ['string', 'null'] } };
+// F9 R8: a hand-off's receiving side — a department and/or a named receiver (ids from docket_tasks report=people);
+// null clears. Docket validates (receiver in that department, not the task's own team, top-level only) and
+// never lets these set the acceptance — only docket_accept_handoff does.
+const HANDOFF_ID = { ...T.uuid, nullable: true, schema: { type: ['string', 'null'] } };
 const longText = max => ({ schema: { type: 'string', maxLength: max }, check: v => typeof v === 'string' && v.trim().length > 0 && v.length <= max ? { ok: true, value: v.trim() } : { ok: false, error: `must be non-empty text up to ${max} characters` } });
 const optText = max => ({ allowEmpty: true, schema: { type: 'string', maxLength: max }, check: v => typeof v === 'string' && v.length <= max ? { ok: true, value: v } : { ok: false, error: `must be text up to ${max} characters` } });
 
@@ -131,6 +136,8 @@ const docketTools = [
       spaces: { action: 'getSpaces', about: 'the spaces you can see, with ids', params: {} },
       programs: { action: 'getPrograms', about: 'programs, with ids', params: {} },
       // Names + departments only (Docket's getEmployees is ungated and also carries auth ids): for assigning owners.
+      // F9 R8: hand-offs coming TO you (named) or your team — not-accepted first, then by date.
+      incoming: { action: 'getIncoming', about: 'open hand-offs to you (named receiver) or your team, with who gives them; not accepted first', params: { scope: T.oneOf('me', 'team', 'all') } },
       people: { action: 'getEmployees', about: 'people you can assign tasks to (id, name, department)', params: {}, shape: d => ({ people: (Array.isArray(d) ? d : (d && (d.rows || d.employees)) || []).map(e => ({ id: e.id, name: e.full_name, department_id: e.department_id || null })) }) },
     },
   }),
@@ -199,6 +206,8 @@ const docketTools = [
       space_id: { ...T.uuid, about: 'Space id. Omit for the default space.' },
       program_id: { ...T.uuid, about: 'Program id.' },
       plan_item_id: { ...PLAN_ITEM, about: 'Plan link: a theme, milestone or result id from docket_plan (proposed or agreed). Omit for an unplanned task.' },
+      handoff_to_department_id: { ...HANDOFF_ID, about: 'Make it a hand-off to another team: that department\'s id (from docket_tasks report=people). You stay the owner; the deadline is the hand-off date.' },
+      handoff_to_employee_id: { ...HANDOFF_ID, about: 'Optional named receiver of the hand-off (an employee id); alone, their team becomes the receiving team.' },
     },
     required: ['title'],
     finalize: d => (d.owner_employee_id ? d : { ...d, assign_self: true }),
@@ -215,6 +224,8 @@ const docketTools = [
       program_id: { ...T.uuid, about: 'New program id.' },
       deadline: { ...T.date, about: 'First deadline, only if the task has none yet.' },
       plan_item_id: { ...PLAN_ITEM, about: 'New plan link (an id from docket_plan), or null to make the task unplanned. Not on a sub-task.' },
+      handoff_to_department_id: { ...HANDOFF_ID, about: 'Hand this task off to another team (department id), or null to stop it being a hand-off. Changing it voids an acceptance.' },
+      handoff_to_employee_id: { ...HANDOFF_ID, about: 'The hand-off\'s named receiver (employee id), or null for the whole receiving team. Changing it voids an acceptance.' },
     },
     required: ['id'],
     check: d => (Object.keys(d).length > 1 ? null : 'give at least one field to change besides `id`'),
@@ -241,6 +252,14 @@ const docketTools = [
     required: ['id', 'body'],
     // getTask applies the private-space gate that docketops' addComment skips (hostile review 2026-11-09).
     guard: () => null,
+  }),
+  // F9 R8 — accept a hand-off given to you or your team (spec §4.6). Docket checks you are on the receiving side.
+  writeTool({
+    name: 'docket_accept_handoff', title: 'Accept a Docket hand-off', action: 'acceptHandoff',
+    description: 'Accept a hand-off that is given to you or to your team (find them with docket_tasks report=incoming). If no one was named, you become the named receiver. Accepting again does nothing.',
+    recorded: 'recorded in the task\'s history.',
+    params: { id: TASK },
+    required: ['id'],
   }),
   writeTool({
     name: 'docket_abandon_task', title: 'Abandon a Docket task', action: 'abandonTask',

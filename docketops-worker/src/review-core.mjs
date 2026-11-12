@@ -73,6 +73,9 @@ const teamKey = (v) => v || null;
 //   names          — { employee_id: full_name }
 //   ownLatest      — { employee_id: ISO }  their own latest history row / comment
 //   lastSeen       — { employee_id: ISO }  user_activity.last_seen_at
+//   handoffs       — R8: the viewer's visible open hand-off task rows touching the teams (given or received)
+//   ownerDept      — R8: owner employee id → department, for hand-offs with no task department (the giving side)
+//   now            — epoch ms (overdue hand-offs)
 //   lwd            — the last working day (YYYY-MM-DD); null when the pack's week isn't the current one
 //                    (then quiet_last_working_day / last_working_day are null — they only mean "now")
 //   lookbackStart  — ISO: how far back ownLatest was read; a person with none carries last_update_before
@@ -81,7 +84,8 @@ const teamKey = (v) => v || null;
 export function buildReviewTeams(x) {
   const { teamIds = [], deptNames = {}, week, last, trend = [], shown = new Set(), revisions = {}, items = [],
     itemHistory = [], linked = [], metrics = [], openTasks = [], nextTasks = [], updates = [], taskPlan = {},
-    names = {}, ownLatest = {}, lastSeen = {}, lwd = null, lookbackStart = null, seenOnly = null } = x;
+    names = {}, ownLatest = {}, lastSeen = {}, lwd = null, lookbackStart = null, seenOnly = null, handoffs = [], ownerDept = {}, now = Date.now() } = x;
+  const hoCtx = { deptNames, names, ownerDept, now, start: istMidnight(week.week_start), end: istMidnight(addDays(week.week_end, 15)) };
   const weekStartMs = istMidnight(week.week_start);
   const weekEndMs = istMidnight(addDays(week.week_end, 1));
   const nextEnd = addDays(week.week_end, 14);
@@ -179,10 +183,76 @@ export function buildReviewTeams(x) {
           .sort((a, b) => String(effectiveDue(a)).localeCompare(String(effectiveDue(b)))).map(itemOut),
       },
       unplanned: { committed, unplanned: unplannedN, pct: pct1(unplannedN, committed) },
+      handoffs: teamHandoffs(handoffs, T, hoCtx),
     };
   });
 }
 function uniqIds(a) { return [...new Set(a.filter(Boolean))]; }
+
+// ── F9 R8 hand-offs (spec §4.6, §8.1 #5) ─────────────────────────────────────
+// A hand-off is a task on the GIVER (owner = giver, effective deadline = the hand-off date, status = its
+// status) with handoff_to_department_id set; the receiving side is that department and, optionally, a named
+// employee who accepts it. Rows here are task rows the worker has ALREADY gated.
+export const isHandoff = (t) => !!t?.handoff_to_department_id;
+const effMs = (t) => Date.parse(t?.revised_deadline || t?.deadline || '');
+// The giving side: the task's department, else its owner's (`ownerDept` = owner employee id → department id).
+const givingTeam = (t, ownerDept = {}) => t.department_id || (t.owner_employee_id && ownerDept[t.owner_employee_id]) || null;
+// The pack / founders' row (`direction` only on the pack's per-team lists).
+export function handoffRow(t, { deptNames = {}, names = {}, ownerDept = {} } = {}, direction) {
+  const from = givingTeam(t, ownerDept), to = t.handoff_to_department_id || null;
+  return { task_id: t.id, task_no: t.task_no || null, title: t.title, ...(direction ? { direction } : {}),
+    from_team_id: from, from_team_name: from ? (deptNames[from] || null) : null,
+    to_team_id: to, to_team_name: to ? (deptNames[to] || null) : null,
+    giver_name: t.owner_employee_id ? (names[t.owner_employee_id] || null) : null,
+    receiver_name: t.handoff_to_employee_id ? (names[t.handoff_to_employee_id] || null) : null,
+    accepted: !!t.handoff_accepted_at, effective_deadline: t.revised_deadline || t.deadline || null, status: t.status };
+}
+// Which pack list a hand-off belongs to (null = neither): overdue = open, effective deadline before now (any
+// age, accepted or not) — it wins; unowned = open, due in [start, end) (this week + the next two) and either
+// no named receiver or not accepted.
+export function handoffBucket(t, { start, end, now }) {
+  if (!isHandoff(t) || !OPEN(t.status) || t.archived_at) return null;
+  const e = effMs(t);
+  if (!Number.isFinite(e)) return null;
+  if (e < now) return 'overdue';
+  if (e >= start && e < end && (!t.handoff_to_employee_id || !t.handoff_accepted_at)) return 'unowned';
+  return null;
+}
+// One team's section: hand-offs it GIVES (giving side = T, 'out') and RECEIVES (handoff department = T, 'in').
+export function teamHandoffs(rows, T, ctx) {
+  const out = { unowned: [], overdue: [] };
+  for (const t of rows) {
+    const dir = teamKey(givingTeam(t, ctx.ownerDept)) === T ? 'out' : teamKey(t.handoff_to_department_id) === T ? 'in' : null;
+    const b = dir && handoffBucket(t, ctx);
+    if (b) out[b].push(handoffRow(t, ctx, dir));
+  }
+  const by = (a, b) => String(a.effective_deadline).localeCompare(String(b.effective_deadline));
+  out.unowned.sort(by); out.overdue.sort(by);
+  return out;
+}
+// The founders' page (§8.6): open cross-team hand-offs due in [start, end) with no named receiver or not
+// accepted; one the caller can't open (outside `keep`) is counted, never listed.
+export function foundersHandoffs({ rows = [], keep = new Set(), deptNames = {}, names = {}, ownerDept = {}, start, end }) {
+  const out = []; let hidden = 0;
+  for (const t of rows) {
+    if (!isHandoff(t) || !OPEN(t.status) || t.archived_at || t.parent_task_id) continue;
+    const e = effMs(t);
+    if (!Number.isFinite(e) || e < start || e >= end) continue;
+    if (givingTeam(t, ownerDept) === t.handoff_to_department_id) continue;
+    if (t.handoff_to_employee_id && t.handoff_accepted_at) continue;
+    if (!keep.has(t.id)) { hidden++; continue; }
+    out.push(handoffRow(t, { deptNames, names, ownerDept }));
+  }
+  out.sort((a, b) => String(a.effective_deadline).localeCompare(String(b.effective_deadline)));
+  return { handoffs: out, hidden };
+}
+const HANDOFF_MAX = 10;
+function handoffLine(h, prefix = '') {
+  const where = h.direction === 'in' ? `from ${esc(h.from_team_name || 'No team')}` : `to ${esc(h.to_team_name || 'No team')}`;
+  const who = h.receiver_name ? `${esc(h.receiver_name)}${h.accepted ? '' : ' (not accepted)'}` : 'no named receiver';
+  const due = h.effective_deadline ? ` — due ${shortDay(istDate(h.effective_deadline))}` : '';
+  return `• ${prefix}${h.task_no ? esc(h.task_no) + ' ' : ''}${esc(h.title)} — ${where} — ${who}${due}`;
+}
 
 // ── Copy for Slack (§8.4): mrkdwn, one message per team + a summary, at the pack's (= viewer's) level.
 // Never an id: names, codes, task numbers and titles only.
@@ -201,7 +271,9 @@ export function packToSlack(pack, omit = pack?.slack_omit) {
   const oT = new Set(omit?.tasks || []), oI = new Set(omit?.items || []);
   pack = { ...pack, teams: (pack?.teams || []).map(t => ({ ...t,
     slipped: (t.slipped || []).filter(s => !oT.has(s.task_id)),
-    milestones: t.milestones ? { ...t.milestones, due: (t.milestones.due || []).filter(m => !oI.has(m.id)) } : t.milestones })) };
+    milestones: t.milestones ? { ...t.milestones, due: (t.milestones.due || []).filter(m => !oI.has(m.id)) } : t.milestones,
+    handoffs: t.handoffs ? { unowned: (t.handoffs.unowned || []).filter(h => !oT.has(h.task_id)),
+                             overdue: (t.handoffs.overdue || []).filter(h => !oT.has(h.task_id)) } : t.handoffs })) };
   const wk = pack?.week || {};
   const label = `week ending ${shortDay(wk.week_end) || wk.week_end || ''}`;
   const teams = (pack?.teams || []).map((t) => {
@@ -220,6 +292,12 @@ export function packToSlack(pack, omit = pack?.slack_omit) {
     if (msDue.length) {
       lines.push('*Milestones due*');
       for (const m of msDue) lines.push(`• ${m.code ? esc(m.code) + ' ' : ''}${esc(m.title)} — ${esc(m.owner_name || 'no owner')} — ${esc(m.state)}`);
+    }
+    const ho = [...(t.handoffs?.overdue || []).map(h => [h, '⚠ overdue: ']), ...(t.handoffs?.unowned || []).map(h => [h, ''])];
+    if (ho.length) {
+      lines.push('*Hand-offs*');
+      for (const [h, pre] of ho.slice(0, HANDOFF_MAX)) lines.push(handoffLine(h, pre));
+      if (ho.length > HANDOFF_MAX) lines.push(`… +${ho.length - HANDOFF_MAX} more`);
     }
     if (t.staleness?.quiet_last_working_day) lines.push(`⚠ No update on any open task on ${shortDay(t.staleness.last_working_day)}`);
     return { department_id: t.department_id, text: lines.join('\n') };
@@ -241,6 +319,7 @@ export function reprojectPack(payload, keep) {
     slipped: (t.slipped || []).filter(s => k(s.task_id)),
     next_two_weeks: { ...t.next_two_weeks,
       tasks_by_person: (t.next_two_weeks?.tasks_by_person || []).map(g => ({ ...g, tasks: g.tasks.filter(x => k(x.task_id)) })).filter(g => g.tasks.length) },
+    handoffs: t.handoffs ? { unowned: (t.handoffs.unowned || []).filter(h => k(h.task_id)), overdue: (t.handoffs.overdue || []).filter(h => k(h.task_id)) } : (t.handoffs ?? null),
   }));
   const out = { ...payload, teams, hidden_tasks: (payload.hidden_tasks || 0) + dropped.size };
   return { ...out, slack: packToSlack(out) };
@@ -271,6 +350,7 @@ export function finalSnapshotPack(p, { keep = new Set(), deptNames = {}, names =
       staleness: null,
       next_two_weeks: { tasks_by_person: [], milestones: [] },
       unplanned: null,
+      handoffs: null,
     };
   });
   const pack = {
@@ -290,6 +370,7 @@ export function packTaskIds(payload) {
   for (const t of payload?.teams || []) {
     for (const s of t.slipped || []) ids.push(s.task_id);
     for (const g of t.next_two_weeks?.tasks_by_person || []) for (const x of g.tasks || []) ids.push(x.task_id);
+    for (const h of [...(t.handoffs?.unowned || []), ...(t.handoffs?.overdue || [])]) ids.push(h.task_id);
   }
   return uniqIds(ids);
 }
@@ -362,6 +443,16 @@ export function foundersToSlack(r) {
     lines.push(`• ${task(a.blocked)} (${who(a.blocked)}) waits on ${task(a.blocker)} (${who(a.blocker)})`
       + (a.blocked.effective_deadline ? ` — due ${day(a.blocked.effective_deadline)}` : '')
       + (a.blocker.status === 'abandoned' ? ' — ⚠ the blocker was abandoned' : ''));
+  }
+  const hos = r?.handoffs || [];
+  if (hos.length) {
+    lines.push('*Hand-offs to land*');
+    for (const h of hos.slice(0, HANDOFF_MAX)) {
+      const who = h.receiver_name ? `${esc(h.receiver_name)}${h.accepted ? '' : ' (not accepted)'}` : 'no named receiver';
+      lines.push(`• ${h.task_no ? esc(h.task_no) + ' ' : ''}${esc(h.title)} (${esc(h.from_team_name || 'No team')}${h.giver_name ? ', ' + esc(h.giver_name) : ''}) → ${esc(h.to_team_name || 'No team')} — ${who}`
+        + (h.effective_deadline ? ` — due ${day(h.effective_deadline)}` : ''));
+    }
+    if (hos.length > HANDOFF_MAX) lines.push(`… +${hos.length - HANDOFF_MAX} more`);
   }
   if (r?.hidden_asks) lines.push(`+${r.hidden_asks} more in spaces you can't open`);
   for (const f of r?.focus || []) {
