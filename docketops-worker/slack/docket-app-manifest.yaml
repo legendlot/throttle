@@ -1,0 +1,46 @@
+# Docket Slack app — F9 R7 (spec docs/superpowers/specs/2026-11-11-docket-plan-layer.md §9).
+# A DEDICATED app, not the Throttle app (whose webhooks carry other alerts). Create it from this manifest:
+# api.slack.com/apps → Create New App → From an app manifest → workspace legend-of-toys → paste this (YAML).
+# Setup steps: slack/README.md. Scopes are exactly spec §9.1 — add none without updating the spec.
+display_information:
+  name: Docket
+  description: Tasks, deadlines and the plan — from Slack.
+  background_color: "#1a1a1a"
+  long_description: >-
+    Docket's Slack companion. A morning DM with what is due, overdue or quiet, with Done / Move date /
+    Comment buttons; the Thursday review prep; and "Add to Docket" on any message to turn a promise into a
+    task. Every action runs as you, with your own Docket permissions. No per-event alerts.
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: Docket
+    always_online: false
+  shortcuts:
+    - name: Add to Docket
+      type: message
+      callback_id: docket_add_from_message
+      description: Turn this message into a Docket task
+  slash_commands:
+    - command: /docket
+      url: https://docketops.afshaan.workers.dev/slack/commands
+      description: Add a task, see yours, or propose a plan item
+      usage_hint: "add <text> · mine · propose <text>"
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - im:write
+      - users:read
+      - users:read.email
+      - commands
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://docketops.afshaan.workers.dev/slack/interactive
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
