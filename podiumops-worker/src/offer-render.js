@@ -327,6 +327,45 @@ export async function renderOfferPdf({ template, offer, annexure, signatory, can
   return doc.save({ useObjectStreams: false });
 }
 
+// O1 — the acceptance certificate: the issued PDF's pages untouched, plus one page of evidence lines
+// (offerlink.js certificateLines). The issued bytes' SHA-256 is printed on the page, so the accepted file
+// points back at exactly what was sent.
+export async function appendCertificatePage(pdfBytes, lines, { title = 'Acceptance certificate', when = null } = {}) {
+  const doc = await PDFDocument.load(pdfBytes, { updateMetadata: false });
+  const reg = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const clean = sanitizer(reg);
+  const [W, H] = PAGE;
+  const textW = W - 2 * MX;
+  let page = doc.addPage(PAGE);
+  let y = H - TOP;
+  const t = clean(title);
+  page.drawText(t, { x: (W - bold.widthOfTextAtSize(t, 15)) / 2, y, size: 15, font: bold, color: INK });
+  y -= 34;
+  const size = 10, lead = 14;
+  for (const line of lines || []) {
+    // A long unbroken run (a hash, a user agent) is split by characters so it never runs off the page.
+    const words = [];
+    for (const w of clean(line).split(' ')) {
+      let rest = w;
+      while (rest && reg.widthOfTextAtSize(rest, size) > textW) {
+        let n = rest.length;
+        while (n > 1 && reg.widthOfTextAtSize(rest.slice(0, n), size) > textW) n--;
+        words.push(rest.slice(0, n)); rest = rest.slice(n);
+      }
+      if (rest) words.push(rest);
+    }
+    for (const l of wrap(words.join(' '), reg, size, textW)) {
+      if (y - lead < BOTTOM) { page = doc.addPage(PAGE); y = H - TOP; }
+      page.drawText(l, { x: MX, y, size, font: reg, color: INK });
+      y -= lead;
+    }
+    y -= 6;
+  }
+  if (when) doc.setModificationDate(when);
+  return doc.save({ useObjectStreams: false });
+}
+
 // SHA-256 hex of the bytes (WebCrypto — present in Workers and Node ≥ 18).
 export async function sha256Hex(bytes) {
   const d = await crypto.subtle.digest('SHA-256', bytes);

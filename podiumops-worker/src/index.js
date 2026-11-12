@@ -66,7 +66,16 @@ import {
 } from './onboarding.js';   // J2 onboarding + profile completion (test/onboarding.test.mjs)
 import {
   renderOfferText, renderOfferPdf, sha256Hex, validateTemplateBody, SAMPLE_OFFER, SAMPLE_SIGNATORY, OFFER_FIELDS,
+  appendCertificatePage,
 } from './offer-render.js';   // C3 letter + PDF renderer (test/offer-render.test.mjs)
+import {
+  newLinkToken, hashLinkToken, linkTokenShapeOk, namesMatch, firstName, DECLINE_REASONS, declineReasonList, TEXT_MAX,
+  isLinkLive, LINK_INVALID, linkState, linkDbErrorCode, addressOk, buildOfferMime, offerSubject, offerMessageId,
+  renderOfferEmail, renderConfirmationEmail, renderAlertEmail, LINK_DOC_TYPES, LINK_DOC_TYPE_KEYS, LINK_DOC_MIMES,
+  LINK_BANK_CAP, candidateLinkDocPath, checkCandidateLinkDocPath, validateCandidateBank,
+  maskAccount as maskBankAccount, certificateLines, istStamp, renderOfferCopyEmail, renderConfirmationCopyEmail,
+  splitOfferRecipients, threadKindsFor, reconcileDue, reconcileDecision, newPathNonce, acceptedPdfPath,
+} from './offerlink.js';   // O1 offer email + acceptance link (test/offerlink.test.mjs)
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 
@@ -229,7 +238,8 @@ async function googleAccessToken(env, opts = {}) {
   const header = b64urlStr(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const claim = b64urlStr(JSON.stringify({
     iss: sa.client_email,
-    sub: env.GOOGLE_ADMIN_IMPERSONATE_EMAIL,
+    // O1: opts.sub = the mailbox to act as (the offer's hiring owner / reporting manager). Default unchanged.
+    sub: opts.sub || env.GOOGLE_ADMIN_IMPERSONATE_EMAIL,
     scope: opts.scope || 'https://www.googleapis.com/auth/admin.directory.user.readonly',
     aud: 'https://oauth2.googleapis.com/token',
     iat: now, exp: now + 3600,
@@ -4650,6 +4660,16 @@ const OFFER_COPY = {
   conflict: 'This conflicts with an existing record — reload and retry',
   offer_check_failed: 'The offer failed a consistency check — reload and retry',
   doc_in_use: 'This document is the evidence for an offer revision and cannot be deleted',
+  // O1 — email + link
+  mail_not_configured: 'Email sending is not set up on this server',
+  no_sender_mailbox: 'Neither the hiring owner nor the reporting manager has a Legend of Toys mailbox to send from',
+  send_pending: 'The last send is still being checked — try again in a minute',
+  mail_failed: 'The email did not go out',
+  pdf_missing: 'The issued PDF could not be read — re-issue the offer',
+  pdf_hash_mismatch: 'The stored PDF does not match the issued one — re-issue the offer',
+  not_link_accepted: 'This offer was not accepted through the link',
+  confirmation_exists: 'The confirmation email has already gone out',
+  no_bank_details: 'The candidate has not submitted bank details yet',
 };
 const offerErr = (code, status = 422) => errCode(code, OFFER_COPY[code] || code.replace(/_/g, ' '), status);
 // PostgREST error → a mapped code (offerDbErrorCode: unique indexes by name, RPC raises), else code +
@@ -4881,12 +4901,15 @@ async function getOffer(url, auth, env) {
   const c = await offerCtx(auth, env, url.searchParams.get('id'));
   if (c.res) return c.res;
   const { x, roles, me } = c;
-  const [o] = await expireDueOffers(env, auth, me, [c.o]);
+  let [o] = await expireDueOffers(env, auth, me, [c.o]);
+  // O1 (D8): settle in-flight mails and heal a send whose ready → sent step did not land.
+  if (await reconcileOfferEmails(env, o)) o = (await loadOffer(env, o.id)) || o;
   const sal = canSeeSalary(roles);
-  const [evr, cr, founders] = await Promise.all([
+  const [evr, cr, founders, extras] = await Promise.all([
     sb(`/rest/v1/application_events?application_id=eq.${o.application_id}&event_type=like.offer_*&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/candidates?id=eq.${o.candidate_id}&select=id,candidate_code,full_name,email&limit=1`, env),
     loadFounders(env),
+    offerLinkExtras(env, auth, o, sal, canManageOffers(x.roles)),
   ]);
   const events = (evr.data || []).filter(e => !e.detail?.offer_id || e.detail.offer_id === o.id || e.event_type === 'offer_superseded')
     .map(e => redactEvent(e, sal));
@@ -4896,17 +4919,26 @@ async function getOffer(url, auth, env) {
     manage: canManageOffers(x.roles),
     decide: o.status === 'pending_approval' && !checkBandDecider(meId, isFounder, o),
     see_salary: sal,
+    // O1
+    send_email: canManageOffers(x.roles) && ['ready', 'sent'].includes(o.status),
+    resend_confirmation: canManageOffers(x.roles) && o.status === 'accepted' && !!extras.acceptance
+      && !extras.emails.some(e => e.kind === 'confirmation' && ['sending', 'sent', 'unknown'].includes(e.status)),
+    verify_docs: isHr(auth),
+    allow_bank_update: isHr(auth) && extras.has_bank,
+    reveal_bank: canComp(auth) && extras.has_bank,
   };
+  const { has_bank, ...o1 } = extras;
   const base = { offer: offerView(o, sal), candidate: cr.data?.[0] || null,
-    opening: { id: x.o.id, opening_code: x.o.opening_code, designation: x.o.designation, status: x.o.status }, events, can };
+    opening: { id: x.o.id, opening_code: x.o.opening_code, designation: x.o.designation, status: x.o.status }, events, can, ...o1 };
   if (!sal) return ok(base);
   const empIds = [o.approver_employee_id, o.requested_by_employee_id, o.decided_by_employee_id].filter(Boolean);
-  const [tr, sr, rr, er, cc] = await Promise.all([
+  const [tr, sr, rr, er, cc, sender] = await Promise.all([
     sb(`/rest/v1/offer_templates?id=eq.${o.template_id}&select=*&limit=1`, env),
     o.signatory_id ? sb(`/rest/v1/offer_signatories?id=eq.${o.signatory_id}&select=*&limit=1`, env) : Promise.resolve({ data: [] }),
     sb(`/rest/v1/offer_rule_sets?id=eq.${o.rule_set_id}&select=code,effective_from,effective_to&limit=1`, env),
     empIds.length ? sb(`/rest/v1/employees?id=in.(${empIds.join(',')})&select=id,full_name`, env) : Promise.resolve({ data: [] }),
-    can.manage && o.status === 'ready' ? offerDefaultCc(env, x) : Promise.resolve(null),
+    can.manage && ['ready', 'sent'].includes(o.status) ? offerDefaultCc(env, x) : Promise.resolve(null),
+    can.manage ? offerSender(env, x.o) : Promise.resolve(null),
   ]);
   const template = tr.data?.[0] || null;
   let text = null, templateError = null;
@@ -4923,7 +4955,7 @@ async function getOffer(url, auth, env) {
     band: bandOf(x.budgets.find(b => b.id === o.budget_id) || null),
     people: { approver: names[o.approver_employee_id] || null, requested_by: names[o.requested_by_employee_id] || null,
       decided_by: names[o.decided_by_employee_id] || null },
-    default_cc: cc });
+    default_cc: cc, mail_from: sender?.email || null });
 }
 
 async function getOfferPdfUrl(url, auth, env) {
@@ -5198,6 +5230,844 @@ async function createOfferDocUploadUrl(body, auth, env) {
   if (c.res) return c.res;
   if (!canManageOffers(c.x.roles)) return err('forbidden', 403);
   return signUpload(offerDocPath(c.o.candidate_id, c.o.offer_ref, c.o.revision, d.kind), env);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// HIRING O1 — the offer email + the candidate's acceptance link. Plan: docs/superpowers/plans/2026-11-12-podium-o1-offer-link.md
+// Mail goes out through Gmail as the opening's hiring owner (else reporting manager) — never an address from
+// the caller (D1). Every send is an intent row first (offer_emails 'sending'), then Gmail, then sent / failed /
+// unknown; reconcileOfferEmails settles the in-between by searching the sender's mailbox for our Message-ID (D8).
+// The link carries a 32-byte token; only its SHA-256 is stored. /public/offer* sits before the JWT gate.
+// ────────────────────────────────────────────────────────────────────────────
+
+const PODIUM_APP_URL = 'https://podium.legendoftoys.com';
+const podiumAppUrl = (env) => String(env.PODIUM_APP_URL || PODIUM_APP_URL).replace(/\/+$/, '');
+const offerLinkUrl = (env, token) => `${podiumAppUrl(env)}/offer/?t=${encodeURIComponent(token)}`;
+const staffOfferUrl = (env, offerId) => `${podiumAppUrl(env)}/hiring/offer/?id=${offerId}`;
+const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';   // already on the shared SA's DWD list
+const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
+const LINK_DOC_OPEN_DAYS = 7;             // D7: the documents step stays open until start_date + 7
+const HEADCOUNT_FULL_NOTICE = "Thank you — we'll be in touch shortly.";
+
+// Per-mailbox token cache, per isolate (a token is good for an hour).
+const gmailTokens = new Map();
+// A failed read (e.g. before 0012 is applied) reads as no rows, so getOffer keeps working for C3.
+const rowsOf = (r) => (r?.ok && Array.isArray(r.data) ? r.data : []);
+async function gmailToken(env, mailbox) {
+  const hit = gmailTokens.get(mailbox);
+  if (hit && hit.exp > Date.now() + 60000) return hit.token;
+  const token = await googleAccessToken(env, { scope: GMAIL_SCOPE, sub: mailbox });
+  gmailTokens.set(mailbox, { token, exp: Date.now() + 3300 * 1000 });
+  return token;
+}
+
+// → { ok, id, threadId } | { ok: false, definite, status, error }. definite = Gmail answered, so the mail
+// certainly did not go; a throw / timeout / 5xx is NOT definite (it may have gone) → the row goes 'unknown'.
+async function gmailSend(env, senderEmail, raw, threadId = null) {
+  let token;
+  try { token = await gmailToken(env, senderEmail); }
+  catch (e) { return { ok: false, definite: true, status: 0, error: `token: ${String(e?.message || e).slice(0, 300)}` }; }
+  const attempt = async (tid) => {
+    let res;
+    try {
+      res = await fetch(`${GMAIL_BASE}/messages/send`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw: b64urlStr(raw), ...(tid ? { threadId: tid } : {}) }), signal: AbortSignal.timeout(25000),
+      });
+    } catch (e) { return { ok: false, definite: false, status: 0, error: String(e?.message || e).slice(0, 300) }; }
+    const d = await res.json().catch(() => ({}));
+    if (res.ok) return { ok: true, id: d.id || null, threadId: d.threadId || null };
+    return { ok: false, definite: res.status < 500, status: res.status, error: String(d?.error?.message || `HTTP ${res.status}`).slice(0, 500) };
+  };
+  const r = await attempt(threadId);
+  // A thread that no longer exists in that mailbox: Gmail refused the whole send, so send it unthreaded.
+  if (!r.ok && r.definite && threadId && [400, 404].includes(r.status)) return attempt(null);
+  return r;
+}
+
+// → { found, id, threadId } | { error }. Searches the sender's own mailbox for our Message-ID.
+async function gmailFindByMessageId(env, senderEmail, messageId) {
+  try {
+    const token = await gmailToken(env, senderEmail);
+    const q = `rfc822msgid:${String(messageId).replace(/^<|>$/g, '')}`;
+    const res = await fetch(`${GMAIL_BASE}/messages?q=${encodeURIComponent(q)}&includeSpamTrash=true&maxResults=1`,
+      { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: d?.error?.message || `HTTP ${res.status}` };
+    const m = (d.messages || [])[0];
+    return m ? { found: true, id: m.id, threadId: m.threadId || null } : { found: false };
+  } catch (e) { return { error: String(e?.message || e) }; }
+}
+
+// D1: the mailbox an offer goes out from = the hiring owner's work_email, else the reporting manager's.
+async function offerSender(env, opening) {
+  const ids = [opening?.hiring_owner_employee_id, opening?.reporting_manager_employee_id].filter(Boolean);
+  if (!ids.length) return null;
+  const r = await sb(`/rest/v1/employees?id=in.(${ids.join(',')})&select=id,full_name,preferred_name,work_email,status`, env);
+  const by = Object.fromEntries((r.data || []).map(e => [e.id, e]));
+  for (const id of ids) {
+    const e = by[id];
+    const m = String(e?.work_email || '').trim().toLowerCase();
+    if (e && e.status !== 'exited' && m.endsWith(`@${WORK_DOMAIN}`) && addressOk(m)) {
+      return { email: m, name: e.full_name, first: String(e.preferred_name || '').trim() || firstName(e.full_name) };
+    }
+  }
+  return null;
+}
+async function loadOpeningRow(env, id) {
+  return (await sb(`/rest/v1/openings?id=eq.${id}&select=id,opening_code,hiring_owner_employee_id,reporting_manager_employee_id,headcount&limit=1`, env)).data?.[0] || null;
+}
+
+// D9 / review M: reply in the application's thread in THIS mailbox (thread ids are per mailbox). Candidate mails
+// thread only on candidate mails; copies / alerts on earlier internal mails, else on the candidate thread.
+async function offerThread(env, applicationId, senderEmail, kind) {
+  for (const kinds of threadKindsFor(kind)) {
+    const r = await sb(`/rest/v1/offer_emails?application_id=eq.${applicationId}&sender_email=eq.${encodeURIComponent(senderEmail)}`
+      + `&kind=in.(${kinds.join(',')})&status=eq.sent&gmail_thread_id=not.is.null&select=gmail_thread_id,message_id_header`
+      + `&order=created_at.desc&limit=1`, env);
+    const t = rowsOf(r)[0];
+    if (t) return { threadId: t.gmail_thread_id, inReplyTo: t.message_id_header };
+  }
+  return { threadId: null, inReplyTo: null };
+}
+
+async function storageBytes(env, path) {
+  const seg = String(path).split('/').map(encodeURIComponent).join('/');
+  try {
+    const r = await fetch(`${env.SUPABASE_URL}/storage/v1/object/authenticated/${DOC_BUCKET}/${seg}`, {
+      headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
+    if (!r.ok) return null;
+    return new Uint8Array(await r.arrayBuffer());
+  } catch (_e) { return null; }
+}
+async function signedUrl(env, path, secs) {
+  const seg = String(path).split('/').map(encodeURIComponent).join('/');
+  const sr = await storageFetch(`/object/sign/${DOC_BUCKET}/${seg}`, env, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresIn: secs }) });
+  return sr.ok && sr.data?.signedURL ? `${env.SUPABASE_URL}/storage/v1${sr.data.signedURL}` : null;
+}
+
+// Validity from the send day (default valid_days), never shorter than the letter already says (= markOfferSent).
+function sendValidUntil(o, sentDay) {
+  let v = addDaysIso(sentDay, Number(o.inputs?.valid_days || 7));
+  if (o.valid_until && o.valid_until > v) v = o.valid_until;
+  return v;
+}
+
+// D8 — intent → Gmail → status. → { row, status: 'sent'|'failed'|'unknown' } | { status: 'refused'|'busy'|'db_error', error }
+// 'busy' = a partial unique index refused the intent (an unresolved offer mail, a confirmation or a copy already
+// exists) → nothing was sent. failWith = record the row as `failed` with that error and do NOT call Gmail (F).
+// The caller runs afterOfferMailSent for a sent 'offer' mail (after its copy, so offers.sent_cc is right).
+async function deliverOfferMail(env, { offer, kind, sender, to, cc = [], subject, text, html, attachments = [], createdBy = null,
+  tokenHash = null, copyTo = [], parentId = null, failWith = null }) {
+  const id = crypto.randomUUID();
+  const messageId = offerMessageId(id);
+  let mime = null, th = { threadId: null, inReplyTo: null };
+  if (!failWith) {
+    th = await offerThread(env, offer.application_id, sender.email, kind);
+    mime = buildOfferMime({ from: sender.email, fromName: sender.name, to, cc, subject, text, html, messageId,
+      inReplyTo: th.inReplyTo, attachments });
+    if (mime.error) return { status: 'refused', error: mime.error };
+  }
+  const ins = await sb(`/rest/v1/offer_emails`, env, { method: 'POST', body: JSON.stringify([{
+    id, offer_id: offer.id, application_id: offer.application_id, kind, status: failWith ? 'failed' : 'sending',
+    error: failWith ? String(failWith).slice(0, 1000) : null, sender_email: sender?.email || '', to_email: to || '', cc_emails: cc,
+    copy_to: copyTo, parent_email_id: parentId, subject, message_id_header: messageId, token_hash: tokenHash, created_by: createdBy }]) });
+  if (!ins.ok) {
+    if (ins.status === 409 || ins.data?.code === '23505') return { status: 'busy', error: 'send_pending' };
+    return { status: 'db_error', error: [ins.data?.code, ins.data?.message].filter(Boolean).join(' ') || String(ins.status) };
+  }
+  const row = ins.data[0];
+  if (failWith) return { row, status: 'failed', error: row.error };
+  const g = await gmailSend(env, sender.email, mime.raw, th.threadId);
+  const patch = g.ok ? { status: 'sent', gmail_message_id: g.id, gmail_thread_id: g.threadId, sent_at: nowIso(), error: null }
+    : g.definite ? { status: 'failed', error: g.error } : { status: 'unknown', error: g.error };
+  await sb(`/rest/v1/offer_emails?id=eq.${row.id}&status=eq.sending`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(patch) });
+  return { row: { ...row, ...patch }, status: patch.status, error: patch.error || null };
+}
+
+// The link-free copy of a sent offer mail for the people who were to be CC'd (A). Recorded, never blocks; one per
+// parent (offer_emails_one_copy). → deliverOfferMail's result | null when there is nobody to copy.
+async function sendOfferCopy(env, parent, o) {
+  if (!(parent.copy_to || []).length) return null;
+  try {
+    const opening = await loadOpeningRow(env, o.opening_id);
+    const sender = opening ? await offerSender(env, opening) : null;
+    if (!sender || sender.email !== parent.sender_email) return null;   // owner changed since: skip, the parent stands
+    const [cr, pdf] = await Promise.all([
+      sb(`/rest/v1/candidates?id=eq.${o.candidate_id}&select=full_name&limit=1`, env),
+      o.pdf_path ? storageBytes(env, o.pdf_path) : Promise.resolve(null),
+    ]);
+    const mail = renderOfferCopyEmail({ candidateName: rowsOf(cr)[0]?.full_name || null, candidateEmail: parent.to_email,
+      designation: o.designation, startDate: o.start_date, validUntil: o.valid_until, staffUrl: staffOfferUrl(env, o.id),
+      revised: Number(o.revision) > 1 });
+    return await deliverOfferMail(env, { offer: o, kind: 'offer_copy', sender, to: sender.email, cc: parent.copy_to,
+      subject: offerSubject(o.designation), text: mail.text, html: mail.html, parentId: parent.id, createdBy: parent.created_by,
+      attachments: pdf ? [{ filename: `${o.offer_ref}-r${o.revision}.pdf`, mime: 'application/pdf', bytes: pdf }] : [] });
+  } catch (e) {
+    console.error('[offer-copy]', e?.message || e);
+    return null;
+  }
+}
+
+// An offer mail is out: older links of the same revision die (D6), and the revision moves to `sent` (D8.4).
+// Copies first (A) — a copy failure is recorded on its own row and never blocks.
+async function afterOfferMailSent(env, e) {
+  const o = await loadOffer(env, e.offer_id);
+  if (o) await sendOfferCopy(env, e, o);
+  await sb(`/rest/v1/offer_emails?offer_id=eq.${e.offer_id}&kind=eq.offer&id=neq.${e.id}&link_revoked_at=is.null`
+    + `&created_at=lt.${encodeURIComponent(e.created_at)}`, env, { method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ link_revoked_at: nowIso() }) });
+  return finishOfferSend(env, e.offer_id);
+}
+
+// Idempotent: a `ready` revision whose offer mail is `sent` → the C3 ready → sent step, with markOfferSent's set.
+// Runs right after a send and from reconcile, so a transition that failed after the mail left heals on the next view.
+async function finishOfferSend(env, offerId) {
+  const o = await loadOffer(env, offerId);
+  if (!o || o.status !== 'ready') return null;
+  const er = await sb(`/rest/v1/offer_emails?offer_id=eq.${o.id}&kind=eq.offer&status=eq.sent&select=*&order=created_at.desc&limit=1`, env);
+  const e = er.data?.[0];
+  if (!e) return null;
+  const actorEmp = e.created_by
+    ? (await sb(`/rest/v1/employees?auth_user_id=eq.${e.created_by}&select=id&limit=1`, env)).data?.[0]?.id || null : null;
+  return hiringRpc(env, 'hiring_offer_transition', {
+    offer_id: o.id, expected_status: 'ready', to_status: 'sent',
+    set: { sent_at: e.sent_at || e.created_at, sent_by: e.created_by, sent_to: e.to_email, sent_cc: e.copy_to || [],
+      valid_until: sendValidUntil(o, istToday(Date.parse(e.created_at))) },
+    evidence_doc: null, acceptance_doc: null, app_status: 'offer', event_type: 'offer_sent', event_note: null,
+    expected_terms_hash: o.terms_hash, actor_user_id: e.created_by, actor_employee_id: actorEmp,
+  });
+}
+
+// D8.3 — settle 'unknown' rows and stuck 'sending' rows by asking the sender's mailbox. → true when anything moved.
+async function reconcileOfferEmails(env, o) {
+  const r = await sb(`/rest/v1/offer_emails?offer_id=eq.${o.id}&status=in.(sending,unknown)&select=*`, env);
+  const now = Date.now();
+  const due = rowsOf(r).filter(e => reconcileDue(e, now));
+  let changed = false;
+  if (due.length && env.GOOGLE_SA_JSON) {
+    const found = await Promise.all(due.map(e => gmailFindByMessageId(env, e.sender_email, e.message_id_header)));
+    const settled = await Promise.all(due.map(async (e, i) => {
+      const f = found[i];
+      if (f.error) return null;
+      // A hit → sent; a miss → unknown (+1), and failed only on the second miss ≥ 2 minutes after the first.
+      const patch = reconcileDecision(e, f, now);
+      const guard = e.last_reconciled_at ? `&last_reconciled_at=eq.${encodeURIComponent(e.last_reconciled_at)}` : '&last_reconciled_at=is.null';
+      const pr = await sb(`/rest/v1/offer_emails?id=eq.${e.id}&status=eq.${e.status}${guard}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+      return pr.ok && pr.data?.length ? { ...e, ...patch } : null;
+    }));
+    for (const e of settled.filter(Boolean)) {
+      if (e.status === 'unknown') continue;
+      changed = true;
+      if (e.status === 'sent' && e.kind === 'offer') await afterOfferMailSent(env, e);
+    }
+  }
+  if (!changed && o.status === 'ready') {
+    const fr = await finishOfferSend(env, o.id);
+    if (fr?.ok) changed = true;
+  }
+  return changed;
+}
+
+// ── Staff: send / resend the offer by email ──────────────────────────────────
+
+// POST sendOfferEmail {id, sent_to?, sent_cc?} — a `ready` revision, or a `sent` one again (same revision: a wrong
+// address, a lost mail). Same gates as markOfferSent; the issued PDF is attached; a fresh link every time.
+async function sendOfferEmail(body, auth, env) {
+  const d = body.data || body;
+  const c = await offerCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { x } = c;
+  let o = c.o;
+  if (!canManageOffers(x.roles)) return err('forbidden', 403);
+  if (!env.GOOGLE_SA_JSON) return offerErr('mail_not_configured', 503);
+  if (await reconcileOfferEmails(env, o)) o = (await loadOffer(env, o.id)) || o;
+  if (o.status === 'ready') {
+    if (!canSendOffer(o)) return offerErr('not_approved_for_terms', 409);
+    const gate = offerOpeningGate(x); if (gate) return gate;
+  } else if (o.status === 'sent') {
+    if (o.valid_until && o.valid_until < istToday()) return offerErr('offer_expired', 409);
+  } else {
+    return errCode('invalid_transition', `Only a ready offer can be emailed, or a sent one re-sent (this one is ${o.status})`, 409);
+  }
+  const app = await loadApplication(env, o.application_id);
+  if (!OFFER_APP_STATUSES.includes(app?.status)) return offerErr('application_not_ready', 409);
+  // C: reconcile ran above; an offer mail still unresolved blocks a new send (the index enforces it again).
+  const [pend, cr] = await Promise.all([
+    sb(`/rest/v1/offer_emails?offer_id=eq.${o.id}&kind=eq.offer&status=in.(sending,unknown)&select=id&limit=1`, env),
+    sb(`/rest/v1/candidates?id=eq.${o.candidate_id}&select=full_name,email&limit=1`, env),
+  ]);
+  if (!pend.ok) return err('db_error', 500);
+  if (pend.data?.length) return offerErr('send_pending', 409);
+  const cand = cr.data?.[0] || null;
+  const to = String(d.sent_to ?? cand?.email ?? '').trim().toLowerCase();
+  if (!EMAIL_RE.test(to)) return err('sent_to must be an email address', 400);
+  const cc = d.sent_cc === undefined || d.sent_cc === null ? await offerDefaultCc(env, x)
+    : (Array.isArray(d.sent_cc) ? d.sent_cc : String(d.sent_cc || '').split(/[,;\s]+/)).map(e => String(e).trim().toLowerCase()).filter(Boolean);
+  if (cc.length > 20 || cc.some(e => !EMAIL_RE.test(e))) return err('sent_cc must be up to 20 email addresses', 400);
+  const sender = await offerSender(env, x.o);
+  if (!sender) return offerErr('no_sender_mailbox', 409);
+  if (!o.pdf_path) return offerErr('pdf_missing', 409);
+  const pdf = await storageBytes(env, o.pdf_path);
+  if (!pdf) return offerErr('pdf_missing', 502);
+  if ((await sha256Hex(pdf)) !== o.pdf_sha256) return offerErr('pdf_hash_mismatch', 409);
+
+  const token = newLinkToken();
+  const validUntil = o.status === 'ready' ? sendValidUntil(o, istToday()) : o.valid_until;
+  const mail = renderOfferEmail({ candidateFirst: firstName(cand?.full_name), designation: o.designation, startDate: o.start_date,
+    validUntil, link: offerLinkUrl(env, token), revised: Number(o.revision) > 1, ownerName: sender.name });
+  // A: the link-bearing mail goes To the candidate only; the CC list gets a link-free copy after it is sent.
+  const split = splitOfferRecipients({ to, cc, sender: sender.email });
+  const res = await deliverOfferMail(env, { offer: o, kind: 'offer', sender, to: split.candidate.to, cc: [],
+    copyTo: split.copy?.cc || [], subject: offerSubject(o.designation), text: mail.text, html: mail.html,
+    attachments: [{ filename: `${o.offer_ref}-r${o.revision}.pdf`, mime: 'application/pdf', bytes: pdf }],
+    createdBy: auth.userId, tokenHash: await hashLinkToken(token) });
+  if (res.status === 'refused') return err(res.error, 400);
+  if (res.status === 'busy') return offerErr('send_pending', 409);
+  if (res.status === 'db_error') return err(`db_error: ${res.error}`, 500);
+  if (res.status === 'failed') {
+    return json({ ok: false, error: 'mail_failed', message: `${OFFER_COPY.mail_failed}: ${res.error}`, email_id: res.row.id }, 502);
+  }
+  if (res.status === 'sent') await afterOfferMailSent(env, res.row);   // copy + revoke older links + ready → sent
+  const [fresh, cpr] = await Promise.all([
+    loadOffer(env, o.id),
+    sb(`/rest/v1/offer_emails?parent_email_id=eq.${res.row.id}&kind=eq.offer_copy&select=id,status,cc_emails&order=created_at.desc&limit=1`, env),
+  ]);
+  const copy = rowsOf(cpr)[0] || null;
+  return ok({ id: o.id, status: (fresh || o).status, valid_until: (fresh || o).valid_until ?? validUntil,
+    email: { id: res.row.id, status: res.status, sender_email: sender.email, to_email: split.candidate.to, copy_to: res.row.copy_to },
+    copy: copy ? { id: copy.id, status: copy.status, cc_emails: copy.cc_emails } : null });
+}
+
+// The confirmation after a link acceptance. To = the to_email of the EXACT offer mail whose link was used
+// (offer_acceptances.token_hash); no CC and no link (A) — the CC list gets a link-free confirmation_copy. One per
+// offer (offer_emails_one_confirmation: a conflict = skip, never a second Gmail call — D). No certificate bytes →
+// a `failed` row and no Gmail call (F), retryable through resendOfferConfirmation.
+// → deliverOfferMail's result (+ copy) | { status: 'refused', error }.
+async function sendOfferConfirmation(env, o, createdBy) {
+  const [ar, opening, cr, dr] = await Promise.all([
+    sb(`/rest/v1/offer_acceptances?offer_id=eq.${o.id}&select=token_hash&limit=1`, env),
+    loadOpeningRow(env, o.opening_id),
+    sb(`/rest/v1/candidates?id=eq.${o.candidate_id}&select=full_name&limit=1`, env),
+    o.acceptance_doc_id ? sb(`/rest/v1/candidate_documents?id=eq.${o.acceptance_doc_id}&select=storage_path,file_name&limit=1`, env) : Promise.resolve({ ok: true, data: [] }),
+  ]);
+  const th = rowsOf(ar)[0]?.token_hash;
+  if (!th) return { status: 'refused', error: 'not_link_accepted' };
+  const lr = await sb(`/rest/v1/offer_emails?token_hash=eq.${th}&kind=eq.offer&select=id,to_email,copy_to&limit=1`, env);
+  const linkMail = rowsOf(lr)[0];
+  const to = String(linkMail?.to_email || '').trim().toLowerCase();
+  const sender = opening ? await offerSender(env, opening) : null;
+  if (!sender) return { status: 'refused', error: 'no_sender_mailbox' };
+  if (!EMAIL_RE.test(to)) return { status: 'refused', error: 'no recipient' };
+  const cand = rowsOf(cr)[0], doc = rowsOf(dr)[0];
+  const subject = offerSubject(o.designation);
+  const pdf = doc?.storage_path ? await storageBytes(env, doc.storage_path) : null;
+  if (!pdf) {
+    return deliverOfferMail(env, { offer: o, kind: 'confirmation', sender, to, subject, text: '', html: '', createdBy,
+      failWith: !doc ? 'The accepted offer document could not be found' : 'The accepted offer PDF could not be read from storage' });
+  }
+  const filename = doc.file_name || `${o.offer_ref}-r${o.revision}-accepted.pdf`;
+  const attachments = [{ filename, mime: 'application/pdf', bytes: pdf }];
+  const mail = renderConfirmationEmail({ candidateFirst: firstName(cand?.full_name), designation: o.designation, joinDate: o.start_date,
+    ownerName: sender.name });
+  const res = await deliverOfferMail(env, { offer: o, kind: 'confirmation', sender, to, cc: [], subject, text: mail.text, html: mail.html,
+    attachments, createdBy, copyTo: linkMail.copy_to || [] });
+  if (res.status === 'sent' && (linkMail.copy_to || []).length) {
+    try {
+      const cm = renderConfirmationCopyEmail({ candidateName: cand?.full_name || null, candidateEmail: to, designation: o.designation,
+        joinDate: o.start_date, staffUrl: staffOfferUrl(env, o.id) });
+      res.copy = await deliverOfferMail(env, { offer: o, kind: 'confirmation_copy', sender, to: sender.email,
+        cc: linkMail.copy_to.filter(e => e !== sender.email && e !== to), subject, text: cm.text, html: cm.html, attachments,
+        parentId: res.row.id, createdBy });
+    } catch (e) { console.error('[confirmation-copy]', e?.message || e); }
+  }
+  return res;
+}
+
+// An internal alert (decline / question / blocked acceptance): from the sender mailbox to itself, CC the reporting
+// manager + hr@, in the application's thread. A failure is recorded on the row, never thrown.
+async function sendOfferAlert(env, o, kind, { reason = null, text = null, proposedDate = null } = {}) {
+  try {
+    const opening = await loadOpeningRow(env, o.opening_id);
+    const sender = opening ? await offerSender(env, opening) : null;
+    if (!sender) return null;
+    const [mr, cr] = await Promise.all([
+      opening.reporting_manager_employee_id
+        ? sb(`/rest/v1/employees?id=eq.${opening.reporting_manager_employee_id}&select=work_email&limit=1`, env) : Promise.resolve({ data: [] }),
+      sb(`/rest/v1/candidates?id=eq.${o.candidate_id}&select=full_name&limit=1`, env),
+    ]);
+    const cc = [...new Set([String(mr.data?.[0]?.work_email || '').trim().toLowerCase(), ...OFFER_CC_ALWAYS])]
+      .filter(e => e && e !== sender.email && addressOk(e));
+    const mail = renderAlertEmail({ kind, candidateName: cr.data?.[0]?.full_name || null, offerRef: o.offer_ref, revision: o.revision,
+      reason, text, proposedDate, appUrl: `${podiumAppUrl(env)}/hiring/offer/?id=${o.id}` });
+    return await deliverOfferMail(env, { offer: o, kind: 'alert', sender, to: sender.email, cc, subject: offerSubject(o.designation),
+      text: mail.text, html: mail.html });
+  } catch (e) {
+    console.error('[offer-alert]', e?.message || e);
+    return null;
+  }
+}
+
+// POST resendOfferConfirmation {id} — an offer accepted through the link whose confirmation mail is missing or failed.
+async function resendOfferConfirmation(body, auth, env) {
+  const d = body.data || body;
+  const c = await offerCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { o, x } = c;
+  if (!canManageOffers(x.roles)) return err('forbidden', 403);
+  if (!env.GOOGLE_SA_JSON) return offerErr('mail_not_configured', 503);
+  if (o.status !== 'accepted') return errCode('invalid_transition', `Only an accepted offer gets a confirmation (this one is ${o.status})`, 409);
+  await reconcileOfferEmails(env, o);
+  const [ar, er] = await Promise.all([
+    sb(`/rest/v1/offer_acceptances?offer_id=eq.${o.id}&select=id&limit=1`, env),
+    sb(`/rest/v1/offer_emails?offer_id=eq.${o.id}&kind=eq.confirmation&status=in.(sending,sent,unknown)&select=id&limit=1`, env),
+  ]);
+  if (!ar.data?.length) return offerErr('not_link_accepted', 409);
+  if (er.data?.length) return offerErr('confirmation_exists', 409);
+  const res = await sendOfferConfirmation(env, o, auth.userId);
+  if (res.status === 'refused') return ['no_sender_mailbox', 'not_link_accepted'].includes(res.error) ? offerErr(res.error, 409) : err(res.error, 400);
+  if (res.status === 'busy') return offerErr('confirmation_exists', 409);
+  if (res.status === 'db_error') return err(`db_error: ${res.error}`, 500);
+  if (res.status === 'failed') return json({ ok: false, error: 'mail_failed', message: `${OFFER_COPY.mail_failed}: ${res.error}`, email_id: res.row.id }, 502);
+  return ok({ id: o.id, email: { id: res.row.id, status: res.status },
+    copy: res.copy?.row ? { id: res.copy.row.id, status: res.copy.status } : null });
+}
+
+// ── Staff: responses, joining documents, bank ────────────────────────────────
+
+// POST markOfferResponseSeen {response_id}
+async function markOfferResponseSeen(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.response_id)) return err('response_id required', 400);
+  const rr = await sb(`/rest/v1/offer_responses?id=eq.${d.response_id}&select=id,offer_id,seen_at&limit=1`, env);
+  const resp = rr.data?.[0];
+  if (!resp) return err('not_found', 404);
+  const c = await offerCtx(auth, env, resp.offer_id);
+  if (c.res) return c.res;
+  if (!canManageOffers(c.x.roles)) return err('forbidden', 403);
+  if (resp.seen_at) return ok({ id: resp.id, seen_at: resp.seen_at });
+  const r = await sb(`/rest/v1/offer_responses?id=eq.${resp.id}&seen_at=is.null`, env, { method: 'PATCH',
+    body: JSON.stringify({ seen_by: auth.userId, seen_at: nowIso() }) });
+  if (!r.ok) return offerDbError(r);
+  return ok({ id: resp.id, seen_at: r.data?.[0]?.seen_at || nowIso() });
+}
+
+// POST verifyCandidateDocument {id, verified} — HR ticks (or clears) a joining document after looking at it.
+async function verifyCandidateDocument(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!isUuid(d.id)) return err('id required', 400);
+  if (typeof d.verified !== 'boolean') return err('verified must be true or false', 400);
+  const dr = await sb(`/rest/v1/candidate_documents?id=eq.${d.id}&select=id,candidate_id,application_id,doc_type&limit=1`, env);
+  const doc = dr.data?.[0];
+  if (!doc) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const sc = await candidateScope(auth, me, env, doc.candidate_id);
+  if (!canSeeDocRow(doc.doc_type, doc.application_id, sc.docCtx)) return err('forbidden', 403);
+  const patch = d.verified ? { verified_by: auth.userId, verified_at: nowIso() } : { verified_by: null, verified_at: null };
+  const r = await sb(`/rest/v1/candidate_documents?id=eq.${doc.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return offerDbError(r);
+  await hiringEvents(env, auth, me, [{ candidate_id: doc.candidate_id, application_id: doc.application_id,
+    event_type: d.verified ? 'document_verified' : 'document_unverified', detail: { doc_type: doc.doc_type, document_id: doc.id } }]);
+  return ok({ id: doc.id, verified_by: patch.verified_by, verified_at: patch.verified_at });
+}
+
+// POST allowCandidateBankUpdate {candidate_id} — HR opens ONE change through the link, for 7 days.
+async function allowCandidateBankUpdate(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!isUuid(d.candidate_id)) return err('candidate_id required', 400);
+  const until = new Date(Date.now() + 7 * 86400000).toISOString();
+  const r = await sb(`/rest/v1/candidate_bank_details?candidate_id=eq.${d.candidate_id}&select=candidate_id,editable_until`, env, {
+    method: 'PATCH', body: JSON.stringify({ editable_until: until, reopen_by: auth.userId }) });
+  if (!r.ok) return offerDbError(r);
+  if (!r.data?.length) return offerErr('no_bank_details', 404);
+  const edges = await loadOrgEdges(env);
+  await hiringEvents(env, auth, callerEmployee(edges, auth.userId), [{ candidate_id: d.candidate_id, event_type: 'bank_update_allowed',
+    detail: { editable_until: until } }]);
+  return ok({ candidate_id: d.candidate_id, editable_until: until });
+}
+
+// POST revealCandidateBank {candidate_id} — the full account number, salary allow-list only (Finance enters it in
+// RazorpayX), logged.
+async function revealCandidateBank(body, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!isUuid(d.candidate_id)) return err('candidate_id required', 400);
+  const [br, cr] = await Promise.all([
+    sb(`/rest/v1/candidate_bank_details?candidate_id=eq.${d.candidate_id}&select=bank_account_number,bank_ifsc,bank_account_name,bank_name,submitted_at&limit=1`, env),
+    sb(`/rest/v1/candidates?id=eq.${d.candidate_id}&select=candidate_code&limit=1`, env),
+  ]);
+  const b = br.data?.[0];
+  if (!b) return offerErr('no_bank_details', 404);
+  await logCompAccess(auth, 'revealCandidateBank', null, cr.data?.[0]?.candidate_code || null, env, { candidate_id: d.candidate_id });
+  return ok({ candidate_id: d.candidate_id, ...b });
+}
+
+// GET getOfferResponses — unseen candidate responses on offers the caller can manage (dashboard card + Hiring page).
+async function getOfferResponses(url, auth, env) {
+  const r = await sb(`/rest/v1/offer_responses?seen_at=is.null&select=id,offer_id,application_id,kind,reason,text,proposed_join_date,created_at,`
+    + `offer:offer_id(id,offer_ref,revision,opening_id,candidate_id,designation,status)&order=created_at.desc&limit=200`, env);
+  if (!r.ok) return err('db_error', 500);
+  const rows = (r.data || []).filter(x => x.offer);
+  if (!rows.length) return ok({ responses: [] });
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const ops = await loadOpeningsWithRoles(auth, me, env, { ids: [...new Set(rows.map(x => x.offer.opening_id))] });
+  const manage = new Map(ops.filter(x => canManageOffers(x.roles)).map(x => [x.o.id, x.o]));
+  const mine = rows.filter(x => manage.has(x.offer.opening_id));
+  const cids = [...new Set(mine.map(x => x.offer.candidate_id))];
+  const cr = cids.length ? await sb(`/rest/v1/candidates?id=in.(${cids.join(',')})&select=id,full_name`, env) : { data: [] };
+  const names = Object.fromEntries((cr.data || []).map(x => [x.id, x.full_name]));
+  return ok({ responses: mine.map(x => ({
+    id: x.id, kind: x.kind, reason: x.reason, reason_label: x.reason ? DECLINE_REASONS[x.reason] || x.reason : null,
+    text: x.text, proposed_join_date: x.proposed_join_date, created_at: x.created_at,
+    offer_id: x.offer_id, offer_ref: x.offer.offer_ref, revision: x.offer.revision, offer_status: x.offer.status,
+    application_id: x.application_id, designation: x.offer.designation, candidate_name: names[x.offer.candidate_id] || null,
+    opening_code: manage.get(x.offer.opening_id)?.opening_code || null,
+  })) });
+}
+
+// GET getOfferMailCheck (super_admin) — D1 proof: mint a gmail.modify token AS the caller's own work mailbox and read
+// its profile. Sends nothing.
+async function getOfferMailCheck(url, auth, env) {
+  const gate = requireSuperAdmin(auth); if (gate) return gate;
+  if (!env.GOOGLE_SA_JSON) return offerErr('mail_not_configured', 503);
+  const er = await sb(`/rest/v1/employees?auth_user_id=eq.${auth.userId}&select=work_email&limit=1`, env);
+  const mailbox = String(er.data?.[0]?.work_email || '').trim().toLowerCase();
+  if (!addressOk(mailbox)) return err('your employee record has no work_email', 400);
+  let token;
+  try { token = await googleAccessToken(env, { scope: GMAIL_SCOPE, sub: mailbox }); }
+  catch (e) { return ok({ mailbox, token: false, error: String(e?.message || e).slice(0, 300), all_good: false }); }
+  const res = await fetch(`${GMAIL_BASE}/profile`, { headers: { Authorization: `Bearer ${token}` } });
+  const d = await res.json().catch(() => ({}));
+  return ok({ mailbox, scope: GMAIL_SCOPE, token: true, call: res.ok, status: res.status,
+    profile_email: d.emailAddress || null, error: res.ok ? null : d?.error?.message || null,
+    all_good: res.ok && String(d.emailAddress || '').toLowerCase() === mailbox });
+}
+
+// getOffer's O1 part: emails (never token_hash), responses, the acceptance evidence, the joining checklist, the bank.
+async function offerLinkExtras(env, auth, o, sal, canManage) {
+  const hr = isHr(auth);
+  const [er, rr, ar, dr, br] = await Promise.all([
+    sb(`/rest/v1/offer_emails?offer_id=eq.${o.id}&select=id,offer_id,kind,status,sender_email,to_email,cc_emails,copy_to,parent_email_id,subject,error,created_at,sent_at,link_revoked_at,reconcile_misses,token_hash&order=created_at.desc`, env),
+    sb(`/rest/v1/offer_responses?offer_id=eq.${o.id}&select=*&order=created_at.desc`, env),
+    sb(`/rest/v1/offer_acceptances?offer_id=eq.${o.id}&select=*&limit=1`, env),
+    // L: this application's documents, plus candidate-level ones (no application) — never another application's.
+    sb(`/rest/v1/candidate_documents?candidate_id=eq.${o.candidate_id}&doc_type=in.(${LINK_DOC_TYPE_KEYS.join(',')})`
+      + `&or=(application_id.eq.${o.application_id},application_id.is.null)`
+      + `&select=id,application_id,doc_type,title,file_name,source,uploaded_at,verified_at,verified_by&order=uploaded_at.asc`, env),
+    sb(`/rest/v1/candidate_bank_details?candidate_id=eq.${o.candidate_id}&select=bank_account_number,bank_ifsc,bank_account_name,bank_name,submitted_at,editable_until&limit=1`, env),
+  ]);
+  const all = rowsOf(er);
+  const emails = all.map(({ token_hash, ...e }) => ({ ...e, has_link: !!token_hash, link_live: e.kind === 'offer' && isLinkLive({ ...e, token_hash }, all) }));
+  // Free text can quote a figure → only for the salary chain (as detail.note).
+  const responses = rowsOf(rr).map(x => ({ id: x.id, kind: x.kind, reason: x.reason,
+    reason_label: x.reason ? DECLINE_REASONS[x.reason] || x.reason : null, text: sal ? x.text : null,
+    proposed_join_date: x.proposed_join_date, created_at: x.created_at, seen_at: x.seen_at, seen_by: x.seen_by }));
+  const a = rowsOf(ar)[0] || null;
+  const acceptance = a ? { id: a.id, typed_name: a.typed_name, accepted_at: a.accepted_at, ip: a.ip, confirmed_join_date: a.confirmed_join_date,
+    pdf_sha256: a.pdf_sha256, signed_doc_id: a.signed_doc_id, user_agent: canManage ? a.user_agent : null } : null;
+  // Existing visibility rule (docTier): ID / PAN / bank / address / relieving → HR; payslips → the salary chain;
+  // the rest → anyone who sees the offer. A viewer who may not see the file gets the count only.
+  const docs = rowsOf(dr);
+  const joining = LINK_DOC_TYPES.map(t => {
+    const files = docs.filter(x => x.doc_type === t.doc_type);
+    const tier = docTier(t.doc_type);
+    const visible = tier === 'hr' ? hr : tier === 'salary' ? sal : true;
+    return { doc_type: t.doc_type, label: t.label, required: t.required, count: files.length,
+      verified_count: files.filter(f => f.verified_at).length,
+      docs: visible ? files.map(f => ({ id: f.id, title: f.title, file_name: f.file_name, source: f.source, uploaded_at: f.uploaded_at,
+        verified_at: f.verified_at, verified_by: f.verified_by })) : null };
+  });
+  const b = rowsOf(br)[0] || null;
+  const bank = (hr || canComp(auth) || canManage) && b ? { bank_account_number: maskBankAccount(b.bank_account_number), bank_ifsc: b.bank_ifsc,
+    bank_account_name: b.bank_account_name, bank_name: b.bank_name, submitted_at: b.submitted_at, editable_until: b.editable_until,
+    editable: !!b.editable_until && Date.parse(b.editable_until) > Date.now() } : null;
+  return { emails, responses, acceptance, joining, bank, has_bank: !!b };
+}
+
+// ── Public: the candidate's link (/public/offer*) — no login, the token is the only credential ──
+const PUBLIC_COPY = {
+  link_invalid: LINK_INVALID,
+  confirm_required: 'Tick both boxes to accept',
+  name_mismatch: 'Type your full name exactly as it appears on the offer',
+  bad_reason: 'Pick a reason',
+  text_required: 'Write your question',
+  text_too_long: 'Please keep it under 2,000 characters',
+  bad_date: 'Pick a valid date',
+  question_cap: 'That is the most questions we can take today — we will reply to the ones you sent',
+  not_documents_step: 'Documents can be uploaded after you accept the offer',
+  bad_doc_type: 'Pick which document this is',
+  bad_file_type: 'Please upload a PDF, JPG or PNG',
+  bad_file_size: 'The file is empty or over 15 MB',
+  upload_not_found: 'We could not find that upload — please try again',
+  storage_check_failed: 'We could not check the upload right now — please try again',
+  path_refused: 'That upload does not belong to this offer',
+  upload_cap: 'That is the most files we can take here — please reply to our email',
+  upload_already_recorded: 'That file is already recorded',
+  bank_cap: 'That is the most bank submissions we can take here — please reply to our email',
+  bank_locked: 'Your bank details are already with us. To change them, ask the Legend of Toys team.',
+  bad_bank: 'Please check the highlighted fields',
+};
+const pubErr = (code, status, extra = {}) => json({ ok: false, error: code, message: PUBLIC_COPY[code] || LINK_INVALID, ...extra }, status);
+const clientIp = (request) => String(request.headers.get('CF-Connecting-IP') || '').slice(0, 100) || null;
+const clientUa = (request) => String(request.headers.get('User-Agent') || '').slice(0, 500) || null;
+
+// → { email, offer, hash, token } for a live link (D6), else null.
+async function offerLinkByToken(env, t) {
+  if (!linkTokenShapeOk(t)) return null;
+  const hash = await hashLinkToken(t);
+  const r = await sb(`/rest/v1/offer_emails?token_hash=eq.${hash}&kind=eq.offer&select=*&limit=1`, env);
+  if (!r.ok) throw new Error(`token lookup failed: ${r.status}`);
+  const e = r.data?.[0];
+  if (!e) return null;
+  const [sib, o] = await Promise.all([
+    sb(`/rest/v1/offer_emails?offer_id=eq.${e.offer_id}&kind=eq.offer&select=id,offer_id,kind,status,created_at,link_revoked_at`, env),
+    loadOffer(env, e.offer_id),
+  ]);
+  if (!sib.ok) throw new Error(`link lookup failed: ${sib.status}`);
+  if (!o || !isLinkLive(e, sib.data || [])) return null;
+  return { email: e, offer: o, hash, token: t };
+}
+
+async function linkCtx(env, link) {
+  let o = link.offer;
+  // I: a live link on a `ready` revision = its send has not settled. Settle it (reconcile + finishOfferSend), then
+  // re-read; still `ready` → linkState's "being prepared" notice.
+  if (o.status === 'ready') {
+    if (await reconcileOfferEmails(env, o)) o = (await loadOffer(env, o.id)) || o;
+    link.offer = o;
+  }
+  const [opening, cr] = await Promise.all([
+    loadOpeningRow(env, o.opening_id),
+    sb(`/rest/v1/candidates?id=eq.${o.candidate_id}&select=id,full_name&limit=1`, env),
+  ]);
+  const owner = opening ? await offerSender(env, opening) : null;
+  const st = linkState({ offer: o, today: istToday(), startPlus7: addDaysIso(o.start_date, LINK_DOC_OPEN_DAYS), ownerFirst: owner?.first || '' });
+  return { o, opening, candidate: cr.data?.[0] || null, owner, st };
+}
+
+// The page's view. A notice carries no letter, no name and no terms (D7).
+async function publicOfferView(env, link, extra = {}, ctx = null) {
+  const { o, candidate, owner, st } = ctx || await linkCtx(env, link);
+  if (st.mode === 'notice') return ok({ mode: 'notice', notice: st.notice, ...extra });
+  const common = { mode: st.mode, candidate_first_name: firstName(candidate?.full_name), designation: o.designation,
+    offer_ref: o.offer_ref, revision: o.revision, start_date: o.start_date, owner_first_name: owner?.first || null };
+  if (st.mode === 'respond') {
+    const [tr, sr, pdfUrl] = await Promise.all([
+      sb(`/rest/v1/offer_templates?id=eq.${o.template_id}&select=*&limit=1`, env),
+      o.signatory_id ? sb(`/rest/v1/offer_signatories?id=eq.${o.signatory_id}&select=display_name,phone,title&limit=1`, env) : Promise.resolve({ data: [] }),
+      o.pdf_path ? signedUrl(env, o.pdf_path, 600) : Promise.resolve(null),
+    ]);
+    let view = null;
+    try {
+      const tpl = tr.data?.[0];
+      view = tpl ? renderOfferText({ template: tpl, offer: { ...offerView(o, true), issue_date: o.issue_date || istToday() },
+        annexure: o.annexure, signatory: sr.data?.[0] || null, candidate }) : null;
+    } catch (_e) { view = null; }   // the PDF link still carries the letter
+    // H: `letter` = the renderOfferText object LetterPreview reads (title / letterhead / paragraphs / closing / footer);
+    // the annexure rides separately for AnnexureTable.
+    const letter = view ? { title: view.title, letterhead: view.letterhead, paragraphs: view.paragraphs, closing: view.closing,
+      footer: view.footer } : null;
+    return ok({ ...common, department: o.department_name || null, location: o.location || null, valid_until: o.valid_until,
+      letter, annexure: view?.annexure || null, pdf_url: pdfUrl, decline_reasons: declineReasonList(), ...extra });
+  }
+  // documents
+  const [dr, br] = await Promise.all([
+    sb(`/rest/v1/candidate_documents?candidate_id=eq.${o.candidate_id}&source=eq.candidate_link&doc_type=in.(${LINK_DOC_TYPE_KEYS.join(',')})`
+      + `&select=doc_type,file_name,uploaded_at,verified_at&order=uploaded_at.asc`, env),
+    sb(`/rest/v1/candidate_bank_details?candidate_id=eq.${o.candidate_id}&select=bank_account_number,bank_ifsc,bank_account_name,bank_name,submitted_at,editable_until&limit=1`, env),
+  ]);
+  if (!dr.ok || !br.ok) throw new Error('public offer read failed');
+  const rows = dr.data || [];
+  const b = br.data?.[0] || null;
+  return ok({ ...common, accepted_at: o.accepted_at,
+    docs: LINK_DOC_TYPES.map(t => {
+      const docs = rows.filter(r => r.doc_type === t.doc_type).map(r => ({ file_name: r.file_name, uploaded_at: r.uploaded_at, verified: !!r.verified_at }));
+      return { ...t, count: docs.length, uploaded: docs.length > 0, verified: docs.some(f => f.verified), docs };
+    }),
+    bank: b ? { bank_account_number: maskBankAccount(b.bank_account_number), bank_ifsc: b.bank_ifsc, bank_account_name: b.bank_account_name,
+      bank_name: b.bank_name, submitted_at: b.submitted_at } : null,
+    bank_editable: !b || (!!b.editable_until && Date.parse(b.editable_until) > Date.now()),
+    docs_open_until: addDaysIso(o.start_date, LINK_DOC_OPEN_DAYS), ...extra });
+}
+
+async function handlePublicOffer(request, url, env) {
+  const sub = url.pathname.replace(/\/+$/, '');
+  if (sub === '/public/offer') {
+    if (request.method !== 'GET') return err('method_not_allowed', 405);
+    const link = await offerLinkByToken(env, url.searchParams.get('t'));
+    return link ? publicOfferView(env, link) : pubErr('link_invalid', 404);
+  }
+  // Every action is POST: mail scanners follow GET links and must never accept an offer.
+  if (request.method !== 'POST') return err('method_not_allowed', 405);
+  let body;
+  try { body = await request.json(); } catch { return err('bad_json', 400); }
+  const link = await offerLinkByToken(env, body?.t);
+  if (!link) return pubErr('link_invalid', 404);
+  const ctx = await linkCtx(env, link);
+  const { o, candidate, st } = ctx;
+  const ip = clientIp(request), ua = clientUa(request);
+  const reload = async (extra = {}) => {
+    const fresh = await loadOffer(env, o.id);
+    return publicOfferView(env, { ...link, offer: fresh || o }, extra);
+  };
+
+  if (sub === '/public/offer/accept') {
+    if (o.status === 'accepted' || st.mode !== 'respond') return publicOfferView(env, link, {}, ctx);   // idempotent
+    if (body.agree !== true || body.confirm_join !== true) return pubErr('confirm_required', 422);
+    const typed = String(body.typed_name ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!namesMatch(typed, candidate?.full_name)) return pubErr('name_mismatch', 422);
+    const pdf = await storageBytes(env, o.pdf_path);
+    if (!pdf || (await sha256Hex(pdf)) !== o.pdf_sha256) throw new Error('issued pdf unavailable or changed');
+    const acceptedAt = nowIso();
+    const lines = certificateLines({ offerRef: o.offer_ref, revision: o.revision, candidateName: candidate.full_name, typedName: typed,
+      acceptedAtIst: istStamp(acceptedAt), joinDate: o.start_date, ip, userAgent: ua, pdfSha256: o.pdf_sha256,
+      tokenHashPrefix: link.hash.slice(0, 12) });
+    const signed = await appendCertificatePage(pdf, lines, { when: new Date(acceptedAt) });
+    const ssha = await sha256Hex(signed);
+    // B: a per-attempt nonce — this request's object is this request's alone. No upsert; any refusal = not ours.
+    const path = acceptedPdfPath(o.application_id, o.offer_ref, o.revision, ssha, newPathNonce());
+    const up = await storageFetch(`/object/${DOC_BUCKET}/${path}`, env, { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: signed });
+    if (!up.ok) throw new Error(`accepted pdf store failed: ${up.status}`);
+    const r = await hiringRpc(env, 'offer_link_accept', {
+      offer_id: o.id, token_hash: link.hash, typed_name: typed, confirmed_join_date: o.start_date, accepted_at: acceptedAt,
+      ip, user_agent: ua, pdf_sha256: o.pdf_sha256, today: istToday(),
+      signed_doc: { storage_path: path, file_name: `${o.offer_ref}-r${o.revision}-accepted.pdf`, mime_type: 'application/pdf',
+        file_size: signed.length, title: `${o.offer_ref} r${o.revision} — accepted through the link` },
+    });
+    if (!r.ok) {
+      // B: delete this request's own object, and only while no document row points at it.
+      const ref = await sb(`/rest/v1/candidate_documents?storage_path=eq.${encodeURIComponent(path)}&select=id&limit=1`, env);
+      if (ref.ok && Array.isArray(ref.data) && !ref.data.length) {
+        const seg = path.split('/').map(encodeURIComponent).join('/');
+        await storageFetch(`/object/${DOC_BUCKET}/${seg}`, env, { method: 'DELETE' }).catch(() => null);
+      }
+      const code = linkDbErrorCode(r.data);
+      if (code === 'headcount_full' || code === 'opening_closed') {
+        // D5 / G: one blocked row per offer (offer_responses_one_blocked); the alert goes only with the insert that won.
+        const ins = await sb(`/rest/v1/offer_responses`, env, { method: 'POST', body: JSON.stringify([{
+          offer_id: o.id, application_id: o.application_id, kind: 'accept_blocked', ip, user_agent: ua }]) });
+        if (ins.ok && ins.data?.[0]?.id) await sendOfferAlert(env, o, 'accept_blocked');
+        else if (!ins.ok && ins.data?.code !== '23505') console.error('[accept-blocked]', ins.status);
+        return ok({ mode: 'notice', notice: HEADCOUNT_FULL_NOTICE });
+      }
+      if (code === 'link_dead') return pubErr('link_invalid', 404);
+      if (['offer_not_open', 'offer_expired', 'stale', 'not_latest', 'conflict', 'pdf_changed', 'join_date_mismatch'].includes(code)) return reload();
+      throw new Error(`offer_link_accept failed: ${code || r.status}`);
+    }
+    const fresh = (await loadOffer(env, o.id)) || o;
+    try { await sendOfferConfirmation(env, fresh, null); }
+    catch (e) { console.error('[offer-confirmation]', e?.message || e); }   // recorded on the row; never fails the acceptance
+    return publicOfferView(env, { ...link, offer: fresh });
+  }
+
+  if (sub === '/public/offer/decline' || sub === '/public/offer/question') {
+    const kind = sub.endsWith('decline') ? 'decline' : 'question';
+    if (st.mode !== 'respond') return publicOfferView(env, link, {}, ctx);
+    const text = String(body.text ?? '').trim();
+    if (text.length > TEXT_MAX) return pubErr('text_too_long', 422);
+    if (kind === 'decline' && !DECLINE_REASONS[body.reason]) return pubErr('bad_reason', 422);
+    if (kind === 'question' && !text) return pubErr('text_required', 422);
+    const proposed = kind === 'question' && body.proposed_join_date ? String(body.proposed_join_date) : null;
+    if (proposed && !isIsoDate(proposed)) return pubErr('bad_date', 422);
+    const r = await hiringRpc(env, 'offer_link_respond', { offer_id: o.id, token_hash: link.hash, kind,
+      reason: kind === 'decline' ? body.reason : null, text: text || null, proposed_join_date: proposed, ip, user_agent: ua, today: istToday() });
+    if (!r.ok) {
+      const code = linkDbErrorCode(r.data);
+      if (code === 'link_dead') return pubErr('link_invalid', 404);
+      if (code === 'question_cap') return pubErr('question_cap', 429);
+      if (['bad_reason', 'text_required', 'text_too_long'].includes(code)) return pubErr(code, 422);
+      if (['offer_not_open', 'offer_expired', 'stale'].includes(code)) return reload();
+      throw new Error(`offer_link_respond failed: ${code || r.status}`);
+    }
+    await sendOfferAlert(env, o, kind, { reason: kind === 'decline' ? body.reason : null, text: text || null, proposedDate: proposed });
+    return kind === 'decline' ? reload({ submitted: 'decline' }) : publicOfferView(env, link, { submitted: 'question' }, ctx);
+  }
+
+  // ── The documents step (accepted, until start_date + 7) ──
+  if (st.mode !== 'documents') return pubErr('not_documents_step', 409);
+
+  if (sub === '/public/offer/upload-url') {
+    if (!LINK_DOC_TYPE_KEYS.includes(body.doc_type)) return pubErr('bad_doc_type', 422);
+    if (!LINK_DOC_MIMES.includes(body.mime) || fileOk(body.file_name, ['pdf', 'jpg', 'jpeg', 'png'])) return pubErr('bad_file_type', 422);
+    // E: reserve the slot first (atomic, ≤ 30 per offer under the offer lock), then mint the URL for that path only.
+    const path = candidateLinkDocPath(o.candidate_id, body.doc_type, body.file_name);
+    const rv = await hiringRpc(env, 'offer_link_reserve_upload', { offer_id: o.id, candidate_id: o.candidate_id, storage_path: path, doc_type: body.doc_type });
+    if (!rv.ok) {
+      if (linkDbErrorCode(rv.data) === 'upload_cap') return pubErr('upload_cap', 409);
+      throw new Error(`upload reserve failed: ${linkDbErrorCode(rv.data) || rv.status}`);
+    }
+    return signUpload(path, env);
+  }
+
+  if (sub === '/public/offer/upload-done') {
+    if (!LINK_DOC_TYPE_KEYS.includes(body.doc_type)) return pubErr('bad_doc_type', 422);
+    if (checkCandidateLinkDocPath(body.storage_path, o.candidate_id, body.doc_type)) return pubErr('path_refused', 403);
+    // E: only a path reserved through THIS offer's upload-url, and only once.
+    const rr = await sb(`/rest/v1/offer_link_uploads?storage_path=eq.${encodeURIComponent(body.storage_path)}&offer_id=eq.${o.id}`
+      + `&doc_type=eq.${body.doc_type}&select=id,completed_at&limit=1`, env);
+    if (!rr.ok) throw new Error('reservation read failed');
+    const resv = rr.data?.[0];
+    if (!resv) return pubErr('path_refused', 403);
+    if (resv.completed_at) return pubErr('upload_already_recorded', 409);
+    // Size + type come from storage, not from the request.
+    const so = checkStoredObject(await storageHead(env, body.storage_path));
+    if (so.error) return pubErr(so.error, so.error === 'storage_check_failed' ? 502 : 422);
+    if (!LINK_DOC_MIMES.includes(so.mime)) return pubErr('bad_file_type', 422);
+    // Claim the completion atomically; a second upload-done for the same path loses here.
+    const claim = await sb(`/rest/v1/offer_link_uploads?id=eq.${resv.id}&completed_at=is.null&select=id`, env, {
+      method: 'PATCH', body: JSON.stringify({ completed_at: nowIso() }) });
+    if (!claim.ok) throw new Error('reservation claim failed');
+    if (!claim.data?.length) return pubErr('upload_already_recorded', 409);
+    const label = LINK_DOC_TYPES.find(t => t.doc_type === body.doc_type)?.label || body.doc_type;
+    const r = await sb(`/rest/v1/candidate_documents`, env, { method: 'POST', body: JSON.stringify([{
+      candidate_id: o.candidate_id, application_id: o.application_id, doc_type: body.doc_type, title: `${label} (from the candidate)`,
+      storage_path: body.storage_path, file_name: String(body.file_name || '').slice(0, 200) || String(body.storage_path).split('/').pop(),
+      mime_type: so.mime, file_size: so.size, uploaded_by: null, source: 'candidate_link' }]) });
+    if (!r.ok) {
+      if (r.data?.code === '23505') return pubErr('upload_already_recorded', 409);
+      // Give the slot back so the candidate can retry the same upload.
+      await sb(`/rest/v1/offer_link_uploads?id=eq.${resv.id}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ completed_at: null }) });
+      throw new Error(`doc record failed: ${r.status}`);
+    }
+    await sb(`/rest/v1/application_events`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify([{
+      candidate_id: o.candidate_id, application_id: o.application_id, event_type: 'document_added',
+      detail: { doc_type: body.doc_type, source: 'candidate_link' } }]) });
+    return publicOfferView(env, link, {}, ctx);
+  }
+
+  if (sub === '/public/offer/bank') {
+    const v = validateCandidateBank(body);
+    if (!v.ok) return pubErr('bad_bank', 422, { errors: v.errors });
+    const er = await sb(`/rest/v1/application_events?application_id=eq.${o.application_id}&event_type=eq.bank_details_received&select=id&limit=${LINK_BANK_CAP}`, env);
+    if (!er.ok) throw new Error('bank cap read failed');
+    if ((er.data || []).length >= LINK_BANK_CAP) return pubErr('bank_cap', 429);
+    const fields = { ...v.clean, submitted_at: nowIso(), offer_id: o.id };
+    // A forwarded link must not be able to change where pay goes: both writes decide in the database.
+    const first = await sb(`/rest/v1/candidate_bank_details?on_conflict=candidate_id`, env, {
+      method: 'POST', prefer: 'resolution=ignore-duplicates,return=representation',
+      body: JSON.stringify([{ candidate_id: o.candidate_id, ...fields }]) });
+    if (!first.ok) throw new Error(`bank write failed: ${first.status}`);
+    let isFirst = true;
+    if (!first.data?.[0]) {
+      isFirst = false;
+      // Already on file: only inside an HR "allow update" window, used up by this change.
+      const again = await sb(`/rest/v1/candidate_bank_details?candidate_id=eq.${o.candidate_id}&editable_until=gt.${encodeURIComponent(nowIso())}&select=candidate_id`, env, {
+        method: 'PATCH', body: JSON.stringify({ ...fields, editable_until: null, reopen_by: null }) });
+      if (!again.ok) throw new Error(`bank update failed: ${again.status}`);
+      if (!again.data?.[0]) return pubErr('bank_locked', 409);
+    }
+    await sb(`/rest/v1/application_events`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify([{
+      candidate_id: o.candidate_id, application_id: o.application_id, event_type: 'bank_details_received',
+      detail: { offer_id: o.id, first: isFirst } }]) });   // no numbers, ever
+    return publicOfferView(env, link, {}, ctx);
+  }
+
+  return err('not_found', 404);
 }
 
 // ── Templates + signatories (salary allow-list or podium_admin) ──────────────
@@ -5646,7 +6516,8 @@ async function confirmJoining(body, auth, env) {
   if (app.status === 'joined') {
     if (!wa?.employee_id) return j1Err('not_accepted');
     const r = await hiringRpc(env, 'hiring_confirm_joining', { application_id: app.id, employee_id: wa.employee_id, ...actor });
-    return r.ok ? ok({ ...(r.data || {}), ...(await onboardingAfterJoining(env, wa.employee_id, auth.userId)) }) : j1DbError(r);
+    return r.ok ? ok({ ...(r.data || {}), ...(await onboardingAfterJoining(env, wa.employee_id, auth.userId)),
+      ...(await copyCandidateBankOnJoining(env, app.candidate_id, wa.employee_id)) }) : j1DbError(r);
   }
   if (app.status !== 'accepted') return j1Err('not_accepted');
   if (!wa || wa.status !== 'created') return j1Err('no_work_account');
@@ -5700,7 +6571,31 @@ async function confirmJoining(body, auth, env) {
     documents: docs.map(({ src, ...rest }) => rest), ...actor,
   });
   if (!r.ok) return j1DbError(r);
-  return ok({ ...(r.data || {}), ...(await onboardingAfterJoining(env, empId, auth.userId)) });
+  return ok({ ...(r.data || {}), ...(await onboardingAfterJoining(env, empId, auth.userId)),
+    ...(await copyCandidateBankOnJoining(env, app.candidate_id, empId)) });
+}
+
+// O1 (D3): the bank details the candidate gave through the offer link → employee_private, ONLY when that row has
+// no account yet (a first fill, not a change request — a later change still goes through profile_change_requests).
+// Never fails the joining: a problem comes back as bank_copy_warning.
+async function copyCandidateBankOnJoining(env, candidateId, employeeId) {
+  try {
+    const br = await sb(`/rest/v1/candidate_bank_details?candidate_id=eq.${candidateId}&select=bank_account_number,bank_ifsc,bank_account_name&limit=1`, env);
+    if (!br.ok) return { bank_copied: false, bank_copy_warning: 'db_error' };
+    const b = br.data?.[0];
+    if (!b) return { bank_copied: false };
+    const fields = { bank_account_number: b.bank_account_number, bank_ifsc: b.bank_ifsc, bank_account_name: b.bank_account_name };
+    const ins = await sb(`/rest/v1/employee_private?on_conflict=employee_id`, env, { method: 'POST',
+      prefer: 'resolution=ignore-duplicates,return=representation', body: JSON.stringify([{ employee_id: employeeId, ...fields }]) });
+    if (!ins.ok) return { bank_copied: false, bank_copy_warning: 'db_error' };
+    if (ins.data?.length) return { bank_copied: true };
+    const up = await sb(`/rest/v1/employee_private?employee_id=eq.${employeeId}&bank_account_number=is.null`, env, {
+      method: 'PATCH', body: JSON.stringify(fields) });
+    if (!up.ok) return { bank_copied: false, bank_copy_warning: 'db_error' };
+    return { bank_copied: !!up.data?.length };
+  } catch (_e) {
+    return { bank_copied: false, bank_copy_warning: 'exception' };
+  }
 }
 
 // J2 hook (decision 5): start the joiner's onboarding right after the joining commits. Best-effort — a failure
@@ -7174,6 +8069,8 @@ const GET_ACTIONS = {
   getCandidates, getCandidate, getCandidateDocumentUrl, findCandidateDuplicates,
   // Hiring C3 — offers
   getOfferSetup, getOffers, getOffer, getOfferPdfUrl, getOfferTemplates,
+  // Hiring O1 — offer email + link (getOfferMailCheck = super_admin)
+  getOfferResponses, getOfferMailCheck,
   // Hiring J1 — work accounts (podium_view required: none of these is self-serve)
   getWorkAccount, checkWorkEmail,
   // X1 — exits (getExit is self-serve, self-scoped by exitCtx; the rest need podium_view)
@@ -7221,6 +8118,9 @@ const POST_ACTIONS = {
   // Hiring C3 — offers
   previewOffer, createOffer, updateOfferDraft, submitOffer, decideOffer, markOfferSent, recordOfferAcceptance,
   recordOfferDecline, withdrawOffer, createOfferDocUploadUrl, previewOfferTemplate, saveOfferTemplate, saveSignatory,
+  // Hiring O1 — offer email + link
+  sendOfferEmail, resendOfferConfirmation, markOfferResponseSeen, verifyCandidateDocument, allowCandidateBankUpdate,
+  revealCandidateBank,
   // Hiring J1 — work accounts + confirm joining (podium_view required: none of these is self-serve)
   createWorkAccount, resetWorkAccountPassword, confirmJoining, markNoShow, suspendWorkAccount,
   // X1 — exits (startExit is self-serve, self-scoped by exitCtx; the rest need podium_view)
@@ -7261,6 +8161,8 @@ const SELF_SERVE_GET = new Set([
   // Hiring C3 — offers self-scope the same way (opening chain + snapshotted offer approver); the
   // template admin reads are gated inside to the salary allow-list / podium_admin.
   'getOfferSetup', 'getOffers', 'getOffer', 'getOfferPdfUrl', 'getOfferTemplates',
+  // Hiring O1 — getOfferResponses filters to the offers the caller manages (canManageOffers per opening).
+  'getOfferResponses',
   // X1 — your own exit (Resign) / your reports' exits; exitCtx self-scopes (self, manager chain, HR).
   // getMyTeamExits = the caller's own chain only (the /me "Your team" list).
   'getExit', 'getMyTeamExits',
@@ -7292,6 +8194,9 @@ const SELF_SERVE_POST = new Set([
   // Hiring C3 — offers (see SELF_SERVE_GET).
   'previewOffer', 'createOffer', 'updateOfferDraft', 'submitOffer', 'decideOffer', 'markOfferSent', 'recordOfferAcceptance',
   'recordOfferDecline', 'withdrawOffer', 'createOfferDocUploadUrl', 'previewOfferTemplate', 'saveOfferTemplate', 'saveSignatory',
+  // Hiring O1 — send / resend / mark seen self-scope via offerCtx + canManageOffers; revealCandidateBank is
+  // requireComp inside (a comp-only user need not hold podium_view). verify / allow-update are requireHr (not here).
+  'sendOfferEmail', 'resendOfferConfirmation', 'markOfferResponseSeen', 'revealCandidateBank',
   // X1 — Resign (self) / start a report's exit (manager chain) / tick manager lines; exitCtx self-scopes and
   // canTickItem limits a manager to owner='manager' lines (exit_update_item re-checks).
   'startExit', 'updateExitItem',
@@ -7341,6 +8246,15 @@ export default {
 
     if (url.pathname === '/health' || url.pathname === '/healthz') {
       return ok({ service: 'podiumops', time: nowIso() });
+    }
+
+    // O1 — the candidate's offer link: no login, the token is the credential. Before the JWT gate.
+    if (url.pathname.startsWith('/public/offer')) {
+      try { return await handlePublicOffer(request, url, env); }
+      catch (e) {
+        console.error('[public-offer]', e?.message || e);
+        return err('Something went wrong. Please try again.', 500);
+      }
     }
 
     if (request.method === 'GET')  return handleGet(url, request, env);

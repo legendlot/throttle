@@ -6,6 +6,8 @@ import { Spinner } from '@throttle/ui';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import { labelOf, EMPLOYMENT_TYPES, tenure } from '../../../lib/format.js';
 import { Avatar, KpiTile, card, cardLabel } from '../../../components/ui.js';
+import { fmtDateTime } from '../../../lib/hiring.js';
+import { RESPONSE_KIND } from '../../../components/OfferBits.js';
 import { ProfileBanner } from '../../../components/OnboardingBits.js';
 
 const BAR_COLS = ['#F2CD1A', '#9fb0ff', '#4ade80', '#fb923c', '#fbbf24', '#ff8a8a'];
@@ -15,6 +17,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const [emps, setEmps] = useState(null);
   const [depts, setDepts] = useState([]);
+  const [replies, setReplies] = useState([]);   // O1: open candidate responses (caller's offers only)
 
   useEffect(() => {
     if (!session) return;
@@ -22,6 +25,9 @@ export default function DashboardPage() {
       podiumopsGet('getEmployees', { status: 'all', limit: 2000 }, session),
       podiumopsGet('getDepartments', {}, session).catch(() => ({ departments: [] })),
     ]).then(([e, d]) => { setEmps(e.employees || []); setDepts(d.departments || []); });
+    podiumopsGet('getOfferResponses', {}, session)
+      .then(r => setReplies(Array.isArray(r) ? r : (r?.responses || [])))
+      .catch(() => setReplies([]));
   }, [session]);
 
   if (!emps) return <Spinner />;
@@ -55,6 +61,20 @@ export default function DashboardPage() {
         <KpiTile label="Notice" value={byStatus.notice || 0} sub={(byStatus.notice || 0) ? 'serving notice' : 'none'} subColor="var(--bad-fg)" />
         <KpiTile label="New · 30d" value={newCount} sub={newCount ? 'onboarding' : 'none'} subColor="var(--green-bright)" />
       </div>
+
+      {replies.length > 0 && (
+        <div style={{ ...card, marginBottom: 14 }}>
+          <div style={cardLabel}>Candidate responses</div>
+          {replies.map(r => (
+            <div key={r.id} onClick={() => router.push(`/hiring/offer/?id=${r.offer_id}`)}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: 13, cursor: 'pointer', flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, color: 'var(--t1)' }}>{r.candidate_name || r.offer_ref}</span>
+              <span style={{ color: 'var(--t-body)' }}>{RESPONSE_KIND[r.kind] || r.kind}{r.reason ? ` · ${String(r.reason).replace(/_/g, ' ')}` : ''}</span>
+              <span className="num" style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--yellow)' }}>{fmtDateTime(r.created_at)}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Card grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 14 }}>

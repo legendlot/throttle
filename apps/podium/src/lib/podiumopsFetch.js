@@ -10,7 +10,7 @@ function token(session) {
   return typeof session === 'string' ? session : session?.access_token;
 }
 
-const PD_URL = process.env.NEXT_PUBLIC_PODIUMOPS_URL || 'https://podiumops.afshaan.workers.dev';
+export const PD_URL = process.env.NEXT_PUBLIC_PODIUMOPS_URL || 'https://podiumops.afshaan.workers.dev';
 
 export async function podiumopsGet(action, params = {}, session) {
   const clean = {};
