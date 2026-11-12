@@ -85,6 +85,12 @@ import {
   maskAccount as maskBankAccount, certificateLines, istStamp, renderOfferCopyEmail, renderConfirmationCopyEmail,
   splitOfferRecipients, threadKindsFor, reconcileDue, reconcileDecision, newPathNonce, acceptedPdfPath,
 } from './offerlink.js';   // O1 offer email + acceptance link (test/offerlink.test.mjs)
+import {
+  PANEL_DOC_TYPES, FEEDBACK_OPEN_STATUSES, MAX_PANEL, CANCEL_REASON_MAX,
+  cleanRoundName, cleanScorecard, cleanPanelIds, parseScheduledAt, cleanInterviewFields, dueAt, canSchedule, verdictMove,
+  verdictBlock, checkFeedback, feedbackBlock, remindAllowed, panelView, interviewSummary, myInterviewBuckets,
+  panelDocs, buildReminderMail, reminderMessageId, interviewDbErrorCode, panelSelfBlock, seatState,
+} from './interviews.js';   // O2 interview rounds + feedback (test/interviews.test.mjs)
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 
@@ -487,11 +493,12 @@ const EMP_EMBED =
 async function getMe(url, auth, env) {
   const edges = await loadOrgEdges(env);
   const me = callerEmployee(edges, auth.userId);
-  const [sr, hiringOn, canCreateOpening, googleAdmin] = await Promise.all([
+  const [sr, hiringOn, canCreateOpening, googleAdmin, panelOn] = await Promise.all([
     sb(`/rest/v1/settings?id=eq.1&select=comp_vault_enabled,min_tenure_days,exit_notice_days&limit=1`, env),
     hiringAccess(auth, me, env),
     hasPerm(auth, 'podium_hiring') ? Promise.resolve(true) : hasActiveReports(me, env),
     isGoogleAdmin(auth, env),
+    panelSeat(me, env),
   ]);
   return ok({
     userId: auth.userId,
@@ -503,12 +510,14 @@ async function getMe(url, auth, env) {
     // podium_hiring_access is the same kind of display flag (nav only); every hiring action self-scopes.
     // podium_offer_templates (nav only) mirrors canAdminOfferTemplates: salary allow-list or podium_admin.
     // podium_google_admin (display only) = podium.google_admin_access (J1, L3); every J1 handler re-checks.
+    // podium_interviews_access (O2 D9, nav only) = a seat on any non-cancelled interview panel; the panel actions
+    // self-scope on the caller's own panel row. It does NOT feed podium_hiring_access (a pure panelist sees only My interviews).
     permissions: { ...(auth.permissions || {}), podium_super_admin: !!auth.isSuperAdmin, podium_hiring_access: hiringOn,
-      podium_offer_templates: canComp(auth) || isAdmin(auth), podium_google_admin: googleAdmin },
+      podium_offer_templates: canComp(auth) || isAdmin(auth), podium_google_admin: googleAdmin, podium_interviews_access: panelOn },
     employee_id: me?.id || null,
     settings: sr.data?.[0] || { comp_vault_enabled: false, min_tenure_days: 90, exit_notice_days: 30 },
     tier: { admin: isAdmin(auth), hr: isHr(auth), comp: canComp(auth), super_admin: !!auth.isSuperAdmin },
-    hiring: { access: hiringOn, can_create: !!canCreateOpening },
+    hiring: { access: hiringOn, can_create: !!canCreateOpening, interviews: panelOn },
   });
 }
 
@@ -3742,7 +3751,7 @@ async function getHiringLookups(url, auth, env) {
   const me = callerEmployee(edges, auth.userId);
   if (!(await hiringAccess(auth, me, env))) return err('forbidden', 403);
   const [er, dr, rr, canCreate] = await Promise.all([
-    sb(`/rest/v1/employees?status=neq.exited&select=id,employee_code,full_name,job_title,department_id&order=full_name.asc&limit=2000`, env),
+    sb(`/rest/v1/employees?status=neq.exited&select=id,employee_code,full_name,job_title,department_id,status,auth_user_id&order=full_name.asc&limit=2000`, env),
     sb(`/rest/v1/departments?active=eq.true&select=id,name&order=name.asc&limit=500`, env),
     sb(`/rest/v1/job_roles?active=eq.true&select=id,role_code,title,department_id,job_description,salary_band_max&order=title.asc&limit=1000`, env),
     hasPerm(auth, 'podium_hiring') ? Promise.resolve(true) : hasActiveReports(me, env),
@@ -3751,7 +3760,8 @@ async function getHiringLookups(url, auth, env) {
   return ok({
     me: me ? { id: me.id } : null,
     can_create: !!canCreate,
-    employees: er.data || [],
+    // O2: can_interview = an active employee with a Podium login (the panel rule, D3). The login id stays here.
+    employees: (er.data || []).map(({ auth_user_id, status, ...e }) => ({ ...e, can_interview: status === 'active' && !!auth_user_id })),
     departments: dr.data || [],
     job_roles: (rr.data || []).map(r => ({
       id: r.id, role_code: r.role_code, title: r.title, department_id: r.department_id,
@@ -3834,6 +3844,16 @@ async function getOpening(url, auth, env) {
     // C3: each application's latest offer revision — status only (no figures) for the candidate rows.
     sb(`/rest/v1/offers?opening_id=eq.${id}&select=application_id,offer_ref,revision,status&order=revision.desc`, env),
   ]);
+  // O2: the round plan + a per-application interview line (count, next time, feedback owed — no content).
+  const [rounds, ivr] = await Promise.all([
+    openingRounds(env, [id]),
+    sb(`/rest/v1/interviews?opening_id=eq.${id}&select=id,application_id,status,scheduled_at`, env),
+  ]);
+  // rowsOf: a failed read (e.g. 0014 not applied yet) is no rows, never a 500.
+  const ivRows = rowsOf(ivr);
+  const ivPanel = await sbInChunks(env, ivRows.map(i => i.id),
+    (ids) => `/rest/v1/interview_panel?interview_id=in.(${ids.join(',')})&select=interview_id,due_at,submitted_at`);
+  const ivSummary = interviewSummary(ivRows, ivPanel);
   const latestOffer = {};
   for (const o of (ofr.data || [])) if (!latestOffer[o.application_id]) latestOffer[o.application_id] = o;
   if (!jr.ok || !br.ok || !ar.ok) return err('db_error', 500);
@@ -3845,7 +3865,8 @@ async function getOpening(url, auth, env) {
     const base = { id: a.id, candidate: a.candidate, candidate_id: a.candidate_id, status: a.status, source: a.source,
       source_detail: a.source_detail, notice_period_days: a.notice_period_days, outcome_reason: redactReason(a.outcome_reason, sal),
       moved_to_application_id: a.moved_to_application_id, created_at: a.created_at, closed_at: a.closed_at,
-      offer: latestOffer[a.id] ? { offer_ref: latestOffer[a.id].offer_ref, revision: latestOffer[a.id].revision, status: latestOffer[a.id].status } : null };
+      offer: latestOffer[a.id] ? { offer_ref: latestOffer[a.id].offer_ref, revision: latestOffer[a.id].revision, status: latestOffer[a.id].status } : null,
+      interviews_summary: ivSummary[a.id] || { count: 0, next_at: null, pending_feedback: 0 } };
     return sal ? { ...base, current_ctc: numOrNull(a.current_ctc), expected_ctc: numOrNull(a.expected_ctc) } : base;
   });
   // Approver: the pending request's snapshot, else who a request made now would go to.
@@ -3874,6 +3895,7 @@ async function getOpening(url, auth, env) {
     applications,
     events: (evr.data || []).map(e => redactEvent(e, sal)),
     approver,
+    rounds,
   });
 }
 
@@ -3988,6 +4010,14 @@ async function getCandidate(url, auth, env) {
       : Promise.resolve({ data: [] }),
   ]);
   const offersAll = await expireDueOffers(env, auth, me, ofr.data || []);
+  // O2: each visible application's interviews (same shape as getApplicationInterviews) + the active round plan of
+  // the openings the caller manages (for the Schedule form).
+  const rolesByOpening = Object.fromEntries(sc.visible.map(v => [v.o.id, v.roles]));
+  const manageOps = sc.visible.filter(v => canManageApps(v.roles)).map(v => v.o.id);
+  const [ivByApp, roundsAll] = await Promise.all([
+    chainInterviews(env, me, visApps, rolesByOpening),
+    openingRounds(env, manageOps, { activeOnly: true }),
+  ]);
   let salaryShown = false;
   const applications = visApps.map(a => {
     const x = sc.byId[a.opening_id];
@@ -4003,7 +4033,10 @@ async function getCandidate(url, auth, env) {
     });
     const out = { ...rest, opening: { id: x.o.id, opening_code: x.o.opening_code, designation: x.o.designation, status: x.o.status, has_jd: !!x.o.current_jd_id },
       can_manage: canManageApps(x.roles), can_see_salary: sal, can_offer: canManageOffers(x.roles), offers,
-      allowed_transitions: APP_TRANSITIONS[a.status] || [] };
+      allowed_transitions: APP_TRANSITIONS[a.status] || [],
+      interviews: ivByApp[a.id] || [],
+      rounds: canManageApps(x.roles) ? roundsAll.filter(r => r.opening_id === x.o.id) : [],
+      can_schedule: canManageApps(x.roles) && canSchedule(a.status) && x.o.status === 'open' && !jdGate(x.o) };
     if (sal) {
       out.current_ctc = numOrNull(current_ctc); out.expected_ctc = numOrNull(expected_ctc);
       if (out.current_ctc != null || out.expected_ctc != null) salaryShown = true;
@@ -8578,6 +8611,657 @@ async function updateAiSettings(body, auth, env) {
   return ok(r.data[0]);
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Hiring O2 — interview rounds + panel feedback.
+// Plan: docs/superpowers/plans/2026-11-12-podium-o2-interviews.md (D1–D9) · pure rules in src/interviews.js.
+// Two surfaces: the CHAIN (canSeeOpening / canManageApps / canEditOpening on the opening, exactly as C1–C3) and
+// the PANEL (getMyInterviews / getPanelInterview / getPanelDocUrl / submitInterviewFeedback). Being a panelist
+// grants nothing on the C1/C2/C3 reads (D5). Feedback is blind until you submit (D4); free-text verdict and
+// cancel notes follow the salary-chain note rule (redactEvent), feedback notes do not (D8).
+// ────────────────────────────────────────────────────────────────────────────
+
+const IV_SELECT = 'id,application_id,opening_id,candidate_id,round_id,round_name,scorecard,scheduled_at,duration_min,mode,location,'
+  + 'status,jd_id,verdict,verdict_reason,verdict_note,verdict_by_employee_id,verdict_at,cancel_reason,cancelled_at,created_at,updated_at';
+const PANEL_SELECT = 'id,interview_id,employee_id,due_at,rating,recommendation,scores,notes,submitted_at,reminded_at,remind_count,created_at';
+const ROUND_SELECT = 'id,opening_id,seq,name,default_interviewer_ids,scorecard,active,created_at,updated_at';
+const PANEL_CANDIDATE_SELECT = 'id,candidate_code,full_name,current_employer,current_title,total_experience_years,skills,education,location,linkedin_url';
+const ivErr = (code, status = 400) => errCode(code, IV_COPY[code] || code, status);
+const IV_COPY = {
+  opening_not_open: 'The opening is not open',
+  application_not_schedulable: 'Interviews are scheduled only while the application is New, Screening or Interviewing',
+  round_required: 'Pick a round from the plan',
+  bad_round: 'That round is not on this opening, or is inactive',
+  round_already_scheduled: 'This application already has a live interview for that round',
+  panel_required: 'Add at least one interviewer',
+  panel_too_large: 'At most 10 interviewers',
+  panelist_inactive: 'Interviewers must be active employees with a Podium login',
+  panel_submitted: 'An interviewer who has submitted feedback cannot be removed',
+  interview_closed: 'This interview is cancelled or a no-show',
+  not_scheduled: 'Only a scheduled interview can be changed',
+  too_early: 'The interview time has not passed yet',
+  verdict_exists: 'This interview already has a verdict',
+  already_submitted: 'Your feedback is already in, it cannot be edited',
+  feedback_locked: 'Your feedback is already in, it cannot be edited',
+  scores_incomplete: 'Score every criterion (1 to 5)',
+  bad_rating: 'Pick an overall rating from 1 to 5',
+  bad_recommendation: 'Pick a recommendation',
+  bad_scores: 'The scores do not match this interview\'s scorecard',
+  notes_too_long: 'Notes can be at most 5,000 characters',
+  remind_too_soon: 'A reminder went out in the last 12 hours',
+  feedback_not_owed: 'This interviewer owes no feedback right now',
+  no_work_mailbox: 'You need an active work mailbox to send reminders',
+  panelist_no_email: 'That interviewer has no work email',
+  mail_failed: 'The reminder could not be sent, try again',
+  mail_unknown: 'The reminder may not have gone out, check your Sent folder before retrying',
+  stale: 'This changed since you loaded it, refresh and try again',
+  bad_time: 'Pick a time within the next year (or the last 30 days)',
+  time_required: 'Pick the interview time',
+  bad_mode: 'Pick in person, video or phone',
+  bad_duration: 'Duration must be 10 to 480 minutes',
+  location_too_long: 'Location can be at most 500 characters',
+  cancel_reason_required: 'Say why the interview is cancelled',
+  round_name_required: 'Name the round',
+  round_name_too_long: 'Round names can be at most 80 characters',
+  bad_order: 'The round list changed, refresh and try again',
+  check_failed: 'The record failed a consistency check',
+  panel_self: 'You cannot add or remove yourself from a panel; ask another member of the hiring team',
+  reschedule_after_feedback: 'Feedback is in, so the time cannot move. Cancel this interview and schedule a new one',
+};
+
+// Every O2 read goes through rowsOf: a failed read (a deploy ahead of 0014, a PostgREST error) reads as no rows,
+// so getMe / getOpening / getCandidate never 500 on it. Long id lists are fetched ≤150 ids per request.
+const IN_CHUNK = 150;
+async function sbInChunks(env, ids, build) {
+  const list = [...new Set((ids || []).filter(Boolean))];
+  if (!list.length) return [];
+  const parts = [];
+  for (let i = 0; i < list.length; i += IN_CHUNK) parts.push(list.slice(i, i + IN_CHUNK));
+  return (await Promise.all(parts.map(c => sb(build(c), env)))).flatMap(rowsOf);
+}
+async function empNames(env, ids) {
+  const rows = await sbInChunks(env, (ids || []).filter(isUuid), (c) => `/rest/v1/employees?id=in.(${c.join(',')})&select=id,full_name`);
+  return Object.fromEntries(rows.map(e => [e.id, e.full_name]));
+}
+// D3: interviewers are active employees with a Podium login.
+async function validInterviewers(env, ids) {
+  const list = [...new Set((ids || []).filter(isUuid))];
+  if (!list.length) return new Set();
+  const r = await sb(`/rest/v1/employees?id=in.(${list.join(',')})&status=eq.active&auth_user_id=not.is.null&select=id`, env);
+  return new Set(rowsOf(r).map(e => e.id));
+}
+// D9: a seat on any non-cancelled interview panel. Kept OUT of hiringAccess: that gate also opens
+// getHiringLookups / findCandidateDuplicates and podium_hiring_access, which a pure panelist must not get (D5).
+async function panelSeat(me, env) {
+  if (!me) return false;
+  const r = await sb(`/rest/v1/interview_panel?employee_id=eq.${me.id}&select=id,interview:interview_id!inner(id,status)`
+    + `&interview.status=neq.cancelled&limit=1`, env);
+  return rowsOf(r).length > 0;
+}
+async function loadInterview(env, id) {
+  if (!isUuid(id)) return null;
+  return (await sb(`/rest/v1/interviews?id=eq.${id}&select=${IV_SELECT}&limit=1`, env)).data?.[0] || null;
+}
+// The chain's hold on one interview: manage = canManageApps, else canSeeOpening.
+async function interviewCtx(auth, env, interviewId, { manage = true } = {}) {
+  const iv = await loadInterview(env, interviewId);
+  if (!iv) return { res: err('not_found', 404) };
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, iv.opening_id);
+  if (!x || !(manage ? canManageApps(x.roles) : canSeeOpening(x.roles))) return { res: err('forbidden', 403) };
+  return { iv, me, x };
+}
+// The panel's hold: the caller's own row on a non-cancelled interview (D5).
+async function panelCtx(auth, env, interviewId) {
+  const iv = await loadInterview(env, interviewId);
+  if (!iv) return { res: err('not_found', 404) };
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  if (!me) return { res: err('forbidden', 403) };
+  const [er, pr] = await Promise.all([
+    sb(`/rest/v1/employees?id=eq.${me.id}&select=status&limit=1`, env),
+    sb(`/rest/v1/interview_panel?interview_id=eq.${iv.id}&select=${PANEL_SELECT}&order=created_at.asc`, env),
+  ]);
+  // An interviewer who has left (or is not active) loses the panel surface.
+  if (rowsOf(er)[0]?.status !== 'active') return { res: err('forbidden', 403) };
+  const rows = rowsOf(pr);
+  const mine = rows.find(r => r.employee_id === me.id);
+  if (!mine || iv.status === 'cancelled') return { res: err('forbidden', 403) };
+  return { iv, me, rows, mine };
+}
+
+// Interviews of these applications as the chain sees them. apps = [{id, opening_id}], rolesByOpening = {openingId: roles}.
+// → { [applicationId]: [interview…] } — panel feedback per D4 / D8, free-text notes per the salary rule.
+async function chainInterviews(env, me, apps, rolesByOpening, now = Date.now()) {
+  const ids = (apps || []).map(a => a.id);
+  if (!ids.length) return {};
+  const ivs = (await sbInChunks(env, ids, (c) => `/rest/v1/interviews?application_id=in.(${c.join(',')})&select=${IV_SELECT}`))
+    .sort((a, b) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at));
+  if (!ivs.length) return {};
+  const [panelRaw, jds] = await Promise.all([
+    sbInChunks(env, ivs.map(i => i.id), (c) => `/rest/v1/interview_panel?interview_id=in.(${c.join(',')})&select=${PANEL_SELECT}`),
+    sbInChunks(env, ivs.map(i => i.jd_id), (c) => `/rest/v1/opening_jds?id=in.(${c.join(',')})&select=id,version`),
+  ]);
+  const panel = panelRaw.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  const jdVer = Object.fromEntries(jds.map(j => [j.id, j.version]));
+  const names = await empNames(env, [...panel.map(p => p.employee_id), ...ivs.map(i => i.verdict_by_employee_id)]);
+  const out = {};
+  for (const iv of ivs) {
+    const roles = rolesByOpening[iv.opening_id];
+    const manage = canManageApps(roles);
+    const sal = canSeeSalary(roles);
+    const rows = panel.filter(p => p.interview_id === iv.id);
+    const mine = rows.find(r => me && r.employee_id === me.id) || null;
+    const view = panelView(rows, me?.id || null, canSeeOpening(roles), { interview: iv, now, names })
+      .map((v, i) => ({ ...v, can_remind: manage && remindAllowed(rows[i], now, iv) }));
+    (out[iv.application_id] ||= []).push({
+      id: iv.id, application_id: iv.application_id, round_id: iv.round_id, round_name: iv.round_name, scorecard: iv.scorecard || [],
+      scheduled_at: iv.scheduled_at, duration_min: iv.duration_min, mode: iv.mode, location: iv.location, status: iv.status,
+      jd_id: iv.jd_id, jd_version: jdVer[iv.jd_id] ?? null,
+      verdict: iv.verdict, verdict_reason: redactReason(iv.verdict_reason, sal), verdict_note: sal ? iv.verdict_note : null,
+      verdict_at: iv.verdict_at, verdict_by_name: names[iv.verdict_by_employee_id] || null,
+      cancel_reason: sal ? iv.cancel_reason : null, cancelled_at: iv.cancelled_at, updated_at: iv.updated_at,
+      panel: view,
+      feedback_hidden: !!mine && !mine.submitted_at,
+      can_edit: manage && iv.status === 'scheduled',
+      can_cancel: manage && iv.status === 'scheduled',
+      can_no_show: manage && iv.status === 'scheduled' && Date.parse(iv.scheduled_at) <= now,
+      can_verdict: manage && !verdictBlock(iv, now),
+    });
+  }
+  return out;
+}
+
+const roundView = (r) => ({ ...r, seq: Number(r.seq), scorecard: r.scorecard || [], default_interviewer_ids: r.default_interviewer_ids || [] });
+async function openingRounds(env, openingIds, { activeOnly = false } = {}) {
+  if (!openingIds.length) return [];
+  const rows = await sbInChunks(env, openingIds,
+    (c) => `/rest/v1/opening_rounds?opening_id=in.(${c.join(',')})${activeOnly ? '&active=eq.true' : ''}&select=${ROUND_SELECT}&order=seq.asc`);
+  return rows.map(roundView).sort((a, b) => a.seq - b.seq);
+}
+
+// ── Rounds (D1): the opening's plan — canEditOpening edits, canSeeOpening reads ──
+
+async function getOpeningRounds(url, auth, env) {
+  const id = url.searchParams.get('opening_id');
+  if (!isUuid(id)) return err('opening_id required', 400);
+  const edges = await loadOrgEdges(env);
+  const x = await loadOneOpening(auth, callerEmployee(edges, auth.userId), env, id);
+  if (!x) return err('not_found', 404);
+  if (!canSeeOpening(x.roles)) return err('forbidden', 403);
+  const rounds = await openingRounds(env, [id]);
+  const names = await empNames(env, rounds.flatMap(r => r.default_interviewer_ids));
+  return ok({ rounds: rounds.map(r => ({ ...r, default_interviewers: r.default_interviewer_ids.map(e => ({ id: e, full_name: names[e] || null })) })),
+    can_edit: canEditOpening(x.roles) });
+}
+
+// POST saveOpeningRound {opening_id, id?, name, default_interviewer_ids[], scorecard[{key?, label}]}
+// Editing a round never touches interviews already scheduled (they keep their snapshot).
+async function saveOpeningRound(body, auth, env) {
+  const d = body.data || body;
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, d.opening_id);
+  if (!x) return err('not_found', 404);
+  if (!canEditOpening(x.roles)) return err('forbidden', 403);
+  const nm = cleanRoundName(d.name);
+  if (nm.error) return ivErr(nm.error);
+  const sc = cleanScorecard(d.scorecard);
+  if (sc.error) return errCode(sc.error, sc.error === 'too_many_criteria' ? 'At most 10 criteria' : sc.error === 'duplicate_criteria'
+    ? 'Two criteria have the same name' : 'Each criterion needs a label (up to 80 characters)', 400);
+  const pi = cleanPanelIds(d.default_interviewer_ids, { min: 0 });
+  if (pi.error) return ivErr(pi.error);
+  if (pi.ids.length) {
+    const live = await validInterviewers(env, pi.ids);
+    if (pi.ids.some(i => !live.has(i))) return ivErr('panelist_inactive');
+  }
+  const row = { name: nm.name, scorecard: sc.scorecard, default_interviewer_ids: pi.ids };
+  let r;
+  if (d.id) {
+    if (!isUuid(d.id)) return err('bad id', 400);
+    r = await sb(`/rest/v1/opening_rounds?id=eq.${d.id}&opening_id=eq.${x.o.id}`, env, { method: 'PATCH', body: JSON.stringify(row) });
+    if (r.ok && !r.data?.length) return err('not_found', 404);
+  } else {
+    const last = await sb(`/rest/v1/opening_rounds?opening_id=eq.${x.o.id}&select=seq&order=seq.desc&limit=1`, env);
+    const seq = Number(last.data?.[0]?.seq || 0) + 1;
+    r = await sb(`/rest/v1/opening_rounds`, env, { method: 'POST', body: JSON.stringify({ ...row, opening_id: x.o.id, seq, created_by: auth.userId }) });
+    if (r.data?.code === '23505') return ivErr('stale', 409);
+  }
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  const saved = r.data?.[0];
+  await hiringEvents(env, auth, me, [{ opening_id: x.o.id, event_type: d.id ? 'round_updated' : 'round_added', detail: { round_id: saved?.id || d.id } }]);
+  return ok(saved ? roundView(saved) : null);
+}
+
+// POST setOpeningRoundActive {id, active} — a round with interviews is never deleted, only deactivated (D1).
+async function setOpeningRoundActive(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.id)) return err('id required', 400);
+  const rr = await sb(`/rest/v1/opening_rounds?id=eq.${d.id}&select=id,opening_id&limit=1`, env);
+  const round = rr.data?.[0];
+  if (!round) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, round.opening_id);
+  if (!x || !canEditOpening(x.roles)) return err('forbidden', 403);
+  // Strictly boolean true: the string "false" must never reactivate a round.
+  const active = d.active === true;
+  const r = await sb(`/rest/v1/opening_rounds?id=eq.${round.id}`, env, { method: 'PATCH', body: JSON.stringify({ active }) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await hiringEvents(env, auth, me, [{ opening_id: x.o.id, event_type: active ? 'round_activated' : 'round_deactivated', detail: { round_id: round.id } }]);
+  return ok(roundView(r.data[0]));
+}
+
+// POST reorderOpeningRounds {opening_id, ids[]} — the full plan, in the new order (one statement, 0014).
+async function reorderOpeningRounds(body, auth, env) {
+  const d = body.data || body;
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, d.opening_id);
+  if (!x) return err('not_found', 404);
+  if (!canEditOpening(x.roles)) return err('forbidden', 403);
+  if (!Array.isArray(d.ids) || !d.ids.length || !d.ids.every(isUuid)) return ivErr('bad_order');
+  const r = await hiringRpc(env, 'hiring_reorder_rounds', { opening_id: x.o.id, ids: d.ids });
+  const code = interviewDbErrorCode(r);
+  if (code) return ivErr(code, code === 'bad_order' ? 409 : 400);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok({ opening_id: x.o.id, count: d.ids.length });
+}
+
+// ── Interviews (D2 / D6 / D7): the chain ─────────────────────────────────────
+
+// GET getApplicationInterviews?application_id — canSeeOpening on the application's opening.
+async function getApplicationInterviews(url, auth, env) {
+  const app = await loadApplication(env, url.searchParams.get('application_id'));
+  if (!app) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, app.opening_id);
+  if (!x || !canSeeOpening(x.roles)) return err('forbidden', 403);
+  const manage = canManageApps(x.roles);
+  const [byApp, rounds] = await Promise.all([
+    chainInterviews(env, me, [app], { [x.o.id]: x.roles }),
+    manage ? openingRounds(env, [x.o.id], { activeOnly: true }) : Promise.resolve([]),
+  ]);
+  return ok({ application_id: app.id, application_status: app.status, can_manage: manage,
+    can_schedule: manage && canSchedule(app.status) && x.o.status === 'open' && !jdGate(x.o),
+    rounds, interviews: byApp[app.id] || [] });
+}
+
+// Shared gate for schedule / edit (D2): JD present, opening open, application new / screening / interviewing.
+function scheduleGate(x, app) {
+  if (jdGate(x.o)) return errCode('jd_required', JD_REQUIRED_MSG, 409);
+  if (x.o.status !== 'open') return ivErr('opening_not_open', 409);
+  if (!canSchedule(app.status)) return ivErr('application_not_schedulable', 409);
+  return null;
+}
+
+// POST scheduleInterview {application_id, round_id?, round_name?, scheduled_at (ISO), duration_min, mode, location, panel[]}
+async function scheduleInterview(body, auth, env) {
+  const d = body.data || body;
+  const app = await loadApplication(env, d.application_id);
+  if (!app) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const x = await loadOneOpening(auth, me, env, app.opening_id);
+  if (!x || !canManageApps(x.roles)) return err('forbidden', 403);
+  const gate = scheduleGate(x, app);
+  if (gate) return gate;
+  // D1: a round from the plan (name + scorecard snapshotted), or free text only when the opening has no active plan.
+  let roundId = null, roundName, scorecard = [];
+  if (d.round_id) {
+    if (!isUuid(d.round_id)) return ivErr('bad_round');
+    const rr = await sb(`/rest/v1/opening_rounds?id=eq.${d.round_id}&opening_id=eq.${x.o.id}&active=eq.true&select=${ROUND_SELECT}&limit=1`, env);
+    const round = rr.data?.[0];
+    if (!round) return ivErr('bad_round');
+    roundId = round.id; roundName = round.name; scorecard = round.scorecard || [];
+  } else {
+    const ar = await sb(`/rest/v1/opening_rounds?opening_id=eq.${x.o.id}&active=eq.true&select=id&limit=1`, env);
+    if (ar.data?.length) return ivErr('round_required');
+    const nm = cleanRoundName(d.round_name);
+    if (nm.error) return ivErr(nm.error);
+    roundName = nm.name;
+  }
+  const t = parseScheduledAt(d.scheduled_at);
+  if (t.error) return ivErr(t.error);
+  const f = cleanInterviewFields(d, { requireAll: true });
+  if (f.error) return ivErr(f.error);
+  const pi = cleanPanelIds(d.panel);
+  if (pi.error) return ivErr(pi.error);
+  const live = await validInterviewers(env, pi.ids);
+  if (pi.ids.some(i => !live.has(i))) return ivErr('panelist_inactive');
+  const due = dueAt(t.iso);
+  // Interview + panel + (new|screening → interviewing, with its event) in one transaction (0014).
+  const r = await hiringRpc(env, 'hiring_schedule_interview', {
+    interview: { application_id: app.id, round_id: roundId, round_name: roundName, scorecard, scheduled_at: t.iso,
+      duration_min: f.patch.duration_min, mode: f.patch.mode, location: f.patch.location ?? null },
+    panel: pi.ids.map(e => ({ employee_id: e, due_at: due })),
+    expected_status: app.status, actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+  });
+  const code = interviewDbErrorCode(r);
+  if (code === 'jd_required') return errCode('jd_required', JD_REQUIRED_MSG, 409);
+  if (code) return ivErr(code, ['stale', 'round_already_scheduled', 'opening_not_open'].includes(code) ? 409 : 400);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok({ interview: r.data?.interview, application_status: r.data?.application_status });
+}
+
+// POST updateInterview {id, scheduled_at?, duration_min?, mode?, location?, add_panel[]?, remove_panel[]?}
+// A reschedule moves every pending panelist's due_at to the new time + 24h (D3).
+async function updateInterview(body, auth, env) {
+  const d = body.data || body;
+  const c = await interviewCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { iv, me, x } = c;
+  if (iv.status !== 'scheduled') return ivErr('not_scheduled', 409);
+  const app = await loadApplication(env, iv.application_id);
+  if (!app) return err('not_found', 404);
+  const gate = scheduleGate(x, app);
+  if (gate) return gate;
+  const patch = {};
+  let at = iv.scheduled_at;
+  // Only a time that actually changes is parsed / validated (an unchanged time 31+ days back must not block an edit).
+  if (d.scheduled_at != null && d.scheduled_at !== '' && Date.parse(d.scheduled_at) !== Date.parse(iv.scheduled_at)) {
+    const t = parseScheduledAt(d.scheduled_at);
+    if (t.error) return ivErr(t.error);
+    patch.scheduled_at = t.iso; at = t.iso;
+  }
+  const f = cleanInterviewFields(Object.fromEntries(['mode', 'duration_min', 'location'].filter(k => k in d).map(k => [k, d[k]])));
+  if (f.error) return ivErr(f.error);
+  for (const [k, v] of Object.entries(f.patch)) if (v !== iv[k]) patch[k] = v;
+  const add = cleanPanelIds(d.add_panel, { min: 0 });
+  const remove = cleanPanelIds(d.remove_panel, { min: 0 });
+  if (add.error || remove.error) return ivErr(add.error || remove.error);
+  // D4: nobody seats or unseats themselves on an existing panel.
+  if (panelSelfBlock(me?.id || null, add.ids, remove.ids)) return ivErr('panel_self', 403);
+  const pr = await sb(`/rest/v1/interview_panel?interview_id=eq.${iv.id}&select=employee_id,submitted_at`, env);
+  if (!pr.ok) return err('db_error', 500);
+  const current = rowsOf(pr);
+  // Feedback is anchored to the time it was given for (re-checked under the lock in hiring_update_interview).
+  if (patch.scheduled_at && current.some(p => p.submitted_at)) return ivErr('reschedule_after_feedback', 409);
+  const have = new Set(current.map(p => p.employee_id));
+  const addIds = add.ids.filter(e => !have.has(e));
+  const removeIds = remove.ids.filter(e => have.has(e) && !addIds.includes(e));
+  if (current.some(p => removeIds.includes(p.employee_id) && p.submitted_at)) return ivErr('panel_submitted', 409);
+  if (current.length + addIds.length - removeIds.length < 1) return ivErr('panel_required');
+  if (current.length + addIds.length - removeIds.length > MAX_PANEL) return ivErr('panel_too_large');
+  if (addIds.length) {
+    const live = await validInterviewers(env, addIds);
+    if (addIds.some(i => !live.has(i))) return ivErr('panelist_inactive');
+  }
+  if (!Object.keys(patch).length && !addIds.length && !removeIds.length) return err('no_patch', 400);
+  const r = await hiringRpc(env, 'hiring_update_interview', {
+    interview_id: iv.id, expected_updated_at: iv.updated_at, patch,
+    add: addIds.map(e => ({ employee_id: e, due_at: dueAt(at) })), remove: removeIds,
+    new_due_at: patch.scheduled_at ? dueAt(at) : null,
+    actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+  });
+  const code = interviewDbErrorCode(r);
+  if (code === 'jd_required') return errCode('jd_required', JD_REQUIRED_MSG, 409);
+  if (code) return ivErr(code, ['stale', 'panel_submitted', 'round_already_scheduled', 'reschedule_after_feedback',
+    'application_not_schedulable', 'opening_not_open'].includes(code) ? 409 : 400);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok({ interview: r.data?.interview, rescheduled: !!r.data?.rescheduled });
+}
+
+// POST cancelInterview {id, reason} — no JD / opening / application gate: a cancel is the clean-up path (e.g. after
+// the application was closed by hand), and refusing it would strand panelists with feedback they can never give.
+async function cancelInterview(body, auth, env) {
+  const d = body.data || body;
+  const reason = String(d.reason || '').trim();
+  if (!reason) return ivErr('cancel_reason_required');
+  if (reason.length > CANCEL_REASON_MAX) return errCode('cancel_reason_too_long', 'At most 500 characters', 400);
+  const c = await interviewCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { iv, me } = c;
+  if (iv.status !== 'scheduled') return ivErr('not_scheduled', 409);
+  const r = await sb(`/rest/v1/interviews?id=eq.${iv.id}&status=eq.scheduled`, env, { method: 'PATCH',
+    body: JSON.stringify({ status: 'cancelled', cancel_reason: reason, cancelled_by: auth.userId, cancelled_at: nowIso() }) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (!r.data?.length) return ivErr('stale', 409);
+  await hiringEvents(env, auth, me, [{ candidate_id: iv.candidate_id, opening_id: iv.opening_id, application_id: iv.application_id,
+    event_type: 'interview_cancelled', detail: { interview_id: iv.id } }]);
+  return ok({ id: iv.id, status: 'cancelled' });
+}
+
+// POST markInterviewNoShow {id} — the candidate did not turn up. The application does not move (D6); the round can
+// be scheduled again, and no panelist owes feedback on it.
+async function markInterviewNoShow(body, auth, env) {
+  const d = body.data || body;
+  const c = await interviewCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { iv, me } = c;
+  if (iv.status !== 'scheduled') return ivErr('not_scheduled', 409);
+  if (Date.parse(iv.scheduled_at) > Date.now()) return ivErr('too_early', 409);
+  // Guarded on the time we read (a reschedule in between → stale) and on that time having passed.
+  const r = await sb(`/rest/v1/interviews?id=eq.${iv.id}&status=eq.scheduled&scheduled_at=eq.${encodeURIComponent(iv.scheduled_at)}`
+    + `&scheduled_at=lte.${encodeURIComponent(nowIso())}`, env, { method: 'PATCH', body: JSON.stringify({ status: 'no_show' }) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (!r.data?.length) return ivErr('stale', 409);
+  await hiringEvents(env, auth, me, [{ candidate_id: iv.candidate_id, opening_id: iv.opening_id, application_id: iv.application_id,
+    event_type: 'interview_no_show', detail: { interview_id: iv.id } }]);
+  return ok({ id: iv.id, status: 'no_show' });
+}
+
+// POST recordInterviewVerdict {id, verdict, reason?, note?} (D6). reject → rejected (reason code), hold → on_hold,
+// advance → nothing on the application. The move reuses setApplicationStatus's rules. Missing feedback is a UI
+// warning, never a server block.
+async function recordInterviewVerdict(body, auth, env) {
+  const d = body.data || body;
+  const c = await interviewCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { iv, me, x } = c;
+  const block = verdictBlock(iv);
+  if (block) return ivErr(block, 409);
+  const move = verdictMove(d.verdict);
+  if (move?.error) return errCode('bad_verdict', 'Pick advance, reject or hold', 400);
+  const app = await loadApplication(env, iv.application_id);
+  if (!app) return err('not_found', 404);
+  if (jdGate(x.o)) return errCode('jd_required', JD_REQUIRED_MSG, 409);
+  if (!canSchedule(app.status)) return ivErr('application_not_schedulable', 409);
+  const reason = move?.reasonRequired ? (String(d.reason || '').trim() || null) : null;
+  if (move) {
+    const bad = checkTransition(app.status, move.to, reason);
+    if (bad === 'reason_required') return errCode('reason_required', 'A reason is required to reject', 400);
+    if (bad === 'bad_reason') return errCode('bad_reason', `reason must be one of: ${OUTCOME_REASON_CODES.join(', ')}`, 400);
+    if (bad) return errCode('invalid_transition', `Cannot move ${app.status} → ${move.to} here`, 409);
+    if (needsNoLiveOffer(move.to) && await hasLiveOffer(env, app.id)) return errCode('close_offers_first', OFFER_COPY.close_offers_first, 409);
+  }
+  const note = String(d.note || '').trim();
+  if (note.length > 2000) return errCode('note_too_long', 'At most 2,000 characters', 400);
+  const r = await hiringRpc(env, 'hiring_interview_verdict', {
+    interview_id: iv.id, verdict: d.verdict, reason, note: note || null, to_status: move?.to || null,
+    expected_status: app.status, actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+  });
+  const code = interviewDbErrorCode(r);
+  if (code === 'close_offers_first') return errCode('close_offers_first', OFFER_COPY.close_offers_first, 409);
+  if (code) return ivErr(code, code === 'stale' ? 409 : 400);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (move && isTerminalStatus(move.to)) await maybeStartRetention(app.candidate_id, env);
+  return ok({ interview: r.data?.interview, application_status: r.data?.application_status });
+}
+
+// POST remindPanelist {panel_id} (D7) — a short plain-text mail from the CALLER's own work mailbox to the panelist's,
+// naming the candidate code + round. At most one per panelist per 12h (claimed on reminded_at before sending).
+async function remindPanelist(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.panel_id)) return err('panel_id required', 400);
+  const rr = await sb(`/rest/v1/interview_panel?id=eq.${d.panel_id}&select=${PANEL_SELECT}&limit=1`, env);
+  const row = rr.data?.[0];
+  if (!row) return err('not_found', 404);
+  const c = await interviewCtx(auth, env, row.interview_id);
+  if (c.res) return c.res;
+  const { iv, me } = c;
+  const now = Date.now();
+  if (row.submitted_at || !FEEDBACK_OPEN_STATUSES.includes(iv.status) || Date.parse(iv.scheduled_at) > now) return ivErr('feedback_not_owed', 409);
+  if (!remindAllowed(row, now, iv)) return ivErr('remind_too_soon', 409);
+  if (!me) return ivErr('no_work_mailbox');
+  const er = await sb(`/rest/v1/employees?id=in.(${[me.id, row.employee_id].join(',')})&select=id,full_name,preferred_name,work_email,status`, env);
+  const by = Object.fromEntries(rowsOf(er).map(e => [e.id, e]));
+  const mailOf = (e) => {
+    const m = String(e?.work_email || '').trim().toLowerCase();
+    return e && e.status !== 'exited' && m.endsWith(`@${WORK_DOMAIN}`) && addressOk(m) ? m : null;
+  };
+  const sender = mailOf(by[me.id]);
+  if (!sender) return ivErr('no_work_mailbox');
+  const to = mailOf(by[row.employee_id]);
+  if (!to) return ivErr('panelist_no_email');
+  const cr = await sb(`/rest/v1/candidates?id=eq.${iv.candidate_id}&select=candidate_code&limit=1`, env);
+  const mail = buildReminderMail({
+    from: sender, fromName: by[me.id].full_name, to, toFirst: String(by[row.employee_id].preferred_name || '').trim() || firstName(by[row.employee_id].full_name),
+    candidateCode: cr.data?.[0]?.candidate_code || 'a candidate', roundName: iv.round_name, scheduledAt: iv.scheduled_at, dueAt: row.due_at,
+    link: `${podiumAppUrl(env)}/hiring/interviews/detail/?id=${iv.id}`, messageId: reminderMessageId(row.id, crypto.randomUUID().slice(0, 8)),
+  });
+  if (mail.error) return ivErr('mail_failed', 400);
+  // Claim the 12h slot first (guarded on the reminded_at we read), so two clicks cannot both send.
+  const claimAt = nowIso();
+  const prev = { reminded_at: row.reminded_at || null, remind_count: Number(row.remind_count || 0) };
+  const guard = prev.reminded_at ? `reminded_at=eq.${encodeURIComponent(prev.reminded_at)}` : 'reminded_at=is.null';
+  const cl = await sb(`/rest/v1/interview_panel?id=eq.${row.id}&submitted_at=is.null&${guard}`, env, { method: 'PATCH',
+    body: JSON.stringify({ reminded_at: claimAt, remind_count: prev.remind_count + 1 }) });
+  if (!cl.ok) return err(`db_error: ${JSON.stringify(cl.data)}`, 400);
+  if (!cl.data?.length) return ivErr('stale', 409);
+  const g = await gmailSend(env, sender, mail.raw);
+  if (!g.ok) {
+    console.error('[interview-remind]', g.status, g.error);
+    // Gmail answered no → the mail did not go: give the slot back. A timeout may have sent it → keep the claim.
+    if (g.definite) {
+      await sb(`/rest/v1/interview_panel?id=eq.${row.id}&reminded_at=eq.${encodeURIComponent(claimAt)}`, env, { method: 'PATCH',
+        prefer: 'return=minimal', body: JSON.stringify(prev) });
+      return ivErr('mail_failed', 502);
+    }
+    return ivErr('mail_unknown', 502);
+  }
+  await hiringEvents(env, auth, me, [{ candidate_id: iv.candidate_id, opening_id: iv.opening_id, application_id: iv.application_id,
+    event_type: 'feedback_reminded', detail: { interview_id: iv.id, panel_id: row.id } }]);
+  return ok({ panel_id: row.id, reminded_at: claimAt, remind_count: prev.remind_count + 1 });
+}
+
+// ── The panel (D5): my interviews, one interview, its documents, my feedback ──
+
+// GET getMyInterviews[?count_only=1] → { upcoming, owed, done, overdue_count } (cancelled interviews dropped).
+async function getMyInterviews(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const countOnly = url.searchParams.get('count_only') === '1';
+  const empty = { upcoming: [], owed: [], done: [], overdue_count: 0, owed_count: 0 };
+  if (!me) return ok(countOnly ? { overdue_count: 0, owed_count: 0 } : empty);
+  // One inner join (cancelled interviews dropped in the DB) + the application's status for the terminal net.
+  const pr = await sb(`/rest/v1/interview_panel?employee_id=eq.${me.id}&select=${PANEL_SELECT},`
+    + `interview:interview_id!inner(id,application_id,opening_id,candidate_id,round_name,scheduled_at,duration_min,mode,location,status,`
+    + `application:application_id(status))&interview.status=neq.cancelled&order=created_at.desc&limit=1000`, env);
+  if (!pr.ok) return err('db_error', 500);
+  const mine = rowsOf(pr).filter(r => r.interview).map(r => {
+    const { application, ...iv } = r.interview;
+    return { ...r, interview: { ...iv, application_status: application?.status || null } };
+  });
+  if (!mine.length) return ok(countOnly ? { overdue_count: 0, owed_count: 0 } : empty);
+  const b = myInterviewBuckets(mine);
+  if (countOnly) return ok({ overdue_count: b.overdue_count, owed_count: b.owed.length });
+  const ivs = mine.map(r => r.interview);
+  const [cands, opns] = await Promise.all([
+    sbInChunks(env, ivs.map(i => i.candidate_id), (c) => `/rest/v1/candidates?id=in.(${c.join(',')})&select=id,candidate_code,full_name,current_title,current_employer`),
+    sbInChunks(env, ivs.map(i => i.opening_id), (c) => `/rest/v1/openings?id=in.(${c.join(',')})&select=id,opening_code,designation,department:department_id(name)`),
+  ]);
+  const cand = Object.fromEntries(cands.map(c => [c.id, c]));
+  const opn = Object.fromEntries(opns.map(o => [o.id, o]));
+  const now = Date.now();
+  const shape = (r) => {
+    const iv = r.interview, c = cand[iv.candidate_id] || {}, o = opn[iv.opening_id] || {};
+    return {
+      interview_id: iv.id, panel_id: r.id, round_name: iv.round_name, scheduled_at: iv.scheduled_at, duration_min: iv.duration_min,
+      mode: iv.mode, location: iv.location, status: iv.status, due_at: r.due_at, submitted_at: r.submitted_at || null,
+      state: seatState(r, now),
+      candidate: { candidate_code: c.candidate_code || null, full_name: c.full_name || null, current_title: c.current_title || null, current_employer: c.current_employer || null },
+      opening: { opening_code: o.opening_code || null, designation: o.designation || null, department: o.department?.name || null },
+    };
+  };
+  return ok({ upcoming: b.upcoming.map(shape), owed: b.owed.map(shape), done: b.done.map(shape),
+    overdue_count: b.overdue_count, owed_count: b.owed.length });
+}
+
+// GET getPanelInterview?id — the panelist's view (D5): candidate summary (no contact details, CTC, notes, offers,
+// events or other applications), the opening's code / designation / department, the JD the interview ran against,
+// the scorecard, the CV-tier documents, my feedback, and the others' only once mine is in (D4).
+async function getPanelInterview(url, auth, env) {
+  const c = await panelCtx(auth, env, url.searchParams.get('id'));
+  if (c.res) return c.res;
+  const { iv, me, rows, mine } = c;
+  const [cr, or, jr, dr] = await Promise.all([
+    sb(`/rest/v1/candidates?id=eq.${iv.candidate_id}&select=${PANEL_CANDIDATE_SELECT}&limit=1`, env),
+    sb(`/rest/v1/openings?id=eq.${iv.opening_id}&select=opening_code,designation,department:department_id(name)&limit=1`, env),
+    sb(`/rest/v1/opening_jds?id=eq.${iv.jd_id}&select=id,version,source,jd_text,file_name,storage_path,created_at&limit=1`, env),
+    sb(`/rest/v1/candidate_documents?candidate_id=eq.${iv.candidate_id}&doc_type=in.(${PANEL_DOC_TYPES.join(',')})`
+      + `&select=id,doc_type,title,file_name,application_id,uploaded_at&order=uploaded_at.desc`, env),
+  ]);
+  const cand = cr.data?.[0];
+  if (!cand) return err('not_found', 404);
+  const { id: _cid, ...candidate } = cand;
+  const o = or.data?.[0] || {};
+  const jd = jr.data?.[0] || null;
+  const now = Date.now();
+  const names = await empNames(env, rows.map(r => r.employee_id));
+  const view = panelView(rows, me.id, false, { interview: iv, now, names });
+  const own = view.find(v => v.is_me);
+  return ok({
+    interview: { id: iv.id, round_name: iv.round_name, scorecard: iv.scorecard || [], scheduled_at: iv.scheduled_at,
+      duration_min: iv.duration_min, mode: iv.mode, location: iv.location, status: iv.status },
+    candidate: { ...candidate, total_experience_years: numOrNull(candidate.total_experience_years) },
+    opening: { opening_code: o.opening_code || null, designation: o.designation || null, department: o.department?.name || null },
+    jd: jd ? { id: jd.id, version: jd.version, source: jd.source, jd_text: jd.jd_text || null, file_name: jd.file_name || null,
+      has_file: !!jd.storage_path, created_at: jd.created_at } : null,
+    documents: panelDocs(rowsOf(dr), iv.application_id).map(({ application_id, ...doc }) => doc),
+    me: { panel_id: mine.id, due_at: mine.due_at, submitted_at: mine.submitted_at || null, state: own.state, feedback: own.feedback },
+    panel: view.map(v => ({ id: v.id, name: v.name, is_me: v.is_me, state: v.state, submitted_at: v.submitted_at, feedback: v.feedback })),
+    can_submit: !feedbackBlock(iv, mine, now),
+  });
+}
+
+// GET getPanelDocUrl?interview_id&document_id | &jd=1 — a CV-tier document of that interview's candidate, or its JD.
+async function getPanelDocUrl(url, auth, env) {
+  const c = await panelCtx(auth, env, url.searchParams.get('interview_id'));
+  if (c.res) return c.res;
+  const { iv } = c;
+  if (url.searchParams.get('jd') === '1') {
+    const jr = await sb(`/rest/v1/opening_jds?id=eq.${iv.jd_id}&select=storage_path,file_name,mime_type&limit=1`, env);
+    const jd = jr.data?.[0];
+    if (!jd?.storage_path) return err('no_file', 400);
+    return signDownload(jd.storage_path, jd.file_name, jd.mime_type, env);
+  }
+  const docId = url.searchParams.get('document_id');
+  if (!isUuid(docId)) return err('document_id required', 400);
+  const dr = await sb(`/rest/v1/candidate_documents?id=eq.${docId}&candidate_id=eq.${iv.candidate_id}&select=*&limit=1`, env);
+  const doc = panelDocs(rowsOf(dr), iv.application_id)[0];
+  if (!doc) return err('forbidden', 403);
+  return signDownload(doc.storage_path, doc.file_name, doc.mime_type, env);
+}
+
+// POST submitInterviewFeedback {interview_id, rating, recommendation, scores{}, notes} — once, after the interview
+// time, never on a cancelled / no-show interview (D3). The 0014 trigger refuses any later edit.
+async function submitInterviewFeedback(body, auth, env) {
+  const d = body.data || body;
+  const c = await panelCtx(auth, env, d.interview_id);
+  if (c.res) return c.res;
+  const { iv, me, mine } = c;
+  const block = feedbackBlock(iv, mine);
+  if (block) return ivErr(block, 409);
+  const fb = checkFeedback(iv.scorecard || [], d);
+  if (fb.error) return ivErr(fb.error);
+  const submittedAt = nowIso();
+  const r = await sb(`/rest/v1/interview_panel?id=eq.${mine.id}&submitted_at=is.null`, env, { method: 'PATCH',
+    body: JSON.stringify({ ...fb.feedback, submitted_at: submittedAt }) });
+  const code = interviewDbErrorCode(r);
+  if (code === 'feedback_locked') return ivErr('already_submitted', 409);
+  // The 0014 window trigger (FOR SHARE on the interview) lost a race to a cancel / no-show / reschedule.
+  if (code === 'interview_closed' || code === 'too_early') return ivErr(code, 409);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (!r.data?.length) return ivErr('already_submitted', 409);
+  // ids only — never the content (the timeline is read by the whole chain).
+  await hiringEvents(env, auth, me, [{ candidate_id: iv.candidate_id, opening_id: iv.opening_id, application_id: iv.application_id,
+    event_type: 'feedback_submitted', detail: { interview_id: iv.id, panel_id: mine.id } }]);
+  return ok({ interview_id: iv.id, submitted_at: submittedAt });
+}
+// ── end O2
+
 const GET_ACTIONS = {
   getMe, getSettings,
   getEmployees, getEmployee,
@@ -8623,6 +9307,8 @@ const GET_ACTIONS = {
   getOnboardingBoard, getProfileCompletion, getProfileChangeRequests, getOnboardingTemplate, getPolicies,
   // C4 — bulk CV import
   getCvImports, getCvImport, getCvImportFileUrl, getAiSettings,
+  // O2 — interview rounds + feedback (chain reads + the panel's own surface)
+  getOpeningRounds, getApplicationInterviews, getMyInterviews, getPanelInterview, getPanelDocUrl,
 };
 
 const POST_ACTIONS = {
@@ -8678,6 +9364,9 @@ const POST_ACTIONS = {
   // C4 — bulk CV import
   createCvImport, cvImportUploadUrl, cvImportFileDone, cvImportExtract, cvImportSaveItem, cvImportAccept, cvImportSkip,
   discardCvImport, updateAiSettings,
+  // O2 — interview rounds + feedback
+  saveOpeningRound, setOpeningRoundActive, reorderOpeningRounds, scheduleInterview, updateInterview, cancelInterview,
+  markInterviewNoShow, recordInterviewVerdict, remindPanelist, submitInterviewFeedback,
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.
@@ -8721,6 +9410,9 @@ const SELF_SERVE_GET = new Set([
   'getMyProfile', 'getPolicyFile', 'getOnboarding', 'getEmployeePrivate', 'exportXPayroll',
   // C4 — bulk CV import self-scopes like createCandidate (cvImportCtx → canManageApps on the batch's opening).
   'getCvImports', 'getCvImport', 'getCvImportFileUrl',
+  // O2 — rounds / application interviews self-scope via openingRoles (canSeeOpening) like getOpening; the panel
+  // reads (getMyInterviews / getPanelInterview / getPanelDocUrl) self-scope on the caller's own interview_panel row.
+  'getOpeningRounds', 'getApplicationInterviews', 'getMyInterviews', 'getPanelInterview', 'getPanelDocUrl',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
@@ -8757,6 +9449,10 @@ const SELF_SERVE_POST = new Set([
   // C4 — see SELF_SERVE_GET.
   'createCvImport', 'cvImportUploadUrl', 'cvImportFileDone', 'cvImportExtract', 'cvImportSaveItem', 'cvImportAccept',
   'cvImportSkip', 'discardCvImport',
+  // O2 — rounds = canEditOpening; interviews / verdict / remind = canManageApps on the opening; feedback = the
+  // caller's own panel row (see SELF_SERVE_GET).
+  'saveOpeningRound', 'setOpeningRoundActive', 'reorderOpeningRounds', 'scheduleInterview', 'updateInterview',
+  'cancelInterview', 'markInterviewNoShow', 'recordInterviewVerdict', 'remindPanelist', 'submitInterviewFeedback',
 ]);
 
 async function handleGet(url, request, env) {

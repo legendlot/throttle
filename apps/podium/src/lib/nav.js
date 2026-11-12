@@ -1,7 +1,7 @@
 import {
   Users, Network, Briefcase, Building2, BarChart3, Settings, UserPlus,
   Star, Activity, ShieldCheck, UserCog, ClipboardCheck, BookOpen, Factory, Wallet,
-  TrendingUp, Target, ClipboardList, FileSignature, LogOut, ListChecks, IdCard, UserCheck, ScrollText,
+  TrendingUp, Target, ClipboardList, FileSignature, LogOut, ListChecks, IdCard, UserCheck, ScrollText, CalendarClock,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -42,6 +42,9 @@ export const NAV_GROUPS = [
     items: [
       { id: 'openings',   label: 'Openings',   route: '/hiring/openings', icon: Briefcase, requires: 'podium_hiring_access' },
       { id: 'candidates', label: 'Candidates', route: '/hiring',          icon: Users,     requires: 'podium_hiring_access' },
+      // O2 (D9): podium_interviews_access = getMe's display flag for a seat on any non-cancelled interview panel.
+      // Separate from podium_hiring_access, so a pure interviewer sees only this item. The badge is the overdue count.
+      { id: 'interviews', label: 'My interviews', route: '/hiring/interviews', icon: CalendarClock, requires: 'podium_interviews_access' },
     ],
   },
   {

@@ -5,6 +5,7 @@ import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, useSearchShortcut } from '@throttle/ui';
 import { Menu, X, LogOut } from 'lucide-react';
 import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
+import { podiumopsGet } from '../../lib/podiumopsFetch.js';
 import { PodiumSidebar } from '../../components/PodiumSidebar.js';
 import { PodiumTopbar } from '../../components/PodiumTopbar.js';
 
@@ -65,6 +66,8 @@ const META = {
   '/hiring/openings/detail': { crumb: 'Hiring', title: 'Opening' },
   '/hiring/offer':           { crumb: 'Hiring', title: 'Offer' },
   '/hiring/offer/new':       { crumb: 'Hiring', title: 'Offer Terms' },
+  '/hiring/interviews':        { crumb: 'Hiring', title: 'My Interviews' },
+  '/hiring/interviews/detail': { crumb: 'Hiring', title: 'Interview' },
   '/manual':            { crumb: 'Org Design',  title: 'System Manual' },
   '/admin/roles':       { crumb: 'Admin',       title: 'Permissions' },
   '/admin/users':       { crumb: 'Admin',       title: 'Users' },
@@ -86,7 +89,7 @@ function chromeFor(pathname) {
 }
 
 function AuthLayoutInner({ children }) {
-  const { user, role, perms, signOut, loading } = useAuth();
+  const { user, role, perms, signOut, loading, session } = useAuth();
   const pathname  = usePathname();
   const router    = useRouter();
   const { lastRefreshed } = useRefreshState();
@@ -106,7 +109,20 @@ function AuthLayoutInner({ children }) {
     setCollapsed(c => { const n = !c; try { localStorage.setItem('podium-sb-collapsed', n ? '1' : '0'); } catch { /* ignore */ } return n; });
   }, []);
 
-  const navGroups = useMemo(() => filterNavByPerms(NAV_GROUPS, perms || {}), [perms]);
+  // O2: overdue interview feedback → a badge on "My interviews". Refreshed on load and on every visit to that area.
+  const [overdue, setOverdue] = useState(0);
+  const interviewsKey = (pathname || '').startsWith('/hiring/interviews') ? pathname : '';
+  const interviewsOn = !!perms?.podium_interviews_access;
+  useEffect(() => {
+    if (!session || !interviewsOn) return;
+    podiumopsGet('getMyInterviews', { count_only: '1' }, session).then(d => setOverdue(Number(d?.overdue_count) || 0)).catch(() => {});
+  }, [session, interviewsOn, interviewsKey]);
+
+  const navGroups = useMemo(() => {
+    const groups = filterNavByPerms(NAV_GROUPS, perms || {});
+    if (!overdue) return groups;
+    return groups.map(g => g.flat ? g : ({ ...g, items: g.items.map(it => it.id === 'interviews' ? { ...it, badge: overdue } : it) }));
+  }, [perms, overdue]);
 
   if (loading && !user) return <Spinner />;
 

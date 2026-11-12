@@ -14,6 +14,7 @@ import {
   OPENING_STATUSES, APP_STATUSES, BUDGET_STATUSES, SOURCES, HIRING_EMPLOYMENT_TYPES, ACTIVE_APP_STATUSES,
   JD_REQUIRED_MSG, OFFER_STATUSES, hiringError, labelFrom, formatINR, formatBand, numOrNull, idOf, listOf, fmtDateTime,
 } from '../../../../../lib/hiring.js';
+import { RoundsCard, InterviewSummaryLine } from '../../../../../components/InterviewBits.js';
 
 function OpeningDetailInner() {
   const { session, brandUser } = useAuth();
@@ -102,6 +103,10 @@ function OpeningDetailInner() {
           <BandCard opening={o} budgets={budgets} canDecide={!!data.can_decide_pending} canEdit={canEdit} canSeeSalary={canSeeSalary} session={session} onChanged={load} />
           <TeamCard data={data} emps={emps} canEdit={canEdit} canChangeChain={canChangeChain} session={session} onChanged={load} />
         </div>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <RoundsCard openingId={o.id} rounds={data.rounds || []} emps={emps} canEdit={canEdit} session={session} onChanged={load} />
       </div>
 
       <div style={{ marginTop: 14 }}>
@@ -504,6 +509,7 @@ function CandidatesCard({ opening, applications, hasJd, isOpen, canManage, canSe
             <span style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
               <ListBadge list={APP_STATUSES} status={a.status} />
               {a.offer && <span style={{ fontSize: 10.5, color: 'var(--text-3)' }}>{a.offer.offer_ref} r{a.offer.revision} · {labelFrom(OFFER_STATUSES, a.offer.status)}</span>}
+              <InterviewSummaryLine s={a.interviews_summary} />
             </span>
             <span style={{ color: 'var(--text-2)', fontSize: 12 }}>{labelFrom(SOURCES, a.source)}</span>
             <span className="num" style={{ fontSize: 12, color: 'var(--text-2)' }}>

@@ -50,6 +50,11 @@ function NavItem({ item, active, collapsed, onClick }) {
           {item.label}
         </span>
       )}
+      {!collapsed && item.badge > 0 && (
+        <span className="num" style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 9, color: 'var(--bad-fg)', background: 'var(--bad-bg)', border: '1px solid var(--bad-bd)' }}>
+          {item.badge}
+        </span>
+      )}
     </div>
   );
 }
