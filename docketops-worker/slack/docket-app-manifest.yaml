@@ -1,7 +1,14 @@
 # Docket Slack app — F9 R7 (spec docs/superpowers/specs/2026-11-11-docket-plan-layer.md §9).
 # A DEDICATED app, not the Throttle app (whose webhooks carry other alerts). Create it from this manifest:
 # api.slack.com/apps → Create New App → From an app manifest → workspace legend-of-toys → paste this (YAML).
-# Setup steps: slack/README.md. Scopes are exactly spec §9.1 — add none without updating the spec.
+# Setup steps + why each scope is here: slack/README.md.
+#
+# FUTURE-PROOFED (Afshaan, 2026-11-12): scopes are the only thing that forces an admin reinstall later, so
+# the bot scopes below cover every foreseeable Docket use case, not just R7's five. Features those scopes
+# unlock (event subscriptions, the Home tab, unfurl handling) are switched on later WITHOUT a reinstall.
+# Event subscriptions are deliberately absent: Slack verifies an events URL at creation, and docketops has
+# no /slack/events route until it is built. No user-token scopes: every action runs as the bot, mapped to
+# the person by work email.
 display_information:
   name: Docket
   description: Tasks, deadlines and the plan — from Slack.
@@ -14,7 +21,7 @@ features:
   app_home:
     home_tab_enabled: false
     messages_tab_enabled: true
-    messages_tab_read_only_enabled: true
+    messages_tab_read_only_enabled: false
   bot_user:
     display_name: Docket
     always_online: false
@@ -23,20 +30,54 @@ features:
       type: message
       callback_id: docket_add_from_message
       description: Turn this message into a Docket task
+    - name: New Docket task
+      type: global
+      callback_id: docket_new_task
+      description: Create a Docket task from anywhere in Slack
   slash_commands:
     - command: /docket
       url: https://docketops.afshaan.workers.dev/slack/commands
       description: Add a task, see yours, or propose a plan item
-      usage_hint: "add <text> · mine · propose <text>"
+      usage_hint: "add <text> · mine · propose <text> · help"
       should_escape: false
+  unfurl_domains:
+    - docket.legendoftoys.com
 oauth_config:
   scopes:
     bot:
+      # ── R7 core (spec §9.1) ──
       - chat:write
       - im:write
       - users:read
       - users:read.email
       - commands
+      # ── posting beyond 1:1 DMs ──
+      - chat:write.public
+      - chat:write.customize
+      - mpim:write
+      - channels:join
+      # ── knowing where it is / who's in it ──
+      - channels:read
+      - groups:read
+      - im:read
+      - mpim:read
+      - usergroups:read
+      - team:read
+      # ── reading only what it's part of: mentions, its DMs, threads it's invited to ──
+      - app_mentions:read
+      - im:history
+      - mpim:history
+      - channels:history
+      - groups:history
+      # ── reactions, link previews, files, channel bookmarks, Slack's AI side panel ──
+      - reactions:read
+      - reactions:write
+      - links:read
+      - links:write
+      - files:read
+      - files:write
+      - bookmarks:write
+      - assistant:write
 settings:
   interactivity:
     is_enabled: true

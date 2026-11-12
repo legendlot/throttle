@@ -419,7 +419,7 @@ the Claudes), which the readiness list then shows. The 27 Nov and 24 Dec re-plan
 
 ### 9.1 Plumbing
 - A **dedicated "Docket" Slack app** (not the Throttle app, whose webhooks carry other alerts): bot scopes
-  `chat:write`, `im:write`, `users:read`, `users:read.email`, `commands`; interactivity (shortcuts, buttons,
+  `chat:write`, `im:write`, `users:read`, `users:read.email`, `commands` for R7 — **future-proofed 2026-11-12 (Afshaan): the app is installed with 28 bot scopes** covering foreseeable uses (channel posts, group DMs, mentions, DM capture, thread capture in channels the bot is added to, reactions, link previews, files, bookmarks, AI panel) so no later reinstall; the list + reasons live in `docketops-worker/slack/README.md`; no user-token scopes; interactivity (shortcuts, buttons,
   modals) pointed at docketops. Afshaan creates and installs it; `reference/integrations.md` records it.
   Secrets `SLACK_DOCKET_BOT_TOKEN`, `SLACK_DOCKET_SIGNING_SECRET`.
 - **Identity:** `docket.slack_identities (employee_id PK, slack_user_id unique, resolved_at)`, filled by

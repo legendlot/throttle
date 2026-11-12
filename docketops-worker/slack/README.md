@@ -11,7 +11,8 @@ announce it yet.
 2. Pick the workspace **legend-of-toys** → **Next**.
 3. Choose the **YAML** tab, delete the sample, paste the whole of
    [`docket-app-manifest.yaml`](./docket-app-manifest.yaml) → **Next** → check the summary shows
-   5 bot scopes, 1 shortcut, 1 slash command → **Create**.
+   28 bot scopes, 2 shortcuts, 1 slash command, 1 unfurl domain
+   (`docket.legendoftoys.com`) → **Create**.
 4. **Install to Workspace** (left menu → *Install App*) → **Allow**. If the workspace requires admin
    approval for apps, approve it in the admin console.
 5. Optional: *Basic Information → Display Information* → add an app icon.
@@ -42,15 +43,53 @@ Nothing else is needed from the admin. The lane then builds R7 against this app:
   it runs as that person, `source: slack`.
 - Reminders (spec §9.2, IST) go out as DMs from a docketops cron trigger.
 
-## What the scopes are for (spec §9.1 — keep the list exactly this)
+## What the scopes are for — future-proofed (Afshaan, 2026-11-12)
 
-| Scope | Why |
-|---|---|
-| `chat:write` | post the reminder DMs and update them after a button press |
-| `im:write` | open the DM with each person |
-| `users:read` | read the Slack user behind a shortcut / button / command |
-| `users:read.email` | map a Slack user to their Docket employee by work email |
-| `commands` | the `/docket` slash command |
+**Why so many:** adding a scope later means an admin re-approves and reinstalls the app. Turning on a
+feature those scopes already cover (event subscriptions, the Home tab, link previews, another shortcut
+or `/docket` sub-command) does not. So the scopes cover every Docket use case we can foresee now; R7 itself
+uses only the first five. Spec §9.1 records the wider list.
 
-No event subscriptions, no channel history, no file access: the app never reads conversations. The
-shortcut receives the one message it was used on, from Slack's payload.
+| Scope | Use case it unlocks | Used by |
+|---|---|---|
+| `chat:write` | reminder DMs; update a message after a button press; scheduled messages | R7 |
+| `im:write` | open the DM with each person | R7 |
+| `users:read` | who pressed / shortcut / commanded; their time zone | R7 |
+| `users:read.email` | map a Slack user to their Docket employee by work email | R7 |
+| `commands` | `/docket` (one command, sub-commands grow without a reinstall) | R7 |
+| `chat:write.public` | post a team's review pack / weekly score in its public channel without inviting the bot | later |
+| `chat:write.customize` | post as "Docket · Review" etc. under one app | later |
+| `mpim:write` | one group DM to founders + Associates (Thursday pack, Saturday catch-up) | later |
+| `channels:join` | the bot joins a public team channel it should post or listen in | later |
+| `channels:read` `groups:read` `im:read` `mpim:read` | find a team's channel by name; know where a shortcut was used (incl. private) | later |
+| `usergroups:read` | resolve `@design` style team handles in `/docket add …` | later |
+| `team:read` | workspace name/domain for permalinks and previews | later |
+| `app_mentions:read` | "@Docket add invite cards by Fri" in any channel the bot is in | later |
+| `im:history` | DM the bot to capture a task; read replies under a reminder DM | later |
+| `mpim:history` | the same in a group DM that includes the bot | later |
+| `channels:history` `groups:history` | capture the WHOLE thread (not just one message) into a task's description — **only channels the bot has been added to** | later |
+| `reactions:read` | ✅ on a reminder line marks that task done | later |
+| `reactions:write` | the bot ticks the message it captured, so the thread knows | later |
+| `links:read` `links:write` | paste a `docket.legendoftoys.com` task link → a preview card (status, owner, deadline) — rendered at the lowest level of anyone in the channel | later |
+| `files:read` | save a file from the captured message as a task document | later |
+| `files:write` | attach the review pack as a CSV/PDF to the founders' DM (an Incoming Webhook can't attach files) | later |
+| `bookmarks:write` | pin a "Docket — <team>" bookmark to each team channel | later |
+| `assistant:write` | Slack's AI side panel ("ask Docket what's overdue") if we turn it on | later |
+
+**The one real trade-off — the `*:history` scopes.** They let the bot read messages in a channel *after
+someone adds it to that channel* (and its own DMs). It can't read channels it isn't in, and Docket stores
+nothing from a conversation unless a person runs a capture (shortcut, mention, DM). Kept in because "turn
+this thread into a task" is the obvious next ask. Drop the four lines from the manifest if you'd rather
+not.
+
+**Deliberately NOT included** (each would need a reinstall to add, and none has a Docket use):
+- any **user-token** scope (acting as a person in Slack, `search:read`): every action runs as the bot,
+  mapped to the person — no one has to OAuth individually;
+- `channels:manage` / `groups:write` (create/archive/rename channels), `admin.*`, `users:write`;
+- `pins:write`, `reminders:*`, `dnd:*`, `calls:*`, `emoji:read`, `remote_files:*`, `incoming-webhook`;
+- Workflow Builder custom steps ("Create Docket task" as a workflow step): they need a functions block +
+  an events URL in the manifest. Revisit when wanted — that one is a manifest change, not a scope.
+
+**Switched on later without a reinstall** (Slack only asks for one when a change needs a scope that isn't granted): event subscriptions (`app_mention`, `message.im`,
+`reaction_added`, `link_shared`, `app_home_opened` — added once docketops serves `/slack/events`), the Home
+tab (a personal "my tasks" view), more `/docket` sub-commands, link-preview handling.
