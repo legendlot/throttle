@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useListNav, useToast, Combobox } from '@throttle/ui';
-import { Search, Briefcase } from 'lucide-react';
+import { Search, Briefcase, UploadCloud } from 'lucide-react';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import { Avatar, FilterChip, GridHead, GridRow, gridTh, btnGhost } from '../../../components/ui.js';
 import { ListBadge } from '../../../components/HiringBits.js';
@@ -61,6 +61,7 @@ export default function CandidatesPage() {
           <input data-search-primary value={search} onChange={e => setSearch(e.target.value)} placeholder="Name, email, phone…" style={searchInput} />
         </label>
         <button onClick={() => router.push('/hiring/openings')} style={btnGhost}><Briefcase size={13} /> Openings</button>
+        <button onClick={() => router.push('/hiring/import')} style={btnGhost}><UploadCloud size={13} /> Import CVs</button>
       </div>
       <div style={{ fontSize: 12, color: 'var(--t4)', marginBottom: 10 }}>Candidates are added from an opening (the JD comes first).</div>
 

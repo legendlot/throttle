@@ -8207,6 +8207,19 @@ async function getCvImport(url, auth, env) {
   });
 }
 
+// GET getCvImportFileUrl?item_id= — the staged CV, so HR can check the fields against it.
+async function getCvImportFileUrl(url, auth, env) {
+  const c = await cvItemCtx(auth, env, url.searchParams.get('item_id'));
+  if (c.res) return c.res;
+  if (c.item.status === 'skipped') return err('This CV was skipped and deleted', 410);
+  if (c.item.document_id) {
+    const dr = await sb(`/rest/v1/candidate_documents?id=eq.${c.item.document_id}&select=storage_path,file_name,mime_type&limit=1`, env);
+    const doc = dr.data?.[0];
+    if (doc) return signDownload(doc.storage_path, doc.file_name, doc.mime_type, env);
+  }
+  return signDownload(c.item.storage_path, c.item.file_name, c.item.mime_type, env);
+}
+
 // POST createCvImport {opening_id, source, source_detail}
 async function createCvImport(body, auth, env) {
   const d = body.data || body;
@@ -8553,7 +8566,7 @@ const GET_ACTIONS = {
   getMyProfile, getPolicyFile, getOnboarding, getEmployeePrivate, exportXPayroll,
   getOnboardingBoard, getProfileCompletion, getProfileChangeRequests, getOnboardingTemplate, getPolicies,
   // C4 — bulk CV import
-  getCvImports, getCvImport, getAiSettings,
+  getCvImports, getCvImport, getCvImportFileUrl, getAiSettings,
 };
 
 const POST_ACTIONS = {
@@ -8651,7 +8664,7 @@ const SELF_SERVE_GET = new Set([
   // inside; exportXPayroll = requireComp (a comp-only user need not hold podium_view).
   'getMyProfile', 'getPolicyFile', 'getOnboarding', 'getEmployeePrivate', 'exportXPayroll',
   // C4 — bulk CV import self-scopes like createCandidate (cvImportCtx → canManageApps on the batch's opening).
-  'getCvImports', 'getCvImport',
+  'getCvImports', 'getCvImport', 'getCvImportFileUrl',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
