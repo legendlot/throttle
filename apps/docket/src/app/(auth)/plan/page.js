@@ -10,12 +10,13 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, Lock, ChevronUp, ChevronDown, Target, Flag, Lightbulb, CalendarRange } from 'lucide-react';
+import { Plus, Lock, ChevronUp, ChevronDown, Target, Flag, Lightbulb, CalendarRange, Check, CheckCircle2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { Button, IconButton, Pill, EmptyState } from '../../../components/ui/index.js';
 import { PlanPanel } from '../../../components/plan/PlanPanel.js';
-import { NoSourceChip } from '../../../components/plan/MeasureFields.js';
+import { NoSourceChip, ReadingChip } from '../../../components/plan/MeasureFields.js';
+import { reachedEvidence, fmtMeasureValue, metricUnit } from '../../../lib/measure.js';
 import { ProposalSections } from '../../../components/plan/Proposals.js';
 import {
   buildPlanTree, myMilestoneGroups, chipState, effectiveDue, isRedated, fmtPlanDate, oneLine, moveSort,
@@ -31,6 +32,7 @@ export default function PlanPage() {
   const [target, setTarget] = useState(null);   // { mode: 'new', kind, parent } | { mode: 'view', id } | { mode: 'propose' } | { mode: 'proposal', proposal }
   const [moving, setMoving] = useState(false);
   const [proposals, setProposals] = useState([]);
+  const [reached, setReached] = useState([]);   // R9b (level F): agreed items whose latest reading reached the target
 
   const loadProposals = useCallback(async () => {
     if (!session) return;
@@ -44,6 +46,13 @@ export default function PlanPage() {
     catch (e) { setData({ error: planErrorText(e) }); }
   }, [session, showToast, loadProposals]);
   useEffect(() => { load(); }, [load]);
+  const canAdmin = !!data?.can_admin;
+  const loadReached = useCallback(async () => {
+    if (!session || !canAdmin) { setReached([]); return; }
+    try { const r = await docketopsGet('getReachedTargets', {}, session); setReached(Array.isArray(r?.items) ? r.items : []); }
+    catch { setReached([]); }   // the register still works without the queue
+  }, [session, canAdmin]);
+  useEffect(() => { loadReached(); }, [loadReached, data]);
   useEffect(() => {
     if (!session) return;
     docketopsGet('getEmployees', {}, session).then(e => setEmployees(Array.isArray(e) ? e : [])).catch(() => {});
@@ -100,6 +109,25 @@ export default function PlanPage() {
           {isSuper && <Button variant="primary" icon={Plus} onClick={() => add('theme')}>Theme</Button>}
         </div>
       </div>
+
+      {isSuper && reached.length > 0 && (
+        <section className="pl-theme pl-reachq" aria-label="Targets reached">
+          <div className="pl-theme-t"><CheckCircle2 size={13} aria-hidden /> Target reached — confirm done<span className="pl-count">{reached.length}</span></div>
+          {reached.map(r => (
+            <div key={r.id} className="pl-row pl-prop">
+              <div className="pl-row-main">
+                <div className="pl-row-l1"><span className="pl-code">{r.code}</span><span className="pl-row-t">{r.title}</span></div>
+                <div className="pl-row-sub">{fmtMeasureValue(r.reading, metricUnit(metrics, { label: r.metric_label }))} {r.metric_label ? `· ${r.metric_label} ` : ''}· target {r.target || '—'}</div>
+              </div>
+              <span className="pl-owner">{r.owner_name || ''}</span>
+              <span className="pl-due">{r.effective_due ? fmtPlanDate(r.effective_due) : ''}</span>
+              <span className="pl-row-acts">
+                <Button size="sm" variant="primary" icon={Check} onClick={() => setTarget({ mode: 'view', id: r.id, op: 'done', evidence: reachedEvidence(r, metrics) })}>Mark done</Button>
+              </span>
+            </div>
+          ))}
+        </section>
+      )}
 
       <ProposalSections proposals={proposals} isSuper={isSuper} onOpen={openProposal} />
 
@@ -171,6 +199,7 @@ function PlanRow({ item, depth = 0, onOpen, isSuper, siblings, onMove, moving, e
           <span className="pl-row-t">{item.title}</span>
           {item.restricted && <Lock size={12} className="pl-lock" aria-label="Restricted" />}
           {noDataSource(item, metrics) && <NoSourceChip />}
+          <ReadingChip measure={item.measure} metrics={metrics} />
         </div>
         {item.state === 'split'
           ? <div className="pl-row-sub">Split{splitInto.length ? ` → ${splitInto.join(', ')}` : ''}</div>

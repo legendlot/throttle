@@ -38,7 +38,7 @@ export function routeModel(pathname, search, { spaces = [], programs = [] } = {}
     if (programId) {
       const p = (programs || []).find(x => x.id === programId);
       return { path, spaceId, activeKey: `/tasks?program=${programId}`, railKey: 'tasks', showCount: true,
-        crumbs: [{ label: 'Programs' }, { label: p?.name || 'Program' }] };
+        crumbs: [{ label: 'Programs (retired)' }, { label: p?.name || 'Program' }] };   // F9 R9b: old links still resolve
     }
     // ?space=<General's id> is the General board, not a private space.
     if (spaceId && space && !space.is_private) {
@@ -64,6 +64,7 @@ export function routeModel(pathname, search, { spaces = [], programs = [] } = {}
   if (path.startsWith('/tasks/new'))    return { ...base, railKey: 'tasks', crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: 'New task' }] };
   if (path === '/plan')       return { ...base, railKey: 'plan',       crumbs: [{ label: 'Plan' }] };
   if (path === '/plan/tree')  return { ...base, railKey: 'plan',       crumbs: [{ label: 'Plan', href: '/plan' }, { label: 'Tree' }] };
+  if (path === '/plan/replan') return { ...base, railKey: 'plan', crumbs: [{ label: 'Plan', href: '/plan' }, { label: 'Re-plan' }] };
   if (path === '/plan/templates') return { ...base, railKey: 'plan', crumbs: [{ label: 'Plan', href: '/plan' }, { label: 'Templates' }] };
   if (path === '/plan/weeks') return { ...base, railKey: 'plan',       crumbs: [{ label: 'Plan', href: '/plan' }, { label: 'Three weeks' }] };
   if (path === '/review/founders') return { ...base, railKey: 'plan', crumbs: [{ label: 'Review', href: '/review' }, { label: 'Founders’ catch-up' }] };

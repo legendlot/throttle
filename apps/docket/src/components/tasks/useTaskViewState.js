@@ -13,7 +13,6 @@ import { useCallback, useEffect, useState } from 'react';
 export const COLUMNS = {
   status:   { label: 'Status',        width: 124, min: 96,  fixed: true, sort: 'status' },
   team:     { label: 'Team',          width: 130, min: 72 },
-  program:  { label: 'Program',       width: 130, min: 72 },
   plan:     { label: 'Plan',          width: 120, min: 64 },   // F9 R2: the task's plan link (chip + picker)
   space:    { label: 'Space',         width: 130, min: 72, crossSpaceOnly: true },
   owner:    { label: 'Owner',         width: 72,  min: 56,  sort: 'owner_name' },
@@ -22,10 +21,10 @@ export const COLUMNS = {
   deadline: { label: 'Deadline',      width: 144, min: 88,  sort: 'deadline' },
   meta:     { label: 'Activity',      width: 64,  min: 48 },
 };
-const DEFAULT_ORDER = ['status', 'team', 'program', 'plan', 'space', 'owner', 'collabs', 'priority', 'deadline', 'meta'];
-// Program starts hidden (Columns menu turns it on): with every column on, a 1440 screen left
-// the title its 240px floor.
-const DEFAULT_COLS = { order: DEFAULT_ORDER, hidden: { program: true }, widths: {} };
+const DEFAULT_ORDER = ['status', 'team', 'plan', 'space', 'owner', 'collabs', 'priority', 'deadline', 'meta'];
+// F9 R9b: the Program column is retired with Programs (spec §7.1); a saved layout naming it drops the key
+// on load (unknown keys are filtered below).
+const DEFAULT_COLS = { order: DEFAULT_ORDER, hidden: {}, widths: {} };
 const MAX_W = 400;
 
 function read(key, fallback) {

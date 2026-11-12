@@ -9,8 +9,10 @@ import { Pill } from '../../../components/ui/index.js';
 import { fmtPlanDate, fmtPlanStamp } from '../../../lib/plan.js';
 import { STATUS_MAP } from '../../../lib/tasks.js';
 import { HandoffRows } from '../../../components/task/Handoff.js';
+import { packSeries } from '../../../lib/trend.js';
+import { Sparkline } from './Trend.js';
 import { shortDay } from '../../../lib/weeks.js';
-import { fmtPct, missLabel, sourceNote, movedText, touchedText, tsDay, barPct, seenText, updateText } from '../../../lib/review.js';
+import { fmtPct, missLabel, sourceNote, movedText, touchedText, tsDay, seenText, updateText } from '../../../lib/review.js';
 
 const WARN_LABEL = { no_tasks: 'no actionable tasks', no_data_source: 'no data source', not_agreed: 'not agreed' };
 const taskHref = (id) => '/tasks?task=' + id;
@@ -70,15 +72,11 @@ function TeamReview({ team, final }) {
               <Stat label={lw.week_end ? 'week ending ' + shortDay(lw.week_end) : 'on time'} value={fmtPct(lw.pct)} tone="big" />
             </div>
           ) : <p className="rv-none">No committed tasks last week</p>}
-          {(team.trend || []).length > 0 && (
-            <div className="rv-trend" aria-label="Last four closed weeks, on time">
-              {team.trend.filter(Boolean).map(w => (
-                <div key={w.week_end} className="rv-tbar" title={`Week ending ${shortDay(w.week_end)} · ${fmtPct(w.pct)} of ${w.cohort}`}>
-                  <span className="rv-tbar-v">{fmtPct(w.pct)}</span>
-                  <span className="rv-tbar-track"><span className="rv-tbar-fill" style={{ height: barPct(w.pct) + '%' }} /></span>
-                  <span className="rv-tbar-l">{shortDay(w.week_end).replace(/^\w+ /, '')}</span>
-                </div>
-              ))}
+          {/* R9b: the last 4 weeks as a sparkline (the pack's own trend + last week — a snapshot reads the same). */}
+          {packSeries(team, 4).length > 1 && (
+            <div className="rv-trend" aria-label="Last four weeks, on time">
+              <Sparkline points={packSeries(team, 4)} />
+              <span className="rv-tbar-l">{packSeries(team, 4).map(p => fmtPct(p.pct)).join(' · ')}</span>
             </div>
           )}
         </div>

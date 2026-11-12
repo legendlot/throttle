@@ -23,8 +23,8 @@ function loadPlan(session) {
   const key = session?.user?.id || 'session';
   if (cache.key === key && cache.p && Date.now() - cache.at < TTL) return cache.p;
   const p = docketopsGet('getPlan', {}, session)
-    .then(d => ({ items: Array.isArray(d?.items) ? d.items : [], week: normalizeWeekSettings(d?.week) }))
-    .catch(() => ({ items: [], week: normalizeWeekSettings(null) }));
+    .then(d => ({ items: Array.isArray(d?.items) ? d.items : [], week: normalizeWeekSettings(d?.week), metrics: Array.isArray(d?.metrics) ? d.metrics : [] }))
+    .catch(() => ({ items: [], week: normalizeWeekSettings(null), metrics: [] }));
   cache = { key, at: Date.now(), p };
   return p;
 }
@@ -49,6 +49,8 @@ const NO_ITEMS = [];
 const DEFAULT_WEEK = normalizeWeekSettings(null);
 export function usePlanItems(session) { return usePlanRead(session, x => x.items, NO_ITEMS); }
 export function usePlanWeek(session) { return usePlanRead(session, x => x.week, DEFAULT_WEEK); }
+// R9b: the metric registry (units for the reading chip) off the same cached read.
+export function usePlanMetrics(session) { return usePlanRead(session, x => x.metrics, NO_ITEMS); }
 
 // byId over the caller's plan rows (the Plan filter needs parents).
 export function usePlanById(items) {

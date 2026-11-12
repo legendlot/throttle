@@ -243,7 +243,6 @@ function TriageCard({ task, result, saved, canBack, cardRef, dispatch, saving, s
         <div className="gt-meta">
           <span className="gt-id">{task.task_no}</span>
           {task.space_name && <span>{task.space_name}</span>}
-          {task.program?.name && <span>· {task.program.name}</span>}
           {result && <span className={'gt-result ' + result}>{RESULT_LABEL[result]}</span>}
         </div>
         <h3 className="gt-task">{task.title}</h3>

@@ -269,7 +269,7 @@ test('F9 R4: docket_tasks takes a week filter (this/next/overdue/none/a date) an
     assert.equal(seen[0].u.searchParams.get('week'), w);
   }
   for (const bad of ['last', '2026-02-30', "this'", 'x'.repeat(11)]) assert.equal(rd.parse({ report: 'my_tasks', week: bad }, NOW).ok, false, bad);
-  assert.equal(rd.parse({ report: 'program_tasks', program_id: U, week: 'this' }, NOW).ok, false);   // not on program_tasks
+  assert.equal(rd.parse({ report: 'program_tasks', program_id: U, week: 'this' }, NOW).ok, false);   // programs retired (R9b): no such report
 });
 test('comment: a task you cannot open (private space) is refused before writing', async () => {
   const seen = []; const t = findTool('docket_add_comment');
@@ -452,7 +452,8 @@ test('docket plan links: plan_item_id is whitelisted on create/update; null clea
 test('docket_plan: its reports → getPlan / getPlanItem / getProposals / getWeekScore / getReviewPack / getFoundersReview as the person', async () => {
   const t = findTool('docket_plan');
   assert.deepEqual(Object.fromEntries(Object.entries(t.reports).map(([k, r]) => [k, r.action])), { themes: 'getPlan', items: 'getPlan', item: 'getPlanItem', proposals: 'getProposals', score: 'getWeekScore',
-    review: 'getReviewPack', founders: 'getFoundersReview', templates: 'getTemplates', template: 'getTemplate' });
+    review: 'getReviewPack', founders: 'getFoundersReview', templates: 'getTemplates', template: 'getTemplate',
+    reached: 'getReachedTargets', trend: 'getScoreTrend', replan: 'getReplan' });
   assert.equal(t.parse({ report: 'item' }, NOW).ok, false);                  // id required
   assert.equal(t.parse({ report: 'themes', id: U }, NOW).ok, false);         // not a param of themes
   const seen = [];
@@ -654,4 +655,43 @@ test('docket_apply_template: id + anchor + date + roles (label → employee uuid
   const env = (status, body) => ({ DOCKETOPS: { fetch: async () => new Response(JSON.stringify(body), { status }) } });
   const refused = await t.run({ env: env(400, { ok: false, error: 'owner_inactive', message: 'That person has left', label: 'Owner' }), sbAccess: 'J', input: good });
   assert.equal(refused.ok, false);
+});
+
+// ---- Docket F9 R9b (2026-11-12): measure readings, the reached queue, the score trend, the re-plan; Programs retired
+test('R9b: docket_plan report=reached / trend / replan → getReachedTargets / getScoreTrend / getReplan as the person; params checked', async () => {
+  const t = findTool('docket_plan');
+  const seen = [];
+  for (const [input, want] of [
+    [{ report: 'reached' }, { action: 'getReachedTargets' }],
+    [{ report: 'trend' }, { action: 'getScoreTrend' }],
+    [{ report: 'trend', weeks: 12, team: 'all' }, { action: 'getScoreTrend', weeks: '12', team: 'all' }],
+    [{ report: 'trend', team: U }, { action: 'getScoreTrend', team: U }],
+    [{ report: 'replan' }, { action: 'getReplan' }],
+    [{ report: 'replan', month: '2026-12' }, { action: 'getReplan', month: '2026-12' }],
+  ]) {
+    const p = t.parse(input, NOW);
+    assert.equal(p.ok, true, JSON.stringify(input));
+    await t.run({ env: docketEnv(seen), sbAccess: 'J', input: p.value });
+    assert.deepEqual(Object.fromEntries(seen.at(-1).u.searchParams), want);
+    assert.equal(seen.at(-1).init.method, undefined);
+  }
+  for (const bad of [{ report: 'trend', weeks: 0 }, { report: 'trend', weeks: 27 }, { report: 'trend', team: 'Sales' }, { report: 'replan', month: '2026-13' },
+    { report: 'replan', month: '2026-12-01' }, { report: 'replan', month: "2026-1'" }, { report: 'reached', month: '2026-12' }, { report: 'trend', month: '2026-12' }])
+    assert.equal(t.parse(bad, NOW).ok, false, JSON.stringify(bad));
+});
+test('R9b: items keep measure.reading (Docket attaches it at the levels that see the measure)', async () => {
+  const t = findTool('docket_plan');
+  const reading = { value: 98.4, window_from: '2026-10-13', window_to: '2026-11-11', checked_at: '2026-11-12T00:30:01Z', reached: true, target_parsed: true };
+  const env = { DOCKETOPS: { fetch: async () => new Response(JSON.stringify({ ok: true, data: { items: [{ id: U, kind: 'milestone', level: 'O',
+    measure: { system: 'redline', metric: 'redline.first_pass_yield', target: '≥ 98%', source_ok: true, reading } }] } }), { status: 200 }) } };
+  const r = await t.run({ env, sbAccess: 'J', input: t.parse({ report: 'items' }, NOW).value });
+  assert.deepEqual(r.data.result.items[0].measure.reading, reading);
+});
+test('R9b: Programs retired — no program filter, report or field on any Docket tool', () => {
+  const rd = findTool('docket_tasks');
+  assert.ok(!('program_tasks' in rd.reports) && !('programs' in rd.reports));
+  for (const report of ['my_tasks', 'space_tasks']) assert.equal(rd.parse({ report, program_id: U }, NOW).ok, false, report);
+  assert.equal(findTool('docket_create_task').parse({ title: 'x', program_id: U }, NOW).ok, false);
+  assert.equal(findTool('docket_update_task').parse({ id: U, program_id: U }, NOW).ok, false);
+  for (const name of ['docket_tasks', 'docket_create_task', 'docket_update_task']) assert.doesNotMatch(JSON.stringify(findTool(name).inputSchema), /program/i, name);
 });

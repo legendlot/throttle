@@ -34,14 +34,15 @@ import { istDateStr, isExpired, isDueOn, istHM, lateFlag, buildRegister } from '
 import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT_ACTIONS,
   linkError, effectiveLink, taskPlan, planLinkLabel, planDbError,
   validateSplitPayload, validateProposal, validateDecision } from './plan-core.mjs';
-import { normalizeMeasure, publicMetrics } from './plan-metrics.mjs';
+import { normalizeMeasure, publicMetrics, metricByKey } from './plan-metrics.mjs';
+import { trendWeeksParam, trendWeekEnds, trendModel, replanMonth, weekEndsIn, readiness, REPLAN_RISK_DAYS, REPLAN_ACTION_DAYS } from './rhythm-core.mjs';
 import { buildTree, treeTaskItemIds, TREE_LEVELS } from './tree-core.mjs';
 import { templateListRow, templateNodesFor } from './template-core.mjs';
 import { WEEK_KEYS, normalizeWeekSettings, resolveWeekFilter, matchesWeek, planWindow, istMidnight, staleCutoff,
   buildPlanWeeks, ROWS_BY, istDate, isDateStr, weekEndOf, effectiveDue } from './weeks-core.mjs';
 import { buildReviewTeams, lastWorkingDay, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack, scoreBlock,
   handoffBucket, foundersHandoffs, isHandoff,
-  validateFocusItems, buildAsks, foundersToSlack } from './review-core.mjs';
+  validateFocusItems, buildAsks, foundersToSlack, noDataSource } from './review-core.mjs';
 
 
 // ── CORS ──────────────────────────────────────────────────────────────────
@@ -1704,6 +1705,8 @@ async function createTaskCore(d, auth, env) {
   // deadline) is optional and enriched later — the task lands in "The Grid" until it
   // has both an owner and a deadline. (RULE-DOCKET-001, V2.)
   if (!d.title || !String(d.title).trim()) return err('title required', 400);
+  // F9 R9b: Programs are retired (spec §7.1; RULE-DOCKET-004 superseded) — a task can no longer be tagged.
+  if (d.program_id) return err('programs_retired', 400);
   // Optional initial status (a status-group "+ Add task"), so it is one write + one history row.
   if (d.status != null && d.status !== '' && !d.is_recurring) {
     if (d.status === 'abandoned') return err('use abandonTask to abandon (reason required)', 422);
@@ -1735,10 +1738,9 @@ async function createTaskCore(d, auth, env) {
     if (parent.parent_task_id) return err('one_level_only: parent is already a sub-task', 422);
     if (parent.status === 'abandoned') return abandonedRO();
     spaceId = parent.space_id; // a sub-task always lives in its parent's space
-    // A sub-task inherits owner / program / team from its parent unless the caller
-    // explicitly set them (speed-create passes title only — these fill in from the parent).
+    // A sub-task inherits owner / team from its parent unless the caller explicitly set them (speed-create
+    // passes title only — these fill in from the parent). Not the program: Programs are retired (R9b).
     if (d.owner_employee_id == null) d.owner_employee_id = parent.owner_employee_id || null;
-    if (d.program_id == null)        d.program_id        = parent.program_id || null;
     if (d.department_id == null)     d.department_id     = parent.department_id || null;
   }
   if (!spaceId) spaceId = await defaultSpaceId(env);
@@ -2082,6 +2084,7 @@ const EDITABLE  = ['title','description','department_id','owner_employee_id','pr
 async function updateTask(body, auth, env) {
   const d = body.data || body;
   if (!d.id) return err('id required', 400);
+  if (d.program_id) return err('programs_retired', 400);   // R9b: clearing (null) still works
   const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
@@ -2261,6 +2264,7 @@ async function bulkUpdateTasks(body, auth, env) {
   const field = d.field;
   if (!ids.length) return err('ids required', 400);
   if (!BULK_FIELDS.has(field)) return err('invalid field', 400);
+  if (field === 'program_id' && d.value) return err('programs_retired', 400);   // R9b: clearing still works
 
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
   if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
@@ -2777,22 +2781,10 @@ async function removeDashboardViewer(body, auth, env) {
   return ok({ removed: d.user_id });
 }
 
-// ── Programs (RULE-DOCKET-004) ──────────────────────────────────────────────
-async function createProgram(body, auth, env) {
-  const d = body.data || body;
-  if (!d.name || !String(d.name).trim()) return err('name required', 400);
-  const name = String(d.name).trim();
-  // Idempotent inline create: reuse an existing (case-insensitive) program if present.
-  // ILIKE treats % and _ as wildcards (escaped here) and PostgREST maps * to % (can't be
-  // escaped), so the query may over-match — the exact case-insensitive compare decides.
-  const pattern = name.replace(/[\\%_]/g, (c) => '\\' + c);
-  const existing = await sbDocket(`/rest/v1/programs?archived_at=is.null&name=ilike.${enc(pattern)}&select=id,name,color&limit=50`, env);
-  const same = existing.ok ? (existing.data || []).find(p => String(p.name).toLowerCase() === name.toLowerCase()) : null;
-  if (same) return ok(same);
-  const r = await sbDocket(`/rest/v1/programs`, env, {
-    method: 'POST', body: JSON.stringify([{ name, color: d.color || null, created_by_user_id: auth.userId }]) });
-  if (!r.ok || !r.data?.[0]) return err('create_failed: ' + JSON.stringify(r.data), 400);
-  return ok(r.data[0]);
+// ── Programs (RULE-DOCKET-004 — superseded: retired in F9 R9b, spec §7.1) ───────
+// `docket.programs` stays (archived tasks reference it) and every READ keeps working; nothing creates one.
+async function createProgram() {
+  return err('programs_retired', 410);
 }
 
 // ── Spaces (RULE-DOCKET-003) ────────────────────────────────────────────────
@@ -2948,6 +2940,31 @@ async function planRows(auth, env) {
   return sbDocket(`/rest/v1/rpc/plan_items_for`, env, { method: 'POST', body: JSON.stringify({
     p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth), p_is_review: isReviewer(auth) }) });
 }
+// F9 R9b: the measure auto-check's latest reading (migration 0029, docket.plan_measure_latest — one batched read
+// per request). Attached as measure.reading ONLY where the projection already returns the measure: levels F / R / O,
+// never T / L / none, never a restricted item below F. Clients never write readings (normalizeMeasure ignores them).
+const READING_LEVELS = ['F', 'R', 'O'];
+const readingOk = (i) => !!i && READING_LEVELS.includes(i.level) && !!i.measure && typeof i.measure === 'object'
+  && (i.level === 'F' || !i.restricted);
+// A failed read is "no reading" (an empty Map) — a page never 500s for it; `strict` (the confirm queue) → null.
+async function readingsFor(rows, env, { strict = false } = {}) {
+  const ids = uniq(rows.filter(readingOk).map(i => i.id));
+  const r = await sbInAll(sbDocket, ids, l => `/rest/v1/plan_measure_latest?item_id=in.${l}&select=item_id,metric,target_text,reading,window_from,window_to,checked_at,reached,target_parsed&order=item_id.asc`, env);
+  if (!r.ok) return strict ? null : new Map();
+  return new Map((r.data || []).map(x => [x.item_id, x]));
+}
+// The reading for the item's CURRENT measure: none when the stored row was for another metric (the measure was
+// edited since — manual included); `reached` only while the stored target is still the measure's target.
+function readingOf(i, readings) {
+  const x = readingOk(i) ? readings.get(i.id) : null;
+  if (!x || x.metric !== i.measure.metric) return null;
+  const sameTarget = (x.target_text || null) === ((typeof i.measure.target === 'string' && i.measure.target.trim()) || null);
+  return { value: x.reading == null ? null : Number(x.reading), window_from: x.window_from, window_to: x.window_to, checked_at: x.checked_at,
+    reached: sameTarget && x.reached != null ? !!x.reached : null, target_parsed: sameTarget && x.target_parsed != null };
+}
+// row → row with measure.reading (null when there is none for its current measure); rows it may not carry pass untouched.
+const withReading = (readings) => (i) => (readingOk(i) ? { ...i, measure: { ...i.measure, reading: readingOf(i, readings) } } : i);
+
 async function nameMap(sb, table, ids, env) {
   const r = await sbIn(sb, uniq(ids), (l) => `/rest/v1/${table}?id=in.${l}&select=id,full_name`, env);
   const m = {}; (r.ok ? r.data || [] : []).forEach(x => { m[x.id] = x.full_name; });
@@ -2958,8 +2975,9 @@ const withOwnerName = (names) => (x) => ({ ...x, owner_name: x.owner_employee_id
 async function getPlan(url, auth, env) {
   const [r, week] = await Promise.all([planRows(auth, env), weekSettings(env)]);
   if (!r.ok) return err('db_error', 500);
-  const rows = Array.isArray(r.data) ? r.data : [];
-  const names = await nameMap(sbPodium, 'employees', rows.map(x => x.owner_employee_id), env);
+  const raw = Array.isArray(r.data) ? r.data : [];
+  const [names, readings] = await Promise.all([nameMap(sbPodium, 'employees', raw.map(x => x.owner_employee_id), env), readingsFor(raw, env)]);
+  const rows = raw.map(withReading(readings));
   // R3: the "measured from" registry rides along so the app never keeps its own copy (§4.4).
   // R4: so do the week settings — /tasks groups and filters by week with the org's week_end_dow.
   return ok({ items: rows.map(withOwnerName(names)), can_admin: isPlanAdmin(auth), employee_id: auth.employeeId,
@@ -2974,9 +2992,12 @@ async function getPlanItem(url, auth, env) {
       p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth), p_id: id, p_is_review: isReviewer(auth) }) }),
   ]);
   if (!r.ok || !h.ok) return err('db_error', 500);
-  const rows = Array.isArray(r.data) ? r.data : [];
+  const all = Array.isArray(r.data) ? r.data : [];
+  const found = all.find(x => x.id === id);
+  if (!found) return err('not_found', 404);
+  const readings = await readingsFor([found, ...all.filter(x => x.parent_id === id)], env);
+  const rows = all.map(x => (x.id === id || x.parent_id === id ? withReading(readings)(x) : x));
   const item = rows.find(x => x.id === id);
-  if (!item) return err('not_found', 404);
   const children = rows.filter(x => x.parent_id === id);
   const history = Array.isArray(h.data) ? h.data : [];
   // R2: the tasks linked to this item (a milestone: and to its results), intersected with what the caller
@@ -3427,7 +3448,9 @@ async function buildReviewPack(weekParam, teamParam, auth, env) {
   const themeOf = (i) => (i.kind === 'theme' ? i.id : i.kind === 'milestone' ? i.parent_id : itemById.get(i.parent_id)?.parent_id);
   const restrictedThemes = new Set(raw.filter(i => i.kind === 'theme' && i.restricted).map(i => i.id));
   const restrictedItems = raw.filter(i => restrictedThemes.has(themeOf(i))).map(i => i.id);
-  const fo = raw.filter(i => (i.level === 'F' || i.level === 'O' || i.level === 'R') && (i.kind === 'milestone' || i.kind === 'result'));
+  const foRaw = raw.filter(i => (i.level === 'F' || i.level === 'O' || i.level === 'R') && (i.kind === 'milestone' || i.kind === 'result'));
+  const readings = await readingsFor(foRaw, env);   // R9b: measure.reading on the pack's milestone / result rows
+  const fo = foRaw.map(withReading(readings));
   const horizonEnd = addDays(weekEnd, 14);
   const live = (i) => i.state === 'proposed' || i.state === 'agreed';
   const horizonIds = fo.filter(i => live(i) && effectiveDue(i) && effectiveDue(i) >= weekStart && effectiveDue(i) <= horizonEnd).map(i => i.id);
@@ -3795,8 +3818,10 @@ async function getPlanTree(url, auth, env) {
   const [r, ar, sr] = await Promise.all([planRows(auth, env), sbAll(sbDocket, `/rest/v1/spaces?archived_at=not.is.null&select=id&order=id.asc`, env),
     sbAll(sbDocket, `/rest/v1/plan_items?select=id,parent_id,kind&order=id.asc`, env)]);
   if (!r.ok || !ar.ok || !sr.ok) return err('db_error', 500);
-  const items = (Array.isArray(r.data) ? r.data : []).filter(i => TREE_LEVELS.includes(i.level));
-  if (themeId && !items.some(i => i.id === themeId && i.kind === 'theme')) return err('not_found', 404);
+  const raw = (Array.isArray(r.data) ? r.data : []).filter(i => TREE_LEVELS.includes(i.level));
+  if (themeId && !raw.some(i => i.id === themeId && i.kind === 'theme')) return err('not_found', 404);
+  const readings = await readingsFor(raw, env);   // R9b: measure.reading at F / R / O (a level-T row has no measure)
+  const items = raw.map(withReading(readings));
   const opts = { closed: q.get('closed') === '1', mine: q.get('mine') === '1', employeeId: auth.employeeId || null, themeId, structure: sr.data || [] };
   const tr = await sbInAll(sbDocket, treeTaskItemIds(items, opts),
     l => `/rest/v1/tasks?plan_item_id=in.${l}&parent_task_id=is.null&archived_at=is.null&is_recurring=eq.false&select=${TREE_TASK_COLS}&order=id.asc`, env);
@@ -3809,6 +3834,146 @@ async function getPlanTree(url, auth, env) {
     ...tasks.filter(t => visibleIds.has(t.id)).map(t => t.owner_employee_id)], env);
   const tree = buildTree(items, tasks, { ...opts, now: Date.now(), visibleIds, level: isF ? 'F' : null, names, metrics: publicMetrics() });
   return ok({ items: tree.items, tasks: tree.tasks, ...(isF ? { hidden_total: tree.hidden_total } : {}), generated_at: nowIso() });
+}
+
+// ── F9 R9b: the founders' confirm queue (spec §4.4 P2) — level F only ─────────
+// GET ?action=getReachedTargets → agreed milestones / results whose LATEST auto-check reading reached the target,
+// by effective due. Confirming is the existing `done` action (the app pre-fills the evidence) — no new write path.
+async function getReachedTargets(url, auth, env) {
+  if (!isPlanAdmin(auth)) return err('forbidden', 403);
+  const r = await planRows(auth, env);
+  if (!r.ok) return err('db_error', 500);
+  const agreed = (Array.isArray(r.data) ? r.data : []).filter(i => i.state === 'agreed' && (i.kind === 'milestone' || i.kind === 'result') && readingOk(i));
+  const readings = await readingsFor(agreed, env, { strict: true });
+  if (!readings) return err('db_error', 500);
+  // readingOf: the reading must be for the item's CURRENT metric and target — an edited (or manual) measure never queues
+  const hit = agreed.filter(i => readingOf(i, readings)?.reached === true);
+  const names = await nameMap(sbPodium, 'employees', hit.map(i => i.owner_employee_id), env);
+  const items = hit.map(i => {
+    const rd = readingOf(i, readings);
+    return { id: i.id, kind: i.kind, code: i.code || null, title: i.title,
+      owner_name: i.owner_employee_id ? names[i.owner_employee_id] || null : null, effective_due: effectiveDue(i),
+      metric_label: metricByKey(i.measure.metric)?.label || i.measure.metric || null, target: i.measure.target || null,
+      reading: rd.value, window_from: rd.window_from, window_to: rd.window_to, checked_at: rd.checked_at };
+  }).sort((a, b) => String(a.effective_due || '').localeCompare(String(b.effective_due || ''))
+    || String(a.code || '').localeCompare(String(b.code || ''), undefined, { numeric: true }));
+  return ok({ items });
+}
+
+// ── F9 R9b: the on-time score trend (spec §8.1 #2, §8.5) ─────────────────────
+// GET ?action=getScoreTrend[&weeks=8 (1–26)][&team=<department id>|all]. Rights and team scoping = getReviewPack:
+// a plan admin or a Founders' Associate any team or all; a lead ONLY their own team. Each of the last N CLOSED
+// weeks (week_end before the current week) is docket.week_score(week_end) — never recomputed from tasks. Level F
+// takes week_score's own team rows and totals (whole, as R5 built them). week_score's team rows are NOT split by
+// space (they include Founders'-space tasks), so below F the points come from its TASK rows (each one carries its
+// frozen outcome, department and space) cut by the review pack's non-admin gate (reviewVisibleIds: tasks the
+// caller can open, never an archived space, never the Founders' space — and a task linked into a restricted
+// subtree must live in the Founders' space, R2 link guard) and grouped by department.
+async function getScoreTrend(url, auth, env) {
+  const q = url.searchParams;
+  const n = trendWeeksParam(q.get('weeks'));
+  if (!n) return err('bad_weeks', 400);
+  const teamParam = q.get('team') || '';
+  if (teamParam && teamParam !== 'all' && !isUuid(teamParam)) return err('bad_team', 400);
+  const isSuper = isPlanAdmin(auth);
+  const anyTeam = isSuper || isReviewer(auth);
+  if (!anyTeam) {
+    if (!auth.departmentId) return err('no_team', 403);
+    if (teamParam && teamParam !== 'all' && teamParam !== auth.departmentId) return err('forbidden', 403);
+    if (teamParam === 'all') return err('forbidden', 403);
+  }
+  const teamId = anyTeam ? (teamParam === 'all' || !teamParam ? null : teamParam) : auth.departmentId;
+  const settings = await weekSettings(env);
+  const ends = trendWeekEnds(istDate(Date.now()), settings.week_end_dow, n);
+  const [wr, dr] = await Promise.all([
+    sbDocket(`/rest/v1/weeks?week_end=in.${inList(ends)}&closed_at=not.is.null&select=week_end&order=week_end.asc`, env),
+    sbPodium(`/rest/v1/departments?select=id,name&order=name.asc`, env),
+  ]);
+  if (!wr.ok || !dr.ok) return err('db_error', 500);
+  const deptNames = Object.fromEntries((dr.data || []).map(d => [d.id, d.name]));
+  if (teamId && !deptNames[teamId]) return err('bad_team', 400);
+  const closed = (wr.data || []).map(w => w.week_end).filter(we => ends.includes(we));
+  const sr = await Promise.all(closed.map(we => sbDocket(`/rest/v1/rpc/week_score`, env, { method: 'POST', body: JSON.stringify({ p_date: we }) })));
+  if (sr.some(r => !r.ok)) return err('db_error', 500);
+  const scores = {};
+  closed.forEach((we, k) => { if (sr[k].data?.final) scores[we] = sr[k].data; });
+  let visible = null;
+  if (!isSuper) {
+    visible = await reviewVisibleIds(auth, Object.values(scores).flatMap(s => (Array.isArray(s.tasks) ? s.tasks : []).map(t => t.task_id)), env);
+    if (!visible) return err('db_error', 500);
+  }
+  return ok(trendModel({ weekEnds: ends, scores, whole: isSuper, teamId, deptNames,
+    rowsOf: (s) => (Array.isArray(s.tasks) ? s.tasks : []).filter(t => visible.has(t.task_id)) }));
+}
+
+// ── F9 R9b: the monthly re-plan (spec §8.7) — level F only ───────────────────
+// GET ?action=getReplan[&month=YYYY-MM (default: next month, IST)] → the month's agreed + proposed milestones
+// with readiness, the risk proposals since the last re-plan, the previous month's closed weekly scores.
+async function getReplan(url, auth, env) {
+  if (!isPlanAdmin(auth)) return err('forbidden', 403);
+  const today = istDate(Date.now());
+  const mo = replanMonth(url.searchParams.get('month'), today);
+  if (!mo) return err('bad_month', 400);
+  const iso = (ms) => new Date(ms).toISOString();
+  const aStart = istMidnight(mo.first), aEnd = istMidnight(addDays(mo.first, REPLAN_ACTION_DAYS));
+  const riskFrom = iso(istMidnight(addDays(mo.first, -REPLAN_RISK_DAYS))), riskTo = iso(istMidnight(mo.first));
+  const inWin = `or=(and(revised_deadline.gte.${iso(aStart)},revised_deadline.lt.${iso(aEnd)}),and(revised_deadline.is.null,deadline.gte.${iso(aStart)},deadline.lt.${iso(aEnd)}))`;
+  const [pr, settings, dr, ppr, spr] = await Promise.all([
+    planRows(auth, env),
+    weekSettings(env),
+    sbPodium(`/rest/v1/departments?select=id,name&order=name.asc`, env),
+    sbAll(sbDocket, `/rest/v1/plan_proposals?kind_hint=eq.risk&or=(status.eq.submitted,and(created_at.gte.${riskFrom},created_at.lt.${riskTo}))&select=id,title,why,status,suggested_theme_id,proposer_user_id,created_at&order=created_at.desc,id.asc`, env),
+    sbAll(sbDocket, `/rest/v1/spaces?archived_at=not.is.null&select=id&order=id.asc`, env),
+  ]);
+  if (!pr.ok || !dr.ok || !ppr.ok || !spr.ok) return err('db_error', 500);
+  const rows = Array.isArray(pr.data) ? pr.data : [];
+  const byId = new Map(rows.map(i => [i.id, i]));
+  const deptNames = Object.fromEntries((dr.data || []).map(d => [d.id, d.name]));
+  const ms = rows.filter(i => i.kind === 'milestone' && (i.state === 'agreed' || i.state === 'proposed')
+    && effectiveDue(i) && effectiveDue(i) >= mo.first && effectiveDue(i) <= mo.last);
+  const resultsOf = {};
+  for (const i of rows) if (i.kind === 'result' && i.parent_id && i.state !== 'dropped') (resultsOf[i.parent_id] = resultsOf[i.parent_id] || []).push(i.id);
+  const linkIds = uniq(ms.flatMap(m => [m.id, ...(resultsOf[m.id] || [])]));
+  const weekEnds = weekEndsIn(mo.prevFirst, mo.prevLast, settings.week_end_dow).filter(we => we < today);
+  const [tr, er, wr] = await Promise.all([
+    sbInAll(sbDocket, linkIds, l => `/rest/v1/tasks?plan_item_id=in.${l}&parent_task_id=is.null&archived_at=is.null&is_recurring=eq.false&${PW_OPEN}&${inWin}&select=id,status,plan_item_id,parent_task_id,space_id,deadline,revised_deadline&order=id.asc`, env),
+    sbIn(sbPodium, uniq(ms.map(m => m.owner_employee_id)), l => `/rest/v1/employees?id=in.${l}&select=id,full_name,department_id,status`, env),
+    weekEnds.length ? sbDocket(`/rest/v1/weeks?week_end=in.${inList(weekEnds)}&closed_at=not.is.null&select=week_end&order=week_end.asc`, env) : Promise.resolve({ ok: true, data: [] }),
+  ]);
+  if (!tr.ok || !er.ok || !wr.ok) return err('db_error', 500);
+  const archived = new Set((spr.data || []).map(x => x.id));
+  // Level F counts every linked task (§5.3 rollups) — except one in an archived space, which nobody will work.
+  const tasks = (tr.data || []).filter(t => !archived.has(t.space_id) && (() => {
+    const e = Date.parse(t.revised_deadline || t.deadline || '');
+    return Number.isFinite(e) && e >= aStart && e < aEnd;
+  })());
+  const emp = Object.fromEntries((er.data || []).map(e => [e.id, e]));
+  const activeOwners = new Set((er.data || []).filter(e => e.status === 'active').map(e => e.id));
+  const closed = (wr.data || []).map(w => w.week_end);
+  const sr = await Promise.all(closed.map(we => sbDocket(`/rest/v1/rpc/week_score`, env, { method: 'POST', body: JSON.stringify({ p_date: we }) })));
+  if (sr.some(r => !r.ok)) return err('db_error', 500);
+  const pnames = await nameMap(sbStore, 'users_profile', (ppr.data || []).map(p => p.proposer_user_id), env);
+  const metrics = publicMetrics();
+  const milestones = ms.map(m => {
+    const team = m.department_id || emp[m.owner_employee_id]?.department_id || null;
+    return { id: m.id, code: m.code || null, title: m.title, state: m.state, effective_due: effectiveDue(m),
+      owner_name: emp[m.owner_employee_id]?.full_name || null, team_id: team, team_name: team ? deptNames[team] || null : null,
+      chips: { no_data_source: noDataSource(m, metrics), redated: !!m.revised_due_date, not_agreed: m.state !== 'agreed' },
+      readiness: readiness(m, { activeOwners, tasks, resultIds: resultsOf[m.id] || [] }) };
+  }).sort((a, b) => String(a.effective_due).localeCompare(String(b.effective_due)) || String(a.code || '').localeCompare(String(b.code || ''), undefined, { numeric: true }));
+  const block = (b) => ({ on_time: Number(b?.on_time) || 0, cohort: Number(b?.cohort) || 0, pct: b && Number(b.cohort) > 0 && b.pct != null ? Number(b.pct) : null });
+  const scores = closed.map((we, k) => sr[k].data || {}).filter(s => s.final).map(s => ({ week_end: s.week_end, overall: block(s.totals),
+    teams: (Array.isArray(s.teams) ? s.teams : []).map(t => ({ id: t.department_id || null, name: t.department_id ? deptNames[t.department_id] || null : 'No team', ...block(t) })) }));
+  const ready = milestones.filter(m => m.readiness.ready).length;
+  return ok({
+    month: mo.month, first: mo.first, last: mo.last,
+    milestones,
+    risks: (ppr.data || []).map(p => ({ id: p.id, title: p.title, why: p.why || null, status: p.status, created_at: p.created_at,
+      proposer_name: pnames[p.proposer_user_id] || null,
+      suggested_theme_title: p.suggested_theme_id ? byId.get(p.suggested_theme_id)?.title || null : null })),
+    scores: { month: mo.prev, weeks: scores },
+    counts: { milestones: milestones.length, ready, not_ready: milestones.length - ready },
+  });
 }
 
 // ── F9 R9a: plan templates (spec §11; migration 0028) ────────────────────────
@@ -3950,6 +4115,7 @@ const GET_ACTIONS = {
   getReviewPack, getReviewSnapshots, getFoundersReview,
   getIncoming,
   getPlanTree, getTemplates, getTemplate,
+  getReachedTargets, getScoreTrend, getReplan,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,

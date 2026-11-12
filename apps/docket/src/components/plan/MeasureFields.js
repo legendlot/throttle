@@ -1,8 +1,9 @@
 'use client';
 // F9 R3 — "Done when · measured from" (spec §4.4): system → metric (filtered by system) → target. The
 // metric list is the worker's registry (getPlan `metrics`); the worker re-validates and sets source_ok.
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Activity, CheckCircle2 } from 'lucide-react';
 import { metricSystems, metricsFor } from '../../lib/plan.js';
+import { readingChip } from '../../lib/measure.js';
 
 const SYSTEM_LABEL = { redline: 'Redline', garage: 'Garage', odo: 'Odo', podium: 'Podium', docket: 'Docket', manual: 'Manual' };
 
@@ -31,6 +32,16 @@ export function MeasureFields({ value, onChange, metrics = [], disabled = false 
       )}
     </div>
   );
+}
+
+// R9b: the daily check's latest reading (measure.reading — sent at F / R / O only) + "✓ target reached".
+export function ReadingChip({ measure, metrics = [] }) {
+  const c = readingChip(measure, metrics);
+  if (!c) return null;
+  return <>
+    <span className="pl-reading" title={c.title}><Activity size={11} aria-hidden /> {c.text}</span>
+    {c.reached && <span className="pl-reached"><CheckCircle2 size={11} aria-hidden /> target reached</span>}
+  </>;
 }
 
 export function NoSourceChip() {

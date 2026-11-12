@@ -4,14 +4,14 @@
 // R3: "Done when · measured from" + the ⚠ No data source chip, Split (super admins), and the proposal
 // forms (propose — anyone; decide — super admins).
 // Fixed right panel, no backdrop: the register stays usable behind it (the .tv-side pattern).
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Combobox, useToast } from '@throttle/ui';
 import { X, Lock, Check, History, ListChecks, Scissors } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../lib/docketopsFetch.js';
 import { Button, Pill } from '../ui/index.js';
 import { StatusBadge } from '../StatusBadge.js';
 import { PlanChip } from './PlanPicker.js';
-import { MeasureFields, NoSourceChip } from './MeasureFields.js';
+import { MeasureFields, NoSourceChip, ReadingChip } from './MeasureFields.js';
 import { SplitForm } from './SplitForm.js';
 import { ProposeForm, ProposalView } from './Proposals.js';
 import {
@@ -80,7 +80,7 @@ export function PlanPanel({ target, isSuper, employeeId, byId, employees, metric
         ? <NewItem key={`new-${target.kind}-${target.parent?.id || ''}`} target={target} isSuper={isSuper} ownerOpts={ownerOpts}
             metrics={metrics} session={session} showToast={showToast} onClose={onClose}
             onCreated={(id) => { onChanged(); onOpen(id); }} />
-        : <ItemView key={target.id} id={target.id} isSuper={isSuper} employeeId={employeeId} byId={byId} ownerOpts={ownerOpts}
+        : <ItemView key={target.id + (target.op || '')} id={target.id} initialOp={target.op} initialText={target.evidence} isSuper={isSuper} employeeId={employeeId} byId={byId} ownerOpts={ownerOpts}
             metrics={metrics} nameOf={nameOf} session={session} showToast={showToast} onClose={onClose} onChanged={onChanged} onOpen={onOpen} />}
     </aside>
   );
@@ -162,7 +162,7 @@ function NewItem({ target, isSuper, ownerOpts, metrics, session, showToast, onCl
 }
 
 // ── open an item ─────────────────────────────────────────────────────────────
-function ItemView({ id, isSuper, employeeId, byId, ownerOpts, metrics, nameOf, session, showToast, onClose, onChanged, onOpen }) {
+function ItemView({ id, initialOp, initialText, isSuper, employeeId, byId, ownerOpts, metrics, nameOf, session, showToast, onClose, onChanged, onOpen }) {
   const [data, setData] = useState(null);
   const [draft, setDraft] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -176,6 +176,14 @@ function ItemView({ id, isSuper, employeeId, byId, ownerOpts, metrics, nameOf, s
     } catch (e) { showToast(planErrorText(e), 'error'); onClose(); }
   }, [id, session, showToast, onClose]);
   useEffect(() => { load(); }, [load]);
+  // R9b: "Target reached — confirm done" opens the item straight into the existing done form, evidence
+  // prefilled (still editable; the done action — and its rights — are unchanged).
+  const opened = useRef(false);
+  useEffect(() => {
+    if (!data || opened.current || initialOp !== 'done') return;
+    opened.current = true;
+    setOp('done'); setForm({ text: initialText || '' });
+  }, [data, initialOp, initialText]);
 
   if (!data || !draft) return <><Head onClose={onClose} /><div className="pl-panel-body pl-muted">Loading…</div></>;
   const it = data.item;
@@ -247,7 +255,8 @@ function ItemView({ id, isSuper, employeeId, byId, ownerOpts, metrics, nameOf, s
           : <ReadValue>{it.done_when}</ReadValue>}</Field>}
         {it.kind !== 'theme' && <Field label="Done when · measured from">{can('measure')
           ? <MeasureFields value={draft.measure} metrics={metrics} onChange={m => set({ measure: m })} />
-          : <ReadValue>{measureText(it.measure, metrics)}</ReadValue>}</Field>}
+          : <ReadValue>{measureText(it.measure, metrics)}</ReadValue>}
+          {it.measure?.reading && <div className="pl-reading-row"><ReadingChip measure={it.measure} metrics={metrics} /></div>}</Field>}
         {it.kind !== 'theme' && <Field label="Due date" hint={it.state === 'proposed' ? 'A proposal’s date is a draft until it’s agreed.' : undefined}>
           {can('due_date')
             ? <input type="date" className="pl-input" value={draft.due_date} onChange={e => set({ due_date: e.target.value })} />

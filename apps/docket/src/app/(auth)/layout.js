@@ -16,7 +16,6 @@ import { DocketTopbar } from '../../components/DocketTopbar.js';
 import { DocketTabBar } from '../../components/DocketTabBar.js';
 import { ShortcutsSheet } from '../../components/ShortcutsSheet.js';
 import { SpaceSettings } from '../../components/SpaceSettings.js';
-import { NewProgramModal } from '../../components/NewProgramModal.js';
 import { CommandBar } from '../../components/CommandBar.js';
 import { modPressed } from '../../lib/platform.js';
 
@@ -45,11 +44,7 @@ function AuthLayoutInner({ children }) {
   const [count, setCount] = useState(null);   // board task count, published by the tasks page
   const [settingsSpace, setSettingsSpace] = useState(null);   // sidebar ⋯ → SpaceSettings
   const [employees, setEmployees] = useState(null);           // lazy, only for SpaceSettings
-  const [programModal, setProgramModal] = useState(false);     // + New → New program
   const [cmdOpen, setCmdOpen] = useState(false);               // ⌘K command bar (P6)
-  // Programs created this session: getMe lists only programs with visible tasks, so a
-  // brand-new one would otherwise breadcrumb as "Program". Breadcrumb lookup only.
-  const [createdPrograms, setCreatedPrograms] = useState([]);
 
   // Mobile slide-over sidebar; closes itself on navigation. Keyed on the FULL route
   // (path + query) — /tasks?space=… → /tasks?program=… is a navigation even though
@@ -105,28 +100,24 @@ function AuthLayoutInner({ children }) {
   }, [loadMe]);
 
   // Route → active rail item, active sidebar row, breadcrumb.
-  const route = useMemo(() => routeModel(pathname, search, { spaces, programs: [...programs, ...createdPrograms] }), [pathname, search, spaces, programs, createdPrograms]);
-  const onTasksBoard = route.path === '/tasks';
+  const route = useMemo(() => routeModel(pathname, search, { spaces, programs }), [pathname, search, spaces, programs]);   // programs: old ?program= links' breadcrumb only (F9 R9b)
 
   const go = useCallback((r) => router.push(r), [router]);
-  // + New → New task: on a program board, stay and focus its ProgramCapture (it
-  // auto-tags the program); otherwise as the old sidebar button — the current space's
+  // + New → New task: as the old sidebar button — the current space's
   // board (or General) — and focus its un-prefilled top "New task" capture
   // ([data-create-primary]; focusing reveals it) once that route has landed.
   const newTask = useCallback(() => {
-    const programId = onTasksBoard ? (search.get('program') || '') : '';
-    const target = programId ? `/tasks?program=${programId}` : route.spaceId ? `/tasks?space=${route.spaceId}` : '/tasks';
+    const target = route.spaceId ? `/tasks?space=${route.spaceId}` : '/tasks';   // a retired program's list has no capture
     if (!atRoute(target)) router.push(target);
     focusWhenReady('[data-create-primary]', { route: target });
-  }, [router, route.spaceId, onTasksBoard, search]);
+  }, [router, route.spaceId]);
   const newSpace = useCallback(() => router.push('/tasks?space=new'), [router]);
-  const newProgram = useCallback(() => { setMobileNavOpen(false); setProgramModal(true); }, []);
   // ⌘K command bar (P6): the top-bar search trigger, ⌘K / Ctrl+K anywhere, and `/` on a
   // page without its own search. Not over another shell modal, a page modal (.backdrop)
   // or an open picker / menu (.ui-pop, .pop) — Esc order stays one layer at a time. It
   // may open over TaskView (no picker open); TaskView's keys are off while it's up.
-  const canOpenCmd = useCallback(() => !(settingsSpace || programModal || helpOpen)
-    && !document.querySelector('.ui-pop, .pop, .backdrop, [data-modal]'), [settingsSpace, programModal, helpOpen]);
+  const canOpenCmd = useCallback(() => !(settingsSpace || helpOpen)
+    && !document.querySelector('.ui-pop, .pop, .backdrop, [data-modal]'), [settingsSpace, helpOpen]);
   const openSearch = useCallback(() => { if (canOpenCmd()) { setMobileNavOpen(false); setCmdOpen(true); } }, [canOpenCmd]);
 
   const openSpaceSettings = useCallback((s) => {
@@ -170,8 +161,8 @@ function AuthLayoutInner({ children }) {
       if (e.key === 'Escape' && helpOpen) { setHelpOpen(false); return; }
       if (e.key === 'Escape' && mobileNavOpen) { setMobileNavOpen(false); return; }
       if (typing) return;
-      // A shell modal (space settings / new program) owns the keyboard; `?` still closes help.
-      if (settingsSpace || programModal) return;
+      // A shell modal (space settings) owns the keyboard; `?` still closes help.
+      if (settingsSpace) return;
       // So does a page-owned modal marked [data-modal] (F3 Grid triage): no `?` / `[` / `/`
       // underneath it. ⌘K is already gated on the same selector (canOpenCmd).
       if (!helpOpen && document.querySelector('[data-modal]')) return;
@@ -188,7 +179,7 @@ function AuthLayoutInner({ children }) {
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [helpOpen, mobileNavOpen, settingsSpace, programModal, toggleSidebar, openSearch, cmdOpen]);
+  }, [helpOpen, mobileNavOpen, settingsSpace, toggleSidebar, openSearch, cmdOpen]);
 
   if (loading && !user) return <Spinner />;
 
@@ -196,7 +187,7 @@ function AuthLayoutInner({ children }) {
   const isAdmin = !!perms?.docket_admin;
   const isPlanAdmin = !!perms?.docket_plan_admin;   // F9 R6b: the founders' catch-up nav entry
   // shellModalOpen: a layout-owned modal is up; pages fold it into their hotkey guards.
-  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
+  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, shellModalOpen: !!settingsSpace || helpOpen || cmdOpen };
 
   return (
     <ChromeContext.Provider value={ctxValue}>
@@ -210,7 +201,6 @@ function AuthLayoutInner({ children }) {
           onSearch={openSearch}
           onNewTask={newTask}
           onNewSpace={newSpace}
-          onNewProgram={newProgram}
           onHelp={() => setHelpOpen(true)}
         />
         <div className="dk-body">
@@ -229,7 +219,6 @@ function AuthLayoutInner({ children }) {
             activeKey={route.activeKey}
             path={route.path}
             spaces={spaces}
-            programs={programs}
             isAdmin={isAdmin}
             isPlanAdmin={isPlanAdmin}
             showTemplates={showTemplates}
@@ -237,7 +226,6 @@ function AuthLayoutInner({ children }) {
             mobileOpen={mobileNavOpen}
             onSelect={go}
             onNewSpace={newSpace}
-            onNewProgram={newProgram}
             onSpaceSettings={openSpaceSettings}
           />
           {mobileNavOpen && <div className="dks-backdrop" onMouseDown={() => setMobileNavOpen(false)} />}
@@ -259,19 +247,11 @@ function AuthLayoutInner({ children }) {
         />
         {/* Mounted per open: fresh state, sources read synchronously (no stale frame). */}
         {cmdOpen && <CommandBar userId={user?.id} session={session} onClose={() => setCmdOpen(false)} router={router}
-          spaces={spaces} programs={[...programs, ...createdPrograms.filter(c => !programs.some(p => p.id === c.id))]}
+          spaces={spaces}
           canViewDashboard={canViewDashboard} isAdmin={isAdmin} isPlanAdmin={isPlanAdmin} showTemplates={showTemplates}
-          onNewTask={newTask} onNewSpace={newSpace} onNewProgram={newProgram}
+          onNewTask={newTask} onNewSpace={newSpace}
           onToggleSidebar={toggleSidebar} onHelp={() => setHelpOpen(true)} />}
         {helpOpen && <ShortcutsSheet onClose={() => setHelpOpen(false)} />}
-        {programModal && (
-          <NewProgramModal session={session} onClose={() => setProgramModal(false)}
-            onCreated={(prog) => {
-              setProgramModal(false);
-              setCreatedPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog]);
-              router.push('/tasks?program=' + prog.id);
-            }} />
-        )}
         {settingsSpace && (
           <SpaceSettings space={settingsSpace} session={session} employees={employees || []} showToast={showToast}
             onClose={() => setSettingsSpace(null)}

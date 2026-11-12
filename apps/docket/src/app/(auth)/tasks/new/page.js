@@ -18,7 +18,6 @@ function NewTaskInner() {
 
   const [departments, setDepartments] = useState([]);
   const [employees, setEmployees] = useState([]);
-  const [programs, setPrograms] = useState([]);
   const [parentTask, setParentTask] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -28,14 +27,12 @@ function NewTaskInner() {
     if (!session) return;
     setLoading(true);
     try {
-      const [d, e, p] = await Promise.all([
+      const [d, e] = await Promise.all([
         docketopsGet('getDepartments', {}, session),
         docketopsGet('getEmployees', {}, session),
-        docketopsGet('getPrograms', {}, session).catch(() => []),
       ]);
       setDepartments(Array.isArray(d) ? d : []);
       setEmployees(Array.isArray(e) ? e : []);
-      setPrograms(Array.isArray(p) ? p : []);
       if (parentId) {
         const p = await docketopsGet('getTask', { id: parentId }, session).catch(() => null);
         if (p) setParentTask(p);
@@ -44,13 +41,6 @@ function NewTaskInner() {
     finally { setLoading(false); }
   }, [session, parentId, showToast]);
   useEffect(() => { load(); }, [load]);
-
-  async function createProgram(name) {
-    const prog = await docketopsPost('createProgram', { name }, session);
-    setPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog].sort((a, b) => a.name.localeCompare(b.name)));
-    if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed'));
-    return prog; // { id, name, color }
-  }
 
   async function submit(payload) {
     setSaving(true);
@@ -72,7 +62,7 @@ function NewTaskInner() {
         <button className="btn btn-ghost" onClick={() => router.back()}><ArrowLeft size={13} /> Back</button>
       </div>
       {loading ? <Spinner /> : (
-        <TaskForm departments={departments} employees={employees} programs={programs} planItems={planItems} parentTask={parentTask} onCreateProgram={createProgram} onSubmit={submit} saving={saving} />
+        <TaskForm departments={departments} employees={employees} planItems={planItems} parentTask={parentTask} onSubmit={submit} saving={saving} />
       )}
     </div>
   );

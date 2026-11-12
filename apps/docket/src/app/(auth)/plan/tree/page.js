@@ -11,7 +11,8 @@ import { Spinner } from '@throttle/ui';
 import { ChevronRight, Network, Target, ChevronsDown, ChevronsUp, CalendarRange } from 'lucide-react';
 import { docketopsGet } from '../../../../lib/docketopsFetch.js';
 import { Button, EmptyState, Pill } from '../../../../components/ui/index.js';
-import { NoSourceChip } from '../../../../components/plan/MeasureFields.js';
+import { NoSourceChip, ReadingChip } from '../../../../components/plan/MeasureFields.js';
+import { usePlanMetrics } from '../../../../components/plan/PlanPicker.js';
 import { TaskView } from '../../../../components/task/TaskView.js';
 import { chipState, fmtPlanDate } from '../../../../lib/plan.js';
 import { STATUS_MAP } from '../../../../lib/tasks.js';
@@ -29,6 +30,7 @@ export default function PlanTreePage() {
   const [themes, setThemes] = useState([{ value: '', label: 'All themes' }]);
   const [drawerId, setDrawerId] = useState(null);
   const [people, setPeople] = useState({ departments: [], employees: [] });
+  const metrics = usePlanMetrics(session);   // R9b: units for the reading chip
 
   // Only the newest request lands (toggling filters fast).
   const ticket = useRef(0);
@@ -100,7 +102,7 @@ export default function PlanTreePage() {
       ) : (
         <div className="ptr-list" role="tree" aria-label="Plan tree">
           {rows.map(r => r.type === 'item'
-            ? <ItemRow key={'i' + r.item.id} row={r} onToggle={() => setExpanded(s => toggle(s, r.item.id))} />
+            ? <ItemRow key={'i' + r.item.id} row={r} metrics={metrics} onToggle={() => setExpanded(s => toggle(s, r.item.id))} />
             : r.type === 'task'
             ? <TaskLeaf key={'t' + r.itemId + r.task.id} row={r} onOpen={() => setDrawerId(r.task.id)} />
             : <div key={'m' + r.itemId} className="ptr-more" style={{ paddingLeft: indent(r.depth) }}>
@@ -117,7 +119,7 @@ export default function PlanTreePage() {
 
 const indent = (depth) => 8 + depth * 20;
 
-function ItemRow({ row, onToggle }) {
+function ItemRow({ row, metrics, onToggle }) {
   const it = row.item;
   const chip = chipState(it);
   const due = it.effective_due || it.revised_due_date || it.due_date;
@@ -133,6 +135,7 @@ function ItemRow({ row, onToggle }) {
           {it.code && <span className="pl-code">{it.code}</span>}
           <span className="ptr-t">{it.title}</span>
           {it.no_data_source && <NoSourceChip />}
+          <ReadingChip measure={it.measure} metrics={metrics} />
         </div>
         <div className="ptr-l2">
           {it.owner_name && <span className="ptr-meta">{it.owner_name}</span>}

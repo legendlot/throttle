@@ -95,7 +95,7 @@ test('rows: effective date, re-dated, ⚠ no data source; a level-T row is code 
   const r = byId(buildTree(items, [], { now: NOW, names: { e1: 'ZZ One' }, metrics: [{ key: 'zz', source_ok: true }] }));
   assert.deepEqual(r.t1, { id: 't1', parent_id: null, kind: 'theme', code: 'T1', title: 'ZZ t1', level: 'T', state: 'agreed',
     owner_employee_id: null, owner_name: null, due_date: null, revised_due_date: null, effective_due: null, redated: false,
-    no_data_source: null, counts: { open: 0, done: 0, overdue: 0, hidden: 0 }, on_time: { on_time: 0, scored: 0, pct: null } });
+    no_data_source: null, measure: null, counts: { open: 0, done: 0, overdue: 0, hidden: 0 }, on_time: { on_time: 0, scored: 0, pct: null } });
   assert.equal(r.m1.parent_id, null);                                                // its milestone's theme isn't in the projection
   assert.equal(r.m1.effective_due, '2026-11-25'); assert.equal(r.m1.redated, true);
   assert.equal(r.m1.owner_name, 'ZZ One'); assert.equal(r.m1.no_data_source, false);

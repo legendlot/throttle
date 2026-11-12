@@ -2,8 +2,9 @@
 // Supabase JWT, service binding DOCKETOPS), so Docket's own rules decide what they may see and edit
 // (owner / creator / collaborator / own department; docket_admin + docket_view_all widen it).
 // Write safety (Afshaan 2026-11-09 asked for read + write so Claude can manage a task list):
-//   - only single-task actions (and applying a plan template, F9 R9a); no bulk actions, no space/role/program/
-//     template admin (templates are edited in the app only), no deletes
+//   - only single-task actions (and applying a plan template, F9 R9a); no bulk actions, no space/role/
+//     template admin (templates are edited in the app only), no deletes. Programs are retired (F9 R9b,
+//     RULE-DOCKET-004 superseded): no program filter or field; a task row still carries its program read-only
 //     (Docket has no task delete; abandon is reversible via set_status and needs a reason);
 //   - every write is a separate tool with readOnlyHint:false, so Claude asks before each one unless
 //     the person has chosen otherwise in their own Claude settings;
@@ -43,6 +44,10 @@ const SCORE_WEEK = { schema: { type: 'string', maxLength: 10 }, check: v => (['t
 // F9 R6a: one team (a department id from docket_tasks report=people) or all of them.
 const TEAM = { schema: { type: 'string', maxLength: 36 }, check: v => (v === 'all' || T.uuid.check(v).ok)
   ? { ok: true, value: v } : { ok: false, error: 'must be all or a department id (uuid)' } };
+// F9 R9b: a month for the re-plan (YYYY-MM).
+const MONTHV = /^\d{4}-(0[1-9]|1[0-2])$/;
+const MONTH = { schema: { type: 'string', pattern: MONTHV.source }, check: v => (typeof v === 'string' && MONTHV.test(v))
+  ? { ok: true, value: v } : { ok: false, error: 'must be a month, YYYY-MM' } };
 // F9 R6b: which week a founder's top 5 is for — this, next, or the week holding a date.
 const FOCUS_WEEK = { schema: { type: 'string', maxLength: 10 }, check: v => (['this', 'next'].includes(v) || T.date.check(v).ok)
   ? { ok: true, value: v } : { ok: false, error: 'must be this, next, or a date YYYY-MM-DD (its week)' } };
@@ -131,7 +136,7 @@ function writeTool({ name, title, description, action, params, required = [], de
       if (!res.ok) {
         if (res.reason === 'worker denied') return { ok: false, reason: 'docket denied' };
         // docketops' `*_failed: {db}`: most often an id that does not exist (FK). Plain words, no DB text.
-        if (res.serverFail) return { ok: false, userError: 'Docket could not save that change. Check that any ids given (owner, program, space) came from docket_tasks, and check the task before trying again.' };
+        if (res.serverFail) return { ok: false, userError: 'Docket could not save that change. Check that any ids given (owner, space) came from docket_tasks, and check the task before trying again.' };
         if (res.reason === 'unreachable') return { ok: false, reason: 'write unconfirmed' };
         return res;
       }
@@ -144,15 +149,13 @@ function writeTool({ name, title, description, action, params, required = [], de
 const docketTools = [
   reportTool({
     system: 'docket', name: 'docket_tasks', title: 'Docket tasks', binding: 'DOCKETOPS', dropKeys: DOCKET_DROP,
-    description: 'Read Docket: your own task list (tasks you own, created or collaborate on), a space\'s tasks, one task in full (comments, history, collaborators, subtasks), and the spaces/programs you can see. Docket\'s own visibility rules apply.',
-    paramAbout: { status: 'Filter by status.', priority: 'Filter by priority.', overdue: 'Only overdue tasks.', week: 'Only tasks due in one week (IST, Docket\'s week end): this, next, overdue, none (no deadline), or any date YYYY-MM-DD for the week holding it.', q: 'Search text in titles.', program_id: 'Limit to one program.', space_id: 'The space (from report=spaces). Omit for the default space.', id: 'Task id.' },
+    description: 'Read Docket: your own task list (tasks you own, created or collaborate on), a space\'s tasks, one task in full (comments, history, collaborators, subtasks), and the spaces you can see. Docket\'s own visibility rules apply.',
+    paramAbout: { status: 'Filter by status.', priority: 'Filter by priority.', overdue: 'Only overdue tasks.', week: 'Only tasks due in one week (IST, Docket\'s week end): this, next, overdue, none (no deadline), or any date YYYY-MM-DD for the week holding it.', q: 'Search text in titles.', space_id: 'The space (from report=spaces). Omit for the default space.', id: 'Task id.' },
     reports: {
-      my_tasks: { action: 'getMyTasks', about: 'your own tasks (owner, creator or collaborator), filterable', params: { status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, week: WEEK, q: T.text, program_id: T.uuid } },
-      space_tasks: { action: 'getTasks', about: 'tasks in one space you can access, filterable', params: { space_id: T.uuid, status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, week: WEEK, q: T.text, program_id: T.uuid } },
+      my_tasks: { action: 'getMyTasks', about: 'your own tasks (owner, creator or collaborator), filterable', params: { status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, week: WEEK, q: T.text } },
+      space_tasks: { action: 'getTasks', about: 'tasks in one space you can access, filterable', params: { space_id: T.uuid, status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, week: WEEK, q: T.text } },
       task: { action: 'getTask', about: 'one task in full: comments, history, collaborators, documents, subtasks', params: { id: T.uuid }, required: ['id'] },
-      program_tasks: { action: 'getProgramTasks', about: 'tasks across spaces for one program', params: { program_id: T.uuid }, required: ['program_id'] },
       spaces: { action: 'getSpaces', about: 'the spaces you can see, with ids', params: {} },
-      programs: { action: 'getPrograms', about: 'programs, with ids', params: {} },
       // Names + departments only (Docket's getEmployees is ungated and also carries auth ids): for assigning owners.
       // F9 R8: hand-offs coming TO you (named) or your team — not-accepted first, then by date.
       incoming: { action: 'getIncoming', about: 'open hand-offs to you (named receiver) or your team, with who gives them; not accepted first', params: { scope: T.oneOf('me', 'team', 'all') } },
@@ -165,7 +168,8 @@ const docketTools = [
     system: 'docket', name: 'docket_plan', title: 'Docket plan', binding: 'DOCKETOPS', dropKeys: DOCKET_DROP,
     description: 'Read the Docket plan (themes → milestones → results) at your own level: themes you can link tasks to, the milestones and results you own, one item with its children and the linked tasks you can see. Use the ids as plan_item_id on docket_create_task / docket_update_task (a Founders\' Associate sees every unrestricted item but links only to themes and to items they own).',
     paramAbout: { id: 'For report=item: a plan item id (from report=items or themes). For report=template: a template id (from report=templates).', week: 'For report=score / review / founders: this (default), last (the week just closed), or any date YYYY-MM-DD for the week holding it.',
-      team: 'For report=review: a department id, or all. Default: a founder or Founders\' Associate all teams; everyone else their own team.' },
+      team: 'For report=review / trend: a department id, or all. Default: a founder or Founders\' Associate all teams; everyone else their own team.',
+      weeks: 'For report=trend: how many closed weeks, 1–26 (default 8).', month: 'For report=replan: YYYY-MM (default next month, IST).' },
     reports: {
       themes: { action: 'getPlan', about: 'the themes you can see (code, title, state)', params: {},
         shape: d => ({ themes: ((d && d.items) || []).filter(x => x.kind === 'theme') }) },
@@ -186,6 +190,11 @@ const docketTools = [
       // F9 R9a (spec §11): plan templates — founders' ones to super admins, leads' ones to super admins and leads.
       templates: { action: 'getTemplates', about: 'the plan templates you can use: name, who it is for (founders → applied to a theme, leads → to a milestone), its roles, steps and day span', params: {} },
       template: { action: 'getTemplate', about: 'one template: its steps (titles only unless you can edit it), its roles and day span — what docket_apply_template needs', params: { id: T.uuid }, required: ['id'] },
+      // F9 R9b (spec §4.4 P2): an item's measure carries its latest daily auto-check reading (measure.reading) at
+      // the levels that see the measure. These three are Docket-gated the same way as the app.
+      reached: { action: 'getReachedTargets', about: 'super admins: agreed milestones / results whose daily measure check reached the target — the queue to confirm done (mark done with the reading as evidence)', params: {} },
+      trend: { action: 'getScoreTrend', about: 'the weekly on-time % per team over the last closed weeks (a lead: their own team only)', params: { weeks: T.int(1, 26), team: TEAM } },
+      replan: { action: 'getReplan', about: 'super admins: the monthly re-plan — the month\'s milestones with readiness (agreed, active owner, data source, actionable tasks in its first two weeks), the risk proposals, and the previous month\'s final weekly scores', params: { month: MONTH } },
     },
   }),
   // F9 R3 — anyone can propose something for the plan (spec §4.5). It lands in the founders' queue; nothing
@@ -225,7 +234,6 @@ const docketTools = [
       deadline: { ...T.date, about: 'Due date, YYYY-MM-DD.' },
       owner_employee_id: { ...T.uuid, about: 'Owner (employee id). Omit to own it yourself.' },
       space_id: { ...T.uuid, about: 'Space id. Omit for the default space.' },
-      program_id: { ...T.uuid, about: 'Program id.' },
       plan_item_id: { ...PLAN_ITEM, about: 'Plan link: a theme, milestone or result id from docket_plan (proposed or agreed). Omit for an unplanned task.' },
       handoff_to_department_id: { ...HANDOFF_ID, about: 'Make it a hand-off to another team: that department\'s id (from docket_tasks report=people). You stay the owner; the deadline is the hand-off date.' },
       handoff_to_employee_id: { ...HANDOFF_ID, about: 'Optional named receiver of the hand-off (an employee id); alone, their team becomes the receiving team.' },
@@ -235,14 +243,13 @@ const docketTools = [
   }),
   writeTool({
     name: 'docket_update_task', title: 'Edit a Docket task', action: 'updateTask',
-    description: 'Change a task\'s title, description, priority, owner, program or plan link, or set a FIRST deadline on a task that has none (to move an existing deadline use docket_revise_deadline). Status changes use docket_set_status. A sub-task follows its parent\'s plan link.',
+    description: 'Change a task\'s title, description, priority, owner or plan link, or set a FIRST deadline on a task that has none (to move an existing deadline use docket_revise_deadline). Status changes use docket_set_status. A sub-task follows its parent\'s plan link.',
     params: {
       id: TASK,
       title: { ...longText(200), about: 'New title.' },
       description: { ...optText(4000), about: 'New description.' },
       priority: { ...PRIORITY, about: 'New priority.' },
       owner_employee_id: { ...T.uuid, about: 'New owner (employee id).' },
-      program_id: { ...T.uuid, about: 'New program id.' },
       deadline: { ...T.date, about: 'First deadline, only if the task has none yet.' },
       plan_item_id: { ...PLAN_ITEM, about: 'New plan link (an id from docket_plan), or null to make the task unplanned. Not on a sub-task.' },
       handoff_to_department_id: { ...HANDOFF_ID, about: 'Hand this task off to another team (department id), or null to stop it being a hand-off. Changing it voids an acceptance.' },

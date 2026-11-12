@@ -80,7 +80,6 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   const [busy, setBusy] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [descDraft, setDescDraft] = useState('');
-  const [programs, setPrograms] = useState([]);
   const [spaces, setSpaces] = useState([]);
   const [edit, setEdit] = useState(null);             // which property picker is open
   const [abandonMode, setAbandonMode] = useState(false);
@@ -91,7 +90,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   const [depAnchor, setDepAnchor] = useState(null);   // F7 add flow: the ref it opens against, or null
   const [sections, setSections] = useState({});       // collapsed sections
   const [nav, setNav] = useState({ prev: null, next: null });
-  const refs = useMemo(() => ({ status: createRef(), owner: createRef(), collab: createRef(), deadline: createRef(), priority: createRef(), team: createRef(), program: createRef(), plan: createRef(), handoff: createRef(), handoffPerson: createRef(), space: createRef() }), []);
+  const refs = useMemo(() => ({ status: createRef(), owner: createRef(), collab: createRef(), deadline: createRef(), priority: createRef(), team: createRef(), plan: createRef(), handoff: createRef(), handoffPerson: createRef(), space: createRef() }), []);
   const planItems = usePlanItems(session);   // F9 R2: the Plan picker's items (getPlan, shared)
   const rootRef = useRef(null);
   const titleRef = useRef(null);
@@ -110,7 +109,6 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
 
   useEffect(() => {
     if (!session) return;
-    docketopsGet('getPrograms', {}, session).then(p => setPrograms(p || [])).catch(() => {});
     docketopsGet('getSpaces', {}, session).then(s => setSpaces(s || [])).catch(() => {});
   }, [session]);
   useEffect(() => { try { const s = JSON.parse(localStorage.getItem(SECTIONS_KEY) || '{}'); if (s && typeof s === 'object') setSections(s); } catch { /* ignore */ } }, []);
@@ -225,16 +223,6 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
     try { await docketopsPost('removeCollaborator', { id: task.id, employee_id: employeeId }, session); await mutated(); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
-  async function createProgramInline(name) {
-    setBusy(true);
-    try {
-      const prog = await docketopsPost('createProgram', { name }, session);
-      setPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog].sort((a, b) => a.name.localeCompare(b.name)));
-      await docketopsPost('updateTask', { id: task.id, program_id: prog.id }, session); await mutated();
-      if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed'));
-    } catch (e) { showToast(e.message || 'Failed to add program', 'error'); }
-    finally { setBusy(false); }
-  }
   async function moveToSpace(v) {
     if (!v || v === task.space_id) return;
     setBusy(true);
@@ -257,18 +245,17 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
     catch (e) { showToast(handoffErrorText(e), 'error'); load(true); }
     finally { setBusy(false); }
   }
-  const actions = { saveField, setStatus, commitDeadline, doAbandon, addCollab, removeCollab, createProgramInline, moveToSpace, saveHandoff, acceptHandoff };
+  const actions = { saveField, setStatus, commitDeadline, doAbandon, addCollab, removeCollab, moveToSpace, saveHandoff, acceptHandoff };
 
   const opts = useMemo(() => ({
     teamOpts: [{ value: '', label: '— No team —' }, ...departments.map(d => ({ value: d.id, label: d.name, dot: personColor(d.id) }))],
     ownerOpts: [{ value: '', label: '— Unassigned —' }, ...employees.map(e => ({ value: e.id, label: e.full_name }))],
     prioOpts: PRIORITIES.map(p => ({ value: p.key, label: p.label })),
-    programCellOpts: [{ value: '', label: '— No program —' }, ...programs.map(p => ({ value: p.id, label: p.name }))],
     spaceOpts: spaces.map(s => ({ value: s.id, label: s.name + (s.is_private ? '' : ' · open') })),
     collabOpts: task ? employees.filter(e => !(task.collaborators || []).some(c => c.employee_id === e.id) && e.id !== task.owner_employee_id).map(e => ({ value: e.id, label: e.full_name })) : [],
     planItems,
     departments, employees,   // F9 R8: the hand-off team / person pickers
-  }), [departments, employees, programs, spaces, task, planItems]);
+  }), [departments, employees, spaces, task, planItems]);
   const revisions = (task?.history || []).filter(h => h.event_type === 'deadline_revised').length;
 
   // ⌘K "Add dependency" for the open task (CommandBar reads source 'taskView'). Opens the add

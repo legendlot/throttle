@@ -190,6 +190,8 @@ const ERR = {
   founders_space: 'Only a super admin can do that in the Founders’ space.',
   founders_space_fixed: 'The Founders’ space can’t be archived or recovered.',
   bad_plan_item_id: 'Pick a plan item from the list.',
+  // R9b — Programs retired (spec §7.1)
+  programs_retired: 'Programs are retired — link the task to the plan instead.',
   // R3 — split, measure, proposals
   bad_children: 'A split needs 2 to 10 parts, each with a title, owner, due date and done-when.',
   bad_results: 'Map each result to one of the new parts, or drop it.',

@@ -2077,3 +2077,43 @@ a.rv-row:hover, button.rv-row:hover, .rv-row.on { background: var(--hover); }
   .tpl-role-l { flex-basis: auto; }
   .tpl-node .pl-input, .tpl-apply .pl-input { font-size: 16px; }
 }
+
+/* F9 R9b — the measure reading chip + "Target reached — confirm done" */
+.pl-reading { flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; max-width: 100%; font-size: 10.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text-2); background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
+.pl-reached { flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 600; white-space: nowrap;
+  color: var(--st-done); background: var(--st-done-bg); border-radius: 4px; padding: 1px 5px; }
+.pl-reading-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.pl-reachq .pl-theme-t svg { color: var(--st-done); }
+.tk-retired a { color: var(--accent); }
+.tv-retired { color: var(--text-3); }
+@media (max-width: 767px) { .pl-reading { white-space: normal; } }
+
+/* F9 R9b — /review score trend + sparklines (inline SVG; scrolls inside its card) */
+.rv-trendcard { margin-bottom: 14px; }
+.rv-chart-scroll { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+.rv-chart { display: block; min-width: 480px; }
+.rv-grid { stroke: var(--border); stroke-width: 1; }
+.rv-axis { font-size: 10px; fill: var(--text-4); font-family: var(--f-ui); }
+.rv-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: 11.5px; color: var(--text-2); }
+.rv-leg { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow-wrap: anywhere; }
+.rv-leg-dot { flex-shrink: 0; width: 9px; height: 3px; border-radius: 2px; }
+.rv-spark { display: block; flex-shrink: 0; }
+.rv-trend { align-items: center; flex-wrap: wrap; }
+
+/* F9 R9b — /plan/replan: the tables scroll inside their card at 375px, never the page */
+.rp-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 10px; }
+.rp-bar .rv-team-h { margin: 0; flex: 1 1 auto; }
+.rp-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+.rp-table { width: 100%; min-width: 640px; border-collapse: collapse; font-size: 13px; }
+.rp-table th { text-align: left; font-weight: 600; font-size: 12px; color: var(--text-3); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.rp-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; color: var(--text-2); }
+.rp-table .rp-c { text-align: center; white-space: nowrap; }
+.rp-ms { min-width: 220px; color: var(--text-1); }
+.rp-nowrap { white-space: nowrap; }
+.rp-ok { color: var(--st-done); }
+.rp-bad { color: var(--overdue); }
+.rp-n { margin-left: 4px; font-size: 11px; color: var(--text-3); }
+.rp-notready td:first-child { box-shadow: inset 3px 0 0 var(--overdue); }
+.rp-total td { font-weight: 600; color: var(--text-1); }
+.rp-risk .rv-note { display: block; font-weight: 400; }

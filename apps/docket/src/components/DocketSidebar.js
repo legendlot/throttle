@@ -1,10 +1,10 @@
 'use client';
 // Docket context sidebar (ClickUp redesign P1). Sits between the icon rail and the
-// page; holds the hierarchy only — Programs, then Spaces (General · My spaces · By
-// others) — or, on an Admin route, the three admin pages.
+// page; holds the hierarchy only — Plan, then Spaces (General · My spaces · By others) — or, on an
+// Admin route, the three admin pages. F9 R9b: the Programs section is retired (spec §7.1).
 //
 // Collapsible sections (S138): per-section open state is persisted per person in
-// localStorage (`docket.nav.collapsed`); Programs + Spaces default open, the two
+// localStorage (`docket.nav.collapsed`); Spaces defaults open, the two
 // space sub-groups default closed. Override: a section always renders open when it
 // holds the active row. "Customize sidebar" hides whole sections
 // (`docket.nav.hidden`); a hidden section still shows while it holds the active row.
@@ -16,9 +16,8 @@ import { IconButton, Button, Menu, MenuItem, MenuLabel } from './ui/index.js';
 import { personColor } from './primitives.js';
 import { ADMIN_ITEMS } from '../lib/nav.js';
 
-const DEFAULT_COLLAPSED = { programs: false, spaces: false, mySpaces: true, otherSpaces: true };
+const DEFAULT_COLLAPSED = { spaces: false, mySpaces: true, otherSpaces: true };
 const HIDEABLE = [
-  { key: 'programs',    label: 'Programs' },
   { key: 'mySpaces',    label: 'My spaces' },
   { key: 'otherSpaces', label: 'By others' },
 ];
@@ -66,8 +65,8 @@ function SectionHead({ label, open, onToggle, depth = 0, onAdd, addLabel }) {
 const dot = (color) => <span className="dks-dot" style={{ background: color }} />;
 
 export function DocketSidebar({
-  activeKey = '', path = '', spaces = [], programs = [], isAdmin = false, isPlanAdmin = false, showTemplates = false,
-  collapsed = false, mobileOpen = false, onSelect, onNewSpace, onNewProgram, onSpaceSettings,
+  activeKey = '', path = '', spaces = [], isAdmin = false, isPlanAdmin = false, showTemplates = false,
+  collapsed = false, mobileOpen = false, onSelect, onNewSpace, onSpaceSettings,
 }) {
   const privates = (spaces || []).filter(s => s.is_private);
   const mySpaces = privates.filter(s => s.is_owner);
@@ -83,7 +82,6 @@ export function DocketSidebar({
   const isCollapsed = (key) => (key in navCollapsed ? navCollapsed[key] : DEFAULT_COLLAPSED[key]);
   const toggle = (key) => setNavCollapsed(prev => ({ ...prev, [key]: !(key in prev ? prev[key] : DEFAULT_COLLAPSED[key]) }));
 
-  const programActive = activeKey.startsWith('/tasks?program=');
   const mySpaceActive = mySpaces.some(s => activeKey === '/tasks?space=' + s.id);
   const otherSpaceActive = otherSpaces.some(s => activeKey === '/tasks?space=' + s.id);
   const spacesActive = activeKey === '/tasks' || mySpaceActive || otherSpaceActive;
@@ -130,21 +128,12 @@ export function DocketSidebar({
         <Row depth={1} label="Three weeks" active={path === '/plan/weeks'} onClick={go('/plan/weeks')} />
         {/* F9 R9a: theme → milestone → result → task, with rollups; and templates (only for people who may make or see one). */}
         <Row depth={1} label="Tree" active={path === '/plan/tree'} onClick={go('/plan/tree')} />
+        {isPlanAdmin && <Row depth={1} label="Re-plan" active={path === '/plan/replan'} onClick={go('/plan/replan')} />}
         {showTemplates && <Row depth={1} label="Templates" active={path === '/plan/templates'} onClick={go('/plan/templates')} />}
         {/* F9 R6a: the weekly review pack — everyone (a lead sees their own team; plan admins any). */}
         <Row depth={1} label="Review" active={path === '/review'} onClick={go('/review')} />
         {/* F9 R6b: the Saturday founders' catch-up — plan admins only (the worker 403s anyone else). */}
         {isPlanAdmin && <Row depth={1} label="Founders’ catch-up" active={path === '/review/founders'} onClick={go('/review/founders')} />}
-        {/* Programs (S138): cross-space jump-to — every task tagged to the program, in any
-            space you can access. Only programs you have visible tasks in are listed (counts). */}
-        {(programs.length > 0 || onNewProgram) && shown('programs', programActive) && <div className="dks-section">
-          <SectionHead label="Programs" open={open('programs', programActive)} onToggle={() => toggle('programs')}
-            onAdd={onNewProgram} addLabel="New program" />
-          {open('programs', programActive) && programs.map(p => (
-            <Row key={p.id} depth={1} lead={dot(p.color || personColor(p.id))} label={p.name} count={p.task_count}
-              active={activeKey === '/tasks?program=' + p.id} onClick={go('/tasks?program=' + p.id)} />
-          ))}
-        </div>}
 
         {/* Spaces: General (the org-wide board — the worker's default when no space_id is
             set), then the caller's own private spaces, then private spaces others added them to. */}

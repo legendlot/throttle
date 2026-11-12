@@ -12,7 +12,8 @@ const KIND_RANK = { theme: 0, milestone: 1, result: 2 };
 const effMs = (t) => Date.parse(t?.revised_deadline || t?.deadline || '');
 
 // The item row the tree returns: the projection's fields (a level-T row is code + title + kind + level (+ state,
-// as getPlan gives it) — nothing else), plus effective date, re-dated flag, ⚠ no data source, counts, on-time.
+// as getPlan gives it) — nothing else), plus effective date, re-dated flag, ⚠ no data source, the measure (with
+// its latest reading, R9b), counts, on-time.
 function itemRow(i, { names, metrics, isF, parentId }) {
   const T = i.level === 'T';
   return {
@@ -24,6 +25,7 @@ function itemRow(i, { names, metrics, isF, parentId }) {
     effective_due: T ? null : i.revised_due_date || i.due_date || null,
     redated: T ? false : !!i.revised_due_date,
     no_data_source: T ? null : noDataSource(i, metrics),
+    measure: T ? null : i.measure || null,   // R9b: as the projection gives it, + measure.reading (worker-attached)
     ...(isF ? { restricted: !!i.restricted } : {}),
   };
 }

@@ -16,6 +16,7 @@ import { fmtPlanStamp } from '../../../lib/plan.js';
 import { slackText, stepWeek, weekParam, weekState, reviewTitle, reviewHref, reviewErrorText, foundersHref } from '../../../lib/review.js';
 import { shortDay } from '../../../lib/weeks.js';
 import { ReviewPack } from './ReviewPack.js';
+import { TrendCard } from './Trend.js';
 
 export default function ReviewPage() {
   return <Suspense fallback={<div className="pl"><Spinner /></div>}><ReviewInner /></Suspense>;
@@ -168,7 +169,11 @@ function ReviewInner() {
               ? `Week ending ${shortDay(w.week_end)} has not started yet — its commitments are frozen when it opens.`
               : `Week ending ${shortDay(w.week_end)} was never opened, so there is no committed list to score.`}
             action={isThis ? null : <Button variant="neutral" size="sm" onClick={() => go({ week: 'this' })}>This week</Button>} />
-        ) : <ReviewPack pack={data} />}
+        ) : <>
+          {/* R9b: the score trend (getScoreTrend, same team scope as the pack). */}
+          <TrendCard session={session} team={data.team_id || 'all'} />
+          <ReviewPack pack={data} />
+        </>}
     </div>
   );
 }

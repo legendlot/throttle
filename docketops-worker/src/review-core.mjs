@@ -48,8 +48,9 @@ export function noDataSource(item, metrics = []) {
   return reg ? !reg.source_ok : m.source_ok !== true;
 }
 
+// R9b: `reading` = the measure's latest auto-check reading, only on a row whose measure the worker gave one to.
 const itemOut = (i) => ({ id: i.id, kind: i.kind, code: i.code || null, title: i.title, owner_name: i.owner_name || null,
-  due: effectiveDue(i), state: i.state });
+  due: effectiveDue(i), state: i.state, ...(i.measure && i.measure.reading !== undefined ? { reading: i.measure.reading } : {}) });
 const inDates = (d, from, to) => !!d && d >= from && d <= to;
 const teamKey = (v) => v || null;
 

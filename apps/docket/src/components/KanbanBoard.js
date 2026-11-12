@@ -2,7 +2,7 @@
 /* KanbanBoard — board view for the Docket tasks page (ClickUp redesign P4).
    Columns come from the active group-by axis (default: status). Dragging a card
    between columns sets that axis's field on the task via ctx.saveField (status →
-   changeStatus, owner/team/program → updateTask) — audited, optimistic. Shift+←/→ on a
+   changeStatus, owner/team → updateTask) — audited, optimistic. Shift+←/→ on a
    focused card makes the same call with the neighbouring column.
    Frontend-only: reuses the already-loaded task rows + the existing save paths.
    Abandoned tasks are never shown and Abandoned is never a column (terminal,
@@ -33,11 +33,10 @@ const AXIS = {
   status:     { field: 'status',            keyOf: (t) => t.status,                     curr: (t) => t.status },
   person:     { field: 'owner_employee_id', keyOf: (t) => t.owner_employee_id || NONE,  curr: (t) => t.owner_employee_id || '' },
   department: { field: 'department_id',     keyOf: (t) => t.department_id || NONE,       curr: (t) => t.department_id || '' },
-  program:    { field: 'program_id',        keyOf: (t) => t.program?.id || NONE,         curr: (t) => t.program?.id || '' },
 };
 // Read-only (field null); keyOf needs the org's week end, so it is built per render.
 const weekAxis = (dow, now) => ({ field: null, keyOf: (t) => weekBucket(t, dow, now), curr: (t) => weekBucket(t, dow, now) });
-const NONE_LABEL = { person: 'Unassigned', department: 'No team', program: 'No program' };
+const NONE_LABEL = { person: 'Unassigned', department: 'No team' };   // F9 R9b: no Program axis (retired)
 
 function buildColumns(axis, rows, dow) {
   if (axis === 'week') {
@@ -53,11 +52,8 @@ function buildColumns(axis, rows, dow) {
     if (axis === 'person') {
       if (t.owner_employee_id) seen.set(t.owner_employee_id, { value: t.owner_employee_id, label: t.owner_name || 'Unknown', color: personColor(t.owner_employee_id) });
       else hasNone = true;
-    } else if (axis === 'department') {
+    } else {
       if (t.department_id) seen.set(t.department_id, { value: t.department_id, label: t.department_name || 'Unknown', color: personColor(t.department_id) });
-      else hasNone = true;
-    } else { // program
-      if (t.program?.id) seen.set(t.program.id, { value: t.program.id, label: t.program.name || 'Program', color: 'var(--text-4)' });
       else hasNone = true;
     }
   }
@@ -312,7 +308,6 @@ function KanbanCard({ task, axis, ctx, canMove = true, dragging, onDragStart, on
   const kids = task.child_count || 0;
   const st = STATUS_MAP[task.status];
   const showTeam = axis !== 'department' && task.department_name;
-  const showProg = axis !== 'program' && task.program?.name;
   const spaceTag = <span className="kb-tag" title={`Space: ${task.space_name}`}><span className="kb-dot" style={{ background: personColor(task.space_id) }} />{task.space_name}</span>;
   const owner = task.owner_name
     ? <Avatar name={task.owner_name} size={20} title={`Owner: ${task.owner_name}`} />
@@ -357,11 +352,10 @@ function KanbanCard({ task, axis, ctx, canMove = true, dragging, onDragStart, on
         {size === 'm' && showSpace && task.space_name && (
           <div className="kb-tags">{spaceTag}</div>
         )}
-        {size === 'l' && (showTeam || showProg || (showSpace && task.space_name) || collabs.length > 0) && (
+        {size === 'l' && (showTeam || (showSpace && task.space_name) || collabs.length > 0) && (
           <div className="kb-tags">
             {showSpace && task.space_name && spaceTag}
             {showTeam && <span className="kb-tag" title={`Team: ${task.department_name}`}><span className="kb-dot" style={{ background: personColor(task.department_id) }} />{task.department_name}</span>}
-            {showProg && <span className="kb-tag" title={`Program: ${task.program.name}`}>{task.program.name}</span>}
             {collabs.length > 0 && <AvatarStack names={collabs} size={18} title={collabs.join(', ')} className="kb-collabs" />}
           </div>
         )}
