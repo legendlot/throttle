@@ -365,6 +365,11 @@ owner_employee_id, entered_at, entry_reason`) is the cohort, written by the data
 "still due before week end" — never frozen. The Friday **held** button stores the provisional view for the
 minutes, labelled provisional; the final score is stored separately at close.
 
+*As built (R5):* open and close run from `docket.week_tick()` on a 5-minute pg_cron, so the snapshot and the
+close read the tasks up to 5 minutes after S 00:00 / E+1 00:00 (accepted). A task created already done
+enters as `created_done` and is on time while still done at close. Task rows in spaces the viewer can't open
+come back as a `hidden_tasks` count only; team / person counts stay whole.
+
 Until the page ships, the **same SQL function** (`docket.week_score(p_week_end)`) is what the founders'
 Claude calls for each Friday review (§14); weeks from 16 Nov are exact because the cohort and the
 transactional deadlines start at P0.
@@ -489,7 +494,7 @@ this build** — themes and milestones are entered by the founders, item by item
 | **R2 — tasks link up** ✅ SHIPPED 2026-11-11 (`ead8c9df`) | `tasks.plan_item_id` + Plan field (drawer, quick capture, Grid, Board) + chips + filters + Unplanned · level L redaction in hydration/search/connector · Founders' space + confidentiality triggers + A4 · connector `docket_plan` read + `plan_item_id` |
 | **R3 — lifecycle depth** ✅ SHIPPED 2026-11-12 (`227507a5`) | split (§4.3.1) · done-when/measure + ⚠ no data source · proposals + queue (§4.5) |
 | **R4 — weeks** ✅ SHIPPED 2026-11-12 (`1468205e`) | week-ending group-by + Week filter (all views) · three-week view + warnings (§7.2) |
-| R5 — the score | transactional deadline RPC · `week_commitments` cohort · `week_score()` · connector `score` |
+| **R5 — the score** ✅ SHIPPED 2026-11-12 (`30213876`) | transactional deadline RPC · `week_commitments` cohort · `week_score()` · connector `score` |
 | R6 — review | review pack (provisional/final) + staleness + export + snapshots · Saturday founders' page · level R (Associates) |
 | R7 — Slack | Docket Slack app, identities, cron, reminders, shortcut, `/docket`, buttons |
 | R8 — hand-offs | fields + accept + pack section + Incoming |
