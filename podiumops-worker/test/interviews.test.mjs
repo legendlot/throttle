@@ -243,6 +243,11 @@ test('reminder mail: plain text, code + round only, no injection', () => {
   assert.doesNotMatch(head, /^Bcc:/m);
   assert.match(body, /candidate CAN-0042, Tech Bcc: x@evil\.test interview on 12 Nov 2026, 3:30 pm IST/);
   assert.match(body, /due by 13 Nov 2026, 3:30 pm IST/);
+  const at = (now) => buildReminderMail({ from: 'lead@legendoftoys.com', to: 'panel@legendoftoys.com', candidateCode: 'CAN-0042',
+    roundName: 'Tech', scheduledAt: '2026-11-12T10:00:00Z', dueAt: '2026-11-13T10:00:00Z', link: 'https://x.test/',
+    messageId: reminderMessageId(U(12), 'abc'), now }).raw;
+  assert.match(at(Date.parse('2026-11-13T09:00:00Z')), /It is due by 13 Nov 2026/);
+  assert.match(at(Date.parse('2026-11-13T11:00:00Z')), /It was due by 13 Nov 2026/);
   assert.match(body, /hiring\/interviews/);
   assert.equal(buildReminderMail({ from: 'x', to: 'panel@legendoftoys.com', messageId: '<a@b>' }).error, 'bad_sender');
   assert.equal(buildReminderMail({ from: 'a@legendoftoys.com', to: 'a, b@c.com', messageId: '<a@b>' }).error, 'bad_recipient');

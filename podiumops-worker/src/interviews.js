@@ -307,7 +307,7 @@ export const reminderMessageId = (panelId, nonce) => `<podium-interview-remind-$
 
 // A short plain-text reminder. Names the candidate CODE + round + time and links My interviews. Never the
 // candidate's name or contact details, salary, or anyone's feedback. → { raw, subject, text } | { error }
-export function buildReminderMail({ from, fromName = '', to, toFirst = '', candidateCode, roundName, scheduledAt, dueAt: due, link, messageId }) {
+export function buildReminderMail({ from, fromName = '', to, toFirst = '', candidateCode, roundName, scheduledAt, dueAt: due, link, messageId, now = Date.now() }) {
   const f = String(from || '').trim(), t = String(to || '').trim();
   if (!addressOk(f)) return { error: 'bad_sender' };
   if (!addressOk(t)) return { error: 'bad_recipient' };
@@ -320,7 +320,8 @@ export function buildReminderMail({ from, fromName = '', to, toFirst = '', candi
     `Hi ${clean(toFirst) || 'there'},`,
     '',
     `Your feedback for candidate ${code}, ${round} interview on ${istLabel(scheduledAt)}, is still pending.`,
-    due ? `It was due by ${istLabel(due)}.` : '',
+    // S449 smoke: a reminder before the deadline said "was due" — tense follows the clock.
+    due ? `It ${Date.parse(due) <= now ? 'was' : 'is'} due by ${istLabel(due)}.` : '',
     '',
     `Submit it in Podium: ${clean(link)}`,
     '',
