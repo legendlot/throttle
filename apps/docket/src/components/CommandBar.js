@@ -73,7 +73,7 @@ function taskMeta(t) {
   return [t.parent_task_no ? '↳ ' + t.parent_task_no : null, t.space_name || null].filter(Boolean).join(' · ');
 }
 
-export function CommandBar({ open = true, userId, session, onClose, router, spaces = [], programs = [], canViewDashboard, isAdmin, onNewTask, onNewSpace, onNewProgram, onToggleSidebar, onHelp }) {
+export function CommandBar({ open = true, userId, session, onClose, router, spaces = [], programs = [], canViewDashboard, isAdmin, isPlanAdmin = false, onNewTask, onNewSpace, onNewProgram, onToggleSidebar, onHelp }) {
   // The layout mounts the bar on each open, so this state starts fresh and the page
   // sources are read synchronously — no frame of the previous results.
   const [q, setQ] = useState('');
@@ -135,6 +135,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
       { key: 'nav:plan', label: 'Plan', icon: Target, route: '/plan' },
       { key: 'nav:plan-weeks', label: 'Three weeks', icon: Target, route: '/plan/weeks' },
       { key: 'nav:review', label: 'Review', icon: Target, route: '/review' },
+      ...(isPlanAdmin ? [{ key: 'nav:review-founders', label: 'Founders’ catch-up', icon: Target, route: '/review/founders' }] : []),
       { key: 'nav:tasks', label: 'Tasks', icon: ListTodo, route: '/tasks' },
       { key: 'nav:mine', label: 'My tasks', icon: UserCheck, route: '/tasks?lens=mine' },
       { key: 'nav:checklist', label: 'Checklist', icon: ListChecks, route: '/checklist' },
@@ -175,7 +176,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
 
     for (const t of (snap.tasks?.rows || [])) add(taskItem(t));
     return items;
-  }, [open, spaces, programs, canViewDashboard, isAdmin, snap]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, spaces, programs, canViewDashboard, isAdmin, isPlanAdmin, snap]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Rows to show: grouped, ranked, capped. Flattened for keyboard order.
   const rows = useMemo(() => {

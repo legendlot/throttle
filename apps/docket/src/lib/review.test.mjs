@@ -87,3 +87,30 @@ test('seenText / updateText: absent last_seen shows nothing; the 30-day lookback
   assert.equal(r.updateText({ last_update: null }), 'never');
   assert.equal(r.updateText({ last_update: '2026-11-12T08:35:00Z', last_update_older: true }), '12 Nov 2026, 14:05');
 });
+
+test('focusSlots: five slots by rank, gaps empty, junk ranks ignored', () => {
+  const s = r.focusSlots([{ rank: 3, task_id: 't', note: 'x', ref: { kind: 'task', task_no: 'DKT-1', title: 'A' } }, { rank: 9, note: 'no' }]);
+  assert.equal(s.length, 5);
+  assert.equal(s[2].task_id, 't');
+  assert.equal(r.slotFilled(s[0]), false);
+  assert.equal(r.slotFilled(s[2]), true);
+});
+test('focusPayload: filled slots only, renumbered 1..n, one id at most, note trimmed', () => {
+  const slots = r.focusSlots([]);
+  slots[1] = { plan_item_id: 'p', task_id: 't', note: '  why  ' };
+  slots[3] = { note: '   ' };
+  slots[4] = { task_id: 't2', note: '' };
+  assert.deepEqual(r.focusPayload(slots), [{ rank: 1, plan_item_id: 'p', note: 'why' }, { rank: 2, task_id: 't2' }]);
+  assert.deepEqual(r.focusPayload(r.focusSlots([])), []);
+});
+test('focusRefText / hiddenAsksText / founders title + href', () => {
+  assert.equal(r.focusRefText({ ref: { kind: 'item', code: 'M01', title: 'Launch' } }), 'M01 · Launch');
+  assert.equal(r.focusRefText({ ref: { kind: 'task', task_no: 'DKT-9', title: 'Ship' } }), 'DKT-9 · Ship');
+  assert.equal(r.focusRefText({ task_id: 'x', ref: null }), 'A task you can’t open');
+  assert.equal(r.focusRefText({ note: 'n' }), '');
+  assert.equal(r.hiddenAsksText(2), '+2 involve spaces you’re not in');
+  assert.equal(r.hiddenAsksText(0), '');
+  assert.equal(r.foundersTitle('2026-11-15', NOW), 'Founders’ catch-up · week ending Sun 15 Nov');
+  assert.equal(r.foundersHref({ week: 'this' }), '/review/founders');
+  assert.equal(r.foundersHref({ week: '2026-11-08' }), '/review/founders?week=2026-11-08');
+});

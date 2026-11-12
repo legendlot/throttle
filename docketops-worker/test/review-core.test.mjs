@@ -3,7 +3,8 @@
 // and the Slack copy.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scoreBlock, lastWorkingDay, groupByPerson, noDataSource, buildReviewTeams, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack }
+import { scoreBlock, lastWorkingDay, groupByPerson, noDataSource, buildReviewTeams, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack,
+  validateFocusItems, buildAsks, foundersToSlack }
   from '../src/review-core.mjs';
 
 const S = { week_end_dow: 7, working_days: [1, 2, 3, 4, 5, 6], holidays: [] };
@@ -217,4 +218,69 @@ test('packToSlack never names an omitted (Founders\' space) task or a restricted
   assert.ok(!/Hire CFO|DKT-1|Secret deal|M01/.test(all), all);
   assert.ok(/Fix belt/.test(all) && /Open plant/.test(all));
   assert.match(s.summary, /1 slipped/);
+});
+
+const UID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+test('validateFocusItems: ≤5, ranks 1–5 unique, one id at most, an id or a note, note ≤500 trimmed; sorted by rank', () => {
+  assert.deepEqual(validateFocusItems([{ rank: 2, task_id: UID(1) }, { rank: 1, plan_item_id: UID(2), note: ' why ' }]), { items: [
+    { rank: 1, plan_item_id: UID(2), task_id: null, note: 'why' }, { rank: 2, plan_item_id: null, task_id: UID(1), note: null }] });
+  assert.deepEqual(validateFocusItems([]), { items: [] });
+  assert.deepEqual(validateFocusItems([{ rank: 1, plan_item_id: '', note: 'x' }]).items[0].plan_item_id, null);
+  const E = (x) => validateFocusItems(x).error;
+  assert.equal(E(null), 'bad_item');
+  assert.equal(E([1, 2, 3, 4, 5, 6].map(rank => ({ rank, note: 'x' }))), 'too_many');
+  assert.equal(E([{ rank: 1, note: 'a' }, { rank: 1, note: 'b' }]), 'bad_rank');
+  for (const rank of [0, 6, 1.5, '1', null]) assert.equal(E([{ rank, note: 'a' }]), 'bad_rank', String(rank));
+  assert.equal(E([{ rank: 1, plan_item_id: UID(1), task_id: UID(2) }]), 'bad_item');
+  assert.equal(E([{ rank: 1 }]), 'bad_item');
+  assert.equal(E([{ rank: 1, note: '  ' }]), 'bad_item');
+  assert.equal(E([{ rank: 1, task_id: 'M01' }]), 'bad_item');
+  assert.equal(E([{ rank: 1, note: 5 }]), 'bad_item');
+  assert.equal(E(['x']), 'bad_item');
+  assert.equal(E([{ rank: 1, note: 'z'.repeat(501) }]), 'note_too_long');
+  assert.equal(E([{ rank: 1, note: ' ' + 'z'.repeat(500) + ' ' }]), undefined);   // trimmed first
+});
+
+test('buildAsks: window [start, end), open top-level waiting task, cross-team (null ≠ set; both null = same), blocker not done', () => {
+  const start = Date.parse('2026-11-09T00:00:00+05:30'), end = Date.parse('2026-11-23T00:00:00+05:30');
+  const W = (id, o) => ({ id, task_no: id, title: id, status: 'in_progress', department_id: 'd1', owner_employee_id: 'e1', deadline: '2026-11-12T06:30:00Z', ...o });
+  const pairs = [
+    ['ok', {}, { department_id: 'd2' }],
+    ['late', { deadline: '2026-11-23T00:00:00+05:30' }, { department_id: 'd2' }],   // exactly at end → out
+    ['early', { deadline: '2026-11-08T18:29:00Z' }, { department_id: 'd2' }],
+    ['same', {}, {}],
+    ['nulls', { department_id: null }, { department_id: null }],
+    ['nullset', { department_id: null }, { department_id: 'd2' }],
+    ['done', {}, { department_id: 'd2', status: 'done' }],
+    ['aband', {}, { department_id: 'd2', status: 'abandoned' }],
+    ['closed', { status: 'done' }, { department_id: 'd2' }],
+    ['sub', { parent_task_id: 'p' }, { department_id: 'd2' }],
+    ['arch', { archived_at: 'x' }, { department_id: 'd2' }],
+    ['hid', {}, { department_id: 'd2' }],
+  ];
+  const blocked = pairs.map(([k, o]) => W(k, o)), blockers = pairs.map(([k, , o]) => W('b-' + k, o));
+  const links = pairs.map(([k]) => ({ id: 'l-' + k, from_task_id: 'b-' + k, to_task_id: k }));
+  const keep = new Set([...blocked, ...blockers].map(t => t.id).filter(id => id !== 'b-hid'));
+  const r = buildAsks({ links, blocked, blockers, keep, names: { e1: 'Asha' }, deptNames: { d1: 'One', d2: 'Two' }, start, end });
+  assert.deepEqual(r.asks.map(a => a.link_id).sort(), ['l-aband', 'l-nullset', 'l-ok']);
+  assert.equal(r.hidden_asks, 1);
+  const ok = r.asks.find(a => a.link_id === 'l-ok');
+  assert.deepEqual([ok.blocked.team_name, ok.blocker.team_name, ok.blocker.owner_name], ['One', 'Two', 'Asha']);
+});
+
+test('foundersToSlack: asks + hidden count + each founder\'s top 5; a null ref shows its note or "something you can\'t see"; no ids', () => {
+  const card = (no, title, team) => ({ task_id: UID(9), task_no: no, title, team_name: team, owner_name: 'Asha', effective_deadline: '2026-11-13T06:30:00Z', status: 'in_progress' });
+  const txt = foundersToSlack({ week: { week_end: '2026-11-15' }, hidden_asks: 2,
+    asks: [{ link_id: UID(1), blocked: card('DKT-1', 'ZZ <a>', 'One'), blocker: { ...card('DKT-2', 'ZZ b', null), status: 'abandoned' } }],
+    focus: [{ founder_name: 'Afshaan', items: [{ rank: 1, ref: { kind: 'item', code: 'M01', title: 'ZZ ms' }, note: null },
+                                              { rank: 2, ref: { kind: 'task', task_no: 'DKT-3', title: 'ZZ t' }, note: 'push' },
+                                              { rank: 3, ref: null, note: 'hidden but noted' }, { rank: 4, ref: null, note: null }] },
+            { founder_name: 'Vinay', items: [] }] });
+  assert.match(txt, /^\*Founders' catch-up — week ending Sun 15 Nov\*/);
+  assert.match(txt, /• DKT-1 ZZ &lt;a&gt; \(One, Asha\) waits on DKT-2 ZZ b \(No team, Asha\) — due Fri 13 Nov — ⚠ the blocker was abandoned/);
+  assert.match(txt, /\+2 more in spaces you can't open/);
+  assert.match(txt, /1\. M01 ZZ ms\n2\. DKT-3 ZZ t — “push”\n3\. “hidden but noted”\n4\. something you can’t see/);
+  assert.match(txt, /\*Vinay's top 5\*\nNot set yet\./);
+  assert.doesNotMatch(txt, /[0-9a-f]{8}-[0-9a-f]{4}-/);
+  assert.match(foundersToSlack({ week: { week_end: '2026-11-15' }, asks: [], focus: [] }), /No cross-team asks due this week or next\./);
 });

@@ -32,7 +32,8 @@ export default function UsersPage() {
   useEffect(() => { load(); }, [load]);
 
   const isPlanAdmin = !!perms?.docket_plan_admin;
-  const planRoleKeys = new Set(roles.filter((r) => r.permissions?.docket_plan_admin).map((r) => r.role_key));
+  // Roles only a super admin may assign: super admin, and (F9 R6c) Founders' Associate — the same gate (A5).
+  const planRoleKeys = new Set(roles.filter((r) => r.permissions?.docket_plan_admin || r.permissions?.docket_review).map((r) => r.role_key));
 
   async function assign(userId, roleKey) {
     setSavingId(userId);

@@ -14,7 +14,7 @@ test('every tool parse() returns { ok, value } on success (the shape the core pa
     odo_funnel: { report: 'history' }, odo_amazon: { report: 'geo' }, odo_inventory: { report: 'thresholds' }, odo_pnl: { report: 'product_costs' }, odo_lookup: { report: 'channels' },
     docket_tasks: { report: 'my_tasks' }, docket_create_task: { title: 'x' }, docket_update_task: { id: U, priority: 'P1' }, docket_set_status: { id: U, status: 'done' },
     docket_revise_deadline: { id: U, new_deadline: '2026-11-20', reason: 'r' }, docket_add_comment: { id: U, body: 'b' }, docket_abandon_task: { id: U, reason: 'r' },
-    docket_plan: { report: 'themes' }, docket_propose: { title: 'x', why: 'y' },
+    docket_plan: { report: 'themes' }, docket_propose: { title: 'x', why: 'y' }, docket_founder_focus: { items: [] },
     snorkel_procurement: { report: 'pos' }, snorkel_requests: { report: 'requests', mine: true }, snorkel_sales: { report: 'orders' }, snorkel_assets: { report: 'assets', category_id: 3 },
     garage_store: { report: 'stock', q: 'screw' }, redline_production: { report: 'dashboard' }, depot_dispatch: { report: 'pipeline' } };
   for (const t of TOOLS) {
@@ -168,7 +168,7 @@ test('docket: visible only with a docket grant; writes are the only non-read too
   assert.ok(names.includes('docket_tasks') && names.includes('docket_create_task') && !names.includes('odo_sales'));
   assert.ok(!toolsFor({ systems: ['odo'], odo_perms: { sales_view: true } }).map(t => t.name).some(n => n.startsWith('docket_')));
   const writes = TOOLS.filter(t => t.write).map(t => t.name).sort();
-  assert.deepEqual(writes, ['docket_abandon_task', 'docket_add_comment', 'docket_create_task', 'docket_propose', 'docket_revise_deadline', 'docket_set_status', 'docket_update_task']);
+  assert.deepEqual(writes, ['docket_abandon_task', 'docket_add_comment', 'docket_create_task', 'docket_founder_focus', 'docket_propose', 'docket_revise_deadline', 'docket_set_status', 'docket_update_task']);
   assert.equal(findTool('docket_abandon_task').annotations.destructiveHint, true);
 });
 test('docket writes: one fixed action, POST {action,data}, as the person, fields whitelisted', async () => {
@@ -243,11 +243,11 @@ test('hostile 2026-11-09: abandoned tasks are read-only; a second deadline is re
   assert.equal((await st.run({ env: routed(AB, { status: 200, body: { ok: true, data: { id: U, status: 'in_progress' } } }, seen2), sbAccess: 'J', input: st.parse({ id: U, status: 'in_progress' }, NOW).value })).ok, true);
   assert.equal(seen2.length, 1);
 });
-test('the write actions are exactly these seven; reads drop LOT user ids', async () => {
+test('the write actions are exactly these eight; reads drop LOT user ids', async () => {
   assert.deepEqual(Object.fromEntries(TOOLS.filter(t => t.write).map(t => [t.name, t.action])), {
     docket_create_task: 'createTask', docket_update_task: 'updateTask', docket_set_status: 'changeStatus',
     docket_revise_deadline: 'reviseDeadline', docket_add_comment: 'addComment', docket_abandon_task: 'abandonTask',
-    docket_propose: 'proposePlanItem' });
+    docket_propose: 'proposePlanItem', docket_founder_focus: 'setFounderFocus' });
   const rd = findTool('docket_tasks');
   const mk = d => ({ DOCKETOPS: { fetch: async () => new Response(JSON.stringify({ ok: true, data: d }), { status: 200 }) } });
   const people = await rd.run({ env: mk([{ id: U, full_name: 'A B', department_id: null, auth_user_id: 'secret-uid' }]), sbAccess: 'J', input: rd.parse({ report: 'people' }, NOW).value });
@@ -448,9 +448,10 @@ test('docket plan links: plan_item_id is whitelisted on create/update; null clea
   assert.equal(findTool('docket_plan').write, undefined);
   assert.equal(findTool('docket_plan').annotations.readOnlyHint, true);
 });
-test('docket_plan: four reports → getPlan / getPlanItem / getProposals as the person, ids dropped like task reads', async () => {
+test('docket_plan: its reports → getPlan / getPlanItem / getProposals / getWeekScore / getReviewPack / getFoundersReview as the person', async () => {
   const t = findTool('docket_plan');
-  assert.deepEqual(Object.fromEntries(Object.entries(t.reports).map(([k, r]) => [k, r.action])), { themes: 'getPlan', items: 'getPlan', item: 'getPlanItem', proposals: 'getProposals', score: 'getWeekScore' });
+  assert.deepEqual(Object.fromEntries(Object.entries(t.reports).map(([k, r]) => [k, r.action])), { themes: 'getPlan', items: 'getPlan', item: 'getPlanItem', proposals: 'getProposals', score: 'getWeekScore',
+    review: 'getReviewPack', founders: 'getFoundersReview' });
   assert.equal(t.parse({ report: 'item' }, NOW).ok, false);                  // id required
   assert.equal(t.parse({ report: 'themes', id: U }, NOW).ok, false);         // not a param of themes
   const seen = [];
@@ -520,4 +521,54 @@ test('docket_update_task: a first deadline is refused when the task already has 
   const r2 = await u.run({ env: envFor({ id: U, status: 'in_progress', deadline: null, revised_deadline: null }, seen2), sbAccess: 'J',
     input: u.parse({ id: U, deadline: '2026-11-20' }, NOW).value });
   assert.equal(r2.ok, true, JSON.stringify(r2));
+});
+
+// ---- Docket plan R6a/R6b, 2026-11-12: the review pack, the founders' catch-up, the top 5
+test('docket_plan report=review: week + team (a uuid or all) forwarded as is; report=founders: week only; founder ids dropped', async () => {
+  const rd = findTool('docket_plan');
+  const seen = [];
+  const env = { DOCKETOPS: { fetch: async (u) => { seen.push(new URL(u)); return new Response(JSON.stringify({ ok: true, data: {
+    week: { week_end: '2026-11-15' }, focus: [{ founder_user_id: 'uid-7', founder_name: 'F', is_me: true, items: [] }] } }), { status: 200 }); } } };
+  for (const team of ['all', U]) {
+    const p = rd.parse({ report: 'review', week: 'last', team }, NOW);
+    assert.equal(p.ok, true, team);
+    await rd.run({ env, sbAccess: 'J', input: p.value });
+  }
+  assert.deepEqual(Object.fromEntries(seen[0].searchParams), { action: 'getReviewPack', week: 'last', team: 'all' });
+  assert.equal(seen[1].searchParams.get('team'), U);
+  for (const bad of [{ team: 'Sales' }, { week: 'next' }]) assert.equal(rd.parse({ report: 'review', ...bad }, NOW).ok, false, JSON.stringify(bad));
+  assert.equal(rd.parse({ report: 'founders', team: 'all' }, NOW).ok, false);   // team is review's only
+  const f = await rd.run({ env, sbAccess: 'J', input: rd.parse({ report: 'founders', week: '2026-11-14' }, NOW).value });
+  assert.deepEqual(Object.fromEntries(seen[2].searchParams), { action: 'getFoundersReview', week: '2026-11-14' });
+  assert.doesNotMatch(JSON.stringify(f.data), /uid-7/);
+  assert.match(JSON.stringify(f.data), /"is_me":true/);
+});
+test('docket_founder_focus: one POST {action:setFounderFocus, data:{week, items}}; items shaped, ≤5, ranks 1–5', async () => {
+  const t = findTool('docket_founder_focus');
+  assert.equal(t.write, true); assert.equal(t.annotations.readOnlyHint, false);
+  assert.match(t.description, /REPLACES your whole top 5/);
+  const p = t.parse({ week: 'next', items: [{ rank: 1, plan_item_id: U, note: 'why' }, { rank: 2, task_id: U }, { rank: 3, note: 'call X', task_id: '' }] }, NOW);
+  assert.equal(p.ok, true, JSON.stringify(p));
+  assert.deepEqual(p.value, { week: 'next', items: [{ rank: 1, plan_item_id: U, note: 'why' }, { rank: 2, task_id: U }, { rank: 3, note: 'call X' }] });
+  assert.deepEqual(t.parse({ items: [] }, NOW).value, { items: [] });   // clears
+  for (const bad of [{}, { items: 'x' }, { items: [{ rank: 1 }, { rank: 2 }, { rank: 3 }, { rank: 4 }, { rank: 5 }, { rank: 5 }] },
+    { items: [{ rank: 0, note: 'x' }] }, { items: [{ rank: '1', note: 'x' }] }, { items: [{ rank: 1, plan_item_id: 'M01' }] },
+    { items: [{ rank: 1, note: 'x'.repeat(501) }] }, { items: [{ rank: 1, owner: U }] }, { week: 'last', items: [] }, { items: [], extra: 1 }])
+    assert.equal(t.parse(bad, NOW).ok, false, JSON.stringify(bad));
+  const seen = [];
+  const r = await t.run({ env: docketEnv(seen), sbAccess: 'JWT', input: p.value });
+  assert.equal(r.ok, true); assert.equal(seen.length, 1);
+  assert.equal(seen[0].init.method, 'POST');
+  assert.equal(seen[0].init.headers['X-LOT-Source'], 'connector');
+  assert.deepEqual(JSON.parse(seen[0].init.body), { action: 'setFounderFocus', data: p.value });
+});
+
+test('docket_founder_focus: the write result never carries founder_user_id (DOCKET_DROP on writes too)', async () => {
+  const t = findTool('docket_founder_focus');
+  const env = { DOCKETOPS: { fetch: async () => new Response(JSON.stringify({ ok: true, data: { focus: {
+    founder_user_id: 'uid-7', founder_name: 'A', is_me: true, items: [{ rank: 1, note: 'x' }] } } }), { status: 200 }) } };
+  const r = await t.run({ env, sbAccess: 'JWT', input: { items: [{ rank: 1, note: 'x' }] } });
+  assert.equal(r.ok, true);
+  assert.ok(!JSON.stringify(r.data).includes('uid-7'), JSON.stringify(r.data));
+  assert.ok(JSON.stringify(r.data).includes('founder_name'));
 });

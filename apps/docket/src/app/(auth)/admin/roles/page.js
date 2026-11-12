@@ -10,7 +10,8 @@ import { AdminHead, Switch } from '../../../../components/AdminParts.js';
 // Docket permission matrix — 3 boolean keys. Define unlimited custom roles from
 // these toggles. docket_plan_admin implies docket_admin, which implies docket_view_all
 // (enforced here + server-side). Only a super admin can grant, edit or remove a role
-// carrying docket_plan_admin (worker: forbidden_super_admin, spec §5.1 A5).
+// carrying docket_plan_admin (worker: forbidden_super_admin, spec §5.1 A5). docket_review (F9 R6c, level R —
+// the Founders' Associates) has the same gate, implies nothing and is implied by nothing.
 const PERM_DEFS = [
   { group: 'Visibility', items: [
     { key: 'docket_view_all', label: 'See all org tasks + the review dashboard' },
@@ -20,10 +21,13 @@ const PERM_DEFS = [
   ] },
   { group: 'Plan', items: [
     { key: 'docket_plan_admin', label: 'Super admin — the plan register: themes, milestones, targets' },
+    { key: 'docket_review', label: 'Founders’ Associate — review packs + the plan register (never targets or restricted themes)' },
   ] },
 ];
 const ELEVATED = ['docket_admin', 'docket_plan_admin'];
-const carriesPlan = (p) => !!p?.docket_plan_admin;
+// Keys only a super admin may grant, edit or remove (a role carrying one is locked for anyone else).
+const PLAN_GATED = ['docket_plan_admin', 'docket_review'];
+const carriesPlan = (p) => PLAN_GATED.some((k) => !!p?.[k]);
 
 export default function RolesPage() {
   const { session, perms } = useAuth();
@@ -142,7 +146,7 @@ export default function RolesPage() {
             <label className="adm-field"><span className="adm-lbl">Description</span><input className="adm-input" value={desc} onChange={(e) => setDesc(e.target.value)} disabled={saving} /></label>
 
             {editIsSystem && <div className="adm-note"><ShieldCheck size={14} /> System role: permissions are fixed. Label &amp; description only.</div>}
-            {locked && <div className="adm-note"><Lock size={14} /> This role carries super admin — only a super admin can change it.</div>}
+            {locked && <div className="adm-note"><Lock size={14} /> This role carries super admin or Founders’ Associate — only a super admin can change it.</div>}
 
             {PERM_DEFS.map((g) => (
               <div key={g.group} className="adm-field">
@@ -150,13 +154,14 @@ export default function RolesPage() {
                 {g.items.map((it) => {
                   const forced = (it.key === 'docket_view_all' && viewForced) || (it.key === 'docket_admin' && adminForced);
                   const on = !!perm[it.key];
-                  const disabled = saving || editIsSystem || forced || locked || (it.key === 'docket_plan_admin' && !isPlanAdmin);
+                  const disabled = saving || editIsSystem || forced || locked || (PLAN_GATED.includes(it.key) && !isPlanAdmin);
+                  const gateTip = PLAN_GATED.includes(it.key) && !isPlanAdmin ? 'Only a super admin can grant this' : undefined;
                   return (
-                    <div key={it.key} className="adm-row">
+                    <div key={it.key} className="adm-row" title={gateTip}>
                       <span className="adm-row-l">
                         {it.label} <span className="adm-mono">· {it.key}</span>
                         {forced && <span className="adm-row-hint"> (required by {it.key === 'docket_admin' || perm.docket_plan_admin ? 'super admin' : 'admin'})</span>}
-                        {it.key === 'docket_plan_admin' && !isPlanAdmin && <span className="adm-row-hint"> (only a super admin can grant this)</span>}
+                        {PLAN_GATED.includes(it.key) && !isPlanAdmin && <span className="adm-row-hint"> (only a super admin can grant this)</span>}
                       </span>
                       <Switch on={on} label={it.label} onClick={() => toggle(it.key)} disabled={disabled} />
                     </div>

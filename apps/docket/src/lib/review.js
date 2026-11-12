@@ -86,6 +86,7 @@ const ERR = {
   bad_team: 'That team doesn’t exist.',
   week_not_open: 'This week has no score yet, so there’s nothing to hold.',
   forbidden: 'You can only see your own team’s review.',
+  not_found: 'A slot points at something you can’t open any more — clear that slot and save again.',
 };
 export function reviewErrorText(e) {
   const code = e?.message || String(e || '');
@@ -94,3 +95,41 @@ export function reviewErrorText(e) {
 
 // Trend bar height (0–100) for a pct; null → 0 (drawn as an empty bar).
 export function barPct(pct) { const n = Number(pct); return pct == null || !Number.isFinite(n) ? 0 : Math.max(0, Math.min(100, n)); }
+
+// ── R6b: the founders' catch-up (§8.6) ───────────────────────────────────────
+export const FOCUS_SLOTS = 5;
+export const FOCUS_NOTE_MAX = 500;
+// A founder's stored top 5 → exactly five editable slots, by rank (gaps kept empty).
+export function focusSlots(items = []) {
+  const slots = Array.from({ length: FOCUS_SLOTS }, () => ({ plan_item_id: null, task_id: null, note: '', ref: null }));
+  for (const it of items || []) {
+    const i = Number(it?.rank) - 1;
+    if (!Number.isInteger(i) || i < 0 || i >= FOCUS_SLOTS) continue;
+    slots[i] = { plan_item_id: it.plan_item_id || null, task_id: it.task_id || null, note: it.note || '', ref: it.ref || null };
+  }
+  return slots;
+}
+export function slotFilled(s) { return !!(s && (s.plan_item_id || s.task_id || String(s.note || '').trim())); }
+// The setFounderFocus body: only filled slots, ranks renumbered 1..n, at most one of plan_item_id / task_id.
+export function focusPayload(slots = []) {
+  return (slots || []).filter(slotFilled).map((s, i) => {
+    const out = { rank: i + 1 };
+    if (s.plan_item_id) out.plan_item_id = s.plan_item_id;
+    else if (s.task_id) out.task_id = s.task_id;
+    const note = String(s.note || '').trim();
+    if (note) out.note = note;
+    return out;
+  });
+}
+// A slot's reference line. A task the viewer can't open arrives with ref null (the note is kept).
+export function focusRefText(s) {
+  const r = s?.ref;
+  if (r?.kind === 'item') return [r.code, r.title].filter(Boolean).join(' · ');
+  if (r?.kind === 'task') return [r.task_no, r.title].filter(Boolean).join(' · ');
+  if (s?.task_id) return 'A task you can’t open';
+  if (s?.plan_item_id) return 'A plan item you can’t see';
+  return '';
+}
+export function hiddenAsksText(n) { const k = Number(n) || 0; return k > 0 ? `+${k} involve spaces you’re not in` : ''; }
+export function foundersTitle(end, now = Date.now()) { return `Founders’ catch-up · week ending ${shortDay(end, now)}`; }
+export function foundersHref({ week } = {}) { return '/review/founders' + (week && week !== 'this' ? '?week=' + encodeURIComponent(week) : ''); }

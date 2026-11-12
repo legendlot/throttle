@@ -1946,3 +1946,33 @@ a.rv-row:hover, button.rv-row:hover, .rv-row.on { background: var(--hover); }
   .rv-t { flex-basis: 100%; }
   .rv .pl-head-acts { width: 100%; }
 }
+
+/* F9 R6b — /review/founders (the Saturday catch-up) */
+.rv-ask { display: flex; flex-direction: column; gap: 0; padding: 6px 0; border-top: 1px solid var(--border); min-width: 0; }
+.rv-ask:first-of-type { border-top: none; }
+.rv-ask-mid { padding-left: 19px; font-size: 11px; color: var(--text-4); }
+.rv-ask-t { flex-wrap: wrap; }
+.rv-focus { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 14px; }
+.rv-top { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.rv-rank { flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--bg); background: var(--accent); }
+.rv-ref { display: block; color: var(--text-1); overflow-wrap: anywhere; }
+.rv-note { display: block; font-size: 12px; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rv-slot { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); min-width: 0; }
+.rv-slot:first-child { border-top: none; }
+.rv-slot .rv-rank { margin-top: 4px; }
+.rv-slot-b { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.rv-slot-ref { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; min-width: 0; font-size: 12.5px; }
+.rv-slot-ref .rv-ref { flex: 1 1 160px; min-width: 0; }
+.rv-slot-acts { display: inline-flex; gap: 2px; margin-left: auto; }
+.rv-slot-note { min-height: 30px; font-size: 12.5px; }
+.rv-save { align-items: center; justify-content: space-between; margin-top: 8px; }
+/* 375px: meta lines wrap under the title instead of running past the card (smoke 2026-11-12). */
+@media (max-width: 767px) {
+  .rv-row > *, .rv-row-l1 > *, .rv-slot-ref > * { min-width: 0; }
+  .rv-meta { flex: 1 1 100%; flex-shrink: 1; white-space: normal; overflow-wrap: anywhere; }
+  .rv-row .ui-pill { flex-shrink: 1; max-width: 100%; }
+  .rv-pname { flex-basis: 100%; }
+  .rv-slot-acts { margin-left: 0; }
+  .rv-slot-note { font-size: 16px; }
+  .rv-tbar { width: 34px; }
+}

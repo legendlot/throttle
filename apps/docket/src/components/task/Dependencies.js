@@ -134,7 +134,9 @@ export function DepAddFlow({ open, anchorRef, task, session, onClose, onAdded, c
 }
 
 const SEARCH_DEBOUNCE = 180;
-function DepSearch({ task, session, hint, onPick }) {
+// Exported for the founders' Top 5 task slot (R6b): `task` is optional there — no self / already-linked
+// rows to exclude.
+export function DepSearch({ task, session, hint, onPick }) {
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ q: '', rows: [], status: 'idle' });
   const [active, setActive] = useState(0);
@@ -157,8 +159,8 @@ function DepSearch({ task, session, hint, onPick }) {
     return () => clearTimeout(t);
   }, [q, session]);
 
-  const linked = new Set(['waiting_on', 'blocking', 'related'].flatMap(k => (task.links?.[k] || []).map(i => i.id)));
-  const rows = res.rows.filter(r => r.id !== task.id && !linked.has(r.id) && r.status !== 'abandoned');
+  const linked = new Set(['waiting_on', 'blocking', 'related'].flatMap(k => (task?.links?.[k] || []).map(i => i.id)));
+  const rows = res.rows.filter(r => r.id !== task?.id && !linked.has(r.id) && r.status !== 'abandoned');
   useEffect(() => { setActive(0); }, [res.rows]);
   const cur = Math.min(active, Math.max(0, rows.length - 1));
 

@@ -293,3 +293,86 @@ export function packTaskIds(payload) {
   }
   return uniqIds(ids);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// F9 R6b — the Saturday founders' catch-up (spec §8.6, level F only)
+// ════════════════════════════════════════════════════════════════════════════
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const FOCUS_MAX = 5, FOCUS_NOTE_MAX = 500;
+
+// A founder's top 5 as sent → { items: [{ rank, plan_item_id, task_id, note }] (by rank) } | { error }.
+// ≤5 items; ranks whole numbers 1–5, unique; at most one of plan_item_id / task_id; each item an id or a
+// non-blank note ≤500 (trimmed). The same rules as docket.founder_focus_set (migration 0026) and the table.
+export function validateFocusItems(items) {
+  if (!Array.isArray(items)) return { error: 'bad_item' };
+  if (items.length > FOCUS_MAX) return { error: 'too_many' };
+  const out = [], ranks = new Set();
+  const id = (v) => (v === undefined || v === null || v === '' ? { v: null } : typeof v === 'string' && UUID_RE.test(v) ? { v } : { bad: true });
+  for (const it of items) {
+    if (!it || typeof it !== 'object' || Array.isArray(it)) return { error: 'bad_item' };
+    const rank = it.rank;
+    if (!Number.isInteger(rank) || rank < 1 || rank > FOCUS_MAX || ranks.has(rank)) return { error: 'bad_rank' };
+    ranks.add(rank);
+    const p = id(it.plan_item_id), t = id(it.task_id);
+    if (p.bad || t.bad || (p.v && t.v)) return { error: 'bad_item' };
+    if (it.note !== undefined && it.note !== null && typeof it.note !== 'string') return { error: 'bad_item' };
+    const note = typeof it.note === 'string' && it.note.trim() ? it.note.trim() : null;
+    if (note && note.length > FOCUS_NOTE_MAX) return { error: 'note_too_long' };
+    if (!p.v && !t.v && !note) return { error: 'bad_item' };
+    out.push({ rank, plan_item_id: p.v, task_id: t.v, note });
+  }
+  return { items: out.sort((a, b) => a.rank - b.rank) };
+}
+
+// Cross-team asks: open `blocks` links where the BLOCKED task (to_task_id — it waits) is top-level, open,
+// not archived, due in [start, end) (this week or next), and its blocker (from_task_id) sits in a different
+// department (a null department differs from a set one; both null is not cross-team) and isn't done (an
+// abandoned blocker stays listed — that is a real problem). A pair with either side outside `keep` (the
+// caller's space gate) is counted in hidden_asks and never listed.
+//   links    — [{ id, from_task_id, to_task_id }]   blocked / blockers — task rows   keep — Set of task ids
+export function buildAsks({ links = [], blocked = [], blockers = [], keep = new Set(), names = {}, deptNames = {}, start, end }) {
+  const A = new Map(blocked.map(t => [t.id, t])), B = new Map(blockers.map(t => [t.id, t]));
+  const card = (t) => ({ task_id: t.id, task_no: t.task_no || null, title: t.title, team_id: t.department_id || null,
+    team_name: t.department_id ? (deptNames[t.department_id] || null) : null, owner_employee_id: t.owner_employee_id || null,
+    owner_name: t.owner_employee_id ? (names[t.owner_employee_id] || null) : null,
+    effective_deadline: t.revised_deadline || t.deadline || null, status: t.status });
+  const asks = []; let hidden = 0;
+  for (const l of links) {
+    const a = A.get(l.to_task_id), b = B.get(l.from_task_id);
+    if (!a || !b || a.parent_task_id || a.archived_at || !OPEN(a.status) || b.status === 'done') continue;
+    const due = Date.parse(a.revised_deadline || a.deadline || '');
+    if (!Number.isFinite(due) || due < start || due >= end) continue;
+    if ((a.department_id || null) === (b.department_id || null)) continue;
+    if (!keep.has(a.id) || !keep.has(b.id)) { hidden++; continue; }
+    asks.push({ link_id: l.id, blocked: card(a), blocker: card(b) });
+  }
+  asks.sort((x, y) => String(x.blocked.effective_deadline).localeCompare(String(y.blocked.effective_deadline)));
+  return { asks, hidden_asks: hidden };
+}
+
+// ONE mrkdwn message (a DM to the founders, level F): the asks, then each founder's top 5. Never an id.
+export function foundersToSlack(r) {
+  const day = (iso) => shortDay(istDate(iso)) || '';
+  const who = (c) => [c.team_name || 'No team', c.owner_name].filter(Boolean).map(esc).join(', ');
+  const task = (c) => `${c.task_no ? esc(c.task_no) + ' ' : ''}${esc(c.title)}`;
+  const lines = [`*Founders' catch-up — week ending ${shortDay(r?.week?.week_end) || r?.week?.week_end || ''}*`, '*Cross-team asks*'];
+  const asks = r?.asks || [];
+  if (!asks.length) lines.push('No cross-team asks due this week or next.');
+  for (const a of asks) {
+    lines.push(`• ${task(a.blocked)} (${who(a.blocked)}) waits on ${task(a.blocker)} (${who(a.blocker)})`
+      + (a.blocked.effective_deadline ? ` — due ${day(a.blocked.effective_deadline)}` : '')
+      + (a.blocker.status === 'abandoned' ? ' — ⚠ the blocker was abandoned' : ''));
+  }
+  if (r?.hidden_asks) lines.push(`+${r.hidden_asks} more in spaces you can't open`);
+  for (const f of r?.focus || []) {
+    lines.push(`*${esc(f.founder_name || 'A founder')}'s top 5*`);
+    if (!(f.items || []).length) { lines.push('Not set yet.'); continue; }
+    for (const it of f.items) {
+      const ref = it.ref;
+      const head = !ref ? (it.note ? '' : 'something you can’t see')
+        : ref.kind === 'item' ? `${ref.code ? esc(ref.code) + ' ' : ''}${esc(ref.title)}` : `${ref.task_no ? esc(ref.task_no) + ' ' : ''}${esc(ref.title)}`;
+      lines.push(`${it.rank}. ${[head, it.note ? `“${esc(it.note)}”` : ''].filter(Boolean).join(' — ')}`);
+    }
+  }
+  return lines.join('\n');
+}

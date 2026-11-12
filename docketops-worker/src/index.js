@@ -17,6 +17,10 @@
  *   - docket_plan_admin : SUPER ADMIN (F9) — the plan register (themes, milestones, targets) and every
  *                       plan action; implies docket_admin + docket_view_all. Only a super admin can
  *                       grant, edit or revoke a role carrying it (spec §5.1 A5). Never implied BY admin.
+ *   - docket_review   : FOUNDERS' ASSOCIATE (F9 R6c, spec §5.3 level R) — the plan register at level R
+ *                       (every unrestricted item in full, never target_text / a restricted subtree) and
+ *                       the review pack for any team; NOTHING about tasks (task visibility stays baseline).
+ *                       Not implied by admin; guarded like docket_plan_admin (A5).
  *   (dashboard is ALSO shareable independently of view_all: a persistent
  *    docket.settings.dashboard_public flag + per-person docket.dashboard_viewers
  *    grants — admin-managed in /admin/roles. RULE-DOCKET-006.)
@@ -33,7 +37,8 @@ import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT
 import { normalizeMeasure, publicMetrics } from './plan-metrics.mjs';
 import { WEEK_KEYS, normalizeWeekSettings, resolveWeekFilter, matchesWeek, planWindow, istMidnight, staleCutoff,
   buildPlanWeeks, ROWS_BY, istDate, isDateStr, weekEndOf, effectiveDue } from './weeks-core.mjs';
-import { buildReviewTeams, lastWorkingDay, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack } from './review-core.mjs';
+import { buildReviewTeams, lastWorkingDay, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack, scoreBlock,
+  validateFocusItems, buildAsks, foundersToSlack } from './review-core.mjs';
 
 
 // ── CORS ──────────────────────────────────────────────────────────────────
@@ -169,7 +174,7 @@ async function verifyJWT(authHeader, env) {
 }
 
 // ── Permission helpers ──────────────────────────────────────────────────────
-const DOCKET_PERM_KEYS = ['docket_plan_admin', 'docket_admin', 'docket_view_all'];
+const DOCKET_PERM_KEYS = ['docket_plan_admin', 'docket_admin', 'docket_view_all', 'docket_review'];
 function normalizeDocketPerms(permissions) {
   const out = {};
   for (const k of DOCKET_PERM_KEYS) if (permissions && permissions[k]) out[k] = true;
@@ -178,6 +183,8 @@ function normalizeDocketPerms(permissions) {
   return out;
 }
 function isPlanAdmin(auth) { return !!auth.permissions?.docket_plan_admin; }
+// Level R (F9 R6c): a Founders' Associate who is not also a plan admin (a plan admin is F, which covers R).
+function isReviewer(auth) { return !!auth.permissions?.docket_review && !isPlanAdmin(auth); }
 function isAdmin(auth)    { return !!auth.permissions?.docket_admin; }
 function canViewAll(auth) { return !!(auth.permissions?.docket_admin || auth.permissions?.docket_view_all); }
 function requireAdmin(auth) { return isAdmin(auth) ? null : err('forbidden_docket_admin', 403); }
@@ -2484,23 +2491,26 @@ async function deleteComment(body, auth, env) {
 // ── Permission layer (admin) — mirrors Podium ───────────────────────────────
 // Spec §5.1 A5: a role carrying docket_plan_admin is created, edited, deleted or assigned only by a
 // super admin, and only a super admin can change the role of someone who holds one.
+// R6c: a role carrying docket_review (the Founders' Associates, level R) is guarded the same way — it reads
+// the whole unrestricted register, so granting it is a founders' decision.
 const SUPER_ADMIN_ONLY = () => err('forbidden_super_admin', 403);
-async function roleIsPlanAdmin(roleKey, env) {
+const guardedPerms = (p) => { const n = normalizeDocketPerms(p); return !!(n.docket_plan_admin || n.docket_review); };
+async function roleIsGuarded(roleKey, env) {
   if (!roleKey) return false;
   const r = await sbStore(`/rest/v1/docket_roles?role_key=eq.${enc(roleKey)}&select=permissions&limit=1`, env);
-  if (!r.ok) return true; // fail CLOSED: can't prove it isn't super → treat as super (guard blocks)
-  return !!normalizeDocketPerms(r.data?.[0]?.permissions).docket_plan_admin;
+  if (!r.ok) return true; // fail CLOSED: can't prove it isn't guarded → treat as guarded (guard blocks)
+  return guardedPerms(r.data?.[0]?.permissions);
 }
-async function userIsPlanAdmin(userId, env) {
+async function userHoldsGuardedRole(userId, env) {
   const r = await sbStore(`/rest/v1/docket_user_roles?user_id=eq.${enc(userId)}&select=role_key&limit=1`, env);
   if (!r.ok) return true; // fail CLOSED
-  return roleIsPlanAdmin(r.data?.[0]?.role_key, env);
+  return roleIsGuarded(r.data?.[0]?.role_key, env);
 }
 async function createDocketRole(body, auth, env) {
   const gate = requireAdmin(auth); if (gate) return gate;
   const d = body.data || body;
   if (!d.role_key || !d.label) return err('role_key and label required', 400);
-  if (normalizeDocketPerms(d.permissions).docket_plan_admin && !isPlanAdmin(auth)) return SUPER_ADMIN_ONLY();
+  if (guardedPerms(d.permissions) && !isPlanAdmin(auth)) return SUPER_ADMIN_ONLY();
   const key = String(d.role_key).trim().toLowerCase().replace(/\s+/g, '_');
   const r = await sbStore(`/rest/v1/docket_roles`, env, {
     method: 'POST',
@@ -2517,8 +2527,8 @@ async function updateDocketRole(body, auth, env) {
   const cur = await sbStore(`/rest/v1/docket_roles?role_key=eq.${enc(d.role_key)}&select=is_system,permissions&limit=1`, env);
   if (!cur.ok) return err('db_error', 503); // fail closed: never PATCH a role we couldn't read
   const isSys = !!(cur.ok && cur.data?.[0]?.is_system);
-  const carries = !!normalizeDocketPerms(cur.ok && cur.data?.[0]?.permissions).docket_plan_admin;
-  const adds = d.permissions !== undefined && !!normalizeDocketPerms(d.permissions).docket_plan_admin;
+  const carries = guardedPerms(cur.ok && cur.data?.[0]?.permissions);
+  const adds = d.permissions !== undefined && guardedPerms(d.permissions);
   if ((carries || adds) && !isPlanAdmin(auth)) return SUPER_ADMIN_ONLY();
   const updates = { updated_at: nowIso() };
   if (d.label !== undefined)       updates.label = d.label;
@@ -2535,7 +2545,7 @@ async function deleteDocketRole(body, auth, env) {
   const chk = await sbStore(`/rest/v1/docket_roles?role_key=eq.${enc(d.role_key)}&select=is_system&limit=1`, env);
   if (!chk.ok) return err('db_error', 503); // fail closed
   if (chk.data?.[0]?.is_system) return err('cannot delete a system role', 400);
-  if (!isPlanAdmin(auth) && await roleIsPlanAdmin(d.role_key, env)) return SUPER_ADMIN_ONLY();
+  if (!isPlanAdmin(auth) && await roleIsGuarded(d.role_key, env)) return SUPER_ADMIN_ONLY();
   const assigned = await sbStore(`/rest/v1/docket_user_roles?role_key=eq.${enc(d.role_key)}&limit=1`, env);
   if (assigned.ok && assigned.data?.length) return err('cannot delete a role with assigned users', 400);
   const r = await sbStore(`/rest/v1/docket_roles?role_key=eq.${enc(d.role_key)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
@@ -2546,9 +2556,9 @@ async function assignDocketRole(body, auth, env) {
   const gate = requireAdmin(auth); if (gate) return gate;
   const d = body.data || body;
   if (!d.user_id) return err('user_id required', 400);
-  // Granting super admin, or changing/removing a super admin's role: super admins only.
+  // Granting a guarded role (super admin / Founders' Associate), or changing/removing one: super admins only.
   if (!isPlanAdmin(auth)) {
-    const [grants, demotes] = await Promise.all([roleIsPlanAdmin(d.role_key, env), userIsPlanAdmin(d.user_id, env)]);
+    const [grants, demotes] = await Promise.all([roleIsGuarded(d.role_key, env), userHoldsGuardedRole(d.user_id, env)]);
     if (grants || demotes) return SUPER_ADMIN_ONLY();
   }
   if (!d.role_key) {
@@ -2754,7 +2764,8 @@ async function deleteScratchNote(body, auth, env) {
 }
 
 // ── Plan layer (F9 R1 — spec 2026-11-11-docket-plan-layer.md) ─────────────────
-// Every read goes through docket.plan_items_for (the §5.3 projection: F / O / T, done in SQL) and
+// Every read goes through docket.plan_items_for (the §5.3 projection: F / O / R / T, done in SQL — R6c: every
+// call passes p_is_review = isReviewer) and
 // every write through a transactional docket.plan_* RPC that also writes plan_item_history. The SQL
 // enforces the §4.3 matrix; plan-core.mjs mirrors it for affordances. p_is_super = docket_plan_admin.
 const PLAN_ITEM_KEYS = ['kind', 'parent_id', 'title', 'code', 'owner_employee_id', 'department_id', 'target_text',
@@ -2764,7 +2775,7 @@ function planArgs(auth) {
 }
 async function planRows(auth, env) {
   return sbDocket(`/rest/v1/rpc/plan_items_for`, env, { method: 'POST', body: JSON.stringify({
-    p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth) }) });
+    p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth), p_is_review: isReviewer(auth) }) });
 }
 async function nameMap(sb, table, ids, env) {
   const r = await sbIn(sb, uniq(ids), (l) => `/rest/v1/${table}?id=in.${l}&select=id,full_name`, env);
@@ -2789,7 +2800,7 @@ async function getPlanItem(url, auth, env) {
   const [r, h] = await Promise.all([
     planRows(auth, env),
     sbDocket(`/rest/v1/rpc/plan_history_for`, env, { method: 'POST', body: JSON.stringify({
-      p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth), p_id: id }) }),
+      p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth), p_id: id, p_is_review: isReviewer(auth) }) }),
   ]);
   if (!r.ok || !h.ok) return err('db_error', 500);
   const rows = Array.isArray(r.data) ? r.data : [];
@@ -2958,7 +2969,7 @@ async function planLinks(ids, auth, env) {
   const out = {};
   if (!ids.length) return out;
   const r = await sbDocket(`/rest/v1/rpc/plan_links_for`, env, { method: 'POST', body: JSON.stringify({
-    p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth), p_ids: ids }) });
+    p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth), p_ids: ids, p_is_review: isReviewer(auth) }) });
   (r.ok && Array.isArray(r.data) ? r.data : []).forEach(l => { out[l.id] = l; });   // fail closed: no plan
   return out;
 }
@@ -3058,7 +3069,7 @@ async function getPlanWeeks(url, auth, env) {
   const deptNames = Object.fromEntries(departments.map(d => [d.id, d.name]));
   const win = planWindow(now, settings.week_end_dow);
   const raw = Array.isArray(pr.data) ? pr.data : [];
-  const fo = (i) => i.level === 'F' || i.level === 'O';
+  const fo = (i) => i.level === 'F' || i.level === 'O' || i.level === 'R';   // R6c: R sees item detail like O
   const live = (i) => i.state === 'proposed' || i.state === 'agreed';
   const itemIds = raw.filter(i => i.kind !== 'theme' && fo(i) && live(i)).map(i => i.id);
   const themeIds = uniq(raw.filter(i => i.kind === 'milestone' && fo(i) && i.state === 'agreed').map(i => i.parent_id));
@@ -3114,11 +3125,25 @@ async function getPlanWeeks(url, auth, env) {
   return ok({ ...model, employee_id: auth.employeeId, department_id: auth.departmentId || null, departments });
 }
 
+// The task ids (of `ids`) a viewer BELOW plan admin may count and list — getPlanWeeks' gate (visibleTaskRows +
+// the archived-space exclusion) and never a Founders'-space task. null = a read failed (fail closed).
+async function reviewVisibleIds(auth, ids, env) {
+  const [tr, sr] = await Promise.all([
+    sbInAll(sbDocket, uniq(ids), l => `/rest/v1/tasks?id=in.${l}&select=${PW_TASK_COLS}&order=id.asc`, env),
+    sbAll(sbDocket, `/rest/v1/spaces?or=(archived_at.not.is.null,is_founders.eq.true)&select=id,archived_at,is_founders&order=id.asc`, env),
+  ]);
+  if (!tr.ok || !sr.ok) return null;
+  const blocked = new Set((sr.data || []).map(x => x.id));   // archived or the Founders' space
+  const rows = await visibleTaskRows(auth, (tr.data || []).filter(t => !blocked.has(t.space_id)), env);
+  return new Set(rows.map(t => t.id));
+}
 // F9 R5 — the on-time score for one week (spec §8.2): the frozen cohort, final once the week has closed
-// (E+1 00:00 IST), provisional before (on time / missed so far / still due). Super admins only until the
-// review pack (R6) adds level R. GET ?action=getWeekScore[&week=this|last|YYYY-MM-DD (the week holding it)].
+// (E+1 00:00 IST), provisional before (on time / missed so far / still due). Super admins (whole counts) and,
+// since R6c, Founders' Associates (level R: counts and rows from the tasks they can open only).
+// GET ?action=getWeekScore[&week=this|last|YYYY-MM-DD (the week holding it)].
 async function getWeekScore(url, auth, env) {
-  if (!isPlanAdmin(auth)) return err('forbidden', 403);
+  const reviewer = isReviewer(auth);
+  if (!isPlanAdmin(auth) && !reviewer) return err('forbidden', 403);
   const w = url.searchParams.get('week') || 'this';
   const today = istDate(Date.now());
   const date = w === 'this' ? today : w === 'last' ? addDays(today, -7) : isDateStr(w) ? w : null;
@@ -3134,6 +3159,21 @@ async function getWeekScore(url, auth, env) {
   const people = Array.isArray(s.people) ? s.people : [];
   // The counts are whole; task ROWS only for spaces the viewer can open (RULE-DOCKET-003: the space gate
   // beats every admin role) — the rest are a count, like level F's "+N in spaces you're not in".
+  if (reviewer) {
+    // R6c level R: counts AND rows only from tasks the Associate can open (the review pack's non-admin gate),
+    // recomputed here — the RPC's whole-org totals never leave; nothing is said about the rest.
+    const visible = await reviewVisibleIds(auth, tasks.map(t => t.task_id), env);
+    if (!visible) return err('db_error', 500);
+    const shown = tasks.filter(t => visible.has(t.task_id));
+    const final = !!s.final;
+    const groupBy = (key) => [...shown.reduce((m, t) => m.set(t[key] || null, [...(m.get(t[key] || null) || []), t]), new Map())]
+      .map(([k, rows]) => ({ [key]: k, ...scoreBlock(rows, final) }));
+    const names = await nameMap(sbPodium, 'employees', shown.map(x => x.owner_employee_id).filter(Boolean), env);
+    const owner = (x) => ({ ...x, owner_name: x.owner_employee_id ? (names[x.owner_employee_id] || null) : null });
+    const team = (x) => ({ ...x, team_name: x.department_id ? (dept[x.department_id] || null) : null });
+    return ok({ ...s, totals: scoreBlock(shown, final), teams: groupBy('department_id').map(team), people: groupBy('owner_employee_id').map(owner),
+      tasks: shown.map(({ space_id, ...t }) => owner(team(t))), hidden_tasks: 0 });
+  }
   const open = new Set((await keepAccessible(auth, tasks.map(t => ({ id: t.task_id, space_id: t.space_id })), env)).map(t => t.id));
   const shown = tasks.filter(t => open.has(t.task_id));
   const names = await nameMap(sbPodium, 'employees', [...people, ...shown].map(x => x.owner_employee_id).filter(Boolean), env);
@@ -3163,11 +3203,15 @@ async function buildReviewPack(weekParam, teamParam, auth, env) {
   teamParam = teamParam || '';
   if (teamParam && teamParam !== 'all' && !isUuid(teamParam)) return { error: err('bad_team', 400) };
   const isSuper = isPlanAdmin(auth);
-  if (!isSuper) {
+  // R6c: a Founders' Associate (level R) picks any team or all (default all) like a plan admin, but every
+  // count and row stays on the non-admin rules below (`isSuper` false): only tasks they can open, never a
+  // Founders'-space task, no proposals.
+  const anyTeam = isSuper || isReviewer(auth);
+  if (!anyTeam) {
     if (!auth.departmentId) return { error: err('no_team', 403) };
     if (teamParam && teamParam !== auth.departmentId) return { error: err('forbidden', 403) };
   }
-  const teamId = isSuper ? (teamParam === 'all' || !teamParam ? null : teamParam) : auth.departmentId;
+  const teamId = anyTeam ? (teamParam === 'all' || !teamParam ? null : teamParam) : auth.departmentId;
   const score = (d) => sbDocket(`/rest/v1/rpc/week_score`, env, { method: 'POST', body: JSON.stringify({ p_date: d }) });
   const iso = (ms) => new Date(ms).toISOString();
   const topLive = 'archived_at=is.null&is_recurring=eq.false&parent_task_id=is.null';
@@ -3207,7 +3251,7 @@ async function buildReviewPack(weekParam, teamParam, auth, env) {
   const themeOf = (i) => (i.kind === 'theme' ? i.id : i.kind === 'milestone' ? i.parent_id : itemById.get(i.parent_id)?.parent_id);
   const restrictedThemes = new Set(raw.filter(i => i.kind === 'theme' && i.restricted).map(i => i.id));
   const restrictedItems = raw.filter(i => restrictedThemes.has(themeOf(i))).map(i => i.id);
-  const fo = raw.filter(i => (i.level === 'F' || i.level === 'O') && (i.kind === 'milestone' || i.kind === 'result'));
+  const fo = raw.filter(i => (i.level === 'F' || i.level === 'O' || i.level === 'R') && (i.kind === 'milestone' || i.kind === 'result'));
   const horizonEnd = addDays(weekEnd, 14);
   const live = (i) => i.state === 'proposed' || i.state === 'agreed';
   const horizonIds = fo.filter(i => live(i) && effectiveDue(i) && effectiveDue(i) >= weekStart && effectiveDue(i) <= horizonEnd).map(i => i.id);
@@ -3311,7 +3355,8 @@ async function buildReviewPack(weekParam, teamParam, auth, env) {
       as_of: s0.as_of || nowIso() },
     team_id: teamId,
     can_admin: isSuper,
-    departments: isSuper ? departments : departments.filter(d => d.id === auth.departmentId),
+    can_review: anyTeam,
+    departments: anyTeam ? departments : departments.filter(d => d.id === auth.departmentId),
     hidden_tasks: hidden,
     teams,
     proposals: isSuper ? {
@@ -3403,7 +3448,121 @@ async function getReviewSnapshots(url, auth, env) {
   return ok({ snapshots: rows.map(({ created_by, ...x }) => ({ ...x, created_by_name: created_by ? (people[created_by] || null) : null })) });
 }
 
-// A plan admin, read strictly: any failed read is "no" (the role guard's userIsPlanAdmin fails the other
+// ── F9 R6b: the Saturday founders' catch-up (spec §8.6; contract r6bc-contract.md) — level F only ──────────
+// The week holding `date`: its docket.weeks row when there is one (that row's week_end_dow), else the settings.
+async function weekRowFor(date, env) {
+  const [settings, wr] = await Promise.all([weekSettings(env),
+    sbDocket(`/rest/v1/weeks?week_start=lte.${date}&week_end=gte.${date}&select=week_end,week_start,closed_at&order=week_end.desc&limit=1`, env)]);
+  if (!wr.ok) return null;
+  const row = wr.data?.[0];
+  const week_end = row?.week_end || weekEndOf(date, settings.week_end_dow);
+  return { week_end, week_start: row?.week_start || addDays(week_end, -6), closed: !!row?.closed_at, settings };
+}
+// Each plan admin's top 5 for the week (only the caller's when `onlyMe`), caller first. A ref the caller
+// can't see (an item outside plan_items_for, a task outside keepAccessible) → ref null, the note kept.
+async function focusEntries(weekEnd, auth, env, onlyMe = false) {
+  let founders = [auth.userId];
+  if (!onlyMe) {
+    const rr = await sbStore(`/rest/v1/docket_roles?select=role_key,permissions`, env);
+    if (!rr.ok) return null;   // fail closed: never silently drop the other founder's list
+    const keys = (rr.data || []).filter(r => normalizeDocketPerms(r.permissions).docket_plan_admin).map(r => r.role_key);
+    const ur = keys.length ? await sbStore(`/rest/v1/docket_user_roles?role_key=in.${inList(keys)}&select=user_id`, env) : { ok: true, data: [] };
+    if (!ur.ok) return null;
+    founders = uniq([auth.userId, ...(ur.data || []).map(x => x.user_id)]);
+  }
+  const fr = await sbDocket(`/rest/v1/founder_focus?week_end=eq.${weekEnd}&founder_user_id=in.${inList(founders)}&select=founder_user_id,rank,plan_item_id,task_id,note,updated_at&order=rank.asc`, env);
+  if (!fr.ok) return null;
+  const rows = fr.data || [];
+  const planIds = uniq(rows.map(r => r.plan_item_id)), taskIds = uniq(rows.map(r => r.task_id));
+  const [names, pr, tr] = await Promise.all([
+    nameMap(sbStore, 'users_profile', founders, env),
+    planIds.length ? planRows(auth, env) : Promise.resolve({ ok: true, data: [] }),
+    sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?id=in.${l}&select=id,task_no,title,status,deadline,revised_deadline,space_id`, env),
+  ]);
+  if (!pr.ok || !tr.ok) return null;
+  const items = new Map((Array.isArray(pr.data) ? pr.data : []).map(i => [i.id, i]));
+  const tasks = new Map((await keepAccessible(auth, tr.data || [], env)).map(t => [t.id, t]));
+  const ref = (r) => {
+    if (r.plan_item_id) { const i = items.get(r.plan_item_id); return i ? { kind: 'item', code: i.code || null, title: i.title, state: i.state, due: effectiveDue(i) } : null; }
+    if (r.task_id) { const t = tasks.get(r.task_id); return t ? { kind: 'task', task_no: t.task_no, title: t.title, status: t.status, due: t.revised_deadline || t.deadline || null } : null; }
+    return null;
+  };
+  return founders.map(u => {
+    const mine = rows.filter(r => r.founder_user_id === u);
+    return { founder_user_id: u, founder_name: names[u] || null, is_me: u === auth.userId,
+      updated_at: mine.reduce((m, r) => (r.updated_at && (!m || r.updated_at > m) ? r.updated_at : m), null),
+      items: mine.map(r => ({ rank: r.rank, plan_item_id: r.plan_item_id || null, task_id: r.task_id || null, note: r.note || null, ref: ref(r) })) };
+  }).sort((a, b) => (b.is_me - a.is_me) || String(a.founder_name || '').localeCompare(String(b.founder_name || '')));
+}
+// GET ?action=getFoundersReview&week=this|last|YYYY-MM-DD — cross-team asks due this week or next + both
+// founders' top 5, and the one Slack message. Plan admin only.
+async function getFoundersReview(url, auth, env) {
+  if (!isPlanAdmin(auth)) return err('forbidden', 403);
+  const date = reviewDate(url.searchParams.get('week'), istDate(Date.now()));
+  if (!date) return err('bad_week', 400);
+  const wk = await weekRowFor(date, env);
+  if (!wk) return err('db_error', 500);
+  const start = istMidnight(wk.week_start), end = istMidnight(addDays(wk.week_end, 8));
+  const iso = (ms) => new Date(ms).toISOString();
+  const win = `or=(and(revised_deadline.gte.${iso(start)},revised_deadline.lt.${iso(end)}),and(revised_deadline.is.null,deadline.gte.${iso(start)},deadline.lt.${iso(end)}))`;
+  const cols = `${PW_TASK_COLS},archived_at`;
+  const [ar, dr, focus] = await Promise.all([
+    sbAll(sbDocket, `/rest/v1/tasks?archived_at=is.null&parent_task_id=is.null&${PW_OPEN}&${win}&select=${cols}&order=id.asc`, env),
+    sbPodium(`/rest/v1/departments?select=id,name`, env),
+    focusEntries(wk.week_end, auth, env),
+  ]);
+  if (!ar.ok || !dr.ok || !focus) return err('db_error', 500);
+  const blocked = ar.data || [];
+  const lr = await sbInAll(sbDocket, blocked.map(t => t.id), l => `/rest/v1/task_links?kind=eq.blocks&to_task_id=in.${l}&select=id,from_task_id,to_task_id&order=id.asc`, env);
+  if (!lr.ok) return err('db_error', 500);
+  const links = lr.data || [];
+  const br = await sbInAll(sbDocket, uniq(links.map(l => l.from_task_id)), l => `/rest/v1/tasks?id=in.${l}&archived_at=is.null&select=${cols}&order=id.asc`, env);   // a deleted blocker is no ask
+  if (!br.ok) return err('db_error', 500);
+  const blockers = br.data || [];
+  const keep = new Set((await keepAccessible(auth, [...blocked, ...blockers], env)).map(t => t.id));
+  const names = await nameMap(sbPodium, 'employees', [...blocked, ...blockers].filter(t => keep.has(t.id)).map(t => t.owner_employee_id), env);
+  const { asks, hidden_asks } = buildAsks({ links, blocked, blockers, keep, names, start, end,
+    deptNames: Object.fromEntries((dr.data || []).map(d => [d.id, d.name])) });
+  const out = { week: { week_end: wk.week_end, week_start: wk.week_start }, asks, hidden_asks, focus };
+  return ok({ ...out, slack: foundersToSlack(out) });
+}
+// POST { action: 'setFounderFocus', week: this|next|YYYY-MM-DD, items: [...] } — replaces the CALLER's top 5
+// for the week in one transaction (docket.founder_focus_set, migration 0026). items: [] clears it.
+const FOCUS_ERR = /\b(too_many|bad_rank|bad_item|note_too_long|not_found|week_closed|bad_week)\b/;
+async function setFounderFocus(body, auth, env) {
+  if (!isPlanAdmin(auth)) return err('forbidden', 403);
+  const d = body.data || body;
+  const today = istDate(Date.now());
+  const w = d.week || 'this';
+  const date = w === 'this' ? today : w === 'next' ? addDays(today, 7) : isDateStr(w) ? w : null;
+  if (!date) return err('bad_week', 400);
+  const v = validateFocusItems(d.items);
+  if (v.error) return err(v.error, 400);
+  const wk = await weekRowFor(date, env);
+  if (!wk) return err('db_error', 500);
+  // A closed week, or any week already over, is a record (the RPC refuses it too).
+  if (wk.closed || wk.week_end < weekEndOf(today, wk.settings.week_end_dow)) return err('week_closed', 409);
+  const planIds = uniq(v.items.map(i => i.plan_item_id)), taskIds = uniq(v.items.map(i => i.task_id));
+  const [pr, tr] = await Promise.all([
+    planIds.length ? planRows(auth, env) : Promise.resolve({ ok: true, data: [] }),
+    sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?id=in.${l}&archived_at=is.null&select=id,space_id`, env),
+  ]);
+  if (!pr.ok || !tr.ok) return err('db_error', 500);
+  const seenItems = new Set((Array.isArray(pr.data) ? pr.data : []).map(i => i.id));
+  const seenTasks = new Set((await keepAccessible(auth, tr.data || [], env)).map(t => t.id));
+  if (planIds.some(id => !seenItems.has(id)) || taskIds.some(id => !seenTasks.has(id))) return err('not_found', 400);
+  const r = await sbDocket(`/rest/v1/rpc/founder_focus_set`, env, { method: 'POST', body: JSON.stringify({
+    p_actor: auth.userId, p_week_end: wk.week_end, p_items: v.items }) });
+  if (!r.ok) {
+    const code = FOCUS_ERR.exec(String(r.data?.message || ''))?.[1];
+    return code ? err(code, code === 'week_closed' ? 409 : 400) : err('db_error', 500);
+  }
+  const focus = await focusEntries(wk.week_end, auth, env, true);
+  if (!focus) return err('db_error', 500);
+  return ok({ focus: focus[0] });
+}
+
+// A plan admin, read strictly: any failed read is "no" (the role guard's userHoldsGuardedRole fails the other
 // way, because there "yes" blocks). Used where "yes" GRANTS — the Founders' space.
 async function userIsPlanAdminStrict(userId, env) {
   if (!isUuid(userId || '')) return false;
@@ -3425,7 +3584,7 @@ const GET_ACTIONS = {
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,
   getPlan, getPlanItem, getProposals, getPlanWeeks, getWeekScore,
-  getReviewPack, getReviewSnapshots,
+  getReviewPack, getReviewSnapshots, getFoundersReview,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,
@@ -3445,7 +3604,7 @@ const POST_ACTIONS = {
   setDashboardPublic, addDashboardViewer, removeDashboardViewer,
   createPlanItem, updatePlanItem, planItemAction,
   proposePlanItem, decideProposal,
-  holdReview,
+  holdReview, setFounderFocus,
 };
 
 // task_history.source (F9 R6a, §8.3): the MCP gateway marks every call it makes; anything else is the app.

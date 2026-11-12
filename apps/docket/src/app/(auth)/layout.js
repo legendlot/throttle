@@ -181,6 +181,7 @@ function AuthLayoutInner({ children }) {
 
   const displayName = user?.full_name || user?.email || '';
   const isAdmin = !!perms?.docket_admin;
+  const isPlanAdmin = !!perms?.docket_plan_admin;   // F9 R6b: the founders' catch-up nav entry
   // shellModalOpen: a layout-owned modal is up; pages fold it into their hotkey guards.
   const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
 
@@ -217,6 +218,7 @@ function AuthLayoutInner({ children }) {
             spaces={spaces}
             programs={programs}
             isAdmin={isAdmin}
+            isPlanAdmin={isPlanAdmin}
             collapsed={collapsed}
             mobileOpen={mobileNavOpen}
             onSelect={go}
@@ -244,7 +246,7 @@ function AuthLayoutInner({ children }) {
         {/* Mounted per open: fresh state, sources read synchronously (no stale frame). */}
         {cmdOpen && <CommandBar userId={user?.id} session={session} onClose={() => setCmdOpen(false)} router={router}
           spaces={spaces} programs={[...programs, ...createdPrograms.filter(c => !programs.some(p => p.id === c.id))]}
-          canViewDashboard={canViewDashboard} isAdmin={isAdmin}
+          canViewDashboard={canViewDashboard} isAdmin={isAdmin} isPlanAdmin={isPlanAdmin}
           onNewTask={newTask} onNewSpace={newSpace} onNewProgram={newProgram}
           onToggleSidebar={toggleSidebar} onHelp={() => setHelpOpen(true)} />}
         {helpOpen && <ShortcutsSheet onClose={() => setHelpOpen(false)} />}

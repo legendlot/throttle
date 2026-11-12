@@ -19,7 +19,7 @@ import { NoSourceChip } from '../../../components/plan/MeasureFields.js';
 import { ProposalSections } from '../../../components/plan/Proposals.js';
 import {
   buildPlanTree, myMilestoneGroups, chipState, effectiveDue, isRedated, fmtPlanDate, oneLine, moveSort,
-  canAddResult, planErrorText, noDataSource, splitIntoCodes,
+  canAddResult, planErrorText, noDataSource, splitIntoCodes, isReviewRegister,
 } from '../../../lib/plan.js';
 
 export default function PlanPage() {
@@ -51,6 +51,8 @@ export default function PlanPage() {
 
   const items = data?.items || [];
   const isSuper = !!data?.can_admin;
+  // R6c: a Founders' Associate (level R) reads the whole register — read-only, never targets / restricted.
+  const isRegister = isSuper || isReviewRegister(items, isSuper);
   const me = data?.employee_id || null;
   const tree = useMemo(() => buildPlanTree(items), [items]);
   const mine = useMemo(() => myMilestoneGroups(items, me), [items, me]);
@@ -85,8 +87,10 @@ export default function PlanPage() {
     <div className="pl">
       <div className="pl-head">
         <div className="pl-head-tx">
-          <h1 className="pl-title">{isSuper ? 'Plan register' : 'My milestones'}</h1>
-          <p className="pl-lede">{isSuper
+          <h1 className="pl-title">{isRegister ? 'Plan register' : 'My milestones'}</h1>
+          <p className="pl-lede">{!isSuper && isRegister
+            ? 'Every theme, milestone and result, read-only. Click a row for its details.'
+            : isSuper
             ? 'Themes → milestones → results. Click any row to edit it, agree it, re-date it or close it.'
             : 'The milestones you own, under their theme, with the results you’ve committed to.'}</p>
         </div>
@@ -99,14 +103,14 @@ export default function PlanPage() {
 
       <ProposalSections proposals={proposals} isSuper={isSuper} onOpen={openProposal} />
 
-      {isSuper ? (
+      {isRegister ? (
         tree.themes.length === 0
           ? <EmptyState icon={Target} title="No themes yet" body="Start the register with the first theme."
               action={<Button variant="primary" icon={Plus} onClick={() => add('theme')}>Theme</Button>} />
           : tree.themes.map(t => (
             <section key={t.id} className={'pl-theme' + (t.state === 'dropped' ? ' pl-dim' : '')}>
               <PlanRow item={t} {...rowProps} siblings={tree.themes} onMove={move}
-                extra={t.state === 'agreed' && <Button size="sm" variant="ghost" icon={Plus} onClick={() => add('milestone', t)}>Milestone</Button>} />
+                extra={isSuper && t.state === 'agreed' && <Button size="sm" variant="ghost" icon={Plus} onClick={() => add('milestone', t)}>Milestone</Button>} />
               {t.target_text && <div className="pl-target"><Flag size={12} aria-hidden /> {t.target_text}</div>}
               <MilestoneList milestones={t.children} rowProps={rowProps} onMove={move} onAdd={add} />
               {t.children.length === 0 && <div className="pl-none">No milestones yet.</div>}
@@ -172,7 +176,7 @@ function PlanRow({ item, depth = 0, onOpen, isSuper, siblings, onMove, moving, e
           ? <div className="pl-row-sub">Split{splitInto.length ? ` → ${splitInto.join(', ')}` : ''}</div>
           : sub && <div className="pl-row-sub">{sub}</div>}
       </div>
-      <span className="pl-owner">{item.owner_name || (item.kind === 'theme' && item.level === 'F' ? 'Both founders' : '')}</span>
+      <span className="pl-owner">{item.owner_name || (item.kind === 'theme' && (item.level === 'F' || item.level === 'R') ? 'Both founders' : '')}</span>
       {item.kind !== 'theme' && (
         <span className="pl-due">{due ? fmtPlanDate(due) : <span className="pl-muted">No date</span>}
           {isRedated(item) && <Pill className="pl-redated">Re-dated</Pill>}</span>

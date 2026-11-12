@@ -66,3 +66,10 @@ test('trigger / CHECK errors map to their codes and statuses', () => {
   assert.equal(planErrStatus('restricted_needs_founders_space'), 422);
   assert.equal(planErrStatus('restricted_tasks_outside'), 409);
 });
+
+test('level R links like everyone: an R theme yes, an R milestone/result no (not the Associate\'s to attach work to)', () => {
+  assert.equal(linkError({ id: 't', level: 'R', kind: 'theme', state: 'agreed' }), null);
+  assert.equal(linkError({ id: 'm', level: 'R', kind: 'milestone', state: 'agreed' }), 'plan_item_not_found');
+  assert.equal(linkError({ id: 'r', level: 'R', kind: 'result', state: 'agreed' }), 'plan_item_not_found');
+  assert.equal(linkError({ id: 't', level: 'R', kind: 'theme', state: 'dropped' }), 'plan_item_closed');
+});

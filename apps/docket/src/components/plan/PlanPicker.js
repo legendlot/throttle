@@ -1,8 +1,9 @@
 'use client';
 // F9 R2 — the plan on every task. One picker, one chip, one loader, shared by the task view, the create
 // form, quick capture, the list's Plan column and Board cards.
-//   usePlanItems(session) — getPlan (the caller's own F / O / T rows: super → everything; others → the
-//     milestones/results they own + every unrestricted theme). One read per signed-in user, shared by
+//   usePlanItems(session) — getPlan (the caller's own F / O / R / T rows: super → everything; a Founders'
+//     Associate → every unrestricted item at R; others → the milestones/results they own + every
+//     unrestricted theme). One read per signed-in user, shared by
 //     every mounted picker; a plan write (docketopsPost *PlanItem*) fires `docket:plan-changed` → re-read.
 //   PlanPicker — searchable list: "Unplanned" (= clear) + live items as "Theme › M01 › M01.R2 · Title".
 //   PlanChip   — a task's `plan` (the worker's projection): code + title on hover; L "Another owner's

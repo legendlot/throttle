@@ -66,7 +66,7 @@ function SectionHead({ label, open, onToggle, depth = 0, onAdd, addLabel }) {
 const dot = (color) => <span className="dks-dot" style={{ background: color }} />;
 
 export function DocketSidebar({
-  activeKey = '', path = '', spaces = [], programs = [], isAdmin = false,
+  activeKey = '', path = '', spaces = [], programs = [], isAdmin = false, isPlanAdmin = false,
   collapsed = false, mobileOpen = false, onSelect, onNewSpace, onNewProgram, onSpaceSettings,
 }) {
   const privates = (spaces || []).filter(s => s.is_private);
@@ -130,6 +130,8 @@ export function DocketSidebar({
         <Row depth={1} label="Three weeks" active={path === '/plan/weeks'} onClick={go('/plan/weeks')} />
         {/* F9 R6a: the weekly review pack — everyone (a lead sees their own team; plan admins any). */}
         <Row depth={1} label="Review" active={path === '/review'} onClick={go('/review')} />
+        {/* F9 R6b: the Saturday founders' catch-up — plan admins only (the worker 403s anyone else). */}
+        {isPlanAdmin && <Row depth={1} label="Founders’ catch-up" active={path === '/review/founders'} onClick={go('/review/founders')} />}
         {/* Programs (S138): cross-space jump-to — every task tagged to the program, in any
             space you can access. Only programs you have visible tasks in are listed (counts). */}
         {(programs.length > 0 || onNewProgram) && shown('programs', programActive) && <div className="dks-section">

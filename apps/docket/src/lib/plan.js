@@ -220,7 +220,7 @@ export function planErrorText(e) {
 }
 
 // ── R2: tasks link up ────────────────────────────────────────────────────────
-// A task's `plan` comes from the worker's projection (docket.plan_links_for): { id, level F|O|T|L, kind,
+// A task's `plan` comes from the worker's projection (docket.plan_links_for): { id, level F|O|R|T|L, kind,
 // code, title, state, theme_id, theme_code, theme_title, inherited }; L has no code / title / state, and a
 // restricted item below F never arrives at all. The picker reads getPlan (the caller's own F / O / T rows).
 export const LINK_STATES = ['proposed', 'agreed'];
@@ -253,7 +253,7 @@ const optLabel = (it, byId) => (it.kind === 'theme' ? (it.title || it.code) : `$
 // search box finds a code, a theme or a word of the title.
 export function planPickerOptions(items = []) {
   const { byId } = buildPlanTree(items);
-  const live = treeOrder(items).filter(it => LINK_STATES.includes(it.state) && it.level !== 'L');
+  const live = treeOrder(items).filter(it => LINK_STATES.includes(it.state) && it.level !== 'L' && !(it.level === 'R' && it.kind !== 'theme'));   // linking = plan-core linkError: F / O / T, and R themes only — an Associate reads the register, doesn't attach work to other owners' items
   return [{ value: '', label: 'Unplanned' }, ...live.map(it => ({ value: it.id, label: optLabel(it, byId), kind: it.kind, depth: it.kind === 'theme' ? 0 : it.kind === 'milestone' ? 1 : 2 }))];
 }
 
@@ -280,9 +280,13 @@ export function matchesPlanFilter(task, filter, byId = {}) {
   return p.id === filter;
 }
 
-// The chip a task row / card shows. F/O/T: the code (a theme: its code, else title), the title on hover;
+// The chip a task row / card shows. F/O/R/T: the code (a theme: its code, else title), the title on hover;
 // L: "Another owner's milestone" + the theme on hover; an inherited link is muted. No plan → null.
 const OTHER = { milestone: 'Another owner’s milestone', result: 'Another owner’s result', theme: 'Another owner’s theme' };
+// Level R (R6c, Founders' Associates) shows like O — code, title, details; the worker already nulls target_text.
+export const FULL_LEVELS = ['F', 'O', 'R', 'T'];
+// The read-only register a Founders' Associate sees: getPlan rows at level R (owner rows stay O).
+export function isReviewRegister(items = [], isSuper = false) { return !isSuper && (items || []).some(it => it?.level === 'R'); }
 export function planChip(plan) {
   if (!plan || !plan.level || plan.level === 'none') return null;
   const from = plan.inherited ? ' — from the parent task' : '';

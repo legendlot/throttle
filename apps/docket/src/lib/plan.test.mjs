@@ -168,6 +168,16 @@ test('chip: code with the title on hover; L redacted; inherited muted; none noth
   assert.deepEqual(l, { label: 'Another owner’s milestone', title: 'Theme: Growth', muted: false, redacted: true });
   assert.equal(planChip({ id: 'r', level: 'L', kind: 'result' }).label, 'Another owner’s result');
   assert.equal(planChip({ level: 'none' }), null);
+  // Level R (Founders' Associates) reads like O: code, title on hover, never redacted.
+  assert.deepEqual(planChip({ id: 'm2', level: 'R', kind: 'milestone', code: 'M02', title: 'Retail', target_text: null }),
+    { label: 'M02', title: 'M02 · Retail', muted: false, redacted: false });
+  assert.deepEqual(planChip({ id: 't3', level: 'R', kind: 'theme', code: 'T03', title: 'Ops' }),
+    { label: 'T03', title: 'Ops', muted: false, redacted: false });
+  assert.equal(app.isReviewRegister([{ level: 'R' }, { level: 'O' }]), true);
+  assert.equal(app.isReviewRegister([{ level: 'R' }], true), false);
+  assert.equal(app.isReviewRegister([{ level: 'O' }, { level: 'T' }]), false);
+  assert.ok(!app.planPickerOptions([{ id: 'm2', kind: 'milestone', level: 'R', state: 'agreed', title: 'Retail', code: 'M02' }]).some(o => o.value === 'm2'));   // R reads milestones, never links them (plan-core linkError)
+  assert.ok(app.planPickerOptions([{ id: 't9', kind: 'theme', level: 'R', state: 'agreed', title: 'Growth', code: 'T09' }]).some(o => o.value === 't9'));   // …but links to themes like everyone
   assert.equal(planChip(null), null);
 });
 

@@ -13,7 +13,8 @@ import { getAs, postAs, scrub, capPayload } from '../workers.js';
 
 // LOT user ids carried by task rows; the names ride alongside (creator_name, author_name, actor_name).
 const DOCKET_DROP = ['auth_user_id', 'created_by_user_id', 'updated_by', 'abandoned_by', 'author_user_id', 'actor_user_id', 'added_by',
-  'proposer_user_id', 'decided_by'];   // F9 R3 proposals (docketops already strips them; belt and braces)
+  'proposer_user_id', 'decided_by',    // F9 R3 proposals (docketops already strips them; belt and braces)
+  'founder_user_id'];                   // F9 R6b founders' top 5 (is_me + founder_name ride alongside)
 
 // The Docket app makes an abandoned task read-only (TaskView `canEdit = _can_edit && status !== 'abandoned'`,
 // decisions 2026-11-09), but docketops' single-task endpoints don't enforce it, so the gateway does: these
@@ -36,6 +37,35 @@ const WEEK = { schema: { type: 'string', maxLength: 10 }, check: v => (['this', 
 // F9 R5: which week's on-time score — this (provisional), last (final once it closed), or the week holding a date.
 const SCORE_WEEK = { schema: { type: 'string', maxLength: 10 }, check: v => (['this', 'last'].includes(v) || T.date.check(v).ok)
   ? { ok: true, value: v } : { ok: false, error: 'must be this, last, or a date YYYY-MM-DD (its week)' } };
+// F9 R6a: one team (a department id from docket_tasks report=people) or all of them.
+const TEAM = { schema: { type: 'string', maxLength: 36 }, check: v => (v === 'all' || T.uuid.check(v).ok)
+  ? { ok: true, value: v } : { ok: false, error: 'must be all or a department id (uuid)' } };
+// F9 R6b: which week a founder's top 5 is for — this, next, or the week holding a date.
+const FOCUS_WEEK = { schema: { type: 'string', maxLength: 10 }, check: v => (['this', 'next'].includes(v) || T.date.check(v).ok)
+  ? { ok: true, value: v } : { ok: false, error: 'must be this, next, or a date YYYY-MM-DD (its week)' } };
+// The top 5 itself: shaped here, decided by Docket (ranks, visibility, the closed-week rule — setFounderFocus).
+const UUIDV = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FOCUS_ITEMS = {
+  schema: { type: 'array', maxItems: 5, items: { type: 'object', additionalProperties: false, required: ['rank'], properties: {
+    rank: { type: 'integer', minimum: 1, maximum: 5 }, plan_item_id: { type: 'string' }, task_id: { type: 'string' },
+    note: { type: 'string', maxLength: 500 } } } },
+  check: (v) => {
+    if (!Array.isArray(v) || v.length > 5) return { ok: false, error: 'must be a list of at most 5 items' };
+    const out = [];
+    for (const it of v) {
+      if (!it || typeof it !== 'object' || Array.isArray(it)) return { ok: false, error: 'each item must be { rank, plan_item_id | task_id | note }' };
+      const extra = Object.keys(it).find(k => !['rank', 'plan_item_id', 'task_id', 'note'].includes(k));
+      if (extra) return { ok: false, error: `item field \`${extra}\` is not allowed (rank, plan_item_id, task_id, note)` };
+      if (!Number.isInteger(it.rank) || it.rank < 1 || it.rank > 5) return { ok: false, error: 'each item needs a rank 1–5' };
+      for (const k of ['plan_item_id', 'task_id']) if (it[k] != null && it[k] !== '' && !(typeof it[k] === 'string' && UUIDV.test(it[k]))) return { ok: false, error: `\`${k}\` must be an id (uuid)` };
+      if (it.note != null && (typeof it.note !== 'string' || it.note.length > 500)) return { ok: false, error: 'a note is text up to 500 characters' };
+      const o = { rank: it.rank };
+      for (const k of ['plan_item_id', 'task_id', 'note']) if (it[k] != null && it[k] !== '') o[k] = it[k];
+      out.push(o);
+    }
+    return { ok: true, value: out };
+  },
+};
 // F9 R2: a task's plan link. Docket decides who may set it (edit right on the task + the item visible to you
 // as its owner, a theme, or a super admin; live items only) — the gateway only shapes it.
 const PLAN_ITEM = { ...T.uuid, nullable: true, schema: { type: ['string', 'null'] } };
@@ -83,7 +113,7 @@ function writeTool({ name, title, description, action, params, required = [], de
         return res;
       }
       // Always an object (structuredContent must be one), scrubbed like every read.
-      return { ok: true, data: { done: name, result: capPayload(scrub(res.data)).data } };
+      return { ok: true, data: { done: name, result: capPayload(scrub(res.data, { dropKeys: DOCKET_DROP })).data } };
     },
   };
 }
@@ -108,8 +138,9 @@ const docketTools = [
   // their own milestones + the results under them, and every open theme (code + title). Nothing restricted.
   reportTool({
     system: 'docket', name: 'docket_plan', title: 'Docket plan', binding: 'DOCKETOPS', dropKeys: DOCKET_DROP,
-    description: 'Read the Docket plan (themes → milestones → results) at your own level: themes you can link tasks to, the milestones and results you own, one item with its children and the linked tasks you can see. Use the ids as plan_item_id on docket_create_task / docket_update_task.',
-    paramAbout: { id: 'Plan item id (from report=items or themes).', week: 'For report=score: this (default, provisional), last (the week just closed), or any date YYYY-MM-DD for the week holding it.' },
+    description: 'Read the Docket plan (themes → milestones → results) at your own level: themes you can link tasks to, the milestones and results you own, one item with its children and the linked tasks you can see. Use the ids as plan_item_id on docket_create_task / docket_update_task (a Founders\' Associate sees every unrestricted item but links only to themes and to items they own).',
+    paramAbout: { id: 'Plan item id (from report=items or themes).', week: 'For report=score / review / founders: this (default), last (the week just closed), or any date YYYY-MM-DD for the week holding it.',
+      team: 'For report=review: a department id, or all. Default: a founder or Founders\' Associate all teams; everyone else their own team.' },
     reports: {
       themes: { action: 'getPlan', about: 'the themes you can see (code, title, state)', params: {},
         shape: d => ({ themes: ((d && d.items) || []).filter(x => x.kind === 'theme') }) },
@@ -122,7 +153,11 @@ const docketTools = [
         shape: d => ({ proposals: (d && d.proposals) || [] }) },
       // F9 R5 (spec §8.2): the frozen weekly cohort scored — final once the week closed (Monday 00:00 IST),
       // provisional before. Super admins only (Docket refuses anyone else).
-      score: { action: 'getWeekScore', about: 'super admins: the weekly on-time score — per team, per person and per task; provisional (on time / missed so far / still due) until the week closes, then final', params: { week: SCORE_WEEK } },
+      score: { action: 'getWeekScore', about: 'super admins and Founders\' Associates: the weekly on-time score — per team, per person and per task; provisional (on time / missed so far / still due) until the week closes, then final', params: { week: SCORE_WEEK } },
+      // F9 R6a (spec §8.1): the Friday review pack at the caller's level — Docket decides the teams and rows.
+      review: { action: 'getReviewPack', about: 'the weekly review pack per team: this week (provisional) and last week (final) on-time score + trend, slipped tasks with every revision, milestones due / re-dated / warnings, staleness, the next two weeks, unplanned share, and a Copy-for-Slack text', params: { week: SCORE_WEEK, team: TEAM } },
+      // F9 R6b (spec §8.6): the Saturday founders' catch-up — super admins only (Docket refuses anyone else).
+      founders: { action: 'getFoundersReview', about: 'super admins: the Saturday catch-up — cross-team asks (a task waiting on another team\'s task) due this week or next, and each founder\'s top 5', params: { week: SCORE_WEEK } },
     },
   }),
   // F9 R3 — anyone can propose something for the plan (spec §4.5). It lands in the founders' queue; nothing
@@ -139,6 +174,18 @@ const docketTools = [
       suggested_date: { ...T.date, about: 'Optional: by when, YYYY-MM-DD.' },
     },
     required: ['title', 'why'],
+  }),
+  // F9 R6b — a founder's top 5 for a week (spec §8.6). One call replaces the caller's whole list for that
+  // week (Docket does it in one transaction); items: [] clears it. Super admins only (Docket refuses others).
+  writeTool({
+    name: 'docket_founder_focus', title: 'Set your top 5 for a week', action: 'setFounderFocus',
+    description: 'Super admins: set your top 5 for a week — each item ranked 1–5 and either a plan item (plan_item_id from docket_plan), a task (task_id from docket_tasks) or a free note; a note may also sit beside an id. This REPLACES your whole top 5 for that week; send items: [] to clear it. A week that is over can\'t be changed. Read it back with docket_plan report=founders (week = this, last or the week-ending date).',
+    recorded: 'it replaces your top 5 for that week (the other founder\'s list is untouched).',
+    params: {
+      week: { ...FOCUS_WEEK, about: 'this (default), next, or a date YYYY-MM-DD for the week holding it.' },
+      items: { ...FOCUS_ITEMS, about: 'Up to 5 items: { rank 1–5, plan_item_id? | task_id?, note? }. [] clears the week.' },
+    },
+    required: ['items'],
   }),
   writeTool({
     name: 'docket_create_task', title: 'Create a Docket task', action: 'createTask',

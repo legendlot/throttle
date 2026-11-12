@@ -228,8 +228,11 @@ export const LINKABLE_LEVELS = ['F', 'O', 'T'];
 // May the caller point a task at this item? `link` = its plan_links_for row for the caller (or null).
 // L / none / unknown all read as "not found" — an L item is only known through someone else's task, and
 // none must not even exist. Returns an error code or null.
+// Level R (a Founders' Associate) READS every unrestricted item but links like everyone else: themes (what any
+// employee links at T) and items they own (O). Its milestones/results at R are not theirs to attach work to.
 export function linkError(link) {
-  if (!link || !LINKABLE_LEVELS.includes(link.level)) return 'plan_item_not_found';
+  const linkable = link && (LINKABLE_LEVELS.includes(link.level) || (link.level === 'R' && link.kind === 'theme'));
+  if (!linkable) return 'plan_item_not_found';
   if (!LINK_STATES.includes(link.state)) return 'plan_item_closed';
   return null;
 }

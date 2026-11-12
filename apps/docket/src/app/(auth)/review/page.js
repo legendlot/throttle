@@ -9,11 +9,11 @@ import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { ClipboardCheck, ChevronLeft, ChevronRight, Copy, Pause, History, X } from 'lucide-react';
+import { ClipboardCheck, ChevronLeft, ChevronRight, Copy, Pause, History, X, Users } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { Button, EmptyState, Pill } from '../../../components/ui/index.js';
 import { fmtPlanStamp } from '../../../lib/plan.js';
-import { slackText, stepWeek, weekParam, weekState, reviewTitle, reviewHref, reviewErrorText } from '../../../lib/review.js';
+import { slackText, stepWeek, weekParam, weekState, reviewTitle, reviewHref, reviewErrorText, foundersHref } from '../../../lib/review.js';
 import { shortDay } from '../../../lib/weeks.js';
 import { ReviewPack } from './ReviewPack.js';
 
@@ -112,6 +112,7 @@ function ReviewInner() {
           </p>
         </div>
         <div className="pl-head-acts">
+          {data.can_admin && <Button variant="ghost" icon={Users} onClick={() => router.push(foundersHref({ week: weekParam(w.week_end) }))}>Founders’ catch-up →</Button>}
           <Button variant="neutral" icon={Copy} onClick={copySlack} disabled={state !== 'scored'}>Copy for Slack</Button>
           {data.can_admin && <Button variant="neutral" icon={Pause} loading={holding} onClick={hold}
             disabled={state !== 'scored' || !!snap || w.final}>Hold</Button>}
@@ -127,7 +128,8 @@ function ReviewInner() {
           <Button size="sm" variant="neutral" icon={ChevronRight} aria-label="Next week" disabled={state === 'future'}
             onClick={() => go({ week: weekParam(stepWeek(w.week_end, 1)) })} />
         </div>
-        {data.can_admin && (
+        {/* Plan admins and Founders' Associates (level R, R6c) may pick any team; Hold / Snapshots / Proposals stay admin-only. */}
+        {(data.can_admin || data.can_review) && (
           <label className="pw-team">
             <span className="pl-lbl">Team</span>
             <select className="tk-fp-sel" value={teamValue} onChange={e => go({ team: e.target.value === 'all' ? '' : e.target.value })} aria-label="Team">

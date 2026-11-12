@@ -184,7 +184,7 @@ export function buildPlanWeeks({ items = [], tasks = [], linked = [], themeTasks
     const e = weekEndOf(due, dow);
     return colOf.has(e) ? e : null;
   };
-  const winItems = items.filter(i => i.kind !== 'theme' && (i.level === 'F' || i.level === 'O') && LIVE.includes(i.state)
+  const winItems = items.filter(i => i.kind !== 'theme' && (i.level === 'F' || i.level === 'O' || i.level === 'R') && LIVE.includes(i.state)
     && inTeam(i.team_id || null) && itemCol(i));
 
   // Tasks in the window: open + overdue → Overdue; otherwise (open or done) in its week if it's one of three.
@@ -202,7 +202,7 @@ export function buildPlanWeeks({ items = [], tasks = [], linked = [], themeTasks
 
   // ── items: No actionable tasks · Not agreed yet ──
   const resultsOf = {};
-  for (const i of items) if (i.kind === 'result' && (i.level === 'F' || i.level === 'O') && LIVE.includes(i.state)) (resultsOf[i.parent_id] = resultsOf[i.parent_id] || []).push(i.id);
+  for (const i of items) if (i.kind === 'result' && (i.level === 'F' || i.level === 'O' || i.level === 'R') && LIVE.includes(i.state)) (resultsOf[i.parent_id] = resultsOf[i.parent_id] || []).push(i.id);
   const linkedBy = {};
   for (const t of linked) if (!t.parent_task_id) (linkedBy[t.plan_item_id] = linkedBy[t.plan_item_id] || []).push(t);
   for (const i of winItems) {
@@ -237,7 +237,7 @@ export function buildPlanWeeks({ items = [], tasks = [], linked = [], themeTasks
   // ── Theme-only links: open tasks linked straight to a theme that has an AGREED milestone the viewer sees
   //    (F / O). A theme whose agreed milestones are all invisible gives no warning — it would say they exist.
   const agreedMs = {};
-  for (const i of items) if (i.kind === 'milestone' && i.state === 'agreed' && (i.level === 'F' || i.level === 'O')) {
+  for (const i of items) if (i.kind === 'milestone' && i.state === 'agreed' && (i.level === 'F' || i.level === 'O' || i.level === 'R')) {
     (agreedMs[i.parent_id] = agreedMs[i.parent_id] || []).push({ id: i.id, code: i.code || null, title: i.title, due: effectiveDue(i) });
   }
   for (const t of themeTasks) {
