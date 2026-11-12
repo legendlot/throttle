@@ -1,5 +1,7 @@
 // Calls a LOT worker AS THE PERSON (their own Supabase JWT) over a service binding.
 // Workers.dev blocks worker→worker fetch (1042), so every target is a [[services]] binding.
+// Every call carries X-LOT-Source: connector — docketops stamps task_history.source from it (Docket F9 §8.3:
+// a connector update counts as a qualifying update but is shown as such); other workers ignore it.
 // Result: { ok:true, data } | { ok:false, reason } (a refusalText key) | { ok:false, userError } (the
 // worker rejected the request itself, e.g. a bad parameter: shown to Claude, not a refusal).
 
@@ -11,7 +13,7 @@ export async function getAs(binding, sbAccess, action, params = {}) {
   const q = new URLSearchParams({ action });
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
   u.search = q.toString();
-  return callAs(binding, u.toString(), { headers: { Authorization: `Bearer ${sbAccess}` } });
+  return callAs(binding, u.toString(), { headers: { Authorization: `Bearer ${sbAccess}`, 'X-LOT-Source': 'connector' } });
 }
 
 // A write, as the person: POST { action, data } (LOT workers route POSTs by body.action and read
@@ -19,7 +21,7 @@ export async function getAs(binding, sbAccess, action, params = {}) {
 export async function postAs(binding, sbAccess, action, data = {}) {
   return callAs(binding, 'https://worker/', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${sbAccess}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${sbAccess}`, 'Content-Type': 'application/json', 'X-LOT-Source': 'connector' },
     body: JSON.stringify({ action, data }),
   });
 }

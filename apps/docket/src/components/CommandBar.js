@@ -134,6 +134,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
     const navItems = [
       { key: 'nav:plan', label: 'Plan', icon: Target, route: '/plan' },
       { key: 'nav:plan-weeks', label: 'Three weeks', icon: Target, route: '/plan/weeks' },
+      { key: 'nav:review', label: 'Review', icon: Target, route: '/review' },
       { key: 'nav:tasks', label: 'Tasks', icon: ListTodo, route: '/tasks' },
       { key: 'nav:mine', label: 'My tasks', icon: UserCheck, route: '/tasks?lens=mine' },
       { key: 'nav:checklist', label: 'Checklist', icon: ListChecks, route: '/checklist' },

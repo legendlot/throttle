@@ -128,6 +128,8 @@ export function DocketSidebar({
         <Row label="Plan" lead={<Target size={13} strokeWidth={2} aria-hidden />} active={path === '/plan'} onClick={go('/plan')} />
         {/* F9 R4: the rolling three-week view (Overdue · this · next · the week after). */}
         <Row depth={1} label="Three weeks" active={path === '/plan/weeks'} onClick={go('/plan/weeks')} />
+        {/* F9 R6a: the weekly review pack — everyone (a lead sees their own team; plan admins any). */}
+        <Row depth={1} label="Review" active={path === '/review'} onClick={go('/review')} />
         {/* Programs (S138): cross-space jump-to — every task tagged to the program, in any
             space you can access. Only programs you have visible tasks in are listed (counts). */}
         {(programs.length > 0 || onNewProgram) && shown('programs', programActive) && <div className="dks-section">

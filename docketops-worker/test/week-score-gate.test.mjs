@@ -110,7 +110,7 @@ test('reviseDeadline: one RPC with the reason, no direct PATCH, no worker-writte
   assert.equal(status, 200, JSON.stringify(j));
   const rpc = s.calls.filter(c => c.p.includes('/rpc/task_set_deadline'));
   assert.equal(rpc.length, 1);
-  assert.deepEqual(rpc[0].body, { p_actor: ME, p_ids: [U(100)], p_value: '2026-11-20T12:30:00.000Z', p_reason: 'zz slip' });
+  assert.deepEqual(rpc[0].body, { p_actor: ME, p_ids: [U(100)], p_value: '2026-11-20T12:30:00.000Z', p_reason: 'zz slip', p_source: 'app' });
   assert.equal(deadlinePatches(s.calls).length, 0);
   assert.equal(deadlineHistory(s.calls).length, 0);
 });

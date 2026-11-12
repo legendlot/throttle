@@ -32,7 +32,8 @@ import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT
   validateSplitPayload, validateProposal, validateDecision } from './plan-core.mjs';
 import { normalizeMeasure, publicMetrics } from './plan-metrics.mjs';
 import { WEEK_KEYS, normalizeWeekSettings, resolveWeekFilter, matchesWeek, planWindow, istMidnight, staleCutoff,
-  buildPlanWeeks, ROWS_BY, istDate, isDateStr } from './weeks-core.mjs';
+  buildPlanWeeks, ROWS_BY, istDate, isDateStr, weekEndOf, effectiveDue } from './weeks-core.mjs';
+import { buildReviewTeams, lastWorkingDay, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack } from './review-core.mjs';
 
 
 // ── CORS ──────────────────────────────────────────────────────────────────
@@ -224,27 +225,31 @@ async function canSeeTask(auth, task, env) {
   return !!(c.ok && c.data?.length);
 }
 
-async function logHistory(env, taskId, actor, eventType, extra = {}) {
+// `auth` = the request's identity: the actor, and (F9 R6a, §8.3) `source` — 'connector' when the call came
+// through the MCP gateway (X-LOT-Source), else 'app' — so a connector update counts but is shown as such.
+async function logHistory(env, taskId, auth, eventType, extra = {}) {
   await sbDocket(`/rest/v1/task_history`, env, {
     method: 'POST', prefer: 'return=minimal',
     body: JSON.stringify({
-      task_id: taskId, actor_user_id: actor, event_type: eventType,
+      task_id: taskId, actor_user_id: auth.userId, event_type: eventType,
       field: extra.field || null, old_value: extra.old != null ? String(extra.old) : null,
       new_value: extra.new != null ? String(extra.new) : null, note: extra.note || null,
+      source: auth.source || 'app',
     }),
   });
 }
 // Batched history insert — one POST for N rows (used by bulk update; respects the
 // 50-subrequest limit instead of one logHistory await per task). `rows` items take the
 // same {task_id, event_type, field, old, new, note} shape as logHistory's args.
-async function logHistoryBatch(env, actor, rows) {
+async function logHistoryBatch(env, auth, rows) {
   if (!rows.length) return;
   await sbDocket(`/rest/v1/task_history`, env, {
     method: 'POST', prefer: 'return=minimal',
     body: JSON.stringify(rows.map(r => ({
-      task_id: r.task_id, actor_user_id: actor, event_type: r.event_type,
+      task_id: r.task_id, actor_user_id: auth.userId, event_type: r.event_type,
       field: r.field || null, old_value: r.old != null ? String(r.old) : null,
       new_value: r.new != null ? String(r.new) : null, note: r.note || null,
+      source: auth.source || 'app',
     }))),
   });
 }
@@ -255,7 +260,8 @@ async function logHistoryBatch(env, actor, rows) {
 // → { first: [ids], revised: [ids] } | { error: Response }
 async function setDeadline(ids, value, reason, auth, env) {
   const r = await sbDocket(`/rest/v1/rpc/task_set_deadline`, env, { method: 'POST', body: JSON.stringify({
-    p_actor: auth.userId, p_ids: ids, p_value: value, p_reason: reason == null ? null : String(reason) }) });
+    p_actor: auth.userId, p_ids: ids, p_value: value, p_reason: reason == null ? null : String(reason),
+    p_source: auth.source || 'app' }) });
   if (!r.ok) {
     const msg = String(r.data?.message || '');
     if (/reason_required/.test(msg)) return { error: err('reason required', 400) };
@@ -1671,13 +1677,13 @@ async function createTaskCore(d, auth, env) {
       .map(x => ({ task_id: task.id, title: x.title || null, url: x.url.trim(), added_by: auth.userId }));
     if (rows.length) await sbDocket(`/rest/v1/task_documents`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows) });
   }
-  await logHistory(env, task.id, auth.userId, 'created',
+  await logHistory(env, task.id, auth, 'created',
     { note: parentId ? 'sub-task' : null, ...(initStatus !== 'not_started' && !isRecurring ? { field: 'status', new: initStatus } : {}) });
   // A deadline given at create is the immutable original (RULE-DOCKET-001) — log it like
   // updateTask's first set, so the activity feed and "deadline_set" counts see it (F2 quick-add).
-  if (d.deadline && !isRecurring) await logHistory(env, task.id, auth.userId, 'deadline_set', { field: 'deadline', new: d.deadline });
+  if (d.deadline && !isRecurring) await logHistory(env, task.id, auth, 'deadline_set', { field: 'deadline', new: d.deadline });
   // The link's history row stores the item id only (rendered through the projection at read time).
-  if (planItemId) await logHistory(env, task.id, auth.userId, 'plan_item_id_changed', { field: 'plan_item_id', new: planItemId });
+  if (planItemId) await logHistory(env, task.id, auth, 'plan_item_id_changed', { field: 'plan_item_id', new: planItemId });
   return ok({ id: task.id, task_no: task.task_no });
 }
 async function createTask(body, auth, env)    { return createTaskCore(body.data || body, auth, env); }
@@ -1706,7 +1712,7 @@ async function updateRecurrence(body, auth, env) {
     method: 'PATCH', prefer: 'return=minimal',
     body: JSON.stringify({ recurrence: rec, updated_by: auth.userId, updated_at: nowIso() }) });
   if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
-  await logHistory(env, task.id, auth.userId, 'recurrence_changed',
+  await logHistory(env, task.id, auth, 'recurrence_changed',
     { field: 'recurrence', old: JSON.stringify(task.recurrence), new: JSON.stringify(rec) });
   return ok({ id: task.id, recurrence: rec });
 }
@@ -2012,9 +2018,9 @@ async function updateTask(body, auth, env) {
     updates.updated_by = auth.userId; updates.updated_at = nowIso();
     const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, { method: 'PATCH', body: JSON.stringify(updates) });
     if (!r.ok) return taskWriteErr(deadlineSet ? 'update_failed (the deadline was saved): ' : 'update_failed: ', r);
-    for (const [f, oldV, newV] of changes) await logHistory(env, task.id, auth.userId, `${f}_changed`, { field: f, old: oldV, new: newV });
+    for (const [f, oldV, newV] of changes) await logHistory(env, task.id, auth, `${f}_changed`, { field: f, old: oldV, new: newV });
   }
-  if (planChange) await logHistory(env, task.id, auth.userId, 'plan_item_id_changed', { field: 'plan_item_id', old: planChange[0], new: planChange[1] });
+  if (planChange) await logHistory(env, task.id, auth, 'plan_item_id_changed', { field: 'plan_item_id', old: planChange[0], new: planChange[1] });
   return ok({ id: task.id, updated: [...changes.map(c => c[0]), ...(deadlineSet ? ['deadline'] : []), ...(planChange ? ['plan_item_id'] : [])] });
 }
 
@@ -2046,7 +2052,7 @@ async function changeStatus(body, auth, env) {
   if (task.status === 'abandoned') { updates.abandoned_at = null; updates.abandoned_by = null; updates.abandon_reason = null; }
   const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, { method: 'PATCH', body: JSON.stringify(updates) });
   if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
-  await logHistory(env, task.id, auth.userId, 'status_changed', { field: 'status', old: task.status, new: d.status, note: d.note || null });
+  await logHistory(env, task.id, auth, 'status_changed', { field: 'status', old: task.status, new: d.status, note: d.note || null });
   // Only a task that was OPEN can unblock anything — done→abandoned or back would log twice (review #3).
   if (d.status === 'done' && isOpenStatus(task.status)) await logUnblocked([task.id], auth, env);
   return ok({ id: task.id, status: d.status });
@@ -2107,7 +2113,7 @@ async function bulkUpdateTasks(body, auth, env) {
       body: JSON.stringify({ ...stamp, status: value, completed_at: value === 'done' ? nowIso() : null }),
     });
     if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
-    await logHistoryBatch(env, auth.userId, targets.map(t => ({ task_id: t.id, event_type: 'status_changed', field: 'status', old: t.status, new: value })));
+    await logHistoryBatch(env, auth, targets.map(t => ({ task_id: t.id, event_type: 'status_changed', field: 'status', old: t.status, new: value })));
     if (value === 'done') await logUnblocked(targets.filter(t => isOpenStatus(t.status)).map(t => t.id), auth, env);
     return ok({ updated: targets.length, skipped, field });
   }
@@ -2133,7 +2139,7 @@ async function bulkUpdateTasks(body, auth, env) {
   const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(targets.map(t => t.id))}`, env, {
     method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ...stamp, [field]: value }) });
   if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
-  await logHistoryBatch(env, auth.userId, targets.map(t => ({ task_id: t.id, event_type: `${field}_changed`, field, old: t[field], new: value })));
+  await logHistoryBatch(env, auth, targets.map(t => ({ task_id: t.id, event_type: `${field}_changed`, field, old: t[field], new: value })));
   return ok({ updated: targets.length, skipped, field });
 }
 
@@ -2189,7 +2195,7 @@ async function bulkSetCollaborator(body, auth, env) {
       { method: 'DELETE', prefer: 'return=minimal' });
     if (!r.ok) return err('remove_failed: ' + JSON.stringify(r.data), 400);
   }
-  await logHistoryBatch(env, auth.userId, changing.map(id => ({
+  await logHistoryBatch(env, auth, changing.map(id => ({
     task_id: id,
     event_type: mode === 'add' ? 'collaborator_added' : 'collaborator_removed',
     field: 'collaborator', [mode === 'add' ? 'new' : 'old']: employeeId,
@@ -2242,7 +2248,7 @@ async function bulkMoveTasks(body, auth, env) {
     }
     return taskWriteErr('update_failed: ', r);
   }
-  await logHistoryBatch(env, auth.userId, targets.map(t => ({
+  await logHistoryBatch(env, auth, targets.map(t => ({
     task_id: t.id, event_type: 'space_changed', field: 'space_id', old: t.space_id, new: d.space_id })));
   return ok({ updated: targets.length, skipped, space_id: d.space_id });
 }
@@ -2278,7 +2284,7 @@ async function bulkAbandonTasks(body, auth, env) {
       abandon_reason: reason, updated_by: auth.userId, updated_at: nowIso(),
     }) });
   if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
-  await logHistoryBatch(env, auth.userId, targets.map(t => ({
+  await logHistoryBatch(env, auth, targets.map(t => ({
     task_id: t.id, event_type: 'abandoned', field: 'status', old: t.status, new: 'abandoned', note: reason })));
   await logUnblocked(targets.filter(t => isOpenStatus(t.status)).map(t => t.id), auth, env);
   return ok({ updated: targets.length, skipped });
@@ -2299,7 +2305,7 @@ async function abandonTask(body, auth, env) {
     }),
   });
   if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
-  await logHistory(env, task.id, auth.userId, 'abandoned', { field: 'status', old: task.status, new: 'abandoned', note: d.reason });
+  await logHistory(env, task.id, auth, 'abandoned', { field: 'status', old: task.status, new: 'abandoned', note: d.reason });
   if (isOpenStatus(task.status)) await logUnblocked([task.id], auth, env);
   return ok({ id: task.id, status: 'abandoned' });
 }
@@ -2330,8 +2336,8 @@ async function setParent(body, auth, env) {
     method: 'PATCH', body: JSON.stringify({ parent_task_id: newParent, ...(clearsLink ? { plan_item_id: null } : {}), updated_by: auth.userId, updated_at: nowIso() }),
   });
   if (!r.ok) return taskWriteErr('update_failed: ', r);
-  await logHistory(env, task.id, auth.userId, 'parent_changed', { field: 'parent_task_id', old: task.parent_task_id, new: newParent });
-  if (clearsLink) await logHistory(env, task.id, auth.userId, 'plan_item_id_changed',
+  await logHistory(env, task.id, auth, 'parent_changed', { field: 'parent_task_id', old: task.parent_task_id, new: newParent });
+  if (clearsLink) await logHistory(env, task.id, auth, 'plan_item_id_changed',
     { field: 'plan_item_id', old: task.plan_item_id, note: 'cleared: a sub-task follows its parent’s plan link' });
   return ok({ id: task.id, parent_task_id: newParent, ...(clearsLink ? { plan_item_id: null } : {}) });
 }
@@ -2366,7 +2372,7 @@ async function moveTask(body, auth, env) {
       body: JSON.stringify({ space_id: task.space_id }) });
     return taskWriteErr('update_failed: ', mv);
   }
-  await logHistory(env, task.id, auth.userId, 'space_changed', { field: 'space_id', old: task.space_id, new: d.space_id });
+  await logHistory(env, task.id, auth, 'space_changed', { field: 'space_id', old: task.space_id, new: d.space_id });
   return ok({ id: task.id, space_id: d.space_id });
 }
 
@@ -2382,7 +2388,7 @@ async function addCollaborator(body, auth, env) {
     body: JSON.stringify({ task_id: d.id, employee_id: d.employee_id, added_by: auth.userId }),
   });
   if (!r.ok) return err('add_failed: ' + JSON.stringify(r.data), 400);
-  await logHistory(env, task.id, auth.userId, 'collaborator_added', { field: 'collaborator', new: d.employee_id });
+  await logHistory(env, task.id, auth, 'collaborator_added', { field: 'collaborator', new: d.employee_id });
   return ok({ id: task.id, employee_id: d.employee_id });
 }
 async function removeCollaborator(body, auth, env) {
@@ -2394,7 +2400,7 @@ async function removeCollaborator(body, auth, env) {
   if (task.status === 'abandoned') return abandonedRO();
   await sbDocket(`/rest/v1/task_collaborators?task_id=eq.${enc(d.id)}&employee_id=eq.${enc(d.employee_id)}`, env,
     { method: 'DELETE', prefer: 'return=minimal' });
-  await logHistory(env, task.id, auth.userId, 'collaborator_removed', { field: 'collaborator', old: d.employee_id });
+  await logHistory(env, task.id, auth, 'collaborator_removed', { field: 'collaborator', old: d.employee_id });
   return ok({ id: task.id, removed: d.employee_id });
 }
 
@@ -2411,7 +2417,7 @@ async function addDocument(body, auth, env) {
     body: JSON.stringify([{ task_id: d.id, title: d.title || null, url: d.url.trim(), added_by: auth.userId }]),
   });
   if (!r.ok || !r.data?.[0]) return err('add_failed: ' + JSON.stringify(r.data), 400);
-  await logHistory(env, task.id, auth.userId, 'document_added', { field: 'document', new: d.title || d.url });
+  await logHistory(env, task.id, auth, 'document_added', { field: 'document', new: d.title || d.url });
   return ok(r.data[0]);
 }
 async function removeDocument(body, auth, env) {
@@ -2425,7 +2431,7 @@ async function removeDocument(body, auth, env) {
   if (!canEditTask(auth, task) && doc.added_by !== auth.userId) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
   await sbDocket(`/rest/v1/task_documents?id=eq.${enc(d.document_id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
-  await logHistory(env, task.id, auth.userId, 'document_removed', { field: 'document', old: doc.title || doc.url });
+  await logHistory(env, task.id, auth, 'document_removed', { field: 'document', old: doc.title || doc.url });
   return ok({ removed: d.document_id });
 }
 
@@ -3137,6 +3143,266 @@ async function getWeekScore(url, auth, env) {
     tasks: shown.map(({ space_id, ...t }) => owner(team(t))), hidden_tasks: tasks.length - shown.length });
 }
 
+// ── F9 R6a: the review pack (spec §8.1–§8.5; contract r6a-contract.md) ──────────────────────────────
+// GET ?action=getReviewPack&week=this|last|YYYY-MM-DD&team=<department id>|all
+// ACCESS: a plan admin any team or all (default all) — score counts WHOLE (§8.2 as built), task rows only
+// through the task gate below, the rest a hidden_tasks count. Anyone else ONLY their own department, and
+// their counts AND rows only from tasks they can open, never a Founders'-space task. The task gate is
+// getPlanWeeks' — visibleTaskRows + the archived-space exclusion — called ONCE over every task row the
+// pack reads. Plan items: plan_items_for at F / O only (milestones + results). Hand-offs (§8.1 item 5) are R8.
+const RV_OPEN_DAYS = 30;   // last_update looks back this far (an older own update reads as null)
+function reviewDate(w, today) {
+  w = w || 'this';
+  return w === 'this' ? today : w === 'last' ? addDays(today, -7) : isDateStr(w) ? w : null;
+}
+// → { pack, score } | { error: Response }
+async function buildReviewPack(weekParam, teamParam, auth, env) {
+  const today = istDate(Date.now());
+  const date = reviewDate(weekParam, today);
+  if (!date) return { error: err('bad_week', 400) };
+  teamParam = teamParam || '';
+  if (teamParam && teamParam !== 'all' && !isUuid(teamParam)) return { error: err('bad_team', 400) };
+  const isSuper = isPlanAdmin(auth);
+  if (!isSuper) {
+    if (!auth.departmentId) return { error: err('no_team', 403) };
+    if (teamParam && teamParam !== auth.departmentId) return { error: err('forbidden', 403) };
+  }
+  const teamId = isSuper ? (teamParam === 'all' || !teamParam ? null : teamParam) : auth.departmentId;
+  const score = (d) => sbDocket(`/rest/v1/rpc/week_score`, env, { method: 'POST', body: JSON.stringify({ p_date: d }) });
+  const iso = (ms) => new Date(ms).toISOString();
+  const topLive = 'archived_at=is.null&is_recurring=eq.false&parent_task_id=is.null';
+  const team = teamId ? `&department_id=eq.${enc(teamId)}` : '';
+
+  // ── 1. the weeks, the plan, the spaces, the open list ──
+  const [settings, dr, pr, sr, or, ...scores] = await Promise.all([
+    weekSettings(env),
+    sbPodium(`/rest/v1/departments?select=id,name&order=name.asc`, env),
+    planRows(auth, env),
+    sbAll(sbDocket, `/rest/v1/spaces?or=(archived_at.not.is.null,is_founders.eq.true)&select=id,archived_at,is_founders&order=id.asc`, env),
+    sbAll(sbDocket, `/rest/v1/tasks?${topLive}&${PW_OPEN}${team}&select=${PW_TASK_COLS}&order=id.asc`, env),
+    ...[0, -7, -14, -21, -28, -35].map(n => score(addDays(date, n))),
+  ]);
+  if (!dr.ok || !pr.ok || !sr.ok || !or.ok || scores.some(r => !r.ok)) return { error: err('db_error', 500) };
+  const departments = dr.data || [];
+  if (teamId && !departments.some(d => d.id === teamId)) return { error: err('bad_team', 400) };
+  const deptNames = Object.fromEntries(departments.map(d => [d.id, d.name]));
+  const [s0, s1, ...sTrend] = scores.map(r => r.data || {});
+  const weekEnd = s0.week_end || weekEndOf(date, settings.week_end_dow);
+  const weekStart = s0.week_start || addDays(weekEnd, -6);
+  const bounds = { start: istMidnight(weekStart), end: istMidnight(addDays(weekEnd, 1)) };
+  const next = { start: bounds.end, end: istMidnight(addDays(weekEnd, 15)) };
+  // Staleness "last working day" only means something for the week running now (§8.3); a past or future
+  // week's pack carries null there, and its update reads stop at the week's end.
+  const current = today >= weekStart && today <= weekEnd;
+  const lwd = current ? lastWorkingDay(today, settings) : null;
+  const archived = new Set((sr.data || []).filter(x => x.archived_at).map(x => x.id));
+  const founders = new Set((sr.data || []).filter(x => x.is_founders).map(x => x.id));
+  const rowsOf = (s) => (Array.isArray(s.tasks) ? s.tasks : []);
+  const allCohort = [s0, s1, ...sTrend].flatMap(rowsOf);
+  const cohortIds = uniq(allCohort.map(r => r.task_id));
+
+  const raw = Array.isArray(pr.data) ? pr.data : [];
+  // Restricted subtree (level F only carries `restricted`, on themes): never into the Slack copy.
+  const itemById = new Map(raw.map(i => [i.id, i]));
+  const themeOf = (i) => (i.kind === 'theme' ? i.id : i.kind === 'milestone' ? i.parent_id : itemById.get(i.parent_id)?.parent_id);
+  const restrictedThemes = new Set(raw.filter(i => i.kind === 'theme' && i.restricted).map(i => i.id));
+  const restrictedItems = raw.filter(i => restrictedThemes.has(themeOf(i))).map(i => i.id);
+  const fo = raw.filter(i => (i.level === 'F' || i.level === 'O') && (i.kind === 'milestone' || i.kind === 'result'));
+  const horizonEnd = addDays(weekEnd, 14);
+  const live = (i) => i.state === 'proposed' || i.state === 'agreed';
+  const horizonIds = fo.filter(i => live(i) && effectiveDue(i) && effectiveDue(i) >= weekStart && effectiveDue(i) <= horizonEnd).map(i => i.id);
+  const linkIds = uniq([...horizonIds, ...fo.filter(i => i.kind === 'result' && live(i) && horizonIds.includes(i.parent_id)).map(i => i.id)]);
+  const inNext = `or=(and(revised_deadline.gte.${iso(next.start)},revised_deadline.lt.${iso(next.end)}),and(revised_deadline.is.null,deadline.gte.${iso(next.start)},deadline.lt.${iso(next.end)}))`;
+
+  // ── 2. every task row the pack reads, then ONE gate over all of them ──
+  const [cr, nr, lr, hr, ppr] = await Promise.all([
+    sbInAll(sbDocket, cohortIds, l => `/rest/v1/tasks?id=in.${l}&select=${PW_TASK_COLS}&order=id.asc`, env),
+    sbAll(sbDocket, `/rest/v1/tasks?${topLive}&${PW_OPEN}${team}&${inNext}&select=${PW_TASK_COLS}&order=id.asc`, env),
+    sbInAll(sbDocket, linkIds, l => `/rest/v1/tasks?plan_item_id=in.${l}&${topLive}&${PW_OPEN}&select=${PW_TASK_COLS}&order=id.asc`, env),
+    sbInAll(sbDocket, fo.map(i => i.id), l => `/rest/v1/plan_item_history?item_id=in.${l}&event=eq.redated&at=gte.${iso(bounds.start)}&at=lt.${iso(bounds.end)}&select=item_id,event,old,new,note,at&order=id.asc`, env),
+    isSuper ? sbAll(sbDocket, `/rest/v1/plan_proposals?or=(status.eq.submitted,and(created_at.gte.${iso(bounds.start)},created_at.lt.${iso(bounds.end)}))&select=id,title,kind_hint,status,created_at,proposer_user_id&order=created_at.desc,id.asc`, env)
+            : Promise.resolve({ ok: true, data: [] }),
+  ]);
+  if (!cr.ok || !nr.ok || !lr.ok || !hr.ok || !ppr.ok) return { error: err('db_error', 500) };
+  const byId = new Map();
+  for (const t of [...(cr.data || []), ...(or.data || []), ...(nr.data || []), ...(lr.data || [])]) byId.set(t.id, t);
+  const gated = await visibleTaskRows(auth, [...byId.values()].filter(t => !archived.has(t.space_id)), env);
+  const visible = new Set(gated.filter(t => isSuper || !founders.has(t.space_id)).map(t => t.id));
+
+  // Counts: a plan admin every cohort row; anyone else only the rows they can open. Rows LISTED: `visible`.
+  const counted = (rows) => (isSuper ? rows : rows.filter(r => visible.has(r.task_id)));
+  const scoped = (rows) => (teamId ? rows.filter(r => (r.department_id || null) === teamId) : rows);
+  const thisRows = scoped(counted(rowsOf(s0))), lastRows = scoped(counted(rowsOf(s1)));
+  const hidden = isSuper ? uniq([...thisRows, ...lastRows].map(r => r.task_id)).filter(id => !visible.has(id)).length : 0;
+  const openTasks = (or.data || []).filter(t => visible.has(t.id));
+  // Open tasks due in the two weeks after the pack's week (the read filters; this re-checks, so a widened
+  // read can never list a done task or one dated outside the window).
+  const nextTasks = (nr.data || []).filter(t => visible.has(t.id) && isOpenStatus(t.status) && (() => {
+    const e = Date.parse(t.revised_deadline || t.deadline || '');
+    return Number.isFinite(e) && e >= next.start && e < next.end;
+  })());
+  const linked = (lr.data || []).map(t => ({ plan_item_id: t.plan_item_id, owner_employee_id: t.owner_employee_id, status: t.status,
+    deadline: t.deadline, revised_deadline: t.revised_deadline, visible: visible.has(t.id) }));
+
+  // ── 3. history, comments, people ──
+  const slippedIds = uniq([...thisRows, ...lastRows].filter(r => r.outcome === 'miss' && visible.has(r.task_id)).map(r => r.task_id));
+  const updIds = uniq([...openTasks.map(t => t.id), ...thisRows.filter(r => visible.has(r.task_id) && isOpenStatus(r.status)).map(r => r.task_id)]);
+  const since = iso(lwd ? Math.min(bounds.start, istMidnight(lwd)) : bounds.start);
+  const proposals = ppr.data || [];
+  const empIds = uniq([...thisRows, ...lastRows].map(r => r.owner_employee_id)
+    .concat(openTasks.map(t => t.owner_employee_id), nextTasks.map(t => t.owner_employee_id), fo.map(i => i.owner_employee_id)));
+  const [rvr, uhr, ucr, er, pnames] = await Promise.all([
+    sbInAll(sbDocket, slippedIds, l => `/rest/v1/task_history?task_id=in.${l}&event_type=eq.deadline_revised&select=task_id,created_at,old_value,new_value,note,source&order=created_at.asc,id.asc`, env),
+    sbInAll(sbDocket, updIds, l => `/rest/v1/task_history?task_id=in.${l}&created_at=gte.${since}&created_at=lt.${iso(bounds.end)}&select=task_id,created_at,source&order=id.asc`, env),
+    sbInAll(sbDocket, updIds, l => `/rest/v1/task_comments?task_id=in.${l}&deleted_at=is.null&created_at=gte.${since}&created_at=lt.${iso(bounds.end)}&select=task_id,created_at&order=id.asc`, env),
+    sbIn(sbPodium, empIds, l => `/rest/v1/employees?id=in.${l}&select=id,full_name,department_id,auth_user_id`, env),
+    isSuper ? nameMap(sbStore, 'users_profile', proposals.map(p => p.proposer_user_id), env) : Promise.resolve({}),
+  ]);
+  if (!rvr.ok || !uhr.ok || !ucr.ok || !er.ok) return { error: err('db_error', 500) };
+  const emp = {}; (er.data || []).forEach(e => { emp[e.id] = e; });
+  const names = Object.fromEntries(Object.values(emp).map(e => [e.id, e.full_name]));
+  const revisions = {};
+  for (const h of rvr.data || []) (revisions[h.task_id] = revisions[h.task_id] || []).push(h);
+  const updates = [...(uhr.data || []).map(h => ({ task_id: h.task_id, at: h.created_at, source: h.source || 'app' })),
+    ...(ucr.data || []).map(c => ({ task_id: c.task_id, at: c.created_at, source: null }))];
+
+  // Presence + their own latest update, for the people the staleness block will list (open-task owners).
+  const staleOwners = uniq([...openTasks.map(t => t.owner_employee_id), ...thisRows.map(r => r.owner_employee_id)]);
+  const authOf = {}; for (const id of staleOwners) if (emp[id]?.auth_user_id) authOf[emp[id].auth_user_id] = id;
+  const authIds = Object.keys(authOf);
+  const ownEndMs = Math.min(Date.now(), bounds.end);   // a past week's "last update" is as of that week's end
+  const ownSince = iso(ownEndMs - RV_OPEN_DAYS * 86400000), ownUntil = iso(ownEndMs);
+  const [ohr, ocr, uar] = await Promise.all([
+    sbInAll(sbDocket, authIds, l => `/rest/v1/task_history?actor_user_id=in.${l}&created_at=gte.${ownSince}&created_at=lt.${ownUntil}&select=actor_user_id,created_at&order=id.asc`, env),
+    sbInAll(sbDocket, authIds, l => `/rest/v1/task_comments?author_user_id=in.${l}&deleted_at=is.null&created_at=gte.${ownSince}&created_at=lt.${ownUntil}&select=author_user_id,created_at&order=id.asc`, env),
+    // Presence: a plan admin sees everyone's; anyone else only their own (a colleague's isn't theirs to see).
+    sbIn(sbDocket, isSuper ? authIds : authIds.filter(a => a === auth.userId), l => `/rest/v1/user_activity?user_id=in.${l}&select=user_id,last_seen_at`, env),
+  ]);
+  if (!ohr.ok || !ocr.ok || !uar.ok) return { error: err('db_error', 500) };
+  const ownLatest = {}, lastSeen = {};
+  const later = (m, k, v) => { if (k && v && (!m[k] || v > m[k])) m[k] = v; };
+  for (const h of ohr.data || []) later(ownLatest, authOf[h.actor_user_id], h.created_at);
+  for (const c of ocr.data || []) later(ownLatest, authOf[c.author_user_id], c.created_at);
+  for (const a of uar.data || []) later(lastSeen, authOf[a.user_id], a.last_seen_at);
+
+  const items = fo.map(i => ({ ...i, owner_name: names[i.owner_employee_id] || null,
+    team_id: i.department_id || emp[i.owner_employee_id]?.department_id || null }));
+  // Teams in scope (all): every team with a counted cohort row, an open or next-two-weeks task, or a plan item
+  // due / re-dated in the pack's window — a milestone-only team still gets its card. null → 'No team'.
+  const winItemTeams = items.filter(i => {
+    const d = effectiveDue(i);
+    return (i.state !== 'dropped' && d && d >= weekStart && d <= horizonEnd) || (hr.data || []).some(h => h.item_id === i.id);
+  }).map(i => i.team_id);
+  const teamIds = teamId ? [teamId] : uniq([...thisRows, ...lastRows, ...openTasks, ...nextTasks].map(r => r.department_id)
+      .concat(winItemTeams).map(d => d || 'none'))
+    .map(k => (k === 'none' ? null : k))
+    .sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || String(deptNames[a] || '').localeCompare(String(deptNames[b] || '')));
+  const taskPlan = {}; for (const id of thisRows.map(r => r.task_id)) taskPlan[id] = byId.get(id)?.plan_item_id || null;
+  const teams = buildReviewTeams({
+    teamIds, deptNames, shown: visible, revisions, items, itemHistory: hr.data || [], linked, metrics: publicMetrics(),
+    openTasks, nextTasks, updates, taskPlan, names, ownLatest, lastSeen, lwd, lookbackStart: ownSince,
+    seenOnly: isSuper ? null : auth.employeeId || '',
+    week: { week_start: weekStart, week_end: weekEnd, final: !!s0.final, rows: thisRows },
+    last: { week_end: s1.week_end || addDays(weekEnd, -7), final: !!s1.final, rows: lastRows },
+    trend: sTrend.reverse().map(s => ({ week_end: s.week_end, final: !!s.final, rows: scoped(counted(rowsOf(s))) })),
+  });
+  const pack = {
+    week: { week_end: weekEnd, week_start: weekStart, final: !!s0.final, opened: !!s0.opened, opened_late: !!s0.opened_late,
+      as_of: s0.as_of || nowIso() },
+    team_id: teamId,
+    can_admin: isSuper,
+    departments: isSuper ? departments : departments.filter(d => d.id === auth.departmentId),
+    hidden_tasks: hidden,
+    teams,
+    proposals: isSuper ? {
+      submitted_this_week: proposals.filter(p => Date.parse(p.created_at) >= bounds.start && Date.parse(p.created_at) < bounds.end)
+        .map(({ proposer_user_id, ...p }) => ({ ...p, proposer_name: pnames[proposer_user_id] || null })),
+      waiting: proposals.filter(p => p.status === 'submitted').length,
+    } : null,
+  };
+  pack.slack_omit = { tasks: [...byId.values()].filter(t => founders.has(t.space_id)).map(t => t.id), items: restrictedItems };
+  pack.slack = packToSlack(pack);
+  return { pack, score: s0 };
+}
+async function getReviewPack(url, auth, env) {
+  const q = url.searchParams;
+  const r = await buildReviewPack(q.get('week'), q.get('team'), auth, env);
+  if (r.error) return r.error;
+  const { slack_omit, ...pack } = r.pack;   // ids only, but the reader has no use for them
+  return ok(pack);
+}
+// POST { action: 'holdReview', week, team } — the Friday "held" button (§8.2): the current pack, stored as a
+// provisional snapshot (immutable). Plan admin only.
+async function holdReview(body, auth, env) {
+  if (!isPlanAdmin(auth)) return err('forbidden', 403);
+  const d = body.data || body;
+  const r = await buildReviewPack(d.week, d.team, auth, env);
+  if (r.error) return r.error;
+  const s = r.score || {};
+  if (!s.opened) return err('week_not_open', 409);
+  const ins = await sbDocket(`/rest/v1/review_snapshots`, env, { method: 'POST', body: JSON.stringify({
+    week_end: r.pack.week.week_end, kind: 'provisional', department_id: r.pack.team_id, payload: r.pack,
+    scoring_version: s.scoring_version, week_end_dow: s.week_end_dow, cutoff_at: s.cutoff_at, created_by: auth.userId }) });
+  if (!ins.ok || !ins.data?.[0]) return err('insert_failed', 500);
+  return ok({ id: ins.data[0].id, created_at: ins.data[0].created_at });
+}
+// GET ?action=getReviewSnapshots&week=… (list) | &id=<uuid> (one, re-projected for the reader — §8.5: a
+// payload holds what its HOLDER could see, and week_close's final one is the raw week_score with every
+// title; rows in spaces the reader can't open now become a hidden count). Plan admin only.
+async function getReviewSnapshots(url, auth, env) {
+  if (!isPlanAdmin(auth)) return err('forbidden', 403);
+  const q = url.searchParams;
+  const id = q.get('id');
+  if (id) {
+    if (!isUuid(id)) return err('bad_id', 400);
+    const r = await sbDocket(`/rest/v1/review_snapshots?id=eq.${enc(id)}&select=id,kind,week_end,department_id,created_at,payload&limit=1`, env);
+    if (!r.ok) return err('db_error', 500);
+    const snap = r.data?.[0];
+    if (!snap) return err('not_found', 404);
+    const p = snap.payload || {};
+    const ids = Array.isArray(p.tasks) ? uniq(p.tasks.map(t => t.task_id)) : packTaskIds(p);
+    const [tr, fsr] = await Promise.all([
+      sbIn(sbDocket, ids, l => `/rest/v1/tasks?id=in.${l}&select=id,space_id`, env),
+      sbDocket(`/rest/v1/spaces?is_founders=is.true&select=id`, env),
+    ]);
+    if (!tr.ok || !fsr.ok) return err('db_error', 500);
+    const fsp = new Set((fsr.data || []).map(x => x.id));
+    const founderTasks = (tr.data || []).filter(t => fsp.has(t.space_id)).map(t => t.id);
+    const keep = new Set((await keepAccessible(auth, tr.data || [], env)).map(t => t.id));
+    let payload;
+    if (Array.isArray(p.tasks)) {
+      // A final snapshot holds the raw week_score payload → rebuilt in the pack's shape (one batched read each
+      // for team names, owner names and the slipped rows' deadline revisions), titles only for `keep`.
+      const misses = uniq(p.tasks.filter(t => t.outcome === 'miss' && keep.has(t.task_id)).map(t => t.task_id));
+      const [dr, names, rv] = await Promise.all([
+        sbPodium(`/rest/v1/departments?select=id,name&order=name.asc`, env),
+        nameMap(sbPodium, 'employees', p.tasks.filter(t => keep.has(t.task_id)).map(t => t.owner_employee_id), env),
+        sbInAll(sbDocket, misses, l => `/rest/v1/task_history?task_id=in.${l}&event_type=eq.deadline_revised&select=task_id,created_at,old_value,new_value,note,source&order=created_at.asc,id.asc`, env),
+      ]);
+      if (!dr.ok) return err('db_error', 500);
+      const revisions = rv.ok ? {} : null;
+      if (rv.ok) for (const h of rv.data || []) (revisions[h.task_id] = revisions[h.task_id] || []).push(h);
+      payload = finalSnapshotPack(p, { keep, names, revisions, teamId: snap.department_id || null, departments: dr.data || [],
+        deptNames: Object.fromEntries((dr.data || []).map(d => [d.id, d.name])) });
+    } else payload = reprojectPack({ ...p, slack_omit: { tasks: [...new Set([...(p.slack_omit?.tasks || []), ...founderTasks])], items: p.slack_omit?.items || [] } }, keep);
+    if (Array.isArray(p.tasks)) payload = { ...payload, slack_omit: { tasks: founderTasks, items: [] } };
+    payload = { ...payload, slack: packToSlack(payload) };
+    const { slack_omit, ...shown } = payload;
+    return ok({ snapshot: { ...snap, payload: shown } });
+  }
+  const date = reviewDate(q.get('week'), istDate(Date.now()));
+  if (!date) return err('bad_week', 400);
+  const [settings, wr] = await Promise.all([weekSettings(env),
+    sbDocket(`/rest/v1/weeks?week_start=lte.${date}&week_end=gte.${date}&select=week_end&order=week_end.desc&limit=1`, env)]);
+  if (!wr.ok) return err('db_error', 500);
+  const weekEnd = wr.data?.[0]?.week_end || weekEndOf(date, settings.week_end_dow);
+  const r = await sbDocket(`/rest/v1/review_snapshots?week_end=eq.${weekEnd}&select=id,kind,department_id,created_at,created_by&order=created_at.desc`, env);
+  if (!r.ok) return err('db_error', 500);
+  const rows = r.data || [];
+  const people = await nameMap(sbStore, 'users_profile', rows.map(x => x.created_by), env);
+  return ok({ snapshots: rows.map(({ created_by, ...x }) => ({ ...x, created_by_name: created_by ? (people[created_by] || null) : null })) });
+}
+
 // A plan admin, read strictly: any failed read is "no" (the role guard's userIsPlanAdmin fails the other
 // way, because there "yes" blocks). Used where "yes" GRANTS — the Founders' space.
 async function userIsPlanAdminStrict(userId, env) {
@@ -3159,6 +3425,7 @@ const GET_ACTIONS = {
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,
   getPlan, getPlanItem, getProposals, getPlanWeeks, getWeekScore,
+  getReviewPack, getReviewSnapshots,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,
@@ -3178,14 +3445,19 @@ const POST_ACTIONS = {
   setDashboardPublic, addDashboardViewer, removeDashboardViewer,
   createPlanItem, updatePlanItem, planItemAction,
   proposePlanItem, decideProposal,
+  holdReview,
 };
 
+// task_history.source (F9 R6a, §8.3): the MCP gateway marks every call it makes; anything else is the app.
+// Slack / system sources are stamped by their own paths (R7 / the database), never from a header.
+function requestSource(request) { return request.headers.get('X-LOT-Source') === 'connector' ? 'connector' : 'app'; }
 async function handleGet(url, request, env) {
   const action = url.searchParams.get('action');
   if (!action) return err('action_required', 400);
   if (action === 'ping') return ok({ pong: true });
   const auth = await verifyJWT(request.headers.get('Authorization'), env);
   if (!auth) return err('unauthorized', 401);
+  auth.source = requestSource(request);
   const handler = GET_ACTIONS[action];
   if (!handler) return err(`unknown_action: ${action}`, 400);
   try { return await handler(url, auth, env); }
@@ -3194,6 +3466,7 @@ async function handleGet(url, request, env) {
 async function handlePost(request, env) {
   const auth = await verifyJWT(request.headers.get('Authorization'), env);
   if (!auth) return err('unauthorized', 401);
+  auth.source = requestSource(request);
   let body; try { body = await request.json(); } catch { return err('bad_json', 400); }
   const action = body?.action;
   if (!action) return err('action_required', 400);
