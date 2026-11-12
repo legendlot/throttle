@@ -78,9 +78,8 @@ uses only the first five. Spec §9.1 records the wider list.
 
 **The one real trade-off — the `*:history` scopes.** They let the bot read messages in a channel *after
 someone adds it to that channel* (and its own DMs). It can't read channels it isn't in, and Docket stores
-nothing from a conversation unless a person runs a capture (shortcut, mention, DM). Kept in because "turn
-this thread into a task" is the obvious next ask. Drop the four lines from the manifest if you'd rather
-not.
+nothing from a conversation unless a person runs a capture (shortcut, mention, DM). **Kept — Afshaan, 2026-11-12**: "turn this thread into a task" is the obvious
+next ask, and adding them later would force a reinstall.
 
 **Deliberately NOT included** (each would need a reinstall to add, and none has a Docket use):
 - any **user-token** scope (acting as a person in Slack, `search:read`): every action runs as the bot,
