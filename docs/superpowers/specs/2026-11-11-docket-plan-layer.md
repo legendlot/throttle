@@ -495,7 +495,7 @@ this build** — themes and milestones are entered by the founders, item by item
 | **R3 — lifecycle depth** ✅ SHIPPED 2026-11-12 (`227507a5`) | split (§4.3.1) · done-when/measure + ⚠ no data source · proposals + queue (§4.5) |
 | **R4 — weeks** ✅ SHIPPED 2026-11-12 (`1468205e`) | week-ending group-by + Week filter (all views) · three-week view + warnings (§7.2) |
 | **R5 — the score** ✅ SHIPPED 2026-11-12 (`30213876`) | transactional deadline RPC · `week_commitments` cohort · `week_score()` · connector `score` |
-| R6 — review | review pack (provisional/final) + staleness + export + snapshots · Saturday founders' page · level R (Associates) |
+| **R6 — review** ✅ SHIPPED 2026-11-12 (`9400a4f3` R6a, `030e82bd` R6b+c) | review pack (provisional/final) + staleness + export + snapshots · Saturday founders' page · level R (Associates) — as built: R links themes + own items only; Slack copy omits Founders'-space tasks and restricted milestones; hand-offs not in (P1 F7 work) |
 | R7 — Slack | Docket Slack app, identities, cron, reminders, shortcut, `/docket`, buttons |
 | R8 — hand-offs | fields + accept + pack section + Incoming |
 | R9 — | tree view · templates · measure auto-check · score trend · re-plan page · Programs retired |
