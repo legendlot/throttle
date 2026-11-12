@@ -38,6 +38,7 @@ import { normalizeMeasure, publicMetrics, metricByKey } from './plan-metrics.mjs
 import { trendWeeksParam, trendWeekEnds, trendModel, replanMonth, weekEndsIn, readiness, REPLAN_RISK_DAYS, REPLAN_ACTION_DAYS } from './rhythm-core.mjs';
 import { buildTree, treeTaskItemIds, TREE_LEVELS } from './tree-core.mjs';
 import { templateListRow, templateNodesFor } from './template-core.mjs';
+import { slackEvents } from './slack-core.mjs';
 import { WEEK_KEYS, normalizeWeekSettings, resolveWeekFilter, matchesWeek, planWindow, istMidnight, staleCutoff,
   buildPlanWeeks, ROWS_BY, istDate, isDateStr, weekEndOf, effectiveDue } from './weeks-core.mjs';
 import { buildReviewTeams, lastWorkingDay, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack, scoreBlock,
@@ -4174,6 +4175,7 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url = new URL(request.url);
     if (url.pathname === '/health' || url.pathname === '/healthz') return ok({ service: 'docketops', time: nowIso() });
+    if (url.pathname === '/slack/events' && request.method === 'POST') return slackEvents(request, env);
     if (request.method === 'GET')  return handleGet(url, request, env);
     if (request.method === 'POST') return handlePost(request, env);
     return err('method_not_allowed', 405);
