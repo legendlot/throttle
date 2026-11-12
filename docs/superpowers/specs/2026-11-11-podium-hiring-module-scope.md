@@ -312,6 +312,24 @@ adding them later means rewriting data flows:
 
 ## O1 — Offer email + acceptance link (Optional — build right after C3)
 
+> **As built (2026-11-12, LIVE, throttle 85316d3f, migration `podium_offer_link_v1`).** Plan
+> `plans/2026-11-12-podium-o1-offer-link.md` (D1–D10) is the detail; deltas from the text below:
+> - **Mail:**
+>   - It is sent through the shared SA with `gmail.modify`, as the hiring owner (or the reporting manager).
+>   - **The link mail goes To the candidate ONLY.** CC recipients get a separate link-free copy (`offer_copy`)
+>     in the same thread, because the link is a credential (a CC'd person could accept or set the bank account).
+>   - The confirmation carries no link.
+>   - Alerts (question / decline / headcount-blocked) go to the owner, CC the reporting manager + hr@.
+> - **No Cloudflare rate-limit binding (that needs `wrangler.toml`).** The 32-byte token plus per-link caps
+>   stand in: 30 upload reservations, 10 questions a day, and bank saves.
+> - **Joining date:** the candidate confirms the letter's date. A different date goes through "I have a question".
+> - **Headcount and opening status are re-checked under lock at link acceptance.** The staff "Record acceptance"
+>   (C3) still only warns.
+> - **Candidate bank details** live in `candidate_bank_details`, with `employee_private`'s column names, and are
+>   copied in on `confirmJoining` when empty.
+> - **Upload limits:** uploads need a reserved slot, and the bucket caps objects at 15 MB.
+> - **Not proven live:** a Gmail timeout followed by reconcile (`unknown` → sent/failed). It is covered by tests only.
+
 Modelled on Ignition's deal-contract link (S441, `systems/ignition.md` §S441), where a creator opens a link,
 accepts the contract and submits bank details with no login. The same shape works here: **one email from
 Podium carries the offer PDF and a personal link; the candidate accepts (or declines, or asks a question)
