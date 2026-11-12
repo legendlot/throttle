@@ -32,7 +32,7 @@ import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT
   validateSplitPayload, validateProposal, validateDecision } from './plan-core.mjs';
 import { normalizeMeasure, publicMetrics } from './plan-metrics.mjs';
 import { WEEK_KEYS, normalizeWeekSettings, resolveWeekFilter, matchesWeek, planWindow, istMidnight, staleCutoff,
-  buildPlanWeeks, ROWS_BY } from './weeks-core.mjs';
+  buildPlanWeeks, ROWS_BY, istDate, isDateStr } from './weeks-core.mjs';
 
 
 // ── CORS ──────────────────────────────────────────────────────────────────
@@ -248,6 +248,25 @@ async function logHistoryBatch(env, actor, rows) {
     }))),
   });
 }
+// F9 R5: EVERY deadline write goes through docket.task_set_deadline — the task and its history row in one
+// transaction (the AFTER trigger writes the row), and the week-cohort trigger sees it (spec §8.2). Tasks
+// with no deadline at all get the FIRST (immutable) one; the rest are revised, reason required. Migration
+// 0023's guard refuses any other UPDATE of tasks.deadline / revised_deadline. Callers check edit rights.
+// → { first: [ids], revised: [ids] } | { error: Response }
+async function setDeadline(ids, value, reason, auth, env) {
+  const r = await sbDocket(`/rest/v1/rpc/task_set_deadline`, env, { method: 'POST', body: JSON.stringify({
+    p_actor: auth.userId, p_ids: ids, p_value: value, p_reason: reason == null ? null : String(reason) }) });
+  if (!r.ok) {
+    const msg = String(r.data?.message || '');
+    if (/reason_required/.test(msg)) return { error: err('reason required', 400) };
+    if (/reason_too_long/.test(msg)) return { error: err('reason_too_long', 400) };
+    return { error: err('update_failed: ' + JSON.stringify(r.data), 400) };
+  }
+  return { first: r.data?.first || [], revised: r.data?.revised || [] };
+}
+const hasDeadline = (t) => !!(t.deadline || t.revised_deadline);
+const isIsoTime = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) && Number.isFinite(Date.parse(v));
+
 // Abandoned tasks are read-only (decisions §[docket] abandoned read-only, functionality F1/G3): every
 // single-task write refuses them except changeStatus, which is the Reactivate path.
 const abandonedRO = () => err('abandoned_read_only: reactivate the task first', 422);
@@ -1970,9 +1989,10 @@ async function updateTask(body, auth, env) {
     }
   }
   // First-time deadline set (task was quick-captured to The Grid with no deadline).
-  // This becomes the immutable original — afterwards only reviseDeadline changes it.
-  let deadlineSet = false;
-  if (d.deadline && !task.deadline) { updates.deadline = d.deadline; deadlineSet = true; }
+  // This becomes the immutable original — afterwards only reviseDeadline changes it. Validated first, then
+  // written through the RPC (setDeadline) BEFORE the other fields, so a bad date fails the whole request.
+  const deadlineSet = !!(d.deadline && !hasDeadline(task));
+  if (deadlineSet && !isIsoTime(d.deadline)) return err('invalid deadline', 400);
   if (d.custom_fields !== undefined) updates.custom_fields = d.custom_fields;
   // F9 R2: the plan link — touched ONLY when the request names plan_item_id, so a teammate editing other
   // fields never disturbs a link (even one they see only at level L). null / '' clears (edit right alone);
@@ -1986,12 +2006,14 @@ async function updateTask(body, auth, env) {
       updates.plan_item_id = next; planChange = [task.plan_item_id || null, next];
     }
   }
-  if (!Object.keys(updates).length) return ok({ id: task.id, unchanged: true });
-  updates.updated_by = auth.userId; updates.updated_at = nowIso();
-  const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, { method: 'PATCH', body: JSON.stringify(updates) });
-  if (!r.ok) return taskWriteErr('update_failed: ', r);
-  for (const [f, oldV, newV] of changes) await logHistory(env, task.id, auth.userId, `${f}_changed`, { field: f, old: oldV, new: newV });
-  if (deadlineSet) await logHistory(env, task.id, auth.userId, 'deadline_set', { field: 'deadline', new: d.deadline });
+  if (!Object.keys(updates).length && !deadlineSet) return ok({ id: task.id, unchanged: true });
+  if (deadlineSet) { const s = await setDeadline([task.id], d.deadline, null, auth, env); if (s.error) return s.error; }
+  if (Object.keys(updates).length) {
+    updates.updated_by = auth.userId; updates.updated_at = nowIso();
+    const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, { method: 'PATCH', body: JSON.stringify(updates) });
+    if (!r.ok) return taskWriteErr(deadlineSet ? 'update_failed (the deadline was saved): ' : 'update_failed: ', r);
+    for (const [f, oldV, newV] of changes) await logHistory(env, task.id, auth.userId, `${f}_changed`, { field: f, old: oldV, new: newV });
+  }
   if (planChange) await logHistory(env, task.id, auth.userId, 'plan_item_id_changed', { field: 'plan_item_id', old: planChange[0], new: planChange[1] });
   return ok({ id: task.id, updated: [...changes.map(c => c[0]), ...(deadlineSet ? ['deadline'] : []), ...(planChange ? ['plan_item_id'] : [])] });
 }
@@ -2034,18 +2056,16 @@ async function reviseDeadline(body, auth, env) {
   const d = body.data || body;
   if (!d.id || !d.new_deadline) return err('id and new_deadline required', 400);
   if (!d.reason || !String(d.reason).trim()) return err('reason required', 400);
+  if (!isIsoTime(d.new_deadline)) return err('invalid deadline', 400);
   const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
-  const prevEffective = task.revised_deadline || task.deadline;
-  const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, {
-    method: 'PATCH', body: JSON.stringify({ revised_deadline: d.new_deadline, updated_by: auth.userId, updated_at: nowIso() }),
-  });
-  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
-  await logHistory(env, task.id, auth.userId, 'deadline_revised',
-    { field: 'revised_deadline', old: prevEffective, new: d.new_deadline, note: d.reason });
-  return ok({ id: task.id, revised_deadline: d.new_deadline });
+  // One RPC: the task and its history row together (F9 R5). An undated task gets its first deadline.
+  const s = await setDeadline([task.id], d.new_deadline, d.reason, auth, env);
+  if (s.error) return s.error;
+  if (s.first.length) return ok({ id: task.id, deadline: d.new_deadline });
+  return ok({ id: task.id, revised_deadline: d.new_deadline, ...(s.revised.length ? {} : { unchanged: true }) });
 }
 
 // Bulk update N tasks with one action. Subrequest-safe (load + ≤2 patch + 1 history
@@ -2095,24 +2115,13 @@ async function bulkUpdateTasks(body, auth, env) {
   if (field === 'deadline') {
     const value = d.value; // ISO datetime
     if (!value) return err('value required', 400);
-    const firstSet = editable.filter(t => !t.deadline);
-    const revise = editable.filter(t => t.deadline);
+    if (!isIsoTime(value)) return err('invalid deadline', 400);
+    const revise = editable.filter(hasDeadline);
     if (revise.length && (!d.reason || !String(d.reason).trim())) return err('reason required (some tasks already have a deadline)', 400);
-    if (firstSet.length) {
-      const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(firstSet.map(t => t.id))}`, env, {
-        method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ...stamp, deadline: value }) });
-      if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
-    }
-    if (revise.length) {
-      const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(revise.map(t => t.id))}`, env, {
-        method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ...stamp, revised_deadline: value }) });
-      if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
-    }
-    await logHistoryBatch(env, auth.userId, [
-      ...firstSet.map(t => ({ task_id: t.id, event_type: 'deadline_set', field: 'deadline', new: value })),
-      ...revise.map(t => ({ task_id: t.id, event_type: 'deadline_revised', field: 'revised_deadline', old: t.revised_deadline || t.deadline, new: value, note: String(d.reason).trim() })),
-    ]);
-    return ok({ updated: editable.length, skipped, field });
+    // One RPC for the whole batch: first sets + revisions + every history row, all or nothing (F9 R5).
+    const s = await setDeadline(editable.map(t => t.id), value, revise.length ? String(d.reason).trim() : null, auth, env);
+    if (s.error) return s.error;
+    return ok({ updated: s.first.length + s.revised.length, skipped, field });
   }
 
   // Plain settable fields: owner_employee_id / priority / program_id.
@@ -3099,6 +3108,35 @@ async function getPlanWeeks(url, auth, env) {
   return ok({ ...model, employee_id: auth.employeeId, department_id: auth.departmentId || null, departments });
 }
 
+// F9 R5 — the on-time score for one week (spec §8.2): the frozen cohort, final once the week has closed
+// (E+1 00:00 IST), provisional before (on time / missed so far / still due). Super admins only until the
+// review pack (R6) adds level R. GET ?action=getWeekScore[&week=this|last|YYYY-MM-DD (the week holding it)].
+async function getWeekScore(url, auth, env) {
+  if (!isPlanAdmin(auth)) return err('forbidden', 403);
+  const w = url.searchParams.get('week') || 'this';
+  const today = istDate(Date.now());
+  const date = w === 'this' ? today : w === 'last' ? addDays(today, -7) : isDateStr(w) ? w : null;
+  if (!date) return err('bad_week', 400);
+  const [r, dr] = await Promise.all([
+    sbDocket(`/rest/v1/rpc/week_score`, env, { method: 'POST', body: JSON.stringify({ p_date: date }) }),
+    sbPodium(`/rest/v1/departments?select=id,name`, env),
+  ]);
+  if (!r.ok || !dr.ok) return err('db_error', 500);
+  const s = r.data || {};
+  const dept = Object.fromEntries((dr.data || []).map(x => [x.id, x.name]));
+  const tasks = Array.isArray(s.tasks) ? s.tasks : [];
+  const people = Array.isArray(s.people) ? s.people : [];
+  // The counts are whole; task ROWS only for spaces the viewer can open (RULE-DOCKET-003: the space gate
+  // beats every admin role) — the rest are a count, like level F's "+N in spaces you're not in".
+  const open = new Set((await keepAccessible(auth, tasks.map(t => ({ id: t.task_id, space_id: t.space_id })), env)).map(t => t.id));
+  const shown = tasks.filter(t => open.has(t.task_id));
+  const names = await nameMap(sbPodium, 'employees', [...people, ...shown].map(x => x.owner_employee_id).filter(Boolean), env);
+  const owner = (x) => ({ ...x, owner_name: x.owner_employee_id ? (names[x.owner_employee_id] || null) : null });
+  const team = (x) => ({ ...x, team_name: x.department_id ? (dept[x.department_id] || null) : null });
+  return ok({ ...s, teams: (s.teams || []).map(team), people: people.map(owner),
+    tasks: shown.map(({ space_id, ...t }) => owner(team(t))), hidden_tasks: tasks.length - shown.length });
+}
+
 // A plan admin, read strictly: any failed read is "no" (the role guard's userIsPlanAdmin fails the other
 // way, because there "yes" blocks). Used where "yes" GRANTS — the Founders' space.
 async function userIsPlanAdminStrict(userId, env) {
@@ -3120,7 +3158,7 @@ const GET_ACTIONS = {
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,
-  getPlan, getPlanItem, getProposals, getPlanWeeks,
+  getPlan, getPlanItem, getProposals, getPlanWeeks, getWeekScore,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,

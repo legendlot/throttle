@@ -33,6 +33,9 @@ const PRIORITY = T.oneOf('P0', 'P1', 'P2', 'P3');
 // overdue / none (no date), or any YYYY-MM-DD → the week holding that date.
 const WEEK = { schema: { type: 'string', maxLength: 10 }, check: v => (['this', 'next', 'overdue', 'none'].includes(v) || T.date.check(v).ok)
   ? { ok: true, value: v } : { ok: false, error: 'must be this, next, overdue, none, or a date YYYY-MM-DD (its week)' } };
+// F9 R5: which week's on-time score — this (provisional), last (final once it closed), or the week holding a date.
+const SCORE_WEEK = { schema: { type: 'string', maxLength: 10 }, check: v => (['this', 'last'].includes(v) || T.date.check(v).ok)
+  ? { ok: true, value: v } : { ok: false, error: 'must be this, last, or a date YYYY-MM-DD (its week)' } };
 // F9 R2: a task's plan link. Docket decides who may set it (edit right on the task + the item visible to you
 // as its owner, a theme, or a super admin; live items only) — the gateway only shapes it.
 const PLAN_ITEM = { ...T.uuid, nullable: true, schema: { type: ['string', 'null'] } };
@@ -106,7 +109,7 @@ const docketTools = [
   reportTool({
     system: 'docket', name: 'docket_plan', title: 'Docket plan', binding: 'DOCKETOPS', dropKeys: DOCKET_DROP,
     description: 'Read the Docket plan (themes → milestones → results) at your own level: themes you can link tasks to, the milestones and results you own, one item with its children and the linked tasks you can see. Use the ids as plan_item_id on docket_create_task / docket_update_task.',
-    paramAbout: { id: 'Plan item id (from report=items or themes).' },
+    paramAbout: { id: 'Plan item id (from report=items or themes).', week: 'For report=score: this (default, provisional), last (the week just closed), or any date YYYY-MM-DD for the week holding it.' },
     reports: {
       themes: { action: 'getPlan', about: 'the themes you can see (code, title, state)', params: {},
         shape: d => ({ themes: ((d && d.items) || []).filter(x => x.kind === 'theme') }) },
@@ -117,6 +120,9 @@ const docketTools = [
       // everyone else only their own proposals and the outcome — Docket decides which (plan_proposals_for).
       proposals: { action: 'getProposals', about: 'proposals: your own and their outcome (a super admin: the whole Proposed queue)', params: {},
         shape: d => ({ proposals: (d && d.proposals) || [] }) },
+      // F9 R5 (spec §8.2): the frozen weekly cohort scored — final once the week closed (Monday 00:00 IST),
+      // provisional before. Super admins only (Docket refuses anyone else).
+      score: { action: 'getWeekScore', about: 'super admins: the weekly on-time score — per team, per person and per task; provisional (on time / missed so far / still due) until the week closes, then final', params: { week: SCORE_WEEK } },
     },
   }),
   // F9 R3 — anyone can propose something for the plan (spec §4.5). It lands in the founders' queue; nothing
@@ -165,7 +171,7 @@ const docketTools = [
     },
     required: ['id'],
     check: d => (Object.keys(d).length > 1 ? null : 'give at least one field to change besides `id`'),
-    guard: (t, d) => notAbandoned(t) || (d.deadline && t.deadline ? 'this task already has a deadline; move it with docket_revise_deadline (a reason is required).' : null),
+    guard: (t, d) => notAbandoned(t) || (d.deadline && (t.deadline || t.revised_deadline) ? 'this task already has a deadline; move it with docket_revise_deadline (a reason is required).' : null),
   }),
   writeTool({
     name: 'docket_set_status', title: 'Set a Docket task\'s status', action: 'changeStatus',

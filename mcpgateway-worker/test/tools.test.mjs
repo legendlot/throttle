@@ -450,7 +450,7 @@ test('docket plan links: plan_item_id is whitelisted on create/update; null clea
 });
 test('docket_plan: four reports → getPlan / getPlanItem / getProposals as the person, ids dropped like task reads', async () => {
   const t = findTool('docket_plan');
-  assert.deepEqual(Object.fromEntries(Object.entries(t.reports).map(([k, r]) => [k, r.action])), { themes: 'getPlan', items: 'getPlan', item: 'getPlanItem', proposals: 'getProposals' });
+  assert.deepEqual(Object.fromEntries(Object.entries(t.reports).map(([k, r]) => [k, r.action])), { themes: 'getPlan', items: 'getPlan', item: 'getPlanItem', proposals: 'getProposals', score: 'getWeekScore' });
   assert.equal(t.parse({ report: 'item' }, NOW).ok, false);                  // id required
   assert.equal(t.parse({ report: 'themes', id: U }, NOW).ok, false);         // not a param of themes
   const seen = [];
@@ -489,4 +489,35 @@ test('docket_plan report=proposals reads getProposals and drops LOT user ids', a
   const r = await rd.run({ env, sbAccess: 'J', input: p.value });
   assert.equal(seen[0].searchParams.get('action'), 'getProposals');
   assert.deepEqual(r.data.result, { proposals: [{ id: U, title: 'x', status: 'submitted' }] });
+});
+
+// ---- Docket plan R5, 2026-11-12: the score
+test('docket_plan report=score: week this|last|date only, read as the person, user ids dropped', async () => {
+  const rd = findTool('docket_plan');
+  for (const ok of [{}, { week: 'this' }, { week: 'last' }, { week: '2026-11-15' }])
+    assert.equal(rd.parse({ report: 'score', ...ok }, NOW).ok, true, JSON.stringify(ok));
+  for (const bad of [{ week: 'next' }, { week: 'overdue' }, { week: '2026-02-30' }, { week: 'x'.repeat(11) }])
+    assert.equal(rd.parse({ report: 'score', ...bad }, NOW).ok, false, JSON.stringify(bad));
+  assert.equal(rd.parse({ report: 'themes', week: 'this' }, NOW).ok, false);   // week belongs to score only
+  const seen = [];
+  const env = { DOCKETOPS: { fetch: async (u) => { seen.push(new URL(u)); return new Response(JSON.stringify({ ok: true, data: {
+    week_end: '2026-11-15', final: false, totals: { cohort: 1 }, tasks: [{ task_id: U, task_no: 'DKT-1', actor_user_id: 'uid-9' }] } }), { status: 200 }); } } };
+  const r = await rd.run({ env, sbAccess: 'J', input: rd.parse({ report: 'score', week: 'last' }, NOW).value });
+  assert.deepEqual(Object.fromEntries(seen[0].searchParams), { action: 'getWeekScore', week: 'last' });
+  assert.equal(r.data.result.week_end, '2026-11-15');
+  assert.doesNotMatch(JSON.stringify(r.data), /uid-9/);
+});
+test('docket_update_task: a first deadline is refused when the task already has only a revised one', async () => {
+  const u = findTool('docket_update_task');
+  const envFor = (task, seen) => ({ DOCKETOPS: { fetch: async (url, init = {}) => { seen.push({ url: new URL(url), init });
+    return new Response(JSON.stringify({ ok: true, data: init.method === 'POST' ? { id: U } : task }), { status: 200 }); } } });
+  const seen = [];
+  const r = await u.run({ env: envFor({ id: U, status: 'in_progress', deadline: null, revised_deadline: '2026-11-13T12:30:00Z' }, seen), sbAccess: 'J',
+    input: u.parse({ id: U, deadline: '2026-11-20' }, NOW).value });
+  assert.equal(r.ok, false); assert.match(r.userError, /already has a deadline/);
+  assert.equal(seen.filter(x => x.init.method === 'POST').length, 0);
+  const seen2 = [];
+  const r2 = await u.run({ env: envFor({ id: U, status: 'in_progress', deadline: null, revised_deadline: null }, seen2), sbAccess: 'J',
+    input: u.parse({ id: U, deadline: '2026-11-20' }, NOW).value });
+  assert.equal(r2.ok, true, JSON.stringify(r2));
 });
