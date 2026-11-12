@@ -139,7 +139,10 @@ export function friendlyError(code, extra = {}) {
 
 // ── the one Slack Web API helper: `ok:false` is an error; the error text stays here (callers get a code) ──
 // Scalars go form-encoded (some read methods — users.info — refuse JSON); anything with an object goes JSON.
-export async function slackApi(method, body, env, fetchImpl = fetch) {
+// A 429 / `ratelimited` is retried ONCE after Slack's Retry-After (capped at 5 s), then given up as `ratelimited`.
+export const SLACK_RETRY_CAP_MS = 5000;
+const wait = (ms) => new Promise(res => setTimeout(res, ms));
+export async function slackApi(method, body, env, fetchImpl = fetch, { sleep = wait } = {}) {
   const token = env && env.SLACK_DOCKET_BOT_TOKEN;
   if (!token) return { ok: false, error: 'not_configured' };
   const asJson = Object.values(body || {}).some(v => v !== null && typeof v === 'object');
@@ -149,11 +152,20 @@ export async function slackApi(method, body, env, fetchImpl = fetch) {
     init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
     init.body = new URLSearchParams(Object.entries(body || {}).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => [k, String(v)])).toString();
   }
-  try {
-    const res = await fetchImpl(`https://slack.com/api/${method}`, init);
-    const j = await res.json().catch(() => null);
-    return j && j.ok === true ? j : { ok: false, error: (j && j.error) || `http_${res.status}` };
-  } catch { return { ok: false, error: 'network' }; }
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetchImpl(`https://slack.com/api/${method}`, init);
+      const j = await res.json().catch(() => null);
+      if (j && j.ok === true) return j;
+      const limited = res.status === 429 || (j && j.error === 'ratelimited');
+      if (limited && attempt === 0) {
+        const after = Number(res.headers && res.headers.get && res.headers.get('retry-after'));
+        await sleep(Math.min(Number.isFinite(after) && after > 0 ? after * 1000 : 1000, SLACK_RETRY_CAP_MS));
+        continue;
+      }
+      return { ok: false, error: limited ? 'ratelimited' : (j && j.error) || `http_${res.status}` };
+    } catch { return { ok: false, error: 'network' }; }
+  }
 }
 // A reply to a command / button through its response_url — only ever Slack's own hooks host.
 export async function slackRespond(responseUrl, message, fetchImpl = fetch) {

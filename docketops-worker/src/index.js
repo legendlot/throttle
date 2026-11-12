@@ -43,7 +43,9 @@ import { slackEvents, slackSignatureOk, parseForm, parseCommand, proposalFrom, p
   validateTaskSubmission, validateMoveSubmission, validateCommentSubmission, deadlineIso, mineMessage, planOptions,
   lookupEmail } from './slack-core.mjs';
 import { WEEK_KEYS, normalizeWeekSettings, resolveWeekFilter, matchesWeek, planWindow, istMidnight, staleCutoff,
-  buildPlanWeeks, ROWS_BY, istDate, isDateStr, weekEndOf, effectiveDue } from './weeks-core.mjs';
+  buildPlanWeeks, ROWS_BY, istDate, isDateStr, weekEndOf, effectiveDue, isWorkingDay } from './weeks-core.mjs';
+import { SLOT_KEYS, parseReminderSettings, dueSlots, gateRecipients, workingDayAfter, ownerDailySections, ownerDailyMessage,
+  chaseTasks, chaseMessage, founderChaseLine, reviewTomorrowMessage, reviewPackMessage, catchupMessage, safeCode, identityTtlMs, lookupOutcome } from './reminders-core.mjs';
 import { buildReviewTeams, lastWorkingDay, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack, scoreBlock,
   handoffBucket, foundersHandoffs, isHandoff,
   validateFocusItems, buildAsks, foundersToSlack, noDataSource } from './review-core.mjs';
@@ -4157,6 +4159,7 @@ const POST_ACTIONS = {
   holdReview, setFounderFocus,
   acceptHandoff,
   saveTemplate, archiveTemplate, applyTemplate,
+  slackReminderPreview,
 };
 
 // task_history.source (F9 R6a, §8.3): the MCP gateway marks every call it makes; anything else is the app.
@@ -4236,9 +4239,19 @@ function slackEmpDeps(env) {
     },
   };
 }
+const forgetSlackIdentity = (sid, env) =>
+  sbDocket(`/rest/v1/slack_identities?slack_user_id=eq.${enc(sid)}`, env, { method: 'DELETE', prefer: 'return=minimal' }).catch(() => null);
+// Best-effort cache (R7a; the reminders' lookups save through here too). The Slack id is cleared first (it is
+// UNIQUE — it may still sit on another employee's row), then the employee's row is upserted. On a failed write
+// the person is still resolved (and re-resolved next time).
+async function saveSlackIdentity(row, env) {
+  await forgetSlackIdentity(row.slack_user_id, env);
+  await sbDocket(`/rest/v1/slack_identities?on_conflict=employee_id`, env, { method: 'POST',
+    prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify([{ ...row, resolved_at: nowIso() }]) }).catch(() => null);
+}
 // Slack user → the Docket person acting. Fresh cached row first; else users.info → work email → active employee → login.
 function slackPerson(slackUserId, env) {
-  const forget = (sid) => sbDocket(`/rest/v1/slack_identities?slack_user_id=eq.${enc(sid)}`, env, { method: 'DELETE', prefer: 'return=minimal' }).catch(() => null);
+  const forget = (sid) => forgetSlackIdentity(sid, env);
   return resolveSlackPerson(slackUserId, {
     ...slackEmpDeps(env),
     cached: async (sid) => {
@@ -4246,13 +4259,7 @@ function slackPerson(slackUserId, env) {
       return (r.ok && r.data?.[0]) || null;
     },
     forget,
-    // Best-effort cache. The Slack id is cleared first (it is UNIQUE — it may still sit on another employee's row),
-    // then the employee's row is upserted. On a failed write the person is still resolved (and re-resolved next time).
-    save: async (row) => {
-      await forget(row.slack_user_id);
-      await sbDocket(`/rest/v1/slack_identities?on_conflict=employee_id`, env, { method: 'POST',
-        prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify([{ ...row, resolved_at: nowIso() }]) }).catch(() => null);
-    },
+    save: (row) => saveSlackIdentity(row, env),
     authForUser: (uid) => authForUser(uid, null, env),
   });
 }
@@ -4410,6 +4417,247 @@ async function slackInteractive(request, env, ctx) {
   return slackAck();   // anything else is acknowledged and ignored
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// F9 R7b — Slack reminders (spec §9.2). The cron wakes the worker at :00 and :30 (UTC = IST minutes, since IST is
+// +05:30); dueSlots decides what is due in this half-hour from docket.settings.slack_reminders. Every message is
+// rendered AS its recipient (authForUser, no self-provision) through the app's own read handlers, so it shows
+// what they could see in Docket. A log row is claimed BEFORE each DM (unique slot · IST date · employee), so a
+// retry or a double fire never DMs twice. One recipient failing is logged and the run goes on; one slot
+// throwing never stops the others. No raw database or Slack text ever reaches a person.
+// ════════════════════════════════════════════════════════════════════════════
+const REMINDER_RENDER = { owner_daily: renderOwnerDaily, chase: renderChase, review_tomorrow: renderReviewTomorrow,
+  review_pack: renderReviewPack, catchup_prep: renderCatchup };
+
+async function reminderSettings(env) {
+  const r = await sbDocket(`/rest/v1/settings?key=eq.slack_reminders&select=value&limit=1`, env);
+  return parseReminderSettings(r.ok && r.data?.[0] ? r.data[0].value : null);   // unreadable → mode off
+}
+// Who each slot goes to, before mode gating: [{ id, auth_user_id, work_email, full_name, kind? }]
+// The week's commitment cohort (week_score — frozen at commit time, so its owner is who the review scores).
+async function weekCohort(env) {
+  const sc = await sbDocket(`/rest/v1/rpc/week_score`, env, { method: 'POST', body: JSON.stringify({ p_date: istDate(Date.now()) }) });
+  if (!sc.ok) throw new Error('week_score');
+  return { rows: Array.isArray(sc.data?.tasks) ? sc.data.tasks : [], weekEnd: sc.data?.week_end || null };
+}
+async function reminderPeople(slot, env) {
+  if (slot === 'review_tomorrow') {
+    // whoever OWNED a committed task at commit time and still has one not done — even if they've since handed it on
+    const { rows } = await weekCohort(env);
+    const ids = uniq(rows.filter(r => r.status !== 'done' && r.status !== 'abandoned').map(r => r.owner_employee_id));
+    const e = await sbIn(sbPodium, ids, l => `/rest/v1/employees?id=in.${l}&status=eq.active&select=id,auth_user_id,work_email,full_name`, env);
+    if (!e.ok) throw new Error('owners_read');
+    return e.data || [];
+  }
+  if (slot === 'owner_daily') {
+    // every active employee who owns an open task
+    const t = await sbAll(sbDocket, `/rest/v1/tasks?${PW_OPEN}&archived_at=is.null&owner_employee_id=not.is.null&select=owner_employee_id&order=id.asc`, env);
+    if (!t.ok) throw new Error('owners_read');
+    const ids = uniq((t.data || []).map(x => x.owner_employee_id));
+    const e = await sbIn(sbPodium, ids, l => `/rest/v1/employees?id=in.${l}&status=eq.active&select=id,auth_user_id,work_email,full_name`, env);
+    if (!e.ok) throw new Error('owners_read');
+    return e.data || [];
+  }
+  // founders (docket_plan_admin) and Founders' Associates (docket_review, below plan admin) — from the Docket roles
+  const [rr, ur] = await Promise.all([
+    sbStore(`/rest/v1/docket_roles?select=role_key,permissions`, env),
+    sbStore(`/rest/v1/docket_user_roles?select=user_id,role_key`, env),
+  ]);
+  if (!rr.ok || !ur.ok) throw new Error('roles_read');
+  const perms = Object.fromEntries((rr.data || []).map(r => [r.role_key, normalizeDocketPerms(r.permissions || {})]));
+  const kindOf = (p) => (p?.docket_plan_admin ? 'founder' : p?.docket_review ? 'associate' : null);
+  const kinds = {};
+  for (const u of ur.data || []) { const k = kindOf(perms[u.role_key]); if (k) kinds[u.user_id] = k; }
+  const want = slot === 'catchup_prep' ? ['founder'] : ['founder', 'associate'];
+  const users = Object.keys(kinds).filter(u => want.includes(kinds[u]));
+  const e = await sbIn(sbPodium, users, l => `/rest/v1/employees?auth_user_id=in.${l}&status=eq.active&select=id,auth_user_id,work_email,full_name`, env);
+  if (!e.ok) throw new Error('people_read');
+  return (e.data || []).map(p => ({ ...p, kind: kinds[p.auth_user_id] }));
+}
+// employee → Slack user id: slack_identities (fresh — 6 to 8 days, staggered per person) first, else
+// users.lookupByEmail on the work email — the same workspace / not-a-stranger checks as R7a — saved through the
+// same path. → Map(employee_id → { sid } | { status: 'unmapped' | 'failed', code }). Lookups go 20 at once, then
+// one per LOOKUP_GAP_MS (Slack allows ~50 a minute), so a cold cache of 65 fits.
+const LOOKUP_BURST = 20, LOOKUP_GAP_MS = 1300;
+async function reminderSlackIds(people, env, sleep = (ms) => new Promise(r => setTimeout(r, ms))) {
+  const out = new Map();
+  if (!people.length) return out;
+  const r = await sbIn(sbDocket, people.map(p => p.id), l => `/rest/v1/slack_identities?employee_id=in.${l}&select=employee_id,slack_user_id,resolved_at`, env);
+  const rows = Object.fromEntries(((r.ok && r.data) || []).map(x => [x.employee_id, x]));
+  let team = null, lookups = 0;
+  for (const p of people) {
+    const row = rows[p.id];
+    if (row && Date.parse(row.resolved_at || '') > Date.now() - identityTtlMs(p.id)) { out.set(p.id, { sid: row.slack_user_id }); continue; }
+    const email = lookupEmail(p.work_email);
+    if (!email) { out.set(p.id, { status: 'unmapped', code: 'no_work_email' }); continue; }
+    team = team || await botTeamId(env);
+    if (!team) { out.set(p.id, { status: 'failed', code: 'auth_test_failed' }); continue; }
+    if (lookups++ >= LOOKUP_BURST) await sleep(LOOKUP_GAP_MS);
+    const info = await slackApi('users.lookupByEmail', { email }, env);
+    const o = lookupOutcome(info, email, (i) => slackUserEmail(i, team));
+    if (o.sid) await saveSlackIdentity({ employee_id: p.id, slack_user_id: o.sid, auth_user_id: p.auth_user_id || null }, env);
+    out.set(p.id, o);
+  }
+  return out;
+}
+// Claim the log row (insert … on conflict do nothing) → 'claimed' (this run inserted it) | 'exists' (a row is
+// already there — a retry, a double fire) | 'error' (the write failed: nothing is sent, and it is said so).
+async function claimReminder(slot, runDate, employeeId, status, errorCode, env) {
+  const r = await sbDocket(`/rest/v1/slack_reminder_log?on_conflict=slot,run_date,employee_id`, env, { method: 'POST',
+    prefer: 'return=representation,resolution=ignore-duplicates',
+    body: JSON.stringify([{ slot, run_date: runDate, employee_id: employeeId, status, error_code: errorCode || null }]) });
+  if (!r.ok || !Array.isArray(r.data)) { console.error('docketops reminder claim failed', slot, runDate, employeeId, r.status); return 'error'; }
+  return r.data.length === 1 ? 'claimed' : 'exists';
+}
+async function finishReminder(slot, runDate, employeeId, status, errorCode, env) {
+  await sbDocket(`/rest/v1/slack_reminder_log?slot=eq.${enc(slot)}&run_date=eq.${enc(runDate)}&employee_id=eq.${enc(employeeId)}`, env,
+    { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status, error_code: errorCode || null, sent_at: nowIso() }) });
+}
+const asCaller = (auth) => ({ ...auth, source: 'slack' });
+
+async function runReminders(env, scheduledTime) {
+  const [settings, week] = await Promise.all([reminderSettings(env), weekSettings(env)]);
+  if (settings.mode === 'off') return [];
+  const due = dueSlots(scheduledTime, settings, (d) => isWorkingDay(d, week));
+  const results = [];
+  for (const { slot, run_date } of due) {
+    try { results.push({ slot, ...(await runReminderSlot(slot, run_date, settings, env)) }); }
+    catch (e) { console.error('docketops reminder slot failed', slot, e); results.push({ slot, error: true }); }
+  }
+  return results;
+}
+async function runReminderSlot(slot, runDate, settings, env) {
+  const people = gateRecipients(settings.mode, settings.test_employee_ids, await reminderPeople(slot, env));
+  const counts = { sent: 0, skipped_empty: 0, unmapped: 0, failed: 0, claim_failed: 0, already: 0 };
+  const rendered = [];
+  for (const p of people) {
+    try {
+      const auth = p.auth_user_id ? await authForUser(p.auth_user_id, null, env) : null;
+      if (!auth || auth.employeeId !== p.id) { rendered.push({ p, status: 'unmapped', code: 'no_docket_login' }); continue; }
+      const msg = await REMINDER_RENDER[slot](asCaller(auth), env, p);
+      rendered.push(msg ? { p, msg } : { p, status: 'skipped_empty' });
+    } catch (e) { console.error('docketops reminder render failed', slot, e); rendered.push({ p, status: 'failed', code: 'render_failed' }); }
+  }
+  const sids = await reminderSlackIds(rendered.filter(x => x.msg).map(x => x.p), env);
+  const usedSids = new Set();   // two employees on one Slack account get ONE DM a slot
+  const tally = (c, status) => { counts[c === 'claimed' ? status : c === 'exists' ? 'already' : 'claim_failed']++; };
+  for (const x of rendered) {
+    const id = x.p.id;
+    try {
+      if (!x.msg) { tally(await claimReminder(slot, runDate, id, x.status, x.code, env), x.status); continue; }
+      const who = sids.get(id) || { status: 'failed', code: 'lookup_failed' };
+      if (!who.sid) { tally(await claimReminder(slot, runDate, id, who.status, who.code, env), who.status); continue; }
+      if (usedSids.has(who.sid)) { tally(await claimReminder(slot, runDate, id, 'unmapped', 'duplicate_slack_user', env), 'unmapped'); continue; }
+      usedSids.add(who.sid);
+      // the claim comes first: a row already there (a retry, a double fire) means this person is done
+      const c = await claimReminder(slot, runDate, id, 'failed', 'in_flight', env);
+      if (c !== 'claimed') { tally(c); continue; }
+      const res = await slackDm(who.sid, x.msg, env);
+      await finishReminder(slot, runDate, id, res.ok ? 'sent' : 'failed', res.ok ? null : safeCode(res.error), env);
+      counts[res.ok ? 'sent' : 'failed']++;
+    } catch (e) { console.error('docketops reminder send failed', slot, e); counts.failed++; }
+  }
+  return counts;
+}
+
+// ── the five renderers: (auth of the recipient, env, person) → message | null (null = nothing to say) ──
+async function founderSpaceIds(env) {
+  const r = await sbDocket(`/rest/v1/spaces?is_founders=eq.true&select=id`, env);
+  if (!r.ok) throw new Error('spaces_read');
+  return new Set((r.data || []).map(x => x.id));
+}
+async function renderOwnerDaily(auth, env) {
+  const now = Date.now();
+  const [mt, settings, fsp] = await Promise.all([slackCall(GET_ACTIONS.getMyTasks, slackGetUrl('getMyTasks'), auth, env), weekSettings(env), founderSpaceIds(env)]);
+  if (!mt.ok) throw new Error('my_tasks');
+  const own = (mt.data || []).filter(t => t._relation === 'owner' && !t.is_recurring && t.status !== 'done' && t.status !== 'abandoned');
+  const shown = own.filter(t => !fsp.has(t.space_id));   // a Founders'-space task never goes into Slack (as the pack)
+  const staleFrom = staleCutoff(now, settings);
+  const since = new Date(istMidnight(staleFrom)).toISOString();
+  const ids = shown.map(t => t.id);
+  const [hr, cr] = await Promise.all([
+    sbInAll(sbDocket, ids, l => `/rest/v1/task_history?task_id=in.${l}&created_at=gte.${since}&select=task_id&order=id.asc`, env),
+    sbInAll(sbDocket, ids, l => `/rest/v1/task_comments?task_id=in.${l}&deleted_at=is.null&created_at=gte.${since}&select=task_id&order=id.asc`, env),
+  ]);
+  if (!hr.ok || !cr.ok) throw new Error('updates_read');
+  const fresh = new Set([...(hr.data || []), ...(cr.data || [])].map(x => x.task_id));
+  const s = ownerDailySections(shown, { nowMs: now, fresh, staleFrom });
+  const hidden = ownerDailySections(own.filter(t => fsp.has(t.space_id)), { nowMs: now, fresh: new Set(), staleFrom });
+  return ownerDailyMessage(s, { hidden: hidden.overdue.length + hidden.today.length });
+}
+// The chase, at the reader's level: plan-weeks Stale warnings (team = all) + the review pack's raised teams.
+async function chaseFor(auth, env) {
+  const now = Date.now();
+  const [pw, settings, pack] = await Promise.all([
+    slackCall(GET_ACTIONS.getPlanWeeks, slackGetUrl('getPlanWeeks', { team: 'all' }), auth, env),
+    weekSettings(env),
+    buildReviewPack('this', 'all', auth, env),
+  ]);
+  if (!pw.ok || pack.error) throw new Error('chase_read');
+  const today = istDate(now);
+  const until = workingDayAfter(today, 2, (d) => isWorkingDay(d, settings));
+  const stale = (pw.data?.warnings || []).filter(w => w.kind === 'stale' && w.task).map(w => w.task);
+  const tasks = chaseTasks(stale, { nowMs: now, until });
+  const raised = (pack.pack.teams || []).filter(t => t.staleness?.quiet_last_working_day).map(t => t.team_name || 'No team');
+  return { tasks, raised, lwd: lastWorkingDay(today, settings) };
+}
+async function renderChase(auth, env) {
+  if (!isPlanAdmin(auth) && !isReviewer(auth)) return null;
+  const c = await chaseFor(auth, env);
+  return isPlanAdmin(auth) ? founderChaseLine(c.tasks.length, c.raised) : chaseMessage(c.tasks, c.raised, { lwd: c.lwd });
+}
+async function renderReviewTomorrow(auth, env) {
+  if (!auth.employeeId) return null;
+  const { rows: cohort, weekEnd } = await weekCohort(env);
+  const mine = cohort.filter(r => r.owner_employee_id === auth.employeeId);
+  if (!mine.length) return null;
+  const [fsp, tr] = await Promise.all([founderSpaceIds(env),
+    sbInAll(sbDocket, mine.map(r => r.task_id), l => `/rest/v1/tasks?id=in.${l}&select=id,space_id,department_id,owner_employee_id,created_by_user_id,assignee_employee_id,handoff_to_department_id,handoff_to_employee_id&order=id.asc`, env)]);
+  if (!tr.ok) throw new Error('tasks_read');
+  // EVERYONE through the space gate (keepAccessible = canAccessSpace's rule, batched; plan admins included — a task
+  // that moved into a space you can't open is not yours to see in Slack either), and below plan admin also the review
+  // pack's own gate (reviewVisibleIds). A Founders'-space row never goes into Slack (counted, if you can open it).
+  const inSpace = new Set((await keepAccessible(auth, tr.data || [], env)).map(t => t.id));
+  const keep = isPlanAdmin(auth) ? inSpace : await reviewVisibleIds(auth, mine.map(r => r.task_id), env);
+  if (!keep) throw new Error('visible_read');   // fail closed
+  const space = Object.fromEntries((tr.data || []).map(t => [t.id, t.space_id]));
+  const seen = mine.filter(r => inSpace.has(r.task_id) && keep.has(r.task_id));
+  const rows = seen.filter(r => !fsp.has(space[r.task_id]));
+  const hidden = seen.filter(r => fsp.has(space[r.task_id]) && r.status !== 'done' && r.status !== 'abandoned').length;
+  return reviewTomorrowMessage(rows, { hidden, weekEnd });
+}
+async function renderReviewPack(auth, env) {
+  if (!isPlanAdmin(auth) && !isReviewer(auth)) return null;
+  const r = await buildReviewPack('this', 'all', auth, env);
+  if (r.error) throw new Error('pack_read');
+  if (!(r.pack.teams || []).length) return null;
+  return reviewPackMessage(packToSlack(r.pack).summary, r.pack.week?.week_end || null);   // slack_omit applied
+}
+async function renderCatchup(auth, env) {
+  if (!isPlanAdmin(auth)) return null;
+  const r = await slackCall(GET_ACTIONS.getFoundersReview, slackGetUrl('getFoundersReview', { week: 'this' }), auth, env);
+  if (!r.ok) throw new Error('founders_read');
+  return catchupMessage(r.data?.slack, r.data?.week?.week_end || null);
+}
+
+// POST { action: 'slackReminderPreview', slot } — plan admin only. DMs the CALLER their own version of that slot
+// now: no log row, no other recipient, whatever the mode.
+async function slackReminderPreview(body, auth, env) {
+  if (!isPlanAdmin(auth)) return err('forbidden', 403);
+  const slot = (body.data || body).slot;
+  if (!SLOT_KEYS.includes(slot)) return err('bad_slot', 400);
+  if (!auth.employeeId) return err('no_employee', 409);
+  let msg;
+  try { msg = await REMINDER_RENDER[slot](asCaller(auth), env); }
+  catch (e) { console.error('docketops reminder preview failed', slot, e); return err('render_failed', 500); }
+  if (!msg) return ok({ slot, sent: false, empty: true });
+  const er = await sbPodium(`/rest/v1/employees?id=eq.${enc(auth.employeeId)}&select=id,auth_user_id,work_email,full_name&limit=1`, env);
+  const me = (er.ok && er.data?.[0]) || null;
+  const who = me ? (await reminderSlackIds([me], env)).get(me.id) : null;
+  if (!who || !who.sid) return err(who && who.status === 'failed' ? 'slack_lookup_failed' : 'slack_unmapped', who && who.status === 'failed' ? 502 : 409);
+  const res = await slackDm(who.sid, { ...msg, text: `[Preview] ${msg.text}` }, env);
+  return res.ok ? ok({ slot, sent: true }) : err('slack_send_failed', 502);
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
@@ -4421,5 +4669,11 @@ export default {
     if (request.method === 'GET')  return handleGet(url, request, env);
     if (request.method === 'POST') return handlePost(request, env);
     return err('method_not_allowed', 405);
+  },
+  // F9 R7b: crons = ["0,30 * * * *"] (wrangler.toml). event.scheduledTime = the slot's own time, not the start lag.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runReminders(env, event.scheduledTime)
+      .then(results => { for (const r of results) console.log('docketops reminders', JSON.stringify(r)); })   // per slot: sent / skipped_empty / unmapped / failed / claim_failed / already
+      .catch(e => console.error('docketops reminders failed', e)));
   },
 };

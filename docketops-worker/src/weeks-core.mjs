@@ -123,6 +123,12 @@ export function staleCutoff(now = Date.now(), s = WEEK_DEFAULTS, n = STALE_WORKI
   }
   return d;
 }
+// §8.3 "quiet": an open task with no qualifying update since staleFrom (staleCutoff) and not created inside that
+// window of grace. `fresh` = task ids with a task_history row or a live comment since staleFrom. The plan weeks
+// view's Stale warning and the 09:00 Slack reminder both use this one rule.
+export function isQuietTask(t, fresh, staleFrom) {
+  return isOpen(t) && !fresh.has(t.id) && !(t.created_at && istDate(t.created_at) >= staleFrom);
+}
 export function isStale(lastAt, now = Date.now(), s = WEEK_DEFAULTS, n = STALE_WORKING_DAYS) {
   return workingDaysSince(lastAt, now, s) >= n;
 }
@@ -228,8 +234,7 @@ export function buildPlanWeeks({ items = [], tasks = [], linked = [], themeTasks
   for (const t of winTasks) {
     const card = taskCard(t);
     cards.set(t.id, card);
-    if (!isOpen(t) || fresh.has(t.id)) continue;
-    if (t.created_at && istDate(t.created_at) >= staleFrom) continue;   // created inside the window of grace
+    if (!isQuietTask(t, fresh, staleFrom)) continue;   // done / updated / created inside the window of grace
     warn({ kind: 'stale', resolver: { kind: 'task_owner', employee_id: t.owner_employee_id || null, name: t.owner_name || null },
       task: { ...card, warnings: undefined } }, card);
   }
