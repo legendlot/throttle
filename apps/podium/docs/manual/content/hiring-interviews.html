@@ -99,7 +99,50 @@
   <li><strong>Closing a candidate cancels their scheduled interviews automatically.</strong> When an application becomes Rejected, Withdrawn, Declined, No Show or Joined, by any route, its still-scheduled interviews are cancelled with the reason &ldquo;application closed&rdquo;, and nothing remains owed on My interviews.</li>
 </ul>
 
+<h2 class="sec">Google Calendar</h2>
+<p>Podium can put an interview on Google Calendar for you in one click and keep the invites in step with the interview. An <strong>admin switches this on</strong>. Until then nothing about Calendar appears anywhere, and interviews work exactly as described above.</p>
+
+<h3>When you schedule</h3>
+<p>For an interview in the future, the Schedule dialog shows two tick boxes:</p>
+<ul>
+  <li><strong>Add to my Google Calendar and invite the interviewers</strong>: on by default. For a video interview it adds a Meet link.</li>
+  <li><strong>Send the candidate a separate invite (time and joining details only)</strong>: on when the candidate has an email. If they have none, the box says so and stays off.</li>
+</ul>
+<p>You, the person scheduling, are the <strong>organiser</strong>: the event sits on your own calendar. Interviewers get an invite with a link to the interview in Podium, and a Meet link for video interviews. Guests cannot edit the event or invite anyone else.</p>
+<div class="callout warn">
+  <div class="c-title">&#9888; What the candidate sees</div>
+  <p>The candidate&rsquo;s invite is separate and carries only the role, the company, the time, and the Meet link or the place. It has <strong>no Podium link, no interviewer names and no round name</strong>, and candidates cannot see other guests.</p>
+</div>
+
+<h3>Interviews already scheduled</h3>
+<p>An interview scheduled before Calendar was on, or one where you left the box off, shows <strong>Add to calendar</strong> on its row (future interviews only). It adds the event to your calendar, with the same candidate invite choice.</p>
+
+<h3>Keeping Calendar and Podium in step</h3>
+<ul>
+  <li><strong>Edit in Podium</strong> (time, duration, mode, place, panel): the invites update.</li>
+  <li><strong>Cancel in Podium</strong>: the invites are removed and the guests are told.</li>
+  <li><strong>An application closing</strong> (reject, move out, no-show) removes the invites of its cancelled interviews.</li>
+  <li><strong>Someone moves the event in Google Calendar</strong>: Podium picks up the new time the next time the candidate&rsquo;s page is opened, and any pending feedback due dates move with it. If feedback is already in, the time cannot move, so Podium keeps its time and moves Calendar back.</li>
+  <li><strong>Someone deletes the event in Google Calendar</strong> before the interview: Podium cancels the interview too. Deleting it after the interview has happened changes nothing in Podium.</li>
+  <li>Changes to the guest list made in Calendar are not copied into Podium; change the panel in Podium.</li>
+</ul>
+
+<h3>On the interview row</h3>
+<table>
+  <tr><th>You see</th><th>It means</th></tr>
+  <tr><td>On calendar &middot; candidate invited</td><td>The event exists, and the candidate has their separate invite.</td></tr>
+  <tr><td>Meet</td><td>The video link for the interview.</td></tr>
+  <tr><td>Add to calendar</td><td>Not on a calendar yet. Opens the dialog described above.</td></tr>
+  <tr><td>Retry calendar</td><td>The first attempt failed. Press to try again.</td></tr>
+  <tr><td>Retry candidate invite</td><td>The interviewers&rsquo; event went through but the candidate&rsquo;s did not.</td></tr>
+  <tr><td>Retry sync</td><td>A later change did not reach Calendar. Press to push it again.</td></tr>
+  <tr><td>Calendar: &hellip; (under the interview)</td><td>The reason Google gave. The interview itself is always saved; only the invite failed.</td></tr>
+</table>
+
+<h3>For interviewers</h3>
+<p>Interviewers see <strong>Join</strong> (or <strong>Join Meet</strong> on the interview page) next to a video interview in My interviews and on the interview page. They get no Calendar controls.</p>
+
 <div class="callout note">
   <div class="c-title">&#9432; Not built yet</div>
-  <p>Calendar invites, automatic reminders, feedback drafts and editing submitted feedback do not exist. Add the interview to calendars yourself.</p>
+  <p>Automatic reminders, feedback drafts and editing submitted feedback do not exist. Edits to the guest list in Google Calendar are not pulled into Podium.</p>
 </div>

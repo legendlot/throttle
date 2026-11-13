@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { ArrowLeft, Download, Lock } from 'lucide-react';
+import { ArrowLeft, Download, Lock, Video } from 'lucide-react';
 import { podiumopsGet } from '../../../../../lib/podiumopsFetch.js';
 import { fmtDate } from '../../../../../lib/format.js';
 import { Card, KV, Note, backBtn, ghostBtn, iconBtn, muted } from '../../../../../components/HiringBits.js';
@@ -52,7 +52,13 @@ function PanelInterviewInner() {
           <span style={{ color: 'var(--podium-accent)', fontWeight: 600 }}>{c.candidate_code}</span>
           {' · '}{iv.round_name} for {o.designation}{o.opening_code ? ` (${o.opening_code})` : ''}{o.department ? ` · ${o.department}` : ''}
         </div>
-        <div style={{ color: 'var(--text-2)', fontSize: 12.5, marginTop: 2 }}>{interviewWhen(iv)}</div>
+        <div style={{ color: 'var(--text-2)', fontSize: 12.5, marginTop: 2 }}>
+          {interviewWhen(iv)}
+          {iv.meet_url && (
+            <a href={iv.meet_url} target="_blank" rel="noreferrer"
+              style={{ marginLeft: 10, display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--podium-accent)' }}><Video size={12} /> Join Meet</a>
+          )}
+        </div>
       </header>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 14, alignItems: 'start' }}>

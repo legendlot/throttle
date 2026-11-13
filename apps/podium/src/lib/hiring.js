@@ -248,6 +248,16 @@ const ERROR_COPY = {
   no_patch: 'Nothing changed',
   panel_self: 'You cannot add or remove yourself from a panel; ask another member of the hiring team',
   reschedule_after_feedback: 'Feedback is in, so the time cannot move. Cancel this interview and schedule a new one',
+  // O3 — Calendar (podiumops-worker/src/calendar.js CAL_COPY)
+  calendar_off: 'Google Calendar is not switched on for Podium yet',
+  calendar_not_scheduled: 'Only a scheduled interview can go on the calendar',
+  calendar_past: 'This interview time has passed',
+  calendar_linked: 'This interview is already on the calendar',
+  calendar_busy: 'Someone is adding this interview to the calendar right now, refresh in a moment',
+  calendar_no_mailbox: 'You need an active work mailbox to organise the calendar invite',
+  calendar_no_candidate_email: 'The candidate has no email address for an invite',
+  calendar_event_deleted: 'The calendar event was deleted in Google Calendar; schedule a new interview',
+  calendar_failed: 'Google Calendar did not accept the invite, try again',
 };
 export function hiringError(e, fallback = 'Something went wrong') {
   const msg = (e && e.message) || '';

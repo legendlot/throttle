@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { CalendarClock } from 'lucide-react';
+import { CalendarClock, Video } from 'lucide-react';
 import { podiumopsGet } from '../../../../lib/podiumopsFetch.js';
 import { FilterChip } from '../../../../components/ui.js';
 import { muted } from '../../../../components/HiringBits.js';
@@ -60,7 +60,13 @@ export default function MyInterviewsPage() {
               {r.candidate?.current_title && ` · ${r.candidate.current_title}`}{r.candidate?.current_employer && ` @ ${r.candidate.current_employer}`}
             </div>
           </div>
-          <span style={{ fontSize: 12, color: 'var(--text-2)', flex: '1 1 220px' }}>{interviewWhen(r)}</span>
+          <span style={{ fontSize: 12, color: 'var(--text-2)', flex: '1 1 220px' }}>
+            {interviewWhen(r)}
+            {r.status === 'scheduled' && r.meet_url && (
+              <a href={r.meet_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
+                style={{ marginLeft: 8, display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--podium-accent)' }}><Video size={12} /> Join</a>
+            )}
+          </span>
           <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, minWidth: 130 }}>
             {r.status !== 'scheduled' && r.status !== 'completed' ? <InterviewStatusBadge status={r.status} /> : <FeedbackStateBadge state={r.state} />}
             {(r.state === 'pending' || r.state === 'overdue') && <span style={{ ...muted, fontSize: 10.5 }}>due {fmtDateTime(r.due_at)}</span>}

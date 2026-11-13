@@ -103,6 +103,10 @@ import {
   leaveMessageId, cleanAmount, cleanNote, cleanHoliday, leaveDbErrorCode, reclosePlan, splitBase, coveredFromOnChange,
   holidayListMissing, noHolidayListMessage,
 } from './leave.js';   // Leave R1 (test/leave.test.mjs)
+import {
+  CAL_SCOPE, CAL_COPY, calendarEventIds, syncedHash, buildInternalEvent, buildCandidateEvent, conferenceOf, meetUrlOf,
+  eventTimes, calendarSyncAction,
+} from './calendar.js';   // O3 Calendar (test/calendar.test.mjs)
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 
@@ -3920,9 +3924,10 @@ async function getCandidate(url, auth, env) {
   // the openings the caller manages (for the Schedule form).
   const rolesByOpening = Object.fromEntries(sc.visible.map(v => [v.o.id, v.roles]));
   const manageOps = sc.visible.filter(v => canManageApps(v.roles)).map(v => v.o.id);
-  const [ivByApp, roundsAll] = await Promise.all([
+  const [ivByApp, roundsAll, calOn] = await Promise.all([
     chainInterviews(env, me, visApps, rolesByOpening),
     openingRounds(env, manageOps, { activeOnly: true }),
+    manageOps.length ? calendarEnabled(env) : Promise.resolve(false),   // O3
   ]);
   let salaryShown = false;
   const applications = visApps.map(a => {
@@ -3942,7 +3947,8 @@ async function getCandidate(url, auth, env) {
       allowed_transitions: APP_TRANSITIONS[a.status] || [],
       interviews: ivByApp[a.id] || [],
       rounds: canManageApps(x.roles) ? roundsAll.filter(r => r.opening_id === x.o.id) : [],
-      can_schedule: canManageApps(x.roles) && canSchedule(a.status) && x.o.status === 'open' && !jdGate(x.o) };
+      can_schedule: canManageApps(x.roles) && canSchedule(a.status) && x.o.status === 'open' && !jdGate(x.o),
+      calendar_enabled: canManageApps(x.roles) && calOn, candidate_has_email: addressOk(String(cand.email || '').trim().toLowerCase()) };
     if (sal) {
       out.current_ctc = numOrNull(current_ctc); out.expected_ctc = numOrNull(expected_ctc);
       if (out.current_ctc != null || out.expected_ctc != null) salaryShown = true;
@@ -4436,10 +4442,10 @@ async function hasLiveOffer(env, applicationId) {
   return !!r.data?.length;
 }
 
-async function setApplicationStatus(body, auth, env) {
+async function setApplicationStatus(body, auth, env, ctx) {
   const d = body.data || body;
   // J1: a no-show keeps the accepted offer, so it has its own close (see markNoShow).
-  if (d.status === 'no_show') return markNoShow({ data: { application_id: d.id, reason: d.reason, note: d.note } }, auth, env);
+  if (d.status === 'no_show') return markNoShow({ data: { application_id: d.id, reason: d.reason, note: d.note } }, auth, env, ctx);
   const app = await loadApplication(env, d.id);
   if (!app) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
@@ -4465,12 +4471,13 @@ async function setApplicationStatus(body, auth, env) {
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   if (!r.data?.length) return errCode('stale', 'The application changed — reload and retry', 409);
   if (isTerminalStatus(d.status)) await maybeStartRetention(app.candidate_id, env);
+  if (isTerminalStatus(d.status)) await later(ctx, calendarSweepApplication(env, app.id));   // O3 D8
   await hiringEvents(env, auth, me, [{ candidate_id: app.candidate_id, opening_id: app.opening_id, application_id: app.id,
     event_type: 'status_changed', from_status: app.status, to_status: d.status, reason, detail: note ? { note } : null }]);
   return ok({ id: app.id, status: d.status });
 }
 
-async function moveApplication(body, auth, env) {
+async function moveApplication(body, auth, env, ctx) {
   const d = body.data || body;
   // The free-text "why" is a note (salary-chain only on read); the closed row's outcome_reason is the
   // system string "moved to OPN-x".
@@ -4500,6 +4507,7 @@ async function moveApplication(body, auth, env) {
   if (r.status === 409 || r.data?.code === '23505') return errCode('already_active', 'This person already has an active application on that opening', 409);
   if (rpcError(r) === 'stale') return errCode('stale', 'The application changed — reload and retry', 409);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await later(ctx, calendarSweepApplication(env, app.id));   // O3 D8: the old application's interviews were auto-cancelled
   return ok({ from: { id: app.id, status: 'withdrawn' }, to: { id: r.data?.to_application_id, status: 'new', opening_id: dst.o.id } });
 }
 
@@ -6585,7 +6593,7 @@ async function onboardingAfterJoining(env, employeeId, actorUserId) {
 // POST markNoShow {application_id, reason?, note?} — accepted → no_show. The accepted offer stays as the
 // record (they accepted and did not turn up), so unlike the other closes it does not need withdrawing first;
 // an amendment still in flight does. setApplicationStatus routes →no_show here.
-async function markNoShow(body, auth, env) {
+async function markNoShow(body, auth, env, ctx) {
   const d = body.data || body;
   const c = await offerAppCtx(auth, env, d.application_id || d.id);
   if (c.res) return c.res;
@@ -6604,6 +6612,7 @@ async function markNoShow(body, auth, env) {
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   if (!r.data?.length) return errCode('stale', 'The application changed — reload and retry', 409);
   await maybeStartRetention(app.candidate_id, env);
+  await later(ctx, calendarSweepApplication(env, app.id));   // O3 D8
   await hiringEvents(env, auth, me, [{ candidate_id: app.candidate_id, opening_id: app.opening_id, application_id: app.id,
     event_type: 'status_changed', from_status: app.status, to_status: 'no_show', reason, detail: note ? { note } : null }]);
   const wa = await loadWorkAccount(env, `application_id=eq.${app.id}`);
@@ -9168,9 +9177,10 @@ async function chainInterviews(env, me, apps, rolesByOpening, now = Date.now()) 
   const ivs = (await sbInChunks(env, ids, (c) => `/rest/v1/interviews?application_id=in.(${c.join(',')})&select=${IV_SELECT}`))
     .sort((a, b) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at));
   if (!ivs.length) return {};
-  const [panelRaw, jds] = await Promise.all([
+  const [panelRaw, jds, calLinks] = await Promise.all([
     sbInChunks(env, ivs.map(i => i.id), (c) => `/rest/v1/interview_panel?interview_id=in.(${c.join(',')})&select=${PANEL_SELECT}`),
     sbInChunks(env, ivs.map(i => i.jd_id), (c) => `/rest/v1/opening_jds?id=in.(${c.join(',')})&select=id,version`),
+    calendarLinks(env, ivs.map(i => i.id)),   // O3
   ]);
   const panel = panelRaw.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   const jdVer = Object.fromEntries(jds.map(j => [j.id, j.version]));
@@ -9197,6 +9207,10 @@ async function chainInterviews(env, me, apps, rolesByOpening, now = Date.now()) 
       can_cancel: manage && iv.status === 'scheduled',
       can_no_show: manage && iv.status === 'scheduled' && Date.parse(iv.scheduled_at) <= now,
       can_verdict: manage && !verdictBlock(iv, now),
+      // O3: the calendar state; Add to Calendar = manage, scheduled, in the future, not yet (fully) linked.
+      calendar: calendarView(calLinks[iv.id], manage),
+      can_add_calendar: manage && iv.status === 'scheduled' && Date.parse(iv.scheduled_at) > now
+        && (!calLinks[iv.id] || calLinks[iv.id].state === 'pending' || (calLinks[iv.id].state === 'linked' && calLinks[iv.id].candidate_state === 'pending')),
     });
   }
   return out;
@@ -9309,11 +9323,12 @@ async function getApplicationInterviews(url, auth, env) {
   const x = await loadOneOpening(auth, me, env, app.opening_id);
   if (!x || !canSeeOpening(x.roles)) return err('forbidden', 403);
   const manage = canManageApps(x.roles);
-  const [byApp, rounds] = await Promise.all([
+  const [byApp, rounds, calOn] = await Promise.all([
     chainInterviews(env, me, [app], { [x.o.id]: x.roles }),
     manage ? openingRounds(env, [x.o.id], { activeOnly: true }) : Promise.resolve([]),
+    manage ? calendarEnabled(env) : Promise.resolve(false),
   ]);
-  return ok({ application_id: app.id, application_status: app.status, can_manage: manage,
+  return ok({ application_id: app.id, application_status: app.status, can_manage: manage, calendar_enabled: calOn,
     can_schedule: manage && canSchedule(app.status) && x.o.status === 'open' && !jdGate(x.o),
     rounds, interviews: byApp[app.id] || [] });
 }
@@ -9430,7 +9445,9 @@ async function updateInterview(body, auth, env) {
   if (code) return ivErr(code, ['stale', 'panel_submitted', 'round_already_scheduled', 'reschedule_after_feedback',
     'application_not_schedulable', 'opening_not_open'].includes(code) ? 409 : 400);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  return ok({ interview: r.data?.interview, rescheduled: !!r.data?.rescheduled });
+  // O3 D6: mirror the change on the calendar (best effort, after the Podium write).
+  const calendar = await calendarAfterChange(env, r.data?.interview);
+  return ok({ interview: r.data?.interview, rescheduled: !!r.data?.rescheduled, calendar });
 }
 
 // POST cancelInterview {id, reason} — no JD / opening / application gate: a cancel is the clean-up path (e.g. after
@@ -9450,7 +9467,8 @@ async function cancelInterview(body, auth, env) {
   if (!r.data?.length) return ivErr('stale', 409);
   await hiringEvents(env, auth, me, [{ candidate_id: iv.candidate_id, opening_id: iv.opening_id, application_id: iv.application_id,
     event_type: 'interview_cancelled', detail: { interview_id: iv.id } }]);
-  return ok({ id: iv.id, status: 'cancelled' });
+  const calendar = await calendarAfterChange(env, r.data[0]);   // O3 D6: the guests are told
+  return ok({ id: iv.id, status: 'cancelled', calendar });
 }
 
 // POST markInterviewNoShow {id} — the candidate did not turn up. The application does not move (D6); the round can
@@ -9475,7 +9493,7 @@ async function markInterviewNoShow(body, auth, env) {
 // POST recordInterviewVerdict {id, verdict, reason?, note?} (D6). reject → rejected (reason code), hold → on_hold,
 // advance → nothing on the application. The move reuses setApplicationStatus's rules. Missing feedback is a UI
 // warning, never a server block.
-async function recordInterviewVerdict(body, auth, env) {
+async function recordInterviewVerdict(body, auth, env, ctx) {
   const d = body.data || body;
   const c = await interviewCtx(auth, env, d.id);
   if (c.res) return c.res;
@@ -9507,6 +9525,8 @@ async function recordInterviewVerdict(body, auth, env) {
   if (code) return ivErr(code, code === 'stale' ? 409 : 400);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   if (move && isTerminalStatus(move.to)) await maybeStartRetention(app.candidate_id, env);
+  // O3 D8: a reject closes the application, and the DB cancels its other rounds → remove their events.
+  if (move && isTerminalStatus(move.to)) await later(ctx, calendarSweepApplication(env, app.id));
   return ok({ interview: r.data?.interview, application_status: r.data?.application_status });
 }
 
@@ -9566,6 +9586,407 @@ async function remindPanelist(body, auth, env) {
   return ok({ panel_id: row.id, reminded_at: claimAt, remind_count: prev.remind_count + 1 });
 }
 
+// ── O3 — Calendar (plan docs/superpowers/plans/2026-11-13-podium-o3-calendar.md) ──────────────────────
+// Writes go through the podiumops-only write SA (D1), acting as the organiser's mailbox. Off until the
+// super-admin check proves the calendar.events delegation (D2). Every Google call is best-effort AFTER the
+// Podium write: a failed push never undoes an interview change, it leaves last_error and a Retry.
+
+const calErr = (code, status = 400) => errCode(code, CAL_COPY[code] || IV_COPY[code] || code, status);
+const CAL_BASE = 'https://www.googleapis.com/calendar/v3';
+const CAL_LINK_SELECT = 'interview_id,calendar_id,organiser_employee_id,event_id,candidate_event_id,candidate_email,invite_candidate,'
+  + 'meet_url,conference_id,state,candidate_state,synced_start,synced_end,synced_hash,last_error,last_synced_at,updated_at';
+const calTokens = new Map();
+async function calendarToken(env, mailbox) {
+  const hit = calTokens.get(mailbox);
+  if (hit && hit.exp > Date.now() + 60000) return hit.token;
+  // Never the shared key (D1): no GOOGLE_ADMIN_SA_JSON → no calendar.
+  if (!env.GOOGLE_ADMIN_SA_JSON) throw new Error('google_write_not_configured');
+  const token = await googleAccessToken(env, { saJson: env.GOOGLE_ADMIN_SA_JSON, scope: CAL_SCOPE, sub: mailbox });
+  calTokens.set(mailbox, { token, exp: Date.now() + 3300 * 1000 });
+  return token;
+}
+// → { ok, status, definite, data }. definite = Google answered (a 5xx / timeout may still have applied).
+async function gcal(env, mailbox, method, path, { query = {}, body } = {}) {
+  let token;
+  try { token = await calendarToken(env, mailbox); }
+  catch (e) { return { ok: false, status: 0, definite: true, data: { error: { message: `token: ${String(e?.message || e).slice(0, 200)}` } } }; }
+  const u = new URL(`${CAL_BASE}${path}`);
+  for (const [k, v] of Object.entries(query)) if (v != null) u.searchParams.set(k, String(v));
+  let res;
+  try {
+    res = await fetch(u, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(20000) });
+  } catch (e) { return { ok: false, status: 0, definite: false, data: { error: { message: String(e?.message || e).slice(0, 200) } } }; }
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+  return { ok: res.ok, status: res.status, definite: res.status > 0 && res.status < 500, data };
+}
+const gErr = (r) => String(r?.data?.error?.message || `HTTP ${r?.status}`).slice(0, 400);
+const gGone = (r) => r && (r.status === 404 || r.status === 410);
+const evPath = (cal, id) => `/calendars/${encodeURIComponent(cal)}/events${id ? `/${encodeURIComponent(id)}` : ''}`;
+const WRITE_Q = { conferenceDataVersion: 1, sendUpdates: 'all' };
+
+function workMailOf(e) {
+  const m = String(e?.work_email || '').trim().toLowerCase();
+  return e && e.status === 'active' && m.endsWith(`@${WORK_DOMAIN}`) && addressOk(m) ? m : null;
+}
+async function calendarSettings(env) {
+  return rowsOf(await sb('/rest/v1/calendar_settings?id=eq.1&select=*&limit=1', env))[0] || null;
+}
+async function calendarEnabled(env) {
+  return googleWriteConfigured(env) && !!(await calendarSettings(env))?.enabled;
+}
+async function loadCalLink(env, interviewId) {
+  return rowsOf(await sb(`/rest/v1/interview_calendar?interview_id=eq.${interviewId}&select=${CAL_LINK_SELECT}&limit=1`, env))[0] || null;
+}
+async function patchCalLink(env, interviewId, patch) {
+  return sb(`/rest/v1/interview_calendar?interview_id=eq.${interviewId}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(patch) });
+}
+// The people / names an event shows: panel mailboxes (active only), whether any feedback is in, candidate + opening.
+async function calendarContext(env, iv) {
+  const [pr, cr, or] = await Promise.all([
+    sb(`/rest/v1/interview_panel?interview_id=eq.${iv.id}&select=employee_id,submitted_at,employee:employee_id(work_email,status)`, env),
+    sb(`/rest/v1/candidates?id=eq.${iv.candidate_id}&select=candidate_code,full_name&limit=1`, env),
+    sb(`/rest/v1/openings?id=eq.${iv.opening_id}&select=opening_code,designation&limit=1`, env),
+  ]);
+  if (!pr.ok) throw new Error('panel_read_failed');
+  const panel = rowsOf(pr);
+  return { panelEmails: panel.map(p => workMailOf(p.employee)).filter(Boolean), hasFeedback: panel.some(p => p.submitted_at),
+    candidate: rowsOf(cr)[0] || {}, opening: rowsOf(or)[0] || {} };
+}
+const panelLink = (env, ivId) => `${podiumAppUrl(env)}/hiring/interviews/detail/?id=${ivId}`;
+const hashOf = (iv, cx) => syncedHash({ ...iv, panelEmails: cx.panelEmails });
+
+// Create (409 → adopt) one event. → { ok, event } | { ok: false, gone?, error, definite }
+async function calInsertOrAdopt(env, cal, body) {
+  const r = await gcal(env, cal, 'POST', evPath(cal), { query: WRITE_Q, body });
+  if (r.ok) return { ok: true, event: r.data };
+  if (r.status === 409) {
+    const g = await gcal(env, cal, 'GET', evPath(cal, body.id));
+    if (g.ok && g.data?.status !== 'cancelled') return { ok: true, event: g.data, adopted: true };
+    // 409 then 404 is ambiguous (the calendar may be unreachable): only 410 / status cancelled count as deleted.
+    if (g.status === 410 || (g.ok && g.data?.status === 'cancelled')) return { ok: false, gone: true, error: 'deleted_in_calendar', definite: true };
+    return { ok: false, error: gErr(g), definite: g.definite };
+  }
+  return { ok: false, error: gErr(r), definite: r.definite };
+}
+
+// The conference id to remember: a live Meet, or one Google is still creating (so a later push keeps it, not a second one).
+const conferenceIdOf = (ev) => ev?.conferenceData?.conferenceId
+  || (ev?.conferenceData?.createRequest?.status?.statusCode === 'pending' ? 'pending' : null);   // 'failure' → null → a new Meet next push
+
+// Finish a claimed link (D5): internal event, then the candidate's. Safe to re-run (deterministic ids).
+// A linked row only retries the candidate's invite: the internal event is read, never re-stamped (its synced_* /
+// last_error stay as they are, so a missed push or a Calendar move is still seen by the next sync).
+async function completeCalendarLink(env, iv, link) {
+  const cx = await calendarContext(env, iv);
+  const ids = calendarEventIds(iv.id);
+  let internal, patch;
+  if (link.state === 'linked') {
+    const g = await gcal(env, link.calendar_id, 'GET', evPath(link.calendar_id, link.event_id));
+    if (gGone(g) || g.data?.status === 'cancelled') return { error: 'calendar_event_deleted' };
+    if (!g.ok) return { error: 'calendar_failed', detail: gErr(g) };
+    internal = g.data;
+    patch = {};
+  } else {
+    const a = await calInsertOrAdopt(env, link.calendar_id, buildInternalEvent({ id: ids.internal, iv, candidate: cx.candidate,
+      opening: cx.opening, panelEmails: cx.panelEmails, organiserEmail: link.calendar_id, link: panelLink(env, iv.id),
+      conference: 'create', requestId: `${iv.id}-${crypto.randomUUID().slice(0, 8)}` }));
+    if (!a.ok) {
+      if (a.gone) { await patchCalLink(env, iv.id, { state: 'cancelled', last_error: 'The event was deleted in Google Calendar' }); return { error: 'calendar_event_deleted' }; }
+      await patchCalLink(env, iv.id, { last_error: a.error });
+      return { error: 'calendar_failed', detail: a.error };
+    }
+    internal = a.event;
+    const t = eventTimes(internal);
+    // An adopted event (an earlier try's create that did land) may predate an edit: leave synced_hash empty so the
+    // next sync pushes Podium's version onto it.
+    patch = { event_id: ids.internal, meet_url: meetUrlOf(internal), conference_id: conferenceIdOf(internal),
+      synced_start: t ? new Date(t.start).toISOString() : null, synced_end: t ? new Date(t.end).toISOString() : null,
+      synced_hash: a.adopted ? null : hashOf(iv, cx), last_error: null, last_synced_at: nowIso(), state: 'linked' };
+  }
+  const meet = meetUrlOf(internal);
+  if (link.invite_candidate && link.candidate_email && link.candidate_state !== 'linked') {
+    const b = await calInsertOrAdopt(env, link.calendar_id, buildCandidateEvent({ id: ids.candidate, iv, designation: cx.opening.designation,
+      candidateEmail: link.candidate_email, conf: conferenceOf(internal), meetUrl: meet }));
+    let bOk = b.ok;
+    // An adopted candidate invite (an earlier create that did land) may predate an edit: bring it to Podium's version.
+    if (b.ok && b.adopted) {
+      const fix = await gcal(env, link.calendar_id, 'PATCH', evPath(link.calendar_id, ids.candidate), { query: WRITE_Q,
+        body: buildCandidateEvent({ iv, designation: cx.opening.designation, candidateEmail: link.candidate_email, conf: conferenceOf(internal), meetUrl: meet }) });
+      if (!fix.ok) { bOk = false; b.error = gErr(fix); }
+    }
+    if (bOk) { patch.candidate_event_id = ids.candidate; patch.candidate_state = 'linked'; if (link.state === 'linked') patch.last_error = null; }
+    else if (b.gone) patch.candidate_state = 'cancelled';
+    else { patch.candidate_state = 'pending'; patch.candidate_event_id = ids.candidate; patch.last_error = `Candidate invite: ${b.error}`; }
+  }
+  if (Object.keys(patch).length) await patchCalLink(env, iv.id, patch);
+  return { ok: true, meet_url: meet, candidate_invited: (patch.candidate_state || link.candidate_state) === 'linked',
+    partial: !!patch.last_error };
+}
+
+// D6: Podium → Calendar. Patches the internal event (and the candidate's) to the interview as it now is.
+// notifyInternal:false = Google already told the guests (the organiser moved the event); only re-stamp quietly.
+async function calendarPush(env, iv, link, cx = null, { notifyInternal = true } = {}) {
+  cx = cx || await calendarContext(env, iv);
+  const conference = iv.mode !== 'video' ? 'remove' : (link.conference_id || link.meet_url) ? 'keep' : 'create';
+  const h = hashOf(iv, cx);
+  const a = await gcal(env, link.calendar_id, 'PATCH', evPath(link.calendar_id, link.event_id), {
+    query: notifyInternal ? WRITE_Q : { conferenceDataVersion: 1, sendUpdates: 'none' },
+    body: buildInternalEvent({ iv, candidate: cx.candidate, opening: cx.opening, panelEmails: cx.panelEmails,
+      organiserEmail: link.calendar_id, link: panelLink(env, iv.id), conference, requestId: `${iv.id}-${crypto.randomUUID().slice(0, 8)}` }) });
+  if (!a.ok) {
+    await patchCalLink(env, iv.id, { last_error: gErr(a) });
+    return { ok: false, gone: gGone(a), error: gErr(a) };
+  }
+  const meet = iv.mode === 'video' ? meetUrlOf(a.data) : null;
+  const t = eventTimes(a.data);
+  const patch = { meet_url: meet, conference_id: iv.mode === 'video' ? conferenceIdOf(a.data) : null, synced_start: t ? new Date(t.start).toISOString() : null, synced_end: t ? new Date(t.end).toISOString() : null,
+    synced_hash: h, last_error: null, last_synced_at: nowIso() };
+  if (link.candidate_event_id && link.candidate_state === 'linked') {
+    const b = await gcal(env, link.calendar_id, 'PATCH', evPath(link.calendar_id, link.candidate_event_id), { query: WRITE_Q,
+      body: buildCandidateEvent({ iv, designation: cx.opening.designation, candidateEmail: link.candidate_email,
+        conf: conferenceOf(a.data), meetUrl: meet }) });
+    if (gGone(b)) patch.candidate_state = 'cancelled';
+    // The candidate's invite did not move: keep the old hash so the next sync pushes again (the internal PATCH is idempotent).
+    else if (!b.ok) { patch.last_error = `Candidate invite: ${gErr(b)}`; patch.synced_hash = null; }
+  }
+  await patchCalLink(env, iv.id, patch);
+  return { ok: !patch.last_error, error: patch.last_error || null };
+}
+
+// Podium cancelled → delete both events (guests are told). 404 / 410 = already gone.
+// A pending row is deleted by its deterministic ids too: a create that timed out may still have landed (and mailed).
+async function calendarDelete(env, link) {
+  const ids = calendarEventIds(link.interview_id) || {};
+  const del = async (id) => {
+    if (!id) return true;
+    const r = await gcal(env, link.calendar_id, 'DELETE', evPath(link.calendar_id, id), { query: { sendUpdates: 'all' } });
+    return r.ok || gGone(r);
+  };
+  const okA = await del(link.event_id || ids.internal);
+  const candId = link.candidate_event_id || (link.invite_candidate ? ids.candidate : null);
+  // Always tried (404 = fine): a candidate create racing a cancel may have landed after the state said cancelled.
+  const okB = await del(candId);
+  await patchCalLink(env, link.interview_id, okA && okB
+    ? { state: 'cancelled', candidate_state: link.invite_candidate ? 'cancelled' : link.candidate_state, last_error: null, last_synced_at: nowIso() }
+    : { last_error: 'Could not remove the calendar event; it is retried when the interview is opened' });
+  return okA && okB;
+}
+
+// After a Podium change to one interview: push or delete. Never throws; → 'synced' | 'failed' | null (not linked).
+async function calendarAfterChange(env, iv) {
+  try {
+    if (!iv?.id || !googleWriteConfigured(env)) return null;
+    const link = await loadCalLink(env, iv.id);
+    if (!link || link.state === 'cancelled') return null;
+    // Removing invites of a cancelled interview is always safe (even with O3 switched off, even for a pending row).
+    if (iv.status === 'cancelled') return (await calendarDelete(env, link)) ? 'synced' : 'failed';
+    if (iv.status !== 'scheduled' || link.state !== 'linked' || !(await calendarEnabled(env))) return null;
+    return (await calendarPush(env, iv, link)).ok ? 'synced' : 'failed';
+  } catch (e) {
+    console.error('[calendar-after-change]', e?.message || e);
+    return 'failed';
+  }
+}
+// D8: interviews the DB auto-cancelled when an application closed still hold live events → delete them.
+async function calendarSweepApplication(env, applicationId) {
+  try {
+    if (!isUuid(applicationId) || !googleWriteConfigured(env)) return;
+    const r = await sb(`/rest/v1/interview_calendar?state=in.(linked,pending)&select=${CAL_LINK_SELECT},interview:interview_id!inner(application_id,status)`
+      + `&interview.application_id=eq.${applicationId}&interview.status=eq.cancelled`, env);
+    for (const link of rowsOf(r)) await calendarDelete(env, link);
+  } catch (e) { console.error('[calendar-sweep]', e?.message || e); }
+}
+const later = (ctx, p) => (ctx?.waitUntil ? ctx.waitUntil(p) : p);
+
+// GET getCalendarCheck — super-admin, read-only: can the write SA act on the caller's calendar?
+async function calendarProbe(env, auth) {
+  const s = await calendarSettings(env);
+  const base = { enabled: !!s?.enabled, checked_at: s?.checked_at || null, scope: CAL_SCOPE };
+  if (!googleWriteConfigured(env)) return { ...base, configured: false, all_good: false, error: 'google_write_not_configured' };
+  const er = await sb(`/rest/v1/employees?auth_user_id=eq.${auth.userId}&select=work_email,status&limit=1`, env);
+  const mailbox = workMailOf(rowsOf(er)[0]);
+  if (!mailbox) return { ...base, configured: true, all_good: false, error: 'your employee record has no active work mailbox' };
+  calTokens.delete(mailbox);
+  // events.list is covered by calendar.events (calendars.get is not).
+  const r = await gcal(env, mailbox, 'GET', evPath('primary'), { query: { maxResults: 1, timeMin: nowIso(), singleEvents: true } });
+  return { ...base, configured: true, mailbox, call: r.ok, status: r.status, time_zone: r.data?.timeZone || null,
+    error: r.ok ? null : gErr(r), all_good: r.ok };
+}
+async function getCalendarCheck(url, auth, env) {
+  const gate = requireSuperAdmin(auth); if (gate) return gate;
+  return ok(await calendarProbe(env, auth));
+}
+// POST calendarCheck {enable} — super-admin. enable:true only after a passing probe; enable:false switches O3 off.
+async function calendarCheck(body, auth, env) {
+  const gate = requireSuperAdmin(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (d.enable !== true) {
+    const r = await sb('/rest/v1/calendar_settings?id=eq.1', env, { method: 'PATCH', body: JSON.stringify({ enabled: false }) });
+    if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+    return ok({ enabled: false });
+  }
+  const p = await calendarProbe(env, auth);
+  if (!p.all_good) return ok({ ...p, enabled: false, refused: true });
+  const r = await sb('/rest/v1/calendar_settings?id=eq.1', env, { method: 'PATCH',
+    body: JSON.stringify({ enabled: true, checked_at: nowIso(), checked_by: auth.userId, checked_mailbox: p.mailbox }) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok({ ...p, enabled: true });
+}
+
+// POST linkInterviewCalendar {id, invite_candidate} — the caller organises (D3); gates re-checked (D8).
+async function linkInterviewCalendar(body, auth, env) {
+  const d = body.data || body;
+  if (!(await calendarEnabled(env))) return calErr('calendar_off', 409);
+  const c = await interviewCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { iv, me, x } = c;
+  if (iv.status !== 'scheduled') return calErr('calendar_not_scheduled', 409);
+  if (Date.parse(iv.scheduled_at) <= Date.now()) return calErr('calendar_past', 409);
+  const app = await loadApplication(env, iv.application_id);
+  if (!app) return err('not_found', 404);
+  const gate = scheduleGate(x, app);
+  if (gate) return gate;
+  let link = await loadCalLink(env, iv.id);
+  // A linked interview whose candidate invite failed may retry just that part.
+  if (link?.state === 'linked' && link.candidate_state !== 'pending') return calErr('calendar_linked', 409);
+  if (link?.state === 'cancelled') return calErr('calendar_event_deleted', 409);
+  if (!link) {
+    if (!me) return calErr('calendar_no_mailbox');
+    const er = await sb(`/rest/v1/employees?id=eq.${me.id}&select=id,work_email,status&limit=1`, env);
+    const mailbox = workMailOf(rowsOf(er)[0]);
+    if (!mailbox) return calErr('calendar_no_mailbox');
+    const invite = d.invite_candidate === true;
+    let candidateEmail = null;
+    if (invite) {
+      const cr = await sb(`/rest/v1/candidates?id=eq.${iv.candidate_id}&select=email&limit=1`, env);
+      candidateEmail = String(rowsOf(cr)[0]?.email || '').trim().toLowerCase();
+      if (!addressOk(candidateEmail)) return calErr('calendar_no_candidate_email');
+    }
+    const ids = calendarEventIds(iv.id);
+    const ins = await sb('/rest/v1/interview_calendar', env, { method: 'POST', body: JSON.stringify({
+      interview_id: iv.id, calendar_id: mailbox, organiser_employee_id: me.id, event_id: ids.internal,
+      invite_candidate: invite, candidate_email: candidateEmail, candidate_state: invite ? 'pending' : null, created_by: auth.userId }) });
+    if (ins.status === 409 || ins.data?.code === '23505') return calErr('calendar_busy', 409);
+    if (!ins.ok) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
+    link = ins.data?.[0];
+  }
+  // A pending row (an earlier try that did not finish) resumes as its own organiser; the ids make it idempotent.
+  const res = await completeCalendarLink(env, iv, link);
+  if (res.error) return calErr(res.error, res.error === 'calendar_failed' ? 502 : 409);
+  // The interview may have been cancelled or edited while Google was answering: settle against a fresh read.
+  // A failed read settles nothing (the next sync on open does): never delete on a read error.
+  const fr = await sb(`/rest/v1/interviews?id=eq.${iv.id}&select=${IV_SELECT}&limit=1`, env);
+  const fresh = fr.ok && Array.isArray(fr.data) ? fr.data[0] || null : undefined;
+  const nowLink = fresh === undefined ? null : await loadCalLink(env, iv.id);
+  if (nowLink && fresh && fresh.status !== 'scheduled') {
+    if (fresh.status === 'cancelled') await calendarDelete(env, nowLink);
+    return calErr('calendar_not_scheduled', 409);
+  }
+  if (fresh && nowLink?.state === 'linked' && fresh.updated_at !== iv.updated_at) await calendarPush(env, fresh, nowLink);
+  await hiringEvents(env, auth, me, [{ candidate_id: iv.candidate_id, opening_id: iv.opening_id, application_id: iv.application_id,
+    event_type: 'interview_calendar_linked', detail: { interview_id: iv.id, candidate_invited: res.candidate_invited } }]);
+  return ok({ id: iv.id, state: 'linked', meet_url: res.meet_url, candidate_invited: res.candidate_invited, partial: res.partial });
+}
+
+// POST syncInterviewCalendar {id} — D7, called by the interview block on open. → { changed } (true = reload).
+async function syncInterviewCalendar(body, auth, env) {
+  const d = body.data || body;
+  const c = await interviewCtx(auth, env, d.id);
+  if (c.res) return c.res;
+  const { iv, me } = c;
+  if (!googleWriteConfigured(env)) return ok({ linked: false, changed: false });
+  const link = await loadCalLink(env, iv.id);
+  if (!link || link.state === 'cancelled') return ok({ linked: !!link, changed: false, state: link?.state || null });
+  // A cancelled interview's invites go, whatever the state (a pending row's create may have landed).
+  if (iv.status === 'cancelled') return ok({ linked: true, changed: await calendarDelete(env, link), action: 'delete_events' });
+  if (link.state === 'pending') return ok({ linked: false, changed: false, state: 'pending' });
+  // O3 switched off (D2) → no pull / push / cancel from a page open.
+  if (!(await calendarEnabled(env))) return ok({ linked: true, changed: false, action: 'off' });
+  const cx = await calendarContext(env, iv);
+  let event = null;
+  if (link.state === 'linked' && iv.status === 'scheduled') {
+    const g = await gcal(env, link.calendar_id, 'GET', evPath(link.calendar_id, link.event_id));
+    if (!g.ok && !gGone(g)) { await patchCalLink(env, iv.id, { last_error: gErr(g) }); return calErr('calendar_failed', 502); }
+    // A 404 can also mean "this calendar is not reachable" (a suspended organiser, lost delegation): only a calendar
+    // we can still list counts the event as deleted. 410 / status cancelled are definite.
+    if (g.status === 404) {
+      const probe = await gcal(env, link.calendar_id, 'GET', evPath(link.calendar_id), { query: { maxResults: 1 } });
+      if (!probe.ok) {
+        await patchCalLink(env, iv.id, { last_error: `The organiser's calendar cannot be reached: ${gErr(probe)}` });
+        return calErr('calendar_failed', 502);
+      }
+    }
+    event = g.ok ? g.data : null;
+  }
+  const act = calendarSyncAction({ iv, link, event, podiumHash: hashOf(iv, cx), hasFeedback: cx.hasFeedback });
+  if (act.action === 'none') {
+    const meet = event && iv.mode === 'video' ? meetUrlOf(event) : link.meet_url;
+    // A Meet that finished creating after the invites went out: re-stamp so the candidate's invite gets the link.
+    if (meet && meet !== link.meet_url) {
+      await calendarPush(env, iv, { ...link, conference_id: conferenceIdOf(event) || link.conference_id }, cx, { notifyInternal: false });
+      return ok({ linked: true, changed: true, action: 'meet_ready' });
+    }
+    await patchCalLink(env, iv.id, { last_synced_at: nowIso() });
+    return ok({ linked: true, changed: false, action: 'none' });
+  }
+  if (act.action === 'delete_events') return ok({ linked: true, changed: await calendarDelete(env, link), action: act.action });
+  if (act.action === 'detach') {
+    await patchCalLink(env, iv.id, { state: 'cancelled', last_synced_at: nowIso() });
+    return ok({ linked: true, changed: true, action: act.action });
+  }
+  if (act.action === 'push') {
+    const p = await calendarPush(env, iv, link, cx);
+    return ok({ linked: true, changed: true, action: 'push', reason: act.reason, ok: p.ok });
+  }
+  if (act.action === 'cancel_interview') {
+    const r = await sb(`/rest/v1/interviews?id=eq.${iv.id}&status=eq.scheduled&updated_at=eq.${encodeURIComponent(iv.updated_at)}`, env, { method: 'PATCH',
+      body: JSON.stringify({ status: 'cancelled', cancel_reason: 'Cancelled in Google Calendar', cancelled_by: auth.userId, cancelled_at: nowIso() }) });
+    if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+    if (!r.data?.length) return ivErr('stale', 409);
+    await hiringEvents(env, auth, me, [{ candidate_id: iv.candidate_id, opening_id: iv.opening_id, application_id: iv.application_id,
+      event_type: 'interview_cancelled', detail: { interview_id: iv.id, source: 'google_calendar' } }]);
+    await calendarDelete(env, link);   // the candidate's invite goes too
+    return ok({ linked: true, changed: true, action: act.action });
+  }
+  // pull: Calendar moved the time → the same RPC as an edit (pending due dates move with it).
+  const r = await hiringRpc(env, 'hiring_update_interview', {
+    interview_id: iv.id, expected_updated_at: iv.updated_at, patch: { scheduled_at: act.scheduled_at, duration_min: act.duration_min },
+    add: [], remove: [], new_due_at: dueAt(act.scheduled_at), actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+  });
+  const code = interviewDbErrorCode(r);
+  // Someone else's open already took it (or edited): pushing our stale copy would flip Calendar back and mail everyone.
+  if (code === 'stale') return ok({ linked: true, changed: true, action: 'none', reason: 'stale' });
+  if (code || !r.ok) {
+    // Podium cannot take the new time (closed opening, feedback in a race…) → put Calendar back to Podium's time,
+    // read fresh (never the copy this request started with).
+    const fresh = await loadInterview(env, iv.id);
+    if (!fresh || fresh.status !== 'scheduled') return ok({ linked: true, changed: true, action: 'none', reason: code || 'pull_failed' });
+    const p = await calendarPush(env, fresh, link);
+    return ok({ linked: true, changed: true, action: 'push', reason: code || 'pull_failed', ok: p.ok });
+  }
+  const after = r.data?.interview || { ...iv, scheduled_at: act.scheduled_at, duration_min: act.duration_min };
+  // Records the new synced_* and moves the candidate's invite; the panel was already told by Google.
+  await calendarPush(env, after, link, cx, { notifyInternal: false });
+  await hiringEvents(env, auth, me, [{ candidate_id: iv.candidate_id, opening_id: iv.opening_id, application_id: iv.application_id,
+    event_type: 'interview_rescheduled_from_calendar', detail: { interview_id: iv.id, from: iv.scheduled_at, to: act.scheduled_at } }]);
+  return ok({ linked: true, changed: true, action: 'pull' });
+}
+
+// The calendar part of each interview in a chain view (D9). → { [interviewId]: row }
+async function calendarLinks(env, interviewIds) {
+  const rows = await sbInChunks(env, interviewIds, (c) => `/rest/v1/interview_calendar?interview_id=in.(${c.join(',')})&select=${CAL_LINK_SELECT}`);
+  return Object.fromEntries(rows.map(r => [r.interview_id, r]));
+}
+function calendarView(link, manage) {
+  if (!link) return null;
+  return { state: link.state, meet_url: link.state === 'linked' ? link.meet_url : null,
+    candidate_invited: link.candidate_state === 'linked', candidate_pending: link.invite_candidate && link.candidate_state === 'pending',
+    last_error: manage ? link.last_error : null, organiser: link.calendar_id };
+}
+
 // ── The panel (D5): my interviews, one interview, its documents, my feedback ──
 
 // GET getMyInterviews[?count_only=1] → { upcoming, owed, done, overdue_count } (cancelled interviews dropped).
@@ -9588,10 +10009,13 @@ async function getMyInterviews(url, auth, env) {
   const b = myInterviewBuckets(mine);
   if (countOnly) return ok({ overdue_count: b.overdue_count, owed_count: b.owed.length });
   const ivs = mine.map(r => r.interview);
-  const [cands, opns] = await Promise.all([
+  const [cands, opns, myCal] = await Promise.all([
     sbInChunks(env, ivs.map(i => i.candidate_id), (c) => `/rest/v1/candidates?id=in.(${c.join(',')})&select=id,candidate_code,full_name,current_title,current_employer`),
     sbInChunks(env, ivs.map(i => i.opening_id), (c) => `/rest/v1/openings?id=in.(${c.join(',')})&select=id,opening_code,designation,department:department_id(name)`),
+    sbInChunks(env, ivs.filter(i => i.status === 'scheduled').map(i => i.id),
+      (c) => `/rest/v1/interview_calendar?interview_id=in.(${c.join(',')})&state=eq.linked&select=interview_id,meet_url`),   // O3 D9
   ]);
+  const meetOf = Object.fromEntries(myCal.map(r => [r.interview_id, r.meet_url]));
   const cand = Object.fromEntries(cands.map(c => [c.id, c]));
   const opn = Object.fromEntries(opns.map(o => [o.id, o]));
   const now = Date.now();
@@ -9600,6 +10024,7 @@ async function getMyInterviews(url, auth, env) {
     return {
       interview_id: iv.id, panel_id: r.id, round_name: iv.round_name, scheduled_at: iv.scheduled_at, duration_min: iv.duration_min,
       mode: iv.mode, location: iv.location, status: iv.status, due_at: r.due_at, submitted_at: r.submitted_at || null,
+      meet_url: meetOf[iv.id] || null,
       state: seatState(r, now),
       candidate: { candidate_code: c.candidate_code || null, full_name: c.full_name || null, current_title: c.current_title || null, current_employer: c.current_employer || null },
       opening: { opening_code: o.opening_code || null, designation: o.designation || null, department: o.department?.name || null },
@@ -9616,12 +10041,13 @@ async function getPanelInterview(url, auth, env) {
   const c = await panelCtx(auth, env, url.searchParams.get('id'));
   if (c.res) return c.res;
   const { iv, me, rows, mine } = c;
-  const [cr, or, jr, dr] = await Promise.all([
+  const [cr, or, jr, dr, calr] = await Promise.all([
     sb(`/rest/v1/candidates?id=eq.${iv.candidate_id}&select=${PANEL_CANDIDATE_SELECT}&limit=1`, env),
     sb(`/rest/v1/openings?id=eq.${iv.opening_id}&select=opening_code,designation,department:department_id(name)&limit=1`, env),
     sb(`/rest/v1/opening_jds?id=eq.${iv.jd_id}&select=id,version,source,jd_text,file_name,storage_path,created_at&limit=1`, env),
     sb(`/rest/v1/candidate_documents?candidate_id=eq.${iv.candidate_id}&doc_type=in.(${PANEL_DOC_TYPES.join(',')})`
       + `&select=id,doc_type,title,file_name,application_id,uploaded_at&order=uploaded_at.desc`, env),
+    sb(`/rest/v1/interview_calendar?interview_id=eq.${iv.id}&state=eq.linked&select=meet_url&limit=1`, env),   // O3 D9
   ]);
   const cand = cr.data?.[0];
   if (!cand) return err('not_found', 404);
@@ -9634,7 +10060,8 @@ async function getPanelInterview(url, auth, env) {
   const own = view.find(v => v.is_me);
   return ok({
     interview: { id: iv.id, round_name: iv.round_name, scorecard: iv.scorecard || [], scheduled_at: iv.scheduled_at,
-      duration_min: iv.duration_min, mode: iv.mode, location: iv.location, status: iv.status },
+      duration_min: iv.duration_min, mode: iv.mode, location: iv.location, status: iv.status,
+      meet_url: iv.status === 'scheduled' ? rowsOf(calr)[0]?.meet_url || null : null },
     candidate: { ...candidate, total_experience_years: numOrNull(candidate.total_experience_years) },
     opening: { opening_code: o.opening_code || null, designation: o.designation || null, department: o.department?.name || null },
     jd: jd ? { id: jd.id, version: jd.version, source: jd.source, jd_text: jd.jd_text || null, file_name: jd.file_name || null,
@@ -10320,6 +10747,7 @@ const GET_ACTIONS = {
   // J1b — Podium → Google field sync (status: HR or Google admin; diff + OU options: HR)
   getGoogleSyncStatus, getGoogleDiff, getOrgUnitOptions,
   getGoogleWriteCheck,
+  getCalendarCheck,
   // Appraisal engine
   getAppraisalConfig, getMyAppraisals, getAppraisal, getTeamAppraisals,
   getAppraisals, getCycleOverview, getAppraisalCycles, getAppraisalCycle, getEnrollmentPreview,
@@ -10409,6 +10837,7 @@ const POST_ACTIONS = {
   // O2 — interview rounds + feedback
   saveOpeningRound, setOpeningRoundActive, reorderOpeningRounds, scheduleInterview, updateInterview, cancelInterview,
   markInterviewNoShow, recordInterviewVerdict, remindPanelist, submitInterviewFeedback,
+  calendarCheck, linkInterviewCalendar, syncInterviewCalendar,   // O3
   // Leave R1 — the person / the chain / HR (each self-scopes; all in SELF_SERVE_POST)
   previewLeave, applyLeave, decideLeave, withdrawLeave, cancelLeave,
   setLeaveSettings, saveHoliday, deleteHoliday, setOpeningBalance, adjustLeave,
@@ -10501,6 +10930,8 @@ const SELF_SERVE_POST = new Set([
   // caller's own panel row (see SELF_SERVE_GET).
   'saveOpeningRound', 'setOpeningRoundActive', 'reorderOpeningRounds', 'scheduleInterview', 'updateInterview',
   'cancelInterview', 'markInterviewNoShow', 'recordInterviewVerdict', 'remindPanelist', 'submitInterviewFeedback',
+  // O3 — Add to Calendar / sync = canManageApps on the interview's opening (interviewCtx), like cancelInterview.
+  'linkInterviewCalendar', 'syncInterviewCalendar',
   // Leave R1 — preview / apply = self (HR for others); decide = decideBlock (approver, their manager, HR; never self);
   // withdraw / cancel = cancelBlock; the HR writes are isHr inside (see SELF_SERVE_GET).
   'previewLeave', 'applyLeave', 'decideLeave', 'withdrawLeave', 'cancelLeave',

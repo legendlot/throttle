@@ -2,9 +2,9 @@
 // Hiring O2 — interview rounds + feedback: the shared pieces for the opening (round plan), the candidate
 // (per-application interviews) and My interviews. Presentation only; every gate is the worker's.
 // Times are shown and entered in IST (fmtDateTime / istLocalToIso).
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useToast, Combobox } from '@throttle/ui';
-import { Plus, Pencil, Save, X, ArrowUp, ArrowDown, CalendarClock, Bell, Ban, UserX, Gavel, Trash2 } from 'lucide-react';
+import { Plus, Pencil, Save, X, ArrowUp, ArrowDown, CalendarClock, Bell, Ban, UserX, Gavel, Trash2, CalendarCheck, CalendarPlus, Video, RefreshCw } from 'lucide-react';
 import { podiumopsPost } from '../lib/podiumopsFetch.js';
 import { Card, F, Row, Note, ToneBadge, ListBadge, inp, comboInp, primaryBtn, ghostBtn, dangerBtn, iconBtn, muted } from './HiringBits.js';
 import { OUTCOME_REASONS, hiringError, labelFrom, fmtDateTime } from '../lib/hiring.js';
@@ -246,8 +246,27 @@ export function InterviewsBlock({ a, emps, session, onChanged }) {
   const [form, setForm] = useState(null);       // schedule / edit
   const [verdict, setVerdict] = useState(null); // the interview being decided
   const [busy, setBusy] = useState(false);
+  const [cal, setCal] = useState(null);         // O3: the interview being added to the calendar
   const ivs = a.interviews || [];
   const canManage = a.can_manage !== false;
+  // O3 D7: once per open, reconcile each calendar-linked interview with Google (moves / deletions made there).
+  const synced = useRef(false);
+  useEffect(() => {
+    if (synced.current || !canManage) return undefined;
+    const targets = ivs.filter(iv => iv.calendar?.state === 'linked');
+    if (!targets.length) return undefined;
+    synced.current = true;
+    let alive = true;
+    (async () => {
+      let changed = false;
+      for (const iv of targets) {
+        try { const r = await podiumopsPost('syncInterviewCalendar', { id: iv.id }, session); if (r?.changed) changed = true; }
+        catch { /* the row shows last_error */ }
+      }
+      if (alive && changed) onChanged();
+    })();
+    return () => { alive = false; };
+  }, [ivs.map(i => i.id).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!ivs.length && !a.can_schedule) return null;
 
   async function cancel(iv) {
@@ -255,7 +274,12 @@ export function InterviewsBlock({ a, emps, session, onChanged }) {
     if (reason == null) return;
     if (!reason.trim()) { showToast('A reason is required', 'error'); return; }
     setBusy(true);
-    try { await podiumopsPost('cancelInterview', { id: iv.id, reason: reason.trim() }, session); showToast('Interview cancelled', 'success'); onChanged(); }
+    try {
+      const r = await podiumopsPost('cancelInterview', { id: iv.id, reason: reason.trim() }, session);
+      showToast(r?.calendar === 'failed' ? 'Interview cancelled. The calendar invite could not be removed yet; it is retried when this page opens'
+        : r?.calendar === 'synced' ? 'Interview cancelled and removed from the calendar' : 'Interview cancelled', r?.calendar === 'failed' ? 'error' : 'success');
+      onChanged();
+    }
     catch (e) { showToast(hiringError(e), 'error'); }
     finally { setBusy(false); }
   }
@@ -263,6 +287,12 @@ export function InterviewsBlock({ a, emps, session, onChanged }) {
     if (!window.confirm('Mark this interview as a no-show? The candidate stays where they are, and the round can be scheduled again.')) return;
     setBusy(true);
     try { await podiumopsPost('markInterviewNoShow', { id: iv.id }, session); showToast('Marked as no-show', 'success'); onChanged(); }
+    catch (e) { showToast(hiringError(e), 'error'); }
+    finally { setBusy(false); }
+  }
+  async function resync(iv) {
+    setBusy(true);
+    try { await podiumopsPost('syncInterviewCalendar', { id: iv.id }, session); showToast('Calendar checked', 'success'); onChanged(); }
     catch (e) { showToast(hiringError(e), 'error'); }
     finally { setBusy(false); }
   }
@@ -289,6 +319,22 @@ export function InterviewsBlock({ a, emps, session, onChanged }) {
             <span style={{ color: 'var(--text-2)', fontSize: 12 }}>{interviewWhen(iv)}</span>
             {iv.jd_version != null && <span style={muted}>JD v{iv.jd_version}</span>}
             <span style={{ flex: 1 }} />
+            {iv.calendar?.state === 'linked' && (
+              <span style={{ ...muted, display: 'inline-flex', alignItems: 'center', gap: 3 }} title={`On ${iv.calendar.organiser}'s Google Calendar`}>
+                <CalendarCheck size={12} /> On calendar{iv.calendar.candidate_invited ? ' · candidate invited' : ''}
+              </span>
+            )}
+            {iv.status === 'scheduled' && iv.calendar?.meet_url && (
+              <a href={iv.calendar.meet_url} target="_blank" rel="noreferrer" style={{ ...smallBtn, textDecoration: 'none' }}><Video size={12} /> Meet</a>
+            )}
+            {canManage && a.calendar_enabled && iv.can_add_calendar && (
+              <button disabled={busy} onClick={() => setCal(iv)} style={smallBtn}>
+                <CalendarPlus size={12} /> {iv.calendar ? (iv.calendar.state === 'linked' ? 'Retry candidate invite' : 'Retry calendar') : 'Add to calendar'}
+              </button>
+            )}
+            {canManage && iv.calendar?.state === 'linked' && iv.calendar.last_error && (
+              <button disabled={busy} onClick={() => resync(iv)} style={smallBtn}><RefreshCw size={12} /> Retry sync</button>
+            )}
             {canManage && iv.can_edit && <button disabled={busy} onClick={() => setForm({ mode: 'edit', iv })} style={iconBtn} title="Edit"><Pencil size={13} /></button>}
             {canManage && iv.can_no_show && <button disabled={busy} onClick={() => noShow(iv)} style={smallBtn}><UserX size={12} /> No-show</button>}
             {canManage && iv.can_cancel && <button disabled={busy} onClick={() => cancel(iv)} style={smallBtn}><Ban size={12} /> Cancel</button>}
@@ -302,6 +348,7 @@ export function InterviewsBlock({ a, emps, session, onChanged }) {
             </div>
           )}
           {iv.status === 'cancelled' && iv.cancel_reason && <div style={{ ...muted, marginTop: 2 }}>Cancelled: &ldquo;{iv.cancel_reason}&rdquo;</div>}
+          {canManage && iv.calendar?.last_error && <div style={{ ...muted, marginTop: 2, color: 'var(--warn-fg)' }}>Calendar: {iv.calendar.last_error}</div>}
           {iv.feedback_hidden && <div style={{ ...muted, marginTop: 4, color: 'var(--warn-fg)' }}>You are on this panel. The other interviewers&apos; feedback shows once you submit yours in My interviews.</div>}
           <div style={{ marginTop: 4 }}>
             {(iv.panel || []).map(p => (
@@ -324,6 +371,7 @@ export function InterviewsBlock({ a, emps, session, onChanged }) {
       {form && <ScheduleDialog a={a} emps={emps} edit={form.mode === 'edit' ? form.iv : null} session={session}
         onClose={() => setForm(null)} onSaved={() => { setForm(null); onChanged(); }} />}
       {verdict && <VerdictDialog iv={verdict} session={session} onClose={() => setVerdict(null)} onSaved={() => { setVerdict(null); onChanged(); }} />}
+      {cal && <CalendarDialog iv={cal} a={a} session={session} onClose={() => setCal(null)} onSaved={() => { setCal(null); onChanged(); }} />}
     </div>
   );
 }
@@ -339,6 +387,7 @@ function ScheduleDialog({ a, emps, edit, session, onClose, onSaved }) {
     mode: edit.mode, location: edit.location || '', panel: (edit.panel || []).map(p => p.employee_id),
   } : {
     round_id: first?.id || '', round_name: '', at: '', duration_min: 60, mode: 'in_person', location: '', panel: defaultsOf(first),
+    add_cal: !!a.calendar_enabled, invite: !!a.candidate_has_email,   // O3
   });
   const [busy, setBusy] = useState(false);
   const set = (k, v) => setF(s => ({ ...s, [k]: v }));
@@ -356,18 +405,27 @@ function ScheduleDialog({ a, emps, edit, session, onClose, onSaved }) {
     try {
       if (edit) {
         const before = (edit.panel || []).map(p => p.employee_id);
-        await podiumopsPost('updateInterview', {
+        const r = await podiumopsPost('updateInterview', {
           id: edit.id, scheduled_at: iso, duration_min: Number(f.duration_min), mode: f.mode, location: f.location.trim() || null,
           add_panel: f.panel.filter(id => !before.includes(id)), remove_panel: before.filter(id => !f.panel.includes(id)),
         }, session);
-        showToast('Interview updated', 'success');
+        if (r?.calendar === 'failed') showToast('Interview updated. The calendar invite was not updated; use Retry sync on the interview', 'error');
+        else showToast(r?.calendar === 'synced' ? 'Interview updated, and the calendar invite with it' : 'Interview updated', 'success');
       } else {
         if (!rounds.length && !f.round_name.trim()) { showToast('Name the round', 'error'); setBusy(false); return; }
-        await podiumopsPost('scheduleInterview', {
+        const res = await podiumopsPost('scheduleInterview', {
           application_id: a.id, ...(rounds.length ? { round_id: f.round_id } : { round_name: f.round_name.trim() }),
           scheduled_at: iso, duration_min: Number(f.duration_min), mode: f.mode, location: f.location.trim() || null, panel: f.panel,
         }, session);
-        showToast(['new', 'screening'].includes(a.status) ? 'Interview scheduled. The candidate moved to Interviewing' : 'Interview scheduled', 'success');
+        const moved = ['new', 'screening'].includes(a.status) ? ' The candidate moved to Interviewing.' : '';
+        // O3: a future interview goes on the organiser's calendar right after it is saved (the save never waits on Google).
+        if (a.calendar_enabled && f.add_cal && res?.interview?.id && Date.parse(iso) > Date.now()) {
+          try {
+            const c = await podiumopsPost('linkInterviewCalendar', { id: res.interview.id, invite_candidate: !!(f.invite && a.candidate_has_email) }, session);
+            showToast(c?.partial ? `Interview scheduled and on your calendar, but the candidate invite did not go; retry it from the interview.${moved}`
+              : `Interview scheduled and on your Google Calendar.${moved}`, c?.partial ? 'error' : 'success');
+          } catch (e) { showToast(`Interview scheduled, but not added to the calendar: ${hiringError(e)}. Use Add to calendar to retry.${moved}`, 'error'); }
+        } else showToast(`Interview scheduled.${moved}`, 'success');
       }
       onSaved();
     } catch (e) { showToast(hiringError(e), 'error'); }
@@ -412,7 +470,56 @@ function ScheduleDialog({ a, emps, edit, session, onClose, onSaved }) {
       </F>
       {edit && locked.length > 0 && <div style={muted}>Interviewers who have submitted feedback stay on the panel.</div>}
       {edit && <div style={{ ...muted, marginTop: 4 }}>Moving the time moves pending feedback due dates to 24 hours after the new time.</div>}
+      {!edit && a.calendar_enabled && (
+        <div style={{ marginTop: 8, display: 'grid', gap: 4 }}>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12.5 }}>
+            <input type="checkbox" checked={f.add_cal} onChange={e => set('add_cal', e.target.checked)} />
+            Add to my Google Calendar and invite the interviewers{f.mode === 'video' ? ' (with a Meet link)' : ''}
+          </label>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12.5, opacity: f.add_cal && a.candidate_has_email ? 1 : 0.5 }}>
+            <input type="checkbox" checked={f.add_cal && f.invite && !!a.candidate_has_email} disabled={!f.add_cal || !a.candidate_has_email}
+              onChange={e => set('invite', e.target.checked)} />
+            {a.candidate_has_email ? 'Send the candidate a separate invite (time and joining details only)' : 'The candidate has no email, so no candidate invite'}
+          </label>
+        </div>
+      )}
       {!edit && <div style={{ ...muted, marginTop: 4 }}>Feedback is due 24 hours after the interview. Each interviewer sees the others&apos; feedback only after submitting their own.</div>}
+    </Dialog>
+  );
+}
+
+// O3: add an already-scheduled interview to the caller's calendar (or retry a failed try / candidate invite).
+function CalendarDialog({ iv, a, session, onClose, onSaved }) {
+  const { showToast } = useToast();
+  const retryCandidate = iv.calendar?.state === 'linked';
+  const [invite, setInvite] = useState(!!a.candidate_has_email);
+  const [busy, setBusy] = useState(false);
+  async function save() {
+    setBusy(true);
+    try {
+      const c = await podiumopsPost('linkInterviewCalendar', { id: iv.id, invite_candidate: !!(invite && a.candidate_has_email) }, session);
+      showToast(c?.partial ? 'On the calendar, but the candidate invite did not go; try again later' : 'Added to Google Calendar', c?.partial ? 'error' : 'success');
+      onSaved();
+    } catch (e) { showToast(hiringError(e), 'error'); }
+    finally { setBusy(false); }
+  }
+  return (
+    <Dialog title={retryCandidate ? 'Retry the candidate invite' : `Add to calendar: ${iv.round_name}`} icon={CalendarPlus} onClose={() => !busy && onClose()}
+      footer={<>
+        <button onClick={onClose} style={ghostBtn} disabled={busy}>Cancel</button>
+        <button onClick={save} style={primaryBtn} disabled={busy}><CalendarPlus size={13} /> {busy ? 'Adding…' : retryCandidate ? 'Retry' : 'Add'}</button>
+      </>}>
+      <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+        {retryCandidate
+          ? 'The interview is on the calendar. This sends the candidate their separate invite again.'
+          : <>The interview goes on {iv.calendar ? 'the organiser’s' : 'your'} Google Calendar at {interviewWhen(iv)}, and the interviewers get an invite with a link to this interview in Podium{iv.mode === 'video' ? ' and a Meet link' : ''}. Guests cannot change it or invite others.</>}
+      </div>
+      {!retryCandidate && !iv.calendar && (
+        <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12.5, marginTop: 10, opacity: a.candidate_has_email ? 1 : 0.5 }}>
+          <input type="checkbox" checked={invite && !!a.candidate_has_email} disabled={!a.candidate_has_email} onChange={e => setInvite(e.target.checked)} />
+          {a.candidate_has_email ? 'Send the candidate a separate invite (time and joining details only)' : 'The candidate has no email, so no candidate invite'}
+        </label>
+      )}
     </Dialog>
   );
 }

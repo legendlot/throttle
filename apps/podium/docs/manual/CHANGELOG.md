@@ -3,6 +3,16 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.8.0] - 2026-11-13
+### Added
+- Interviews chapter: new "Google Calendar" section (O3). Admin switch-on; the two Schedule
+  tick boxes (interviewers' invite with Meet link, separate candidate invite); the organiser;
+  what the candidate's invite does and does not carry; Add to calendar for earlier interviews;
+  how edits, cancels, closing an application and changes made in Google Calendar flow back;
+  row states and Retry buttons; Join / Join Meet for interviewers.
+### Changed
+- Interviews chapter: the "Not built yet" callout no longer lists calendar invites.
+
 ## [1.7.0] - 2026-11-13
 ### Added
 - New "Google Directory Sync" chapter (People part, after Directory): Podium is now the
