@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.10.1] - 2026-11-13
+### Changed
+- Exits: the relieving and experience letter wording (v1) is approved by Afshaan; the draft warning is replaced.
+
 ## [1.10.0] - 2026-11-13
 ### Added
 - Exits chapter: relieving and experience letters (X1b). HR only; on or after the last working day, on open and
