@@ -21,6 +21,11 @@ declare
   -- { "<department name>": "<space id>" }: adopt this existing space as the team's home (owner unchanged).
   -- Finance → Mahesh's existing "Finance" space, shared with the whole Finance team (Afshaan 2026-11-13).
   REUSE jsonb   := '{"Finance": "d9a994a3-215a-411c-bc1a-3360b6f541fc"}'::jsonb;
+  -- A team whose Podium head has exited (Analytics, Offline, Production on 2026-11-13): Afshaan owns its space for now
+  -- (owner = management only; the team gets in through the team share) — transfer it once Podium names a head.
+  INTERIM uuid := (select e.auth_user_id from podium.employees e join podium.departments d on d.head_employee_id = e.id
+                    where d.name = 'Founder''s Office' and e.status <> 'exited' limit 1);
+  v_interim boolean;
   G uuid := (select id from docket.spaces where is_default limit 1);
   r record; v_head uuid; v_sp uuid; v_npd uuid; v_need boolean; v_reuse text; v_matched text[] := '{}';
   n_skipped int := 0; n_teams int := 0; n_new int := 0; n_team int; n_pers int; n_sub int; n_rec int; n_left int; n_left_rec int; n_cross int;
@@ -41,10 +46,7 @@ begin
              from podium.departments d
             order by d.name loop
     continue when not r.need;
-    v_need := r.need;
-    if not v_need and not exists (select 1 from podium.employees e where e.department_id = r.id and e.status <> 'exited' and e.auth_user_id is not null) then
-      continue;   -- an active team nobody can log in to: on demand later
-    end if;
+    v_need := r.need; v_interim := false;
     v_sp := (select id from docket.spaces where home_department_id = r.id and archived_at is null);
     v_reuse := (select value from jsonb_each_text(REUSE) where lower(key) = lower(r.name) limit 1);
     if v_reuse is not null then v_matched := v_matched || lower(r.name); end if;
@@ -57,8 +59,9 @@ begin
     end if;
     if v_sp is null then
       v_head := (select e.auth_user_id from podium.employees e where e.id = r.head_employee_id and e.status <> 'exited');
-      if v_head is null and not v_need then n_skipped := n_skipped + 1; continue; end if;
-      if v_head is null then raise exception 'P3B team % has no head with a login', r.name; end if;
+      v_interim := v_head is null;
+      if v_interim then v_head := INTERIM; end if;
+      if v_head is null then raise exception 'P3B team % has no head with a login and no interim owner', r.name; end if;
       v_sp := (select id from docket.spaces where lower(name) = lower(r.name) and owner_user_id = v_head and archived_at is null
                  and is_private and not is_personal and not is_founders and not is_default and home_department_id is null
                order by created_at limit 1);
@@ -71,7 +74,8 @@ begin
         insert into docket.spaces (name, is_private, is_default, is_founders, is_personal, owner_user_id, created_by_user_id, home_department_id)
         values (r.name, true, false, false, false, v_head, v_head, r.id) returning id into v_sp;
         insert into docket.space_members (space_id, user_id, added_by_user_id) values (v_sp, v_head, v_head) on conflict do nothing;
-        insert into docket.space_history (space_id, actor_user_id, action, note) values (v_sp, null, 'created', 'team home space (P3b: General retired)');
+        insert into docket.space_history (space_id, actor_user_id, action, note) values (v_sp, null, 'created',
+          'team home space (P3b: General retired)' || case when v_interim then ' — interim owner: the Podium head has exited' else '' end);
         n_new := n_new + 1;
       end if;
     end if;
@@ -93,7 +97,12 @@ begin
       (select docket.ensure_personal_space(e.auth_user_id) from podium.employees e
         where e.auth_user_id = t.created_by_user_id and e.status <> 'exited' limit 1),
       (select docket.ensure_personal_space(e.auth_user_id) from podium.employees e
-        where e.id = t.owner_employee_id and e.status <> 'exited' and e.auth_user_id is not null)), 'personal'
+        where e.id = t.owner_employee_id and e.status <> 'exited' and e.auth_user_id is not null),
+      -- both gone (18 archived Offline tasks, 2026-11-13): the owner's team space, else the creator's
+      (select s.id from podium.employees e join docket.spaces s on s.home_department_id = e.department_id and s.archived_at is null
+        where e.id = t.owner_employee_id),
+      (select s.id from podium.employees e join docket.spaces s on s.home_department_id = e.department_id and s.archived_at is null
+        where e.auth_user_id = t.created_by_user_id limit 1)), 'no team'
     from docket.tasks t where t.space_id = G and t.parent_task_id is null and t.department_id is null;
   -- 3. sub-tasks follow their parent
   insert into p3b_target select c.id, p.target, 'subtask' from docket.tasks c join p3b_target p on p.task_id = c.parent_task_id
@@ -132,7 +141,7 @@ begin
    where cr.space_id = G;
   get diagnostics n_rec = row_count;
 
-  select count(*) filter (where why = 'team'), count(*) filter (where why = 'personal'), count(*) filter (where why = 'subtask')
+  select count(*) filter (where why = 'team'), count(*) filter (where why = 'no team'), count(*) filter (where why = 'subtask')
     into n_team, n_pers, n_sub from p3b_target;
   n_left := (select count(*) from docket.tasks where space_id = G);
   n_left_rec := (select count(*) from docket.checklist_records where space_id = G);
