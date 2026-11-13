@@ -34,12 +34,25 @@
 </ul>
 
 <h2 class="sec">Org unit on the person form</h2>
-<p>The <strong>Google org unit</strong> picker sits beside Department in the Role &amp; Reporting section of the person form.</p>
+<p>Each person&rsquo;s Google org unit is their Podium team: <strong>/Team</strong> for a top-level team, <strong>/Team/Sub team</strong> for a sub team. A &ldquo;/&rdquo; inside a team name becomes &ldquo;-&rdquo;. The <strong>Google org unit</strong> picker sits beside Department in the Role &amp; Reporting section of the person form.</p>
 <ul>
-  <li>When you change the department, the picker <strong>suggests that department&rsquo;s usual org unit</strong> (marked &ldquo;usual for this department&rdquo;), but only if the org unit is blank or still the old department&rsquo;s suggestion. One you chose yourself is never replaced.</li>
+  <li>When you change the department, the picker <strong>pre-fills that team&rsquo;s org unit</strong> (marked &ldquo;this team&rsquo;s org unit&rdquo;), but only if the org unit is blank or still the old team&rsquo;s. One you chose yourself is never replaced.</li>
   <li>It <strong>cannot pick an excluded org unit</strong>; the list leaves them out and a save with one is refused.</li>
-  <li><strong>Org units with nobody in them yet don&rsquo;t appear.</strong> If you need a brand-new one, ask a Google admin to move the first person in Google.</li>
+  <li>If the team&rsquo;s org unit does not exist in Google yet, a Google admin creates it with <strong>Team org units</strong> (below). The form may also note that org units with nobody in them don&rsquo;t appear when Google&rsquo;s full list is unavailable.</li>
   <li><em>Not set</em> means Google keeps whatever org unit the person already has.</li>
+</ul>
+
+<h2 class="sec">Team org units (Google admins)</h2>
+<p>At the top of the <strong>Google vs Podium</strong> tab, <span class="role adm">Google admins</span> see a <strong>Team org units</strong> card. It makes every person&rsquo;s org unit match their team in one go.</p>
+<ol class="steps">
+  <li><span class="s-title">Click Preview</span>. The card lists the <strong>org units to create</strong> and the <strong>people to move</strong> (from, to). Nothing is changed.</li>
+  <li><span class="s-title">Click Create and assign</span> and confirm. The button works <strong>only after a Preview</strong>, and <strong>only if nothing changed since</strong>; otherwise Podium asks you to preview again.</li>
+</ol>
+<p>Create and assign <strong>creates the missing org units in Google</strong> (parents first) and <strong>sets each person&rsquo;s org unit in Podium</strong>. It does not move anyone in Google by itself. The move happens through the normal sync: a few people at a time as their pages are opened, or through <strong>Push to Google</strong> (tick Org unit) when bulk push is not paused. The card says which applies.</p>
+<ul>
+  <li><strong>Never moved:</strong> founders, and anyone in the excluded <strong>/Admin and general</strong> org unit. They show under &ldquo;Skipped&rdquo;. Teams that sit in an excluded org unit are listed too.</li>
+  <li><strong>Old org units are left in place.</strong> Podium never renames, moves or deletes an org unit in Google.</li>
+  <li>Anything that could not be created or set is listed in red on the card.</li>
 </ul>
 
 <h2 class="sec">Directory &rarr; Sync from Google</h2>
