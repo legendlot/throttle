@@ -7,8 +7,8 @@ import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
 // On-demand Google Directory sync. Two tabs:
 // · From Google: review-and-confirm new joiners (import / ignore, dept/manager editable). X1: people suspended /
 //   missing in Google are ALERTS only; an exit is started on the person's page (the worker refuses an exit list).
-// · Google vs Podium (J1b D11): Podium is the source of truth for name, title, department, manager, phone, code and
-//   org unit, and pushes them to Google. Per person × field diff, Preview (dry run) then Push in chunks of 8.
+// · Google vs Podium (J1b D11): Podium is the source of truth for name, title, department, manager, code and
+//   org unit, and pushes them to Google (never phones — they stay in Podium). Push is held while bulk_paused (0019). Per person × field diff, Preview (dry run) then Push in chunks of 8.
 //   The old "moved / differing" review is gone: the worker refuses update / dismiss / baseline (podium_owns_these_fields).
 export default function DirectorySyncModal({ session, onClose, onDone }) {
   const [tab, setTab] = useState('google');
@@ -219,7 +219,7 @@ function FromGoogle({ session, onClose, onDone }) {
 }
 
 // ── Google vs Podium (J1b D11) ───────────────────────────────────────────────
-const FIELD_LABEL = { name: 'Name', title: 'Job title', department: 'Department', manager: 'Manager', phone: 'Phone (mobile)',
+const FIELD_LABEL = { name: 'Name', title: 'Job title', department: 'Department', manager: 'Manager',
   employee_code: 'Employee code', org_unit: 'Org unit' };
 const STATE_LABEL = { differs: 'Differs', changed_in_google: 'Changed in Google', podium_blank: 'Blank in Podium', equal: 'Same' };
 const SKIP_LABEL = {
@@ -453,10 +453,14 @@ function GoogleVsPodium({ session, onClose }) {
             <button style={{ ...btnSecondary, opacity: busy ? 0.6 : 1 }} onClick={() => run(true)} disabled={!!busy || !cellCount}>
               <Eye size={12} /> {busy === 'preview' ? 'Previewing…' : 'Preview'}
             </button>
-            <button style={{ ...btnPrimary, opacity: busy || !previewFresh ? 0.6 : 1 }} onClick={() => run(false)} disabled={!!busy || !previewFresh}
-              title={previewFresh ? '' : 'Preview the ticked fields first'}>
-              <Upload size={12} /> {busy === 'push' ? 'Pushing…' : 'Push to Google'}
-            </button>
+            {data.bulk_paused ? (
+              <span style={{ fontSize: 12, color: 'var(--text-3)', alignSelf: 'center' }}>Bulk push paused while Podium’s data is checked.</span>
+            ) : (
+              <button style={{ ...btnPrimary, opacity: busy || !previewFresh ? 0.6 : 1 }} onClick={() => run(false)} disabled={!!busy || !previewFresh}
+                title={previewFresh ? '' : 'Preview the ticked fields first'}>
+                <Upload size={12} /> {busy === 'push' ? 'Pushing…' : 'Push to Google'}
+              </button>
+            )}
           </>
         )}
         {!loading && !error && data && !data.can_push && (

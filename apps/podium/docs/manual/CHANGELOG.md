@@ -3,6 +3,13 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.8.1] - 2026-11-13
+### Changed
+- Google Directory Sync chapter: phone numbers are no longer pushed to Google (field list is now six);
+  the "Personal phone is visible in Google" callout is replaced by "Phone numbers stay in Podium".
+- Google Directory Sync chapter: new callout that the bulk "Push to Google" is paused (Preview still
+  works); saving a person still updates their Google account with the changed fields.
+
 ## [1.8.0] - 2026-11-13
 ### Added
 - Interviews chapter: new "Google Calendar" section (O3). Admin switch-on; the two Schedule

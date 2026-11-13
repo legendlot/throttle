@@ -4,6 +4,12 @@
 > "Do this task here". Answers 2026-11-12: push the **personal** phone (`employees.phone`); Google's name comes
 > from **full_name only**; **any HR save** pushes; **founders and super-admins are excluded entirely**.
 > Investigation (file:line findings) summarised in the session; key facts are restated in the decisions.
+>
+> ⚠️ **Amended 2026-11-13 (Afshaan, migration 0019):** (1) "don't push phone numbers to google, let them be in
+> podium": `phone` is no longer a sync field anywhere (trigger, CHECKs, merge, diff); Google's phones are never sent.
+> Every phone mention below is historical. (2) "pause bulk update first. I need to see if information is correct on
+> podium first": `pushGoogleFields` (non-dry-run) is refused 423 `bulk_push_paused` unless
+> `podium.settings.google_bulk_push_paused` is exactly false; preview and per-save pushes still run.
 
 ## Facts the design rests on
 

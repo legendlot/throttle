@@ -4,8 +4,9 @@
 // Plan: docs/superpowers/plans/2026-11-12-podium-j1b-google-sync.md (D1–D11) · tests: test/googlesync.test.mjs
 import { WORK_DOMAIN } from './workaccount.js';
 
-// The fields Podium pushes (D2). Never primaryEmail, password, suspension, deletion or groups.
-export const SYNC_FIELDS = ['name', 'title', 'department', 'manager', 'phone', 'employee_code', 'org_unit'];
+// The fields Podium pushes (D2). Never primaryEmail, password, suspension, deletion or groups — and never phones
+// (Afshaan 2026-11-13: phone numbers stay in Podium; Google's phones are left exactly as they are).
+export const SYNC_FIELDS = ['name', 'title', 'department', 'manager', 'employee_code', 'org_unit'];
 // Employee statuses that are pushed (D4). Everyone else is skipped with a reason.
 export const IN_SCOPE_STATUSES = ['active', 'on_leave', 'notice'];
 export const SYNC_STATUSES = ['pending', 'ok', 'failed', 'skipped'];
@@ -16,7 +17,6 @@ export const SYNC_LEASE_MS = 2 * 60 * 1000;
 // Retry backoff after the 1st / 2nd / 3rd-and-later failure (D7).
 export const BACKOFF_MINUTES = [1, 5, 30];
 export const ORG_EXTERNAL_ID_TYPE = 'organization';
-export const MOBILE_PHONE_TYPE = 'mobile';
 // Each Directory GET / PUT is aborted after this, so an attempt always ends well inside its lease.
 export const GOOGLE_CALL_TIMEOUT_MS = 20 * 1000;
 // Founders, hard deny-list on top of users_profile.role = super_admin (Afshaan 2026-11-12: "exclude entirely").
@@ -26,10 +26,10 @@ export const FOUNDER_CODES = ['EMP-001', 'EMP-002'];
 // whose columns changed; INSERT marks every field except name + title; a work_email or status change marks nothing
 // on that person (review 2026-11-13: no silent full push — alignment is the reviewed Google vs Podium push).
 export const COLUMN_FIELD = {
-  full_name: 'name', job_title: 'title', department_id: 'department', manager_id: 'manager', phone: 'phone',
+  full_name: 'name', job_title: 'title', department_id: 'department', manager_id: 'manager',
   employee_code: 'employee_code', org_unit_path: 'org_unit',
 };
-export const INSERT_FIELDS = ['department', 'manager', 'phone', 'employee_code', 'org_unit'];
+export const INSERT_FIELDS = ['department', 'manager', 'employee_code', 'org_unit'];
 // R3: an INSERT dirties only the INSERT_FIELDS whose column holds a value. A NULL org_unit_path or manager_id on a new
 // row means "leave Google alone" (D3) — for an inserted row that holds even for the manager.
 const FIELD_COLUMN = Object.fromEntries(Object.entries(COLUMN_FIELD).map(([c, f]) => [f, c]));
@@ -90,8 +90,6 @@ export async function previewHash(body) {
 const lc = (s) => String(s ?? '').trim().toLowerCase();
 const blank = (v) => v === undefined || v === null || String(v).trim() === '';
 const clean = (v) => (blank(v) ? null : String(v).trim().replace(/\s+/g, ' '));
-// Phone numbers compare without spaces, dashes, dots or brackets ("+91 98450-12345" == "+919845012345").
-export const normPhone = (v) => (blank(v) ? null : String(v).replace(/[\s\-().]/g, ''));
 
 // D2: Google's name comes from full_name ONLY. givenName = every token but the last, familyName = the last; a
 // one-word name fills both (Google requires both). Unlike workaccount.splitName nothing is dropped: Podium's
@@ -120,7 +118,6 @@ export function desiredGoogleFields(emp, { departmentName = null, managerEmail =
     title: clean(e.job_title),
     department: clean(departmentName),
     manager: hasManager ? (mgr ? mgr.toLowerCase() : undefined) : null,
-    phone: clean(e.phone),
     employee_code: clean(e.employee_code),
     org_unit: clean(e.org_unit_path),
   };
@@ -131,7 +128,6 @@ export function googleFieldsOf(gUser) {
   const g = gUser || {};
   const org = primaryOrg(g.organizations);
   const mgrs = arr(g.relations).filter(r => r && r.type === 'manager' && !blank(r.value));
-  const mob = arr(g.phones).find(p => p && p.type === MOBILE_PHONE_TYPE && !blank(p.value));
   const code = arr(g.externalIds).find(x => x && x.type === ORG_EXTERNAL_ID_TYPE && !blank(x.value));
   const gn = clean(g.name?.givenName), fn = clean(g.name?.familyName);
   return {
@@ -139,7 +135,6 @@ export function googleFieldsOf(gUser) {
     title: clean(org?.title),
     department: clean(org?.department),
     manager: mgrs.length ? lc(mgrs[0].value) : null,
-    phone: clean(mob?.value),
     employee_code: clean(code?.value),
     org_unit: clean(g.orgUnitPath),
   };
@@ -151,14 +146,13 @@ function primaryOrg(orgs) {
   return arr(orgs).find(o => o && o.primary === true) || null;
 }
 
-// Are two values of one field the same? (name: both parts · manager: case-insensitive · phone: normalised)
+// Are two values of one field the same? (name: both parts · manager: case-insensitive)
 export function sameValue(field, a, b) {
   if (field === 'name') {
     if (!a || !b) return !a && !b;
     return clean(a.givenName) === clean(b.givenName) && clean(a.familyName) === clean(b.familyName);
   }
   if (field === 'manager') return (a ? lc(a) : null) === (b ? lc(b) : null);
-  if (field === 'phone') return normPhone(a) === normPhone(b);
   return clean(a) === clean(b);
 }
 
@@ -169,7 +163,7 @@ export function sameValue(field, a, b) {
 //   organizations — only the entry with primary=true is touched (its other keys kept, the other entries stay);
 //                   with no primary entry, a new {primary:true, …} entry is APPENDED
 //   relations     — every non-manager relation kept; the manager relation set, or removed when Podium has none
-//   phones        — every other phone type kept; the mobile entry replaced
+//   phones        — never sent (not a SYNC_FIELD): Google's phones stay as they are
 //   externalIds   — every id that is not type `organization` kept (the J1 podium_work_account stamp included)
 // A blank Podium value leaves Google's value alone, except the manager (Podium owns reporting lines).
 // opts.fields limits the merge to those SYNC_FIELDS (dirty_fields on a drain, the admin's pick on a push). Omitted =
@@ -208,16 +202,6 @@ export function mergeGoogleUser(current, desired, { fields } = {}) {
     }
   }
 
-  if (on.has('phone') && want.phone !== null && want.phone !== undefined) {
-    const phones = arr(cur.phones);
-    const mob = phones.filter(p => p && p.type === MOBILE_PHONE_TYPE);
-    if (!(mob.length === 1 && normPhone(mob[0].value) === normPhone(want.phone))) {
-      const entry = { type: MOBILE_PHONE_TYPE, value: want.phone };
-      if (mob.some(p => p.primary)) entry.primary = true;
-      body.phones = [...phones.filter(p => !(p && p.type === MOBILE_PHONE_TYPE)), entry];
-    }
-  }
-
   if (on.has('employee_code') && want.employee_code !== null && want.employee_code !== undefined) {
     const ids = arr(cur.externalIds);
     const org = ids.filter(x => x && x.type === ORG_EXTERNAL_ID_TYPE);
@@ -237,7 +221,7 @@ export function mergeGoogleUser(current, desired, { fields } = {}) {
 // The SYNC_FIELDS a merge body touches (for logs / the dry-run preview).
 export function bodyFields(body) {
   if (!body) return [];
-  const map = { name: 'name', relations: 'manager', phones: 'phone', externalIds: 'employee_code', orgUnitPath: 'org_unit' };
+  const map = { name: 'name', relations: 'manager', externalIds: 'employee_code', orgUnitPath: 'org_unit' };
   const out = [];
   for (const k of Object.keys(body)) {
     if (k === 'organizations') out.push('title_or_department');

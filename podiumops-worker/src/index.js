@@ -6655,8 +6655,8 @@ async function suspendWorkAccount(body, auth, env) {
 
 // ────────────────────────────────────────────────────────────────────────────
 // J1b — PODIUM → GOOGLE FIELD SYNC (plan docs/superpowers/plans/2026-11-12-podium-j1b-google-sync.md, D1–D11).
-// One way: name / title / department / manager / personal phone / employee code / org unit go FROM Podium TO
-// Google; Google values are only ever displayed (getGoogleDiff). Dirty-marking is in the database (0015 triggers on
+// One way: name / title / department / manager / employee code / org unit go FROM Podium TO Google (never phones —
+// Afshaan 2026-11-13); Google values are only ever displayed (getGoogleDiff). Dirty-marking is in the database (0015 triggers on
 // employees + departments → google_sync_state.dirty_fields), and a drain pushes ONLY those fields: a save that
 // changed the title pushes the title, nothing else. Every field is pushed only through pushGoogleFields (HR's
 // reviewed bulk push, D11).
@@ -6671,7 +6671,8 @@ async function suspendWorkAccount(body, auth, env) {
 
 const J1B_COPY = {
   podium_owns_these_fields: 'Podium owns department, manager and org unit now and pushes them to Google. Change them on the person in Podium',
-  bad_fields: 'Pick fields from: name, title, department, manager, phone, employee_code, org_unit',
+  bad_fields: 'Pick fields from: name, title, department, manager, employee_code, org_unit',
+  bulk_push_paused: 'The bulk push to Google is paused while Podium’s data is checked. Preview still works; saving a person still updates their Google account',
   too_many: `Push at most ${GSYNC_CAP} people at a time`,
   employee_ids_required: 'Pick at least one person',
   preview_required: 'Preview first: Push needs the preview of every person it sends',
@@ -7061,12 +7062,18 @@ async function adminPushGoogle(env, auth, ids, fields, hashes) {
   }) };
 }
 
+// settings.google_bulk_push_paused (0019). true unless the row says exactly false.
+export async function bulkPushPaused(env) {
+  const r = await sb(`/rest/v1/settings?id=eq.1&select=google_bulk_push_paused&limit=1`, env);
+  return !(r.ok && r.data?.[0]?.google_bulk_push_paused === false);
+}
+
 // POST pushGoogleFields {employee_ids (≤ 8), fields?, dry_run, preview_hashes} — Google admin.
 // dry_run: the exact users.update body per person + its hash (nothing written to Google, nothing logged).
 // Push (R1): preview_hashes {employee_id: hash} is REQUIRED for every person (400 preview_required); one-shot via
 // adminPushGoogle. Anyone whose body no longer matches the preview is not pushed (stale_preview); the response is
 // 409 stale_preview when any are, with every person's result.
-async function pushGoogleFields(body, auth, env, ctx) {
+export async function pushGoogleFields(body, auth, env, ctx) {
   const gate = await requireGoogleAdmin(auth, env); if (gate) return gate;
   if (!gsyncReady(env)) return j1bErr('google_write_not_configured', 400);
   const d = body.data || body;
@@ -7080,6 +7087,9 @@ async function pushGoogleFields(body, auth, env, ctx) {
     const pv = await previewGooglePush(env, ids, fc.fields);
     return pv.res || ok({ dry_run: true, results: pv.results });
   }
+  // Afshaan 2026-11-13: no bulk alignment until he has checked Podium's data (0019). Anything but an explicit false
+  // (a failed read included) keeps it paused.
+  if (await bulkPushPaused(env)) return j1bErr('bulk_push_paused', 423);
   const hashes = d.preview_hashes && typeof d.preview_hashes === 'object' ? d.preview_hashes : null;
   if (!hashes || ids.some(id => typeof hashes[id] !== 'string' || !/^[0-9a-f]{64}$/.test(hashes[id]))) return j1bErr('preview_required', 400);
   const r = await adminPushGoogle(env, auth, ids, fc.fields, hashes);
@@ -7099,11 +7109,12 @@ async function getGoogleDiff(url, auth, env, ctx) {
   let gusers;
   try { gusers = await fetchGoogleUsers(env); }
   catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
-  const [er, sr, sctx, gAdmin] = await Promise.all([
+  const [er, sr, sctx, gAdmin, paused] = await Promise.all([
     sb(`/rest/v1/employees?status=neq.exited&select=${SYNC_EMP_SELECT}&order=full_name.asc&limit=5000`, env),
     sb(`/rest/v1/google_sync_state?select=employee_id,status,dirty_fields,last_error,skip_reason,last_pushed,last_pushed_at&limit=5000`, env),
     googleSyncContext(env, gusers),
     isGoogleAdmin(auth, env),
+    bulkPushPaused(env),
   ]);
   if (!er.ok || !sr.ok || !sctx) return j1bErr('context_failed', 500);
   kickGoogleSync(env, auth, ctx);
@@ -7125,7 +7136,7 @@ async function getGoogleDiff(url, auth, env, ctx) {
   }
   await backfillOrgUnits(env, backfill);
   return ok({
-    fields: SYNC_FIELDS, people, skipped, can_push: gAdmin, push_chunk: GSYNC_CAP,
+    fields: SYNC_FIELDS, people, skipped, can_push: gAdmin, bulk_paused: paused, push_chunk: GSYNC_CAP,
     counts: { in_scope: people.length, differing: people.filter(p => p.differing.length).length, skipped: skipped.length, backfilled_ou: backfill.length },
   });
 }
@@ -8023,7 +8034,7 @@ async function saveMyProfile(body, auth, env, ctx) {
   const r = await hiringRpc(env, 'profile_save_self', { employee_id: m.emp.id, actor_user_id: auth.userId,
     employee: v.employee, private: v.private }, { headers: actorHeaders(auth) });
   if (!r.ok) return j2DbError(r);
-  // J1b D7/D8: a changed phone was marked pending by the trigger; the self-save pushes it (the person is the actor).
+  // J1b D7/D8: no self-profile field is a Google field since 0019 (phones stay in Podium); this only kicks the drain.
   return ok({ ...(r.data || {}), google_sync: await googleSyncAfterSave(env, auth, ctx, m.emp.id) });
 }
 

@@ -6,13 +6,14 @@ import { readFileSync } from 'node:fs';
 import {
   SYNC_FIELDS, IN_SCOPE_STATUSES, DRAIN_CAP, SYNC_LEASE_MS, ORG_EXTERNAL_ID_TYPE, GOOGLE_CALL_TIMEOUT_MS, FOUNDER_CODES, COLUMN_FIELD,
   splitForGoogle, ouExcluded, desiredGoogleFields, googleFieldsOf, sameValue, mergeGoogleUser, bodyFields, scopeOf,
-  classifyDiff, diffPerson, nextLastPushed, nextAttemptAt, syncClaimFilter, canClaimSync, cleanSyncFields, normPhone,
+  classifyDiff, diffPerson, nextLastPushed, nextAttemptAt, syncClaimFilter, canClaimSync, cleanSyncFields,
   dirtiedFields, fieldsToPush, afterAttempt, leaseHeld, canonicalJson, previewHash, effectiveFields, needsOuCheck, identityChanged,
 } from '../src/googlesync.js';
-import { pushOneToGoogle, googleFetch } from '../src/index.js';
+import { pushOneToGoogle, googleFetch, pushGoogleFields, bulkPushPaused } from '../src/index.js';
 import { WA_EXTERNAL_ID_TYPE, workAccountExternalIds } from '../src/workaccount.js';
 
 const SQL = readFileSync(new URL('../migrations/0015_google_field_sync.sql', import.meta.url), 'utf8');
+const SQL19 = readFileSync(new URL('../migrations/0019_google_sync_no_phone_bulk_pause.sql', import.meta.url), 'utf8');
 const SRC = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
 const WA_ID = '11111111-2222-4333-8444-555555555555';
 const EMP_ID = '22222222-3333-4444-8555-666666666666';
@@ -51,9 +52,10 @@ test('splitForGoogle: blank → null (never pushed)', () => {
 test('desiredGoogleFields maps every D2 field; blanks become null', () => {
   const d = want();
   assert.deepEqual(d, { name: { givenName: 'Testa Middle', familyName: 'Personne' }, title: 'Analyst', department: 'Ops',
-    manager: 'boss@legendoftoys.com', phone: '+91 90000 00001', employee_code: 'EMP-901', org_unit: '/Team A' });
+    manager: 'boss@legendoftoys.com', employee_code: 'EMP-901', org_unit: '/Team A' });
+  assert.equal('phone' in d, false, 'phone stays in Podium (Afshaan 2026-11-13)');
   const b = desiredGoogleFields(emp({ job_title: '  ', phone: null, org_unit_path: '' }), { departmentName: null, hasManager: false });
-  assert.equal(b.title, null); assert.equal(b.phone, null); assert.equal(b.org_unit, null); assert.equal(b.department, null);
+  assert.equal(b.title, null); assert.equal(b.org_unit, null); assert.equal(b.department, null);
   assert.equal(b.manager, null, 'no manager in Podium = a value (remove), not blank');
 });
 test('desiredGoogleFields: a manager with no known work email is undefined (leave Google alone)', () => {
@@ -65,10 +67,9 @@ test('desiredGoogleFields: a manager with no known work email is undefined (leav
 test('mergeGoogleUser: Google already matches → null (no PUT)', () => {
   assert.equal(mergeGoogleUser(gUser(), want()), null);
 });
-test('mergeGoogleUser: phone compared without spaces, manager case-insensitively', () => {
+test('mergeGoogleUser: manager compared case-insensitively', () => {
   const g = gUser({ relations: [{ type: 'manager', value: 'BOSS@legendoftoys.com' }] });
   assert.equal(mergeGoogleUser(g, want()), null);
-  assert.equal(normPhone('+91 90000-00001'), '+919000000001');
 });
 
 // ── merge: preserve what Podium does not own ─────────────────────────────────
@@ -88,13 +89,14 @@ test('merge keeps other relations and sets the manager', () => {
   const b = mergeGoogleUser(gUser(), want(emp(), { departmentName: 'Ops', managerEmail: 'other@legendoftoys.com', hasManager: true }));
   assert.deepEqual(b.relations, [{ type: 'assistant', value: 'helper@legendoftoys.com' }, { type: 'manager', value: 'other@legendoftoys.com' }]);
 });
-test('merge keeps other phone types, replaces the mobile, keeps its primary flag', () => {
-  const b = mergeGoogleUser(gUser(), want(emp({ phone: '+91 90000 00009' })));
-  assert.deepEqual(b.phones, [{ type: 'work', value: '080 1111 1111' }, { type: 'mobile', value: '+91 90000 00009', primary: true }]);
-});
-test('merge adds a mobile when Google has none', () => {
-  const b = mergeGoogleUser(gUser({ phones: [{ type: 'work', value: '1' }] }), want());
-  assert.deepEqual(b.phones, [{ type: 'work', value: '1' }, { type: 'mobile', value: '+91 90000 00001' }]);
+test('phones are never sent: a different Podium phone, or none in Google, changes nothing', () => {
+  assert.equal(SYNC_FIELDS.includes('phone'), false);
+  assert.equal(mergeGoogleUser(gUser(), want(emp({ phone: '+91 90000 00009' }))), null);
+  assert.equal(mergeGoogleUser(gUser({ phones: [] }), want()), null);
+  const b = mergeGoogleUser(gUser(), want(emp({ phone: '+91 90000 00009', job_title: 'Lead' })));
+  assert.deepEqual(Object.keys(b), ['organizations']);
+  assert.equal(cleanSyncFields(['phone']).error, 'bad_fields');
+  assert.deepEqual(dirtiedFields(emp(), emp({ phone: '+91 90000 00009' })), [], 'a phone edit dirties nothing');
 });
 test('merge keeps extra organization keys and the other organizations', () => {
   const g = gUser({ organizations: [{ name: 'Old Co', title: 'Intern' }, { primary: true, title: 'Analyst', department: 'Ops', costCenter: 'CC-1' }] });
@@ -129,8 +131,8 @@ test('merge: a one-word Podium name is pushed as both parts', () => {
 });
 
 // ── merge: blank never wipes, except the manager ─────────────────────────────
-test('a blank Podium value leaves Google alone (title, department, phone, code, OU)', () => {
-  const e = emp({ job_title: null, phone: '', employee_code: null, org_unit_path: null });
+test('a blank Podium value leaves Google alone (title, department, code, OU)', () => {
+  const e = emp({ job_title: null, employee_code: null, org_unit_path: null });
   const b = mergeGoogleUser(gUser(), desiredGoogleFields(e, { departmentName: null, managerEmail: 'boss@legendoftoys.com', hasManager: true }));
   assert.equal(b, null);
 });
@@ -150,7 +152,7 @@ test('a manager with an unknown email never touches Google relations', () => {
 test('opts.fields limits the merge to those fields; an EMPTY list merges nothing', () => {
   const e = emp({ full_name: 'Other Person', job_title: 'Lead', org_unit_path: '/Team B' });
   assert.deepEqual(mergeGoogleUser(gUser(), want(e), { fields: ['org_unit'] }), { orgUnitPath: '/Team B' });
-  assert.equal(mergeGoogleUser(gUser(), want(e), { fields: ['phone'] }), null);
+  assert.equal(mergeGoogleUser(gUser(), want(e), { fields: ['employee_code'] }), null);
   assert.equal(mergeGoogleUser(gUser(), want(e), { fields: [] }), null, '[] is not "all"');
   assert.deepEqual(Object.keys(mergeGoogleUser(gUser(), want(e))).sort(), ['name', 'orgUnitPath', 'organizations'], 'omitted = all');
 });
@@ -159,17 +161,17 @@ test('opts.fields limits the merge to those fields; an EMPTY list merges nothing
 test('dirtiedFields: an update dirties only the fields whose columns changed', () => {
   const a = emp(), b = emp({ job_title: 'Lead' });
   assert.deepEqual(dirtiedFields(a, b), ['title']);
-  assert.deepEqual(dirtiedFields(a, emp({ manager_id: 'm2', phone: '1' })), ['manager', 'phone']);
+  assert.deepEqual(dirtiedFields(a, emp({ manager_id: 'm2', phone: '1' })), ['manager']);
   assert.deepEqual(dirtiedFields(a, emp({ preferred_name: 'x' })), [], 'unwatched column');
   assert.deepEqual(dirtiedFields(a, emp({ work_email: 'new@legendoftoys.com' })), [], 'work_email → nothing on the person');
   assert.deepEqual(dirtiedFields(a, emp({ status: 'on_leave' })), [], 'status → nothing');
-  assert.deepEqual(dirtiedFields(null, emp({ department_id: 'd1', manager_id: 'm1' })), ['department', 'manager', 'phone', 'employee_code', 'org_unit'],
+  assert.deepEqual(dirtiedFields(null, emp({ department_id: 'd1', manager_id: 'm1' })), ['department', 'manager', 'employee_code', 'org_unit'],
     'insert → all but name + title');
   assert.deepEqual(Object.values(COLUMN_FIELD).sort(), [...SYNC_FIELDS].sort(), 'every field has its column');
 });
 test('R3: an INSERT dirties only fields that hold a value — a NULL OU or manager dirties neither', () => {
-  assert.deepEqual(dirtiedFields(null, emp({ org_unit_path: null, manager_id: null, department_id: 'd1' })), ['department', 'phone', 'employee_code']);
-  assert.deepEqual(dirtiedFields(null, emp({ org_unit_path: '  ', phone: '', manager_id: undefined })), ['employee_code'], 'blank = no value');
+  assert.deepEqual(dirtiedFields(null, emp({ org_unit_path: null, manager_id: null, department_id: 'd1' })), ['department', 'employee_code']);
+  assert.deepEqual(dirtiedFields(null, emp({ org_unit_path: '  ', manager_id: undefined })), ['employee_code'], 'blank = no value');
   assert.match(SQL, /if new\.manager_id is not null then v_f := array_append\(v_f, 'manager'\)/);
   assert.match(SQL, /if nullif\(btrim\(coalesce\(new\.org_unit_path, ''\)\), ''\) is not null then v_f := array_append\(v_f, 'org_unit'\)/);
 });
@@ -182,22 +184,23 @@ test('R2: status / work_email change bumps rev and revives a row with dirty fiel
   }
 });
 test('fieldsToPush: dirty fields, narrowed to the claim scope when there is one', () => {
-  assert.deepEqual(fieldsToPush(['title', 'phone']), ['title', 'phone']);
-  assert.deepEqual(fieldsToPush(['phone', 'name']), ['name', 'phone'], 'SYNC_FIELDS order');
-  assert.deepEqual(fieldsToPush(['title', 'phone'], ['phone', 'org_unit']), ['phone']);
+  assert.deepEqual(fieldsToPush(['title', 'org_unit']), ['title', 'org_unit']);
+  assert.deepEqual(fieldsToPush(['org_unit', 'name']), ['name', 'org_unit'], 'SYNC_FIELDS order');
+  assert.deepEqual(fieldsToPush(['title', 'org_unit'], ['org_unit', 'manager']), ['org_unit']);
+  assert.deepEqual(fieldsToPush(['phone', 'title']), ['title'], 'a stale phone entry is never pushed');
   assert.deepEqual(fieldsToPush([], null), []);
   assert.deepEqual(fieldsToPush(null, ['name']), []);
 });
-test('dirty_fields → merge subset: a title change never pushes the (different) phone or OU', () => {
-  const e = emp({ job_title: 'Lead', phone: '+91 90000 00009', org_unit_path: '/Team B' });
+test('dirty_fields → merge subset: a title change never pushes the (different) name or OU', () => {
+  const e = emp({ job_title: 'Lead', full_name: 'Other Person', org_unit_path: '/Team B' });
   const b = mergeGoogleUser(gUser(), want(e), { fields: fieldsToPush(dirtiedFields(emp(), emp({ job_title: 'Lead' }))) });
   assert.deepEqual(Object.keys(b), ['organizations']);
   assert.equal(b.organizations[0].title, 'Lead');
 });
 test('afterAttempt: ok only when nothing is left AND rev is unchanged', () => {
   assert.deepEqual(afterAttempt({ outcome: 'ok', claimedRev: 3, currentRev: 3, dirty: ['title'], done: ['title'] }), { status: 'ok', dirty_fields: [] });
-  assert.deepEqual(afterAttempt({ outcome: 'ok', claimedRev: 3, currentRev: 3, dirty: ['title', 'phone'], done: ['title'] }),
-    { status: 'pending', dirty_fields: ['phone'] }, 'a subset push leaves the other real change pending');
+  assert.deepEqual(afterAttempt({ outcome: 'ok', claimedRev: 3, currentRev: 3, dirty: ['title', 'org_unit'], done: ['title'] }),
+    { status: 'pending', dirty_fields: ['org_unit'] }, 'a subset push leaves the other real change pending');
   assert.deepEqual(afterAttempt({ outcome: 'ok', claimedRev: 3, currentRev: 4, dirty: ['title'], done: ['title'] }),
     { status: 'pending', dirty_fields: ['title'] }, 'changed mid-push: nothing is dropped');
   assert.deepEqual(afterAttempt({ outcome: 'ok', claimedRev: 3, currentRev: 3, dirty: ['title'], done: [] }), { status: 'pending', dirty_fields: ['title'] });
@@ -281,10 +284,10 @@ test('scopeOf: the CURRENT Google OU is excluded unconditionally; a bad TARGET O
 });
 test('R6: a bad target OU is a skip for the org_unit FIELD only', () => {
   const e = emp({ org_unit_path: '/Nowhere' });
-  assert.deepEqual(effectiveFields(e, gUser(), ['phone', 'org_unit'], ctx()), { fields: ['phone'], fieldSkips: { org_unit: 'target_ou_unknown' } });
+  assert.deepEqual(effectiveFields(e, gUser(), ['title', 'org_unit'], ctx()), { fields: ['title'], fieldSkips: { org_unit: 'target_ou_unknown' } });
   assert.deepEqual(effectiveFields(emp({ org_unit_path: '/Admin and general' }), gUser(), undefined, ctx()).fieldSkips, { org_unit: 'target_ou_excluded' });
-  assert.deepEqual(effectiveFields(e, gUser(), ['phone'], ctx()), { fields: ['phone'], fieldSkips: {} }, 'not pushing org_unit → no OU check');
-  assert.equal(needsOuCheck(e, gUser(), ['phone']), false);
+  assert.deepEqual(effectiveFields(e, gUser(), ['title'], ctx()), { fields: ['title'], fieldSkips: {} }, 'not pushing org_unit → no OU check');
+  assert.equal(needsOuCheck(e, gUser(), ['title']), false);
   assert.equal(needsOuCheck(e, gUser(), ['org_unit']), true);
   assert.equal(needsOuCheck(emp({ org_unit_path: '/Team A' }), gUser(), ['org_unit']), false, 'no move → no check');
   assert.deepEqual(effectiveFields(emp({ org_unit_path: '/Team B' }), gUser(), ['org_unit'], ctx()).fields, ['org_unit']);
@@ -311,9 +314,9 @@ test('diffPerson covers every field', () => {
   assert.equal(d.name.state, 'equal');
   assert.equal(d.employee_code.state, 'equal');
 });
-test('googleFieldsOf reads the primary organization, the mobile phone and the organization code', () => {
+test('googleFieldsOf reads the primary organization and the organization code (never phones)', () => {
   const g = googleFieldsOf(gUser());
-  assert.equal(g.phone, '+919000000001');
+  assert.equal('phone' in g, false);
   assert.equal(g.employee_code, 'EMP-901');
   assert.equal(g.manager, 'boss@legendoftoys.com');
   assert.equal(g.department, 'Ops');
@@ -322,8 +325,8 @@ test('googleFieldsOf reads the primary organization, the mobile phone and the or
 test('nextLastPushed records what GOOGLE holds after the push, for the considered fields only', () => {
   const prev = { title: 'Old', org_unit: '/Team A' };
   const after = googleFieldsOf(gUser({ organizations: [{ primary: true, title: 'Analyst (as Google stored it)' }] }));
-  const n = nextLastPushed(prev, want(emp({ phone: null })), ['title', 'phone', 'manager'], after);
-  assert.deepEqual(n, { title: 'Analyst (as Google stored it)', org_unit: '/Team A', manager: 'boss@legendoftoys.com' }, 'blank phone not recorded');
+  const n = nextLastPushed(prev, want(emp({ employee_code: null })), ['title', 'employee_code', 'manager'], after);
+  assert.deepEqual(n, { title: 'Analyst (as Google stored it)', org_unit: '/Team A', manager: 'boss@legendoftoys.com' }, 'blank code not recorded');
   assert.deepEqual(nextLastPushed(null, want(emp(), { hasManager: false }), ['manager'], googleFieldsOf(gUser({ relations: [] }))), { manager: null });
   assert.deepEqual(nextLastPushed(null, want(), [], after), {}, 'nothing considered → nothing recorded');
 });
@@ -374,6 +377,19 @@ test('0015: dirty_fields — the trigger maps columns to fields, the record remo
   assert.ok(rec.indexOf('if not found then continue') < rec.indexOf('update podium.employees e set'), 'baselines only after ownership');
   assert.match(SQL, /from \(select distinct x from unnest\(p_ids\) x where x is not null\) d order by x/, 'mark inserts sorted');
   assert.equal(/set_config\('podium\.gsync_backfill', 'on', false\)/.test(SQL), false, 'never session-wide');
+});
+test('0019: the live trigger no longer watches phone; the state CHECKs refuse it; bulk push paused by default', () => {
+  const fn = SQL19.slice(SQL19.indexOf('create or replace function podium.employees_google_sync_dirty'), SQL19.indexOf('-- ── 2.'));
+  assert.ok(fn.length > 500);
+  assert.equal(/phone/.test(fn), false, 'no phone in the function or the trigger');
+  for (const c of ['full_name', 'job_title', 'department_id', 'manager_id', 'employee_code', 'org_unit_path', 'work_email', 'status']) {
+    assert.match(fn, new RegExp(`old\\.${c} is distinct from new\\.${c}`), c);
+  }
+  assert.match(SQL19, /dirty_fields <@ array\['name', 'title', 'department', 'manager', 'employee_code', 'org_unit'\]/);
+  assert.match(SQL19, /google_bulk_push_paused boolean not null default true/);
+  assert.match(SRC, /if \(await bulkPushPaused\(env\)\) return j1bErr\('bulk_push_paused', 423\)/);
+  assert.ok(SRC.indexOf("bulkPushPaused(env)) return") > SRC.indexOf('if (d.dry_run) {'), 'preview stays allowed');
+  assert.match(SRC, /google_bulk_push_paused === false\)/, 'only an explicit false unpauses');
 });
 test('0015: the trigger watches exactly the D6 columns, IS DISTINCT FROM', () => {
   for (const c of ['full_name', 'job_title', 'department_id', 'manager_id', 'phone', 'employee_code', 'org_unit_path', 'work_email', 'status']) {
@@ -446,13 +462,13 @@ test('R2: identity changed between load and PUT (work email / status / Google id
   assert.equal(lost.calls.get, 0, 'a lost claim stops before the GET too');
 });
 
-test('R6: bad target OU + phone → the phone is pushed, the OU is not', async () => {
-  const e = wEmp({ phone: '+91 90000 00009', org_unit_path: '/Nowhere' });
-  const { out, calls } = await withFetch({}, () => pushOneToGoogle(ENVW, 't', e, sctxW(), { fields: ['phone', 'org_unit'], attemptId: ATT }));
+test('R6: bad target OU + title → the title is pushed, the OU is not; phones are never sent', async () => {
+  const e = wEmp({ job_title: 'Lead', phone: '+91 90000 00009', org_unit_path: '/Nowhere' });
+  const { out, calls } = await withFetch({}, () => pushOneToGoogle(ENVW, 't', e, sctxW(), { fields: ['title', 'org_unit'], attemptId: ATT }));
   assert.equal(out.outcome, 'ok');
   assert.deepEqual(out.fieldSkips, { org_unit: 'target_ou_unknown' });
   assert.equal(calls.put.length, 1);
-  assert.ok(calls.put[0].phones && !('orgUnitPath' in calls.put[0]));
+  assert.ok(calls.put[0].organizations && !('orgUnitPath' in calls.put[0]) && !('phones' in calls.put[0]));
 });
 
 test('R5: a response whose BODY stalls is aborted by the same deadline', async () => {
@@ -478,4 +494,39 @@ test('R1: an admin push is one-shot — never queued, nothing added to dirty_fie
   assert.match(push, /preview_required/);
   assert.match(SQL, /raise exception 'podium_fields_not_queueable'/);
   assert.match(SQL, /claimed_hash = null/);
+});
+
+test('bulk-push pause (0019): anything but an explicit false refuses a real push with 423; preview is never refused', async () => {
+  const ENVP = { ...ENVW, GOOGLE_SA_JSON: '{}', GOOGLE_ADMIN_SA_JSON: '{}', GOOGLE_ADMIN_IMPERSONATE_EMAIL: 'admin@legendoftoys.com' };
+  const AUTHP = { userId: AUTH_ID };
+  const body = { data: { employee_ids: [EMP_ID], dry_run: false, preview_hashes: { [EMP_ID]: 'a'.repeat(64) } } };
+  const run = async (settings, b = body) => {
+    const seen = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = async (u) => {
+      const url = String(u); seen.push(url);
+      if (url.includes('/rest/v1/google_admin_access')) return json([{ auth_user_id: AUTH_ID }]);
+      if (url.includes('/rest/v1/employees?auth_user_id=')) return json([{ id: EMP_ID }]);
+      if (url.includes('/rest/v1/settings')) return typeof settings === 'function' ? settings() : json(settings.body, settings.status || 200);
+      return json({ message: 'stop here' }, 500);
+    };
+    try { const r = await pushGoogleFields(b, AUTHP, ENVP, null); return { status: r.status, body: await r.json(), seen }; }
+    finally { globalThis.fetch = real; }
+  };
+  for (const s of [{ body: [{ google_bulk_push_paused: true }] }, { body: [] }, { body: [{ google_bulk_push_paused: null }] },
+    { body: [{ google_bulk_push_paused: 'false' }] }, { body: { code: '42703' }, status: 400 }]) {
+    const r = await run(s);
+    assert.equal(r.status, 423, JSON.stringify(s));
+    assert.equal(r.body.error, 'bulk_push_paused');
+    assert.equal(r.seen.some(u => /google_sync_claim|googleapis/.test(u)), false, 'nothing claimed or sent');
+  }
+  const thrown = await run(() => { throw new Error('network'); }).catch(e => ({ thrown: e }));
+  assert.ok(thrown.thrown || thrown.status === 423, 'a thrown read never pushes');
+  const open = await run({ body: [{ google_bulk_push_paused: false }] });
+  assert.notEqual(open.status, 423, 'exactly false → the push goes on');
+  assert.ok(open.seen.length > 3, 'went past the pause');
+  const pv = await run({ body: [{ google_bulk_push_paused: true }] }, { data: { employee_ids: [EMP_ID], dry_run: true } });
+  assert.notEqual(pv.status, 423, 'preview is not paused');
+  assert.equal(pv.seen.some(u => u.includes('google_bulk_push_paused')), false, 'preview never reads the pause');
+  assert.equal(typeof bulkPushPaused, 'function');
 });

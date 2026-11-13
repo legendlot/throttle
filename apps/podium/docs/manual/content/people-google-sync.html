@@ -7,11 +7,11 @@
   <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Directory &rarr; Sync from Google; a person&rsquo;s page.</div></div>
 </div>
 
-<h2 class="sec">Podium wins: the seven fields</h2>
-<p>Podium owns these Google fields: <strong>name</strong>, <strong>job title</strong>, <strong>department</strong>, <strong>manager</strong>, <strong>personal phone</strong>, <strong>employee code</strong> and <strong>org unit</strong>. Podium never copies them back from Google.</p>
+<h2 class="sec">Podium wins: the six fields</h2>
+<p>Podium owns these Google fields: <strong>name</strong>, <strong>job title</strong>, <strong>department</strong>, <strong>manager</strong>, <strong>employee code</strong> and <strong>org unit</strong>. Podium never copies them back from Google.</p>
 <div class="callout warn">
   <div class="c-title">&#9888; Editing these in Google is pointless</div>
-  <p>If you change one of the seven in Google, Podium&rsquo;s next change to that person overwrites it, and the Google vs Podium tab will show it as <em>differs</em>. Make the change in Podium instead. Anything not in the list (passwords, suspension, groups, the sign-in address) is never touched by Podium.</p>
+  <p>If you change one of the six in Google, Podium&rsquo;s next change to that person overwrites it, and the Google vs Podium tab will show it as <em>differs</em>. Make the change in Podium instead. Anything not in the list (passwords, suspension, groups, the sign-in address) is never touched by Podium.</p>
 </div>
 <p>A field that is blank in Podium leaves Google&rsquo;s value alone. The one exception is the manager: a person with no manager in Podium has their manager removed in Google.</p>
 
@@ -65,12 +65,16 @@
   <li><span class="s-title">Click Preview</span>. It shows exactly what would be sent to Google; nothing is changed yet.</li>
   <li><span class="s-title">Click Push to Google</span> and confirm. <strong>Push only works after a Preview</strong> of the same ticks, and sends in batches of eight people.</li>
 </ol>
+<div class="callout note">
+  <div class="c-title">&#9432; Bulk push is paused for now</div>
+  <p>Preview still works. The <strong>Push to Google</strong> button is replaced by the line &ldquo;Bulk push paused while Podium&rsquo;s data is checked.&rdquo; until the pause is lifted. Saving a person in Podium still updates that person&rsquo;s Google account with the fields the save changed, so editing a title in Podium updates Google. The steps above apply once the pause is lifted.</p>
+</div>
 <div class="callout warn">
   <div class="c-title">&#9888; Stale, and no automatic retry</div>
   <p>If someone changes a value between Preview and Push, that person is refused as <strong>stale</strong> (the others in the batch still go). Preview again for them. A <strong>failed admin push is not retried automatically</strong>; the screen lists who was not pushed and why, and you preview and push again.</p>
 </div>
 
 <div class="callout note">
-  <div class="c-title">&#9432; Personal phone is visible in Google</div>
-  <p>The personal phone goes to Google as the mobile number, so it shows in the Workspace directory unless your Google contact-sharing settings are restricted. Check that setting with a Google admin before relying on it staying private.</p>
+  <div class="c-title">&#9432; Phone numbers stay in Podium</div>
+  <p>Podium never sends phone numbers to Google and never changes a phone number in Google.</p>
 </div>
