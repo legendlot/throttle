@@ -189,6 +189,8 @@ const ERR = {
   founders_move_out: 'Only a super admin can move a task out of the Founders’ space.',
   founders_space: 'Only a super admin can do that in the Founders’ space.',
   founders_space_fixed: 'The Founders’ space can’t be archived or recovered.',
+  personal_space: 'A personal space is only yours — it can’t be shared, handed over or archived.',
+  personal_space_not_yours: 'Only your own work goes in your personal space: owned by you, no other team, hand-off, plan, program or collaborators.',
   bad_plan_item_id: 'Pick a plan item from the list.',
   // R3 — split, measure, proposals
   bad_children: 'A split needs 2 to 10 parts, each with a title, owner, due date and done-when.',

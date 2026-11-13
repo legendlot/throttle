@@ -211,6 +211,7 @@ test('H3: the /docket add reply names the owner and any @name it could not place
   assert.match(addReply('call vendor @riya', own, task, people, U(3)), /— call vendor — owner Riya Sharma\.$/);
   const mine = parseQuickAdd('call vendor', { people, now: new Date(NOW) });
   assert.match(addReply('call vendor', mine, task, people, U(3)), /— yours\.$/);
+  assert.match(addReply('call vendor', mine, { ...task, space_is_personal: true }, people, U(3)), /— yours, in your Personal space\.$/);   // P2
   const amb = parseQuickAdd('call @ri', { people, now: new Date(NOW) });
   const r = addReply('call @ri', amb, task, people, U(3));
   assert.match(r, /— yours\.\n@ri matched more than one person — kept as yours\./);

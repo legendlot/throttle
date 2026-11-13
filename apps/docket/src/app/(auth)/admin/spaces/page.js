@@ -70,7 +70,7 @@ export default function AdminSpacesPage() {
                     <td className="num">{s.is_default ? '—' : s.member_count}{!s.is_default && s.team_count ? <span className="dt-teams" title="Shared with whole teams"> + {s.team_count} {s.team_count === 1 ? 'team' : 'teams'}</span> : null}</td>
                     <td className="dt-created mono">{s.created_at ? fmtDate(s.created_at) : '—'}</td>
                     <td className="dt-act">
-                      {!s.is_default && !s.is_founders && (
+                      {!s.is_default && !s.is_founders && !s.is_personal && (
                         <Button size="sm" variant="ghost" icon={KeyRound} className="adm-recover" loading={busyId === s.id} onClick={() => recover(s)} title="Break-glass: become owner + member">Recover</Button>
                       )}
                     </td>

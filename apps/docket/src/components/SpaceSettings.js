@@ -23,16 +23,17 @@ export function SpaceSettings({ space, session, employees, showToast, onClose, o
     docketopsGet('getSpaceMembers', { space_id: space.id }, session).then(m => setMembers(m || [])).catch(() => {});
   }, [space.id, session]);
   useEffect(() => { loadMembers(); }, [loadMembers]);
+  const fixedSolo = !!space.is_personal;   // P2: your personal space — only you, never shared or archived
   const loadTeams = useCallback(() => {
-    if (space.is_founders) return;
+    if (space.is_founders || space.is_personal) { setTeams([]); return; }
     docketopsGet('getSpaceTeams', { space_id: space.id }, session).then(t => setTeams(t || []))
       .catch(e => { setTeams([]); showToast(planErrorText(e) || 'Could not load the teams', 'error'); });
-  }, [space.id, space.is_founders, session, showToast]);
+  }, [space.id, space.is_founders, space.is_personal, session, showToast]);
   useEffect(() => { loadTeams(); }, [loadTeams]);
   useEffect(() => {
-    if (space.is_founders) return;
+    if (space.is_founders || space.is_personal) return;
     docketopsGet('getDepartments', {}, session).then(d => setDepartments(d || [])).catch(() => {});
-  }, [space.is_founders, session]);
+  }, [space.is_founders, space.is_personal, session]);
   useEffect(() => {
     function onKey(e) { if (e.key === 'Escape') onClose(); }
     document.addEventListener('keydown', onKey);
@@ -98,7 +99,13 @@ export function SpaceSettings({ space, session, employees, showToast, onClose, o
           <button className="dk-press" style={{ ...primaryBtn, opacity: name.trim() && name.trim() !== space.name ? 1 : 0.5 }} disabled={!name.trim() || name.trim() === space.name} onClick={rename}>Save</button>
         </div>
 
-        {!space.is_founders && (
+        {fixedSolo && (
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 14, lineHeight: 1.5 }}>
+            Your personal space. Only you can see it, and it can't be shared or archived. Move your own work here;
+            anything other people need to see belongs in a shared space.
+          </div>
+        )}
+        {!space.is_founders && !fixedSolo && (
           <>
             <label style={{ ...label, marginTop: 16 }}>Shared with teams <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>· {teams ? teams.length : '…'}</span></label>
             <div style={memberList}>
@@ -123,6 +130,7 @@ export function SpaceSettings({ space, session, employees, showToast, onClose, o
           </>
         )}
 
+        {!fixedSolo && <>
         <label style={{ ...label, marginTop: 16 }}>People <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>· {members.length}</span></label>
         <div style={memberList}>
           {members.map(m => (
@@ -144,7 +152,8 @@ export function SpaceSettings({ space, session, employees, showToast, onClose, o
           </div>
         </div>
 
-        {transferable.length > 0 && (
+        </>}
+        {!fixedSolo && transferable.length > 0 && (
           <>
             <label style={{ ...label, marginTop: 16 }}>Transfer ownership</label>
             <Combobox value="" options={transferable} onChange={(v) => transfer(v)} placeholder="Hand ownership to a member…" allowClear={false} style={input} />
@@ -152,7 +161,7 @@ export function SpaceSettings({ space, session, employees, showToast, onClose, o
         )}
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 18, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-          {space.is_founders ? <span /> : <button className="dk-press" style={dangerBtn} onClick={archive}><Trash2 size={13} /> Archive space</button>}
+          {space.is_founders || fixedSolo ? <span /> : <button className="dk-press" style={dangerBtn} onClick={archive}><Trash2 size={13} /> Archive space</button>}
           <button className="dk-press" style={ghostBtn} onClick={onClose}>Done</button>
         </div>
       </div>

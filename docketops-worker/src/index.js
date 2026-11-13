@@ -368,7 +368,7 @@ async function keepAccessible(auth, tasks, env) {
 }
 // The space rows this request has already read, by id (canEditTask needs a task's space — spec §5.1
 // P0-a). Fed by loadTaskFor, keepAccessible and knowSpaces; one Map per request, on the auth object.
-const SPACE_COLS = 'id,name,is_default,is_private,owner_user_id,is_founders';
+const SPACE_COLS = 'id,name,is_default,is_private,owner_user_id,is_founders,is_personal';
 function noteSpaces(auth, rows) {
   const m = auth._spaceRows || (auth._spaceRows = new Map());
   for (const s of rows || []) if (s && s.id) m.set(s.id, s);
@@ -544,6 +544,7 @@ async function employeeDept(empId, env) {
 // the only member). A new top-level task there defaults to the caller as owner. A shared private space doesn't.
 async function isPersonalSpace(space, auth, env) {
   if (!space?.is_private || space.is_founders || space.archived_at || !auth.employeeId) return false;
+  if (space.is_personal) return space.owner_user_id === auth.userId;   // P2 (0036): THE personal space
   if (space.owner_user_id && space.owner_user_id !== auth.userId) return false;
   const [r, tr] = await Promise.all([
     sbDocket(`/rest/v1/space_members?space_id=eq.${enc(space.id)}&select=user_id`, env),
@@ -556,6 +557,41 @@ async function isPersonalSpace(space, auth, env) {
 async function defaultSpaceId(env) {
   const r = await sbDocket(`/rest/v1/spaces?is_default=eq.true&select=id&limit=1`, env);
   return (r.ok && r.data?.[0]?.id) || null;
+}
+// P2 (0036): the caller's personal space id — created on first use. Once per request; null on failure.
+function personalSpaceId(auth, env) {
+  if (!auth._personalP) {
+    auth._personalP = sbDocket(`/rest/v1/rpc/ensure_personal_space`, env, { method: 'POST', body: JSON.stringify({ p_user: auth.userId }) })
+      .then(r => (r.ok && typeof r.data === 'string' && isUuid(r.data)) ? r.data : null, () => null);
+  }
+  return auth._personalP;
+}
+// A task row that only its caller needs to see (P2): owned by the caller (never ownerless — that belongs in
+// The Grid), no other team, no hand-off, no plan / program link, not a checklist task, no collaborators. Only
+// such a task may be MOVED into a personal space (a personal space hides it from the team, view_all, admins
+// and any later owner / receiver until P3's "people on a task always see it" rule). P2 deliberately does NOT
+// route no-space creates there yet (hostile review 2026-11-13): that switch ships with P3.
+function isJustMine(t, auth) {
+  if (!auth.employeeId || !t.owner_employee_id || lcId(t.owner_employee_id) !== lcId(auth.employeeId)) return false;
+  if (t.department_id && lcId(t.department_id) !== lcId(auth.departmentId || '')) return false;
+  if (t.handoff_to_department_id || t.handoff_to_employee_id) return false;
+  if (t.plan_item_id || t.program_id || t.is_recurring) return false;
+  return true;
+}
+// Which of these top-level task ids can't move into a personal space: the task or any sub-task isn't just the
+// caller's, or anyone collaborates on them. Fails closed (a failed read blocks them all).
+async function personalMoveBlocks(auth, ids, env) {
+  if (!ids.length) return new Set();
+  const fr = await sbDocket(`/rest/v1/tasks?or=(id.in.${inList(ids)},parent_task_id.in.${inList(ids)})&select=id,parent_task_id,owner_employee_id,department_id,handoff_to_department_id,handoff_to_employee_id,plan_item_id,program_id,is_recurring`, env);
+  if (!fr.ok) return new Set(ids);
+  const rows = fr.data || [];
+  const famOf = (r) => r.parent_task_id || r.id;
+  const cr = rows.length ? await sbDocket(`/rest/v1/task_collaborators?task_id=in.${inList(rows.map(r => r.id))}&select=task_id`, env) : { ok: true, data: [] };
+  if (!cr.ok) return new Set(ids);
+  const collab = new Set((cr.data || []).map(c => c.task_id));
+  const blocked = new Set();
+  for (const r of rows) if (!isJustMine(r, auth) || collab.has(r.id)) blocked.add(famOf(r));
+  return blocked;
 }
 async function isSpaceMember(spaceId, userId, env) {
   const r = await sbDocket(`/rest/v1/space_members?space_id=eq.${enc(spaceId)}&user_id=eq.${enc(userId)}&select=user_id&limit=1`, env);
@@ -603,23 +639,25 @@ async function accessibleSpaces(auth, env) {
   const orParts = [`owner_user_id.eq.${auth.userId}`];
   if (memberIds.length) orParts.push(`id.in.${inList(memberIds)}`);
   const ownedRes = await sbDocket(
-    `/rest/v1/spaces?is_private=eq.true&archived_at=is.null&or=(${orParts.join(',')})&select=id,name,is_private,owner_user_id,is_founders&order=name.asc`, env);
+    `/rest/v1/spaces?is_private=eq.true&archived_at=is.null&or=(${orParts.join(',')})&select=id,name,is_private,owner_user_id,is_founders,is_personal&order=name.asc`, env);
   const general = (defRes.ok && defRes.data) || [];
   // A Founders' space reached only through a team share is dropped (see canAccessSpace).
   const privates = ((ownedRes.ok && ownedRes.data) || []).filter(s => !s.is_founders || s.owner_user_id === auth.userId || direct.has(s.id));
   return [...general, ...privates].map(s => ({ id: s.id, name: s.name, is_private: s.is_private, is_owner: s.owner_user_id === auth.userId,
-    ...(s.is_founders ? { is_founders: true } : {}) }));
+    ...(s.is_founders ? { is_founders: true } : {}), ...(s.is_personal ? { is_personal: true } : {}) }));
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 // GET handlers
 // ════════════════════════════════════════════════════════════════════════════
 async function getMe(url, auth, env) {
-  const [spaces, can_view_dashboard] = await Promise.all([
+  let [spaces, can_view_dashboard] = await Promise.all([
     accessibleSpaces(auth, env),
     canViewDashboard(auth, env),
     touchActivity(auth, env),   // app-load presence ping (RULE-DOCKET-008 / last-seen)
   ]);
+  // P2: everyone has a personal space — made on the first app load that finds none (one extra read, once).
+  if (!spaces.some(s => s.is_personal && s.is_owner) && await personalSpaceId(auth, env)) spaces = await accessibleSpaces(auth, env);
   // Programs sidebar (cross-space): only programs the caller has >=1 visible task in, with counts.
   const memberSpaceIds = spaces.filter(s => s.is_private).map(s => s.id);
   const defaultId = (spaces.find(s => !s.is_private) || {}).id || await defaultSpaceId(env);
@@ -1910,7 +1948,8 @@ async function createTaskCore(d, auth, env) {
   // The link's history row stores the item id only (rendered through the projection at read time).
   if (planItemId) await logHistory(env, task.id, auth, 'plan_item_id_changed', { field: 'plan_item_id', new: planItemId });
   if (hoFields) await logHistory(env, task.id, auth, ...handoffHistory({}, hoFields));
-  return ok({ id: task.id, task_no: task.task_no, owner_employee_id: task.owner_employee_id || null, department_id: task.department_id || null });
+  return ok({ id: task.id, task_no: task.task_no, owner_employee_id: task.owner_employee_id || null, department_id: task.department_id || null,
+    space_id: task.space_id || spaceId, space_name: space.name, space_is_personal: !!space.is_personal });
 }
 async function createTask(body, auth, env)    { return createTaskCore(body.data || body, auth, env); }
 async function createSubtask(body, auth, env) {
@@ -2610,9 +2649,12 @@ async function bulkMoveTasks(body, auth, env) {
   const rb = await recordMoveBlocks(moving.map(t => t.id), d.space_id, env);
   if (rb.error) return rb.error;
   const record_link_space = moving.filter(t => rb.blocked.has(t.id)).map(t => t.task_no);
-  const targets = moving.filter(t => !rb.blocked.has(t.id));
-  skipped += record_link_space.length;
-  if (!targets.length) return ok({ updated: 0, skipped, space_id: d.space_id, record_link_space });
+  // P2: into a personal space only what is just yours (task + sub-tasks); the rest are skipped and named.
+  const pb = target.is_personal ? await personalMoveBlocks(auth, moving.filter(t => !rb.blocked.has(t.id)).map(t => t.id), env) : new Set();
+  const personal_space = moving.filter(t => !rb.blocked.has(t.id) && pb.has(t.id)).map(t => t.task_no);
+  const targets = moving.filter(t => !rb.blocked.has(t.id) && !pb.has(t.id));
+  skipped += record_link_space.length + personal_space.length;
+  if (!targets.length) return ok({ updated: 0, skipped, space_id: d.space_id, record_link_space, ...(personal_space.length ? { personal_space } : {}) });
   // A4: leaving the Founders' space needs a plan admin (spaceOf: keepAccessible read these spaces).
   if (!isPlanAdmin(auth) && targets.some(t => spaceOf(auth, t)?.is_founders)) return err('founders_move_out', 403);
   const targetIds = targets.map(t => t.id);
@@ -2635,7 +2677,7 @@ async function bulkMoveTasks(body, auth, env) {
   }
   await logHistoryBatch(env, auth, targets.map(t => ({
     task_id: t.id, event_type: 'space_changed', field: 'space_id', old: t.space_id, new: d.space_id })));
-  return ok({ updated: targets.length, skipped, space_id: d.space_id, record_link_space });
+  return ok({ updated: targets.length, skipped, space_id: d.space_id, record_link_space, ...(personal_space.length ? { personal_space } : {}) });
 }
 
 // Abandon N tasks with ONE reason.
@@ -2745,6 +2787,8 @@ async function moveTask(body, auth, env) {
   if (task.parent_task_id) return err('subtask_moves_with_parent: move its parent task instead', 422);
   // A4: a task leaves the Founders' space only with a plan admin (it stays founders-only, linked or not).
   if (TASK_SPACE.get(task)?.is_founders && !isPlanAdmin(auth)) return err('founders_move_out', 403);
+  // P2: only work that is just yours goes into your personal space (it would vanish for everyone else).
+  if (target.is_personal && (await personalMoveBlocks(auth, [task.id], env)).size) return err('personal_space_not_yours', 422);
   // F8 P2: a task (or a sub-task moving with it) tied to a record checklist moves only where the link rule holds.
   const rb = await recordMoveBlocks([task.id], d.space_id, env);
   if (rb.error) return rb.error;
@@ -3042,6 +3086,7 @@ async function archiveSpace(body, auth, env) {
   const d = body.data || body; if (!d.id) return err('id required', 400);
   const space = await loadSpace(d.id, env); const gate = await requireSpaceOwner(auth, space); if (gate) return gate;
   if (space.is_founders) return err('founders_space_fixed', 403);   // nothing could un-archive it
+  if (space.is_personal) return err('personal_space', 422);
   await sbDocket(`/rest/v1/spaces?id=eq.${enc(d.id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ archived_at: nowIso() }) });
   await logSpace(env, d.id, auth.userId, 'archived', null);
   return ok({ id: d.id, archived: true });
@@ -3049,6 +3094,7 @@ async function archiveSpace(body, auth, env) {
 async function addSpaceMember(body, auth, env) {
   const d = body.data || body; if (!d.space_id || !d.user_id) return err('space_id and user_id required', 400);
   const space = await loadSpace(d.space_id, env); const gate = await requireSpaceOwner(auth, space); if (gate) return gate;
+  if (space.is_personal) return err('personal_space', 422);   // P2: nobody else, ever
   // The Founders' space (§5.2): a plan admin adds, and only a plan admin joins.
   if (space.is_founders && !(isPlanAdmin(auth) && await userIsPlanAdminStrict(d.user_id, env))) return err('founders_space', 403);
   await sbDocket(`/rest/v1/space_members?on_conflict=space_id,user_id`, env, { method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates',
@@ -3063,6 +3109,7 @@ async function shareSpaceWithTeam(body, auth, env) {
   if (!isUuid(String(d.department_id))) return err('invalid department_id', 400);
   const space = await loadSpace(d.space_id, env); const gate = await requireSpaceOwner(auth, space); if (gate) return gate;
   if (space.is_founders) return err('founders_space', 403);
+  if (space.is_personal) return err('personal_space', 422);
   const dr = await sbPodium(`/rest/v1/departments?id=eq.${enc(d.department_id)}&active=eq.true&select=id,name&limit=1`, env);
   if (!dr.ok) return err('db_error', 500);
   if (!dr.data?.length) return err('unknown team', 422);
@@ -3100,6 +3147,7 @@ async function transferSpaceOwnership(body, auth, env) {
   if (!space) return err('space_not_found', 404);
   if (space.is_default) return err('general_is_system', 422);
   if (!isSpaceOwner(auth, space)) return err('forbidden_space_owner', 403);
+  if (space.is_personal) return err('personal_space', 422);
   if (!(await isSpaceMember(d.space_id, d.new_owner_user_id, env))) return err('new owner must be a member first', 422);
   if (space.is_founders && !(await userIsPlanAdminStrict(d.new_owner_user_id, env))) return err('founders_space', 403);
   await sbDocket(`/rest/v1/spaces?id=eq.${enc(d.space_id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ owner_user_id: d.new_owner_user_id }) });
@@ -3128,6 +3176,8 @@ async function recoverSpace(body, auth, env) {
   if (!space || space.is_default) return err('not_recoverable', 422);
   // Admin recovery never applies to the Founders' space (§5.2) — not even the un-archive path.
   if (space.is_founders) return err('founders_space_fixed', 403);
+  // A personal space is never taken over (P3 decides what happens to a leaver's personal tasks).
+  if (space.is_personal) return err('personal_space', 422);
   if (!(await spaceOwnerGone(space.owner_user_id, env))) {
     if (!space.archived_at) return err('owner_still_active: only a space whose owner has left can be recovered — ask the owner to add you or transfer it', 409);
     await sbDocket(`/rest/v1/spaces?id=eq.${enc(d.space_id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ archived_at: null }) });

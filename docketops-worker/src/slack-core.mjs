@@ -231,7 +231,7 @@ export async function resolveSlackPerson(slackUserId, deps, nowMs = Date.now()) 
 // people: getEmployees rows; selfId: the person's employee id.
 export function addReply(text, q, task, people = [], selfId = null) {
   const owner = q.owner_employee_id && q.owner_employee_id !== selfId ? people.find(p => p.id === q.owner_employee_id) : null;
-  const who = owner ? `owner ${owner.full_name}` : 'yours';
+  const who = owner ? `owner ${owner.full_name}` : task.space_is_personal ? 'yours, in your Personal space' : 'yours';   // P2
   const placed = new Set((q.tokens || []).filter(t => t.kind === 'owner').map(t => t.raw.toLowerCase()));
   const notes = [];
   for (const w of String(text || '').split(/\s+/)) {

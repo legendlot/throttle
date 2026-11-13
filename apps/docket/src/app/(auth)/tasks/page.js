@@ -341,7 +341,8 @@ function TasksBoard() {
     if (!programReady) return false;   // program page still loading its tasks: no capture yet
     const body = mineMode ? { title, assign_self: true }
       : inProgramMode ? { title, space_id: (programSpace || programDefaultSpace) || undefined, program_id: viewProgramId }
-      : { title, space_id: spaceId || undefined };
+      // General's own add row names General: since P2 a create with NO space goes to your personal space.
+      : { title, space_id: spaceId || (spaces.find(s => !s.is_private) || {}).id || undefined };
     // The active single-value filters carry into the new task, so it lands in the view you're looking at
     // (Afshaan 2026-11-13). The group's value is narrower and goes over them; quick-add tokens go over both.
     if (!mineMode) {
@@ -611,7 +612,9 @@ function TasksBoard() {
     try {
       const res = await docketopsPost(action, { ids, ...payload }, session);
       const updated = res?.updated ?? 0, skipped = res?.skipped ?? 0;
-      showToast(`${verb} ${updated}${skipped ? ` · skipped ${skipped}` : ''}`, updated ? 'success' : 'info');
+      // P2: a move into a personal space skips work that isn't just yours — say why.
+      const why = res?.personal_space?.length ? ` (not just yours: ${res.personal_space.slice(0, 3).join(', ')}${res.personal_space.length > 3 ? '…' : ''})` : '';
+      showToast(`${verb} ${updated}${skipped ? ` · skipped ${skipped}${why}` : ''}`, updated ? 'success' : 'info');
       clearSelection();
       await load();
     } catch (e) { showToast(planErrorText(e) || `${verb} failed`, 'error'); }

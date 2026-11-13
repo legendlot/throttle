@@ -11,7 +11,7 @@
 //
 // ≤767px the same element becomes a slide-over (CSS: `.dks.mobile-open`).
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { ChevronDown, Plus, Lock, MoreHorizontal, SlidersHorizontal, Check, Target } from 'lucide-react';
+import { ChevronDown, Plus, Lock, MoreHorizontal, SlidersHorizontal, Check, Target, User } from 'lucide-react';
 import { IconButton, Button, Menu, MenuItem, MenuLabel } from './ui/index.js';
 import { personColor } from './primitives.js';
 import { ADMIN_ITEMS } from '../lib/nav.js';
@@ -70,7 +70,8 @@ export function DocketSidebar({
   collapsed = false, mobileOpen = false, onSelect, onNewSpace, onNewProgram, onSpaceSettings,
 }) {
   const privates = (spaces || []).filter(s => s.is_private);
-  const mySpaces = privates.filter(s => s.is_owner);
+  // Your personal space (P2) leads My spaces.
+  const mySpaces = privates.filter(s => s.is_owner).sort((a, b) => (b.is_personal ? 1 : 0) - (a.is_personal ? 1 : 0));
   const otherSpaces = privates.filter(s => !s.is_owner);
   // General is the non-private (default) space. It carries a badge like any other
   // (S309); the worker omits task_count entirely when a space has no open work, so
@@ -95,7 +96,8 @@ export function DocketSidebar({
 
   const spaceRow = (s) => (
     <Row key={s.id} depth={2} label={s.name} count={s.task_count}
-      lead={<Lock size={12} strokeWidth={2} style={{ color: personColor(s.id) }} aria-label="Private" />}
+      lead={s.is_personal ? <User size={12} strokeWidth={2} style={{ color: 'var(--docket-accent)' }} aria-label="Personal — only you" />
+        : <Lock size={12} strokeWidth={2} style={{ color: personColor(s.id) }} aria-label="Private" />}
       active={activeKey === '/tasks?space=' + s.id} onClick={go('/tasks?space=' + s.id)}
       actions={s.is_owner && onSpaceSettings
         ? <IconButton icon={MoreHorizontal} size="sm" label="Space settings" onClick={() => onSpaceSettings(s)} />
