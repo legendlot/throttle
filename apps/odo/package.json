@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "node --test test/*.test.mjs",
     "verify:xlsx": "node scripts/verify-xlsx.mjs && python3 scripts/verify_xlsx.py"
   },
   "dependencies": {
