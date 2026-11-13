@@ -312,6 +312,74 @@ t('an AUTHENTICATED capture keeps full headers — that is the discovery value',
   assert.strictEqual(captures[0].headers['x-vendor'], 'limechat');
 });
 
+// ── 2026-11-13: LimeChat dials, Relay reacts — outcome fields are top-level properties ──
+t('LimeChat call-end fields land as top-level properties a journey condition can read', async () => {
+  reset();
+  const body = { event: 'ai_agent_call_end', phone: '9876543210', call_id: 'lc-1',
+    outcome: 'answered_confirmed', reason: 'Customer agreed to receive the checkout link.',
+    checkout_link_requested: true, human_followup_requested: 'FALSE', item_name: 'Harry Potter Figures',
+    cart_price: 1499, checkout_url: 'https://checkout.shopflo.co/stable/abc?x=1', tenant_id: '29458', notes: 'x' };
+  await LC.handleLimechatWebhook(ENV, req(body));
+  const p = ingested[0].properties;
+  assert.strictEqual(p.outcome, 'answered_confirmed');
+  assert.strictEqual(p.checkout_link_requested, 'true');
+  assert.strictEqual(p.human_followup_requested, 'false');
+  assert.strictEqual(p.item_name, 'Harry Potter Figures');
+  assert.strictEqual(p.cart_price, '1499');
+  assert.strictEqual(p.vendor_event, 'ai_agent_call_end');
+  assert.strictEqual(p.checkout_url, 'https://checkout.shopflo.co/stable/abc?x=1');
+  assert.strictEqual(p.checkout_url_suffix, 'abc?x=1', 'the WA cart button binds the suffix');
+  assert.deepStrictEqual(p.raw, body);
+});
+
+t('vendorOutcome: missing, nested and empty keys are never invented', () => {
+  assert.deepStrictEqual(LC.vendorOutcome({ outcome: '', checkout_link_requested: null,
+    reason: { a: 1 }, nested: { outcome: 'x' } }), {});
+  assert.deepStrictEqual(LC.vendorOutcome(null), {});
+  assert.deepStrictEqual(LC.vendorOutcome([{ outcome: 'x' }]), {});
+  assert.strictEqual(LC.vendorOutcome({ reason: 'r'.repeat(500) }).reason.length, 300);
+});
+
+t('another LimeChat tenant is captured but never becomes an event', async () => {
+  reset();
+  const r = await LC.handleLimechatWebhook(ENV, req({ event: 'ai_agent_call_end', tenant_id: '25', account_id: 1,
+    phone: '919352178961', outcome: 'answered_confirmed', checkout_link_requested: true }));
+  assert.strictEqual(ingested.length, 0, 'a sofa shop customer must never enter a LOT journey');
+  assert.strictEqual(captures.length, 1);
+  assert.strictEqual(r.reason, 'foreign_tenant');
+  assert.strictEqual(LC.foreignTenant({}, { tenant_id: 29458 }), false);
+  assert.strictEqual(LC.foreignTenant({}, {}), false, 'no tenant (Relay-placed calls) still emits');
+  assert.strictEqual(LC.foreignTenant({ LIMECHAT_TENANT_IDS: '1, 2' }, { tenant_id: '2' }), false);
+});
+
+t('vendorOutcome: flags normalise, foreign links are dropped', () => {
+  const o = LC.vendorOutcome({ checkout_link_requested: 1, human_followup_requested: 'No' });
+  assert.strictEqual(o.checkout_link_requested, 'true');
+  assert.strictEqual(o.human_followup_requested, 'false');
+  assert.strictEqual(LC.vendorOutcome({ checkout_url: 'https://evil.example/legendoftoys.com' }).checkout_url, undefined);
+  assert.strictEqual(LC.vendorOutcome({ checkout_url: 'https://legendoftoys.com.evil.io/x' }).checkout_url, undefined);
+  const lot = LC.vendorOutcome({ checkout_url: 'https://legendoftoys.com/cart' });
+  assert.strictEqual(lot.checkout_url, 'https://legendoftoys.com/cart');
+  assert.strictEqual(lot.checkout_url_suffix, undefined, 'off the Shopflo base → no suffix, the send fails loud');
+});
+
+t('a condition on the real 12 Nov payload takes the link branch', () => {
+  const G = require('../src/journey-graph.js');
+  const props = LC.vendorOutcome({ event: 'ai_agent_call_end', outcome: 'answered_confirmed', checkout_link_requested: true });
+  assert.strictEqual(G.evalEventProperty({ field: 'checkout_link_requested', op: 'eq', value: 'true' }, props), true);
+  assert.strictEqual(G.evalEventProperty({ field: 'outcome', op: 'eq', value: 'Answered_Confirmed' }, props), true);
+});
+
+t('LimeChat DD/MM/YYYY timestamps parse as IST day-first', () => {
+  const now = new Date(Date.now() - 2 * 3600 * 1000);   // two hours ago, inside the bounds
+  const ist = new Date(now.getTime() + 5.5 * 3600 * 1000);
+  const dd = String(ist.getUTCDate()).padStart(2, '0'), mm = String(ist.getUTCMonth() + 1).padStart(2, '0');
+  const hh = String(ist.getUTCHours()).padStart(2, '0'), mi = String(ist.getUTCMinutes()).padStart(2, '0');
+  const got = LC.extract({ updated_at: `${dd}/${mm}/${ist.getUTCFullYear()} ${hh}:${mi}:00` });
+  assert.ok(got.occurred_at, 'parsed');
+  assert.ok(Math.abs(new Date(got.occurred_at).getTime() - now.getTime()) < 61000, got.occurred_at);
+});
+
 run().then(() => {
   A.sbComms = realSb; ingestMod.ingest = realIngest;
   console.log(`\n${pass} passed, ${fail} failed`);

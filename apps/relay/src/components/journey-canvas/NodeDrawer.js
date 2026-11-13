@@ -30,7 +30,9 @@ const COND_KINDS = [
 ];
 // event_property field suggestions — the enriched/most-branched-on trigger properties.
 const EVENT_PROP_SUGGEST = ['primary_category', 'total', 'is_cod', 'financial_status',
-  'line_item_count', 'product_title', 'product_names'];
+  'line_item_count', 'product_title', 'product_names',
+  // voice_call_received (LimeChat call end, 2026-11-13) — "true"/"false" for the two flags
+  'outcome', 'checkout_link_requested', 'human_followup_requested'];
 const EVENT_PROP_OPS = [
   { id: 'eq', label: 'is' }, { id: 'neq', label: 'is not' },
   { id: 'contains', label: 'contains' }, { id: 'in', label: 'is any of (comma-sep)' },

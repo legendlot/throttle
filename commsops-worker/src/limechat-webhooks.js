@@ -1,5 +1,11 @@
 // LimeChat voice webhook receiver (POST /webhooks/limechat) — Phase 0 of the voice channel.
 //
+// ⭐ UPDATE 2026-11-13 (Afshaan): LIMECHAT DIALS, RELAY REACTS is now the live design for abandonment
+// calls (reference/decisions.md). The outcome is no longer neutral: LimeChat's call-end fields are
+// lifted to top-level event properties (vendorOutcome below) so a Relay journey can branch on them,
+// and only LOT's own LimeChat tenant emits an event at all (another client's test flow hit this URL
+// on 29–30 Oct). The Phase-0 text below is the history of how the receiver was built.
+//
 // WHAT THIS IS FOR. LimeChat runs the AI voice bot for CART ABANDONMENT calls (⚠️ NOT COD —
 // LOT moved to partial payment, ₹100 upfront + rest at delivery; Afshaan 2026-09-04). Phase 0
 // is CAPTURE ONLY: LimeChat keeps triggering calls off its own Shopflo integration, and Relay
@@ -33,6 +39,7 @@ const A = require('./auth.js');
 const { ingest } = require('./ingest.js');
 const { normalizePhone } = require('./shopify.js');
 const V = require('./voice.js');
+const SF = require('./shopflo.js');
 
 // A transcript or summary never rides into comms.events (spec §5: 1.3–5× the largest events
 // payload ever stored, and getProfile selects * over the last 50 events). The raw capture keeps
@@ -49,11 +56,9 @@ function withoutTranscript(body, depth = 0) {
   return out;
 }
 
-// The one event we emit. Deliberately OUTCOME-NEUTRAL: it records that a call happened and
-// attaches the vendor's whole payload, without asserting what the call meant. The send rule
-// Afshaan settled (message only when the call left something for us to say — unresolved, or
-// unreached in any form; never after a purchase or an explicit "I don't need it anymore")
-// is implemented LATER, against real dispositions, not guessed here.
+// The one event we emit. The NAME stays outcome-neutral; since 2026-11-13 the PROPERTIES carry
+// LimeChat's own outcome fields (vendorOutcome) and the send rule lives in the Relay journey that
+// triggers on it (Pruthvi's canvas), not in this file.
 const EVENT_NAME = 'voice_call_received';
 
 function isConfigured(env) { return !!env.LIMECHAT_WEBHOOK_TOKEN; }
@@ -154,7 +159,12 @@ function extract(body) {
   if (whenRaw != null) {
     // Accept ISO strings and epoch seconds/millis alike — vendors differ and we cannot ask yet.
     const n = Number(whenRaw);
-    const d = Number.isFinite(n) && String(whenRaw).trim() !== ''
+    // LimeChat sends "12/11/2026 12:14:33" = DD/MM/YYYY IST. JS reads that as MM/DD, which is
+    // wrong but in-bounds on some days (11 Dec would land as 12 Nov) — parse it explicitly.
+    const dm = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(String(whenRaw).trim());
+    const d = dm
+      ? new Date(`${dm[3]}-${dm[2].padStart(2, '0')}-${dm[1].padStart(2, '0')}T${(dm[4] || '0').padStart(2, '0')}:${dm[5] || '00'}:${dm[6] || '00'}+05:30`)
+      : Number.isFinite(n) && String(whenRaw).trim() !== ''
       ? new Date(n > 1e12 ? n : n * 1000)
       : new Date(String(whenRaw));
     // ⚠️ BOUNDED. `new Date("2026")`, `Number(true)`, `0` and `-1` all coerce to *valid* dates in
@@ -177,6 +187,67 @@ function extract(body) {
     order_no: (() => { const v = findField(body, KEYS.orderNo); return v != null ? String(v) : null; })(),
     occurred_at: occurredAt,
   };
+}
+
+// LimeChat's own call-end fields, lifted to TOP-LEVEL event properties so a Relay journey can
+// branch on them with the existing `event_property` condition (it reads top-level keys only).
+// Afshaan 2026-11-13: LimeChat dials from its own journey and Relay REACTS to the outcome
+// (supersedes the S400 "Relay dials" plan for abandonment calls). Shape seen live 2026-11-12
+// (`event: ai_agent_call_end`): outcome · reason · checkout_link_requested ·
+// human_followup_requested · item_name · cart_price — plus `checkout_url`, ASKED of LimeChat
+// 2026-11-13 so a Relay send can carry the customer's link ({checkout_url}). Top level only, scalars only, exact keys —
+// a missing key stays missing (a journey then takes its "no" branch), never invented.
+// Only LOT's LimeChat tenant may emit (review 2026-11-13: a sofa shop's flow, tenant 25, posted
+// here with the shared token on 29–30 Oct). A payload naming another tenant is captured raw and
+// acked, never ingested. A payload with NO tenant_id still emits — Relay-placed calls and older
+// shapes carry none. Override with the LIMECHAT_TENANT_IDS secret (comma list).
+const LOT_LIMECHAT_TENANTS = '29458';
+function foreignTenant(env, body) {
+  const t = body && typeof body === 'object' ? body.tenant_id : null;
+  if (t === null || t === undefined || t === '') return false;
+  const allow = String(env.LIMECHAT_TENANT_IDS || LOT_LIMECHAT_TENANTS).split(',').map((x) => x.trim()).filter(Boolean);
+  return !allow.includes(String(t).trim());
+}
+
+// A link we put in a LOT-branded message must point at LOT or its checkout — never a host a
+// payload chose.
+function lotLink(u) {
+  try {
+    const h = new URL(String(u)).hostname.toLowerCase();
+    const ok = (d) => h === d || h.endsWith('.' + d);
+    return ok('legendoftoys.com') || ok('shopflo.co') || ok('myshopify.com');
+  } catch { return false; }
+}
+
+const TRUE_WORDS = new Set(['true', '1', 'yes', 'y']);
+const FALSE_WORDS = new Set(['false', '0', 'no', 'n']);
+function flag(v) {
+  const w = String(v).trim().toLowerCase();
+  return TRUE_WORDS.has(w) ? 'true' : FALSE_WORDS.has(w) ? 'false' : w;
+}
+
+const VENDOR_OUTCOME_KEYS = ['event', 'outcome', 'reason', 'checkout_link_requested',
+  'human_followup_requested', 'item_name', 'cart_price', 'checkout_url'];
+function vendorOutcome(body) {
+  const out = {};
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return out;
+  for (const k of VENDOR_OUTCOME_KEYS) {
+    const v = body[k];
+    if (v === null || v === undefined || v === '' || typeof v === 'object') continue;
+    if (k === 'checkout_url') {
+      if (!lotLink(v)) continue;                     // a foreign link is dropped, not sent
+      out.checkout_url = String(v).slice(0, 2000);
+      // The WA cart template's button binds only the suffix after the Shopflo base.
+      const suf = SF.checkoutUrlSuffix(out.checkout_url);
+      if (suf) out.checkout_url_suffix = suf;
+      continue;
+    }
+    // Flags arrive as true / "true" / 1 / "Yes"; one spelling so `is true` always matches.
+    const val = (k === 'checkout_link_requested' || k === 'human_followup_requested')
+      ? flag(v) : String(v).slice(0, 300);
+    out[k === 'event' ? 'vendor_event' : k] = val;
+  }
+  return out;
 }
 
 // ── raw capture ───────────────────────────────────────────────────────────────────────────
@@ -228,7 +299,7 @@ async function handleLimechatWebhook(env, request) {
   // ⭐ RELAY-REQUESTED CALL (S400, 2026-09-25). A payload carrying our `call_ref` belongs to a call
   // Relay placed through adapters/voice.js: it updates that comms.voice_calls row and, on call end,
   // emits `voice_call_ended` for journeys. Everything below this block is the Phase-0 path for a
-  // payload that names no call of ours — stored, emitted outcome-neutral, and never acted on.
+  // payload that names no call of ours — stored, and emitted with LimeChat's outcome fields for a Relay journey to react to (2026-11-13).
   // A call_ref we do not recognise (or whose phone does not match) is NOT allowed to fall through
   // to the Phase-0 path either: it is captured above and answered, nothing more.
   if (V.hasCallRefKey(body)) {
@@ -241,6 +312,12 @@ async function handleLimechatWebhook(env, request) {
     if (['ledger_read_failed', 'ledger_write_failed', 'apply_error'].includes(r.reason))
       return { ok: false, error: r.reason, status: 503 };
     return { ok: true, captured: true, ...r };
+  }
+
+  // Another LimeChat client's call (shared token) — keep the capture, emit nothing.
+  if (foreignTenant(env, body)) {
+    console.log('limechat_foreign_tenant', String(body.tenant_id).slice(0, 20));
+    return { ok: true, captured: true, mapped: false, reason: 'foreign_tenant', extracted: got };
   }
 
   // No usable identity → nothing to attach a call to. Still a 200: the payload is safely stored
@@ -278,6 +355,7 @@ async function handleLimechatWebhook(env, request) {
     // The WHOLE vendor payload rides along under `raw`. When the disposition vocabulary settles,
     // the outcome rule can be written against real fields without a backfill or a re-send.
     properties: {
+      ...vendorOutcome(body),
       call_id: got.call_id, status: got.status, remarks: got.remarks,
       order_no: got.order_no, phone_raw: got.phone_raw, raw: withoutTranscript(body),
     },
@@ -302,4 +380,4 @@ async function handleLimechatWebhook(env, request) {
   };
 }
 
-module.exports = { handleLimechatWebhook, isConfigured, tokenOk, extract, findField, bodyHash, withoutTranscript, EVENT_NAME };
+module.exports = { handleLimechatWebhook, isConfigured, tokenOk, extract, findField, bodyHash, withoutTranscript, vendorOutcome, foreignTenant, EVENT_NAME };
