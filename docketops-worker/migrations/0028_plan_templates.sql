@@ -1,4 +1,6 @@
 -- 0028_plan_templates.sql — F9 R9a (docket_plan_templates_v1): plan templates (spec §11).
+-- ⚠ plan_template_apply's space gate was widened IN PLACE by 0034 + 0035 (team shares). Re-read the LIVE body
+-- (pg_get_functiondef) before re-creating it from this file, or the team clause is silently dropped.
 -- A template is a reusable tree of milestones / results / tasks with ROLE labels and day offsets; applying it
 -- to an anchor (a theme for a `founders` template, a milestone for a `leads` one) creates every node through
 -- the normal path — plan items through docket.plan_create, tasks as createTaskCore writes them — in ONE

@@ -355,14 +355,15 @@ async function seesTask(auth, task, env) {
 async function keepAccessible(auth, tasks, env) {
   if (!tasks.length) return tasks;
   const spaceIds = uniq(tasks.map(t => t.space_id));
-  const [sr, mr] = await Promise.all([
+  const [sr, mr, team] = await Promise.all([
     sbDocket(`/rest/v1/spaces?id=in.${inList(spaceIds)}&select=${SPACE_COLS}`, env),
     sbDocket(`/rest/v1/space_members?space_id=in.${inList(spaceIds)}&user_id=eq.${enc(auth.userId)}&select=space_id`, env),
+    teamSpaceSet(auth, env),
   ]);
   if (!sr.ok || !mr.ok) return [];   // fail closed
   noteSpaces(auth, sr.data || []);
   const member = new Set((mr.data || []).map(m => m.space_id));
-  const ok = new Set((sr.data || []).filter(sp => sp.is_default || sp.owner_user_id === auth.userId || member.has(sp.id)).map(sp => sp.id));
+  const ok = new Set((sr.data || []).filter(sp => sp.is_default || sp.owner_user_id === auth.userId || member.has(sp.id) || (team.has(sp.id) && !sp.is_founders)).map(sp => sp.id));
   return tasks.filter(t => ok.has(t.space_id));
 }
 // The space rows this request has already read, by id (canEditTask needs a task's space — spec §5.1
@@ -544,8 +545,11 @@ async function employeeDept(empId, env) {
 async function isPersonalSpace(space, auth, env) {
   if (!space?.is_private || space.is_founders || space.archived_at || !auth.employeeId) return false;
   if (space.owner_user_id && space.owner_user_id !== auth.userId) return false;
-  const r = await sbDocket(`/rest/v1/space_members?space_id=eq.${enc(space.id)}&select=user_id`, env);
-  if (!r.ok) return false;
+  const [r, tr] = await Promise.all([
+    sbDocket(`/rest/v1/space_members?space_id=eq.${enc(space.id)}&select=user_id`, env),
+    sbDocket(`/rest/v1/space_teams?space_id=eq.${enc(space.id)}&select=department_id&limit=1`, env),
+  ]);
+  if (!r.ok || !tr.ok || (tr.data || []).length) return false;   // shared with a team → not personal
   const ids = (r.data || []).map(m => m.user_id);
   return (space.owner_user_id === auth.userId || ids.includes(auth.userId)) && ids.every(u => u === auth.userId);
 }
@@ -557,32 +561,52 @@ async function isSpaceMember(spaceId, userId, env) {
   const r = await sbDocket(`/rest/v1/space_members?space_id=eq.${enc(spaceId)}&user_id=eq.${enc(userId)}&select=user_id&limit=1`, env);
   return !!(r.ok && r.data?.length);
 }
-// Can the caller READ a space at all? General = everyone; private = owner or member.
-// (docket_admin is NOT special here — strict separation — unless they've broken-glass in.)
+// Team shares (P1, migration 0034): a private space shared with a team is open to every live member of
+// that team, exactly like a named member. The caller's team = their linked Podium employee's department,
+// and an exited employee has none. Read once per request; a failed read grants nothing (fail closed).
+function callerTeam(auth) { return (auth.employeeActive === false) ? null : (auth.departmentId || null); }
+function teamSpaceSet(auth, env) {
+  if (!auth._teamSpacesP) {
+    const team = callerTeam(auth);
+    auth._teamSpacesP = !team ? Promise.resolve(new Set())
+      : sbDocket(`/rest/v1/space_teams?department_id=eq.${enc(team)}&select=space_id`, env)
+          .then(r => new Set(r.ok ? (r.data || []).map(x => x.space_id) : []), () => new Set());
+  }
+  return auth._teamSpacesP;
+}
+// Can the caller READ a space at all? General = everyone; private = owner, member, or a member of a team
+// it is shared with. (docket_admin is NOT special here — strict separation — unless they've broken-glass in.)
 async function canAccessSpace(auth, space, env) {
   if (!space) return false;
   if (space.is_default) return true;
   if (space.owner_user_id === auth.userId) return true;
-  return isSpaceMember(space.id, auth.userId, env);
+  if (await isSpaceMember(space.id, auth.userId, env)) return true;
+  // A team share never opens the Founders' space (refused at share time and by the 0035 trigger; this is the
+  // read-side belt for a stray row).
+  return !space.is_founders && (await teamSpaceSet(auth, env)).has(space.id);
 }
 function isSpaceOwner(auth, space) { return !!space && space.owner_user_id === auth.userId; }
 async function logSpace(env, spaceId, actor, action, note = null) {
   await sbDocket(`/rest/v1/space_history`, env, { method: 'POST', prefer: 'return=minimal',
     body: JSON.stringify({ space_id: spaceId, actor_user_id: actor, action, note }) });
 }
-// Accessible spaces for the sidebar: General + owned/member private spaces (non-archived).
+// Accessible spaces for the sidebar: General + owned / member / team-shared private spaces (non-archived).
 async function accessibleSpaces(auth, env) {
-  const [defRes, memberRes] = await Promise.all([
+  const [defRes, memberRes, team] = await Promise.all([
     sbDocket(`/rest/v1/spaces?is_default=eq.true&archived_at=is.null&select=id,name,is_private,owner_user_id,is_founders&limit=1`, env),
     sbDocket(`/rest/v1/space_members?user_id=eq.${enc(auth.userId)}&select=space_id`, env),
+    teamSpaceSet(auth, env),
   ]);
-  const memberIds = (memberRes.ok ? memberRes.data : []).map(m => m.space_id);
+  const directIds = (memberRes.ok ? memberRes.data : []).map(m => m.space_id);
+  const memberIds = uniq([...directIds, ...team]);
+  const direct = new Set(directIds);
   const orParts = [`owner_user_id.eq.${auth.userId}`];
   if (memberIds.length) orParts.push(`id.in.${inList(memberIds)}`);
   const ownedRes = await sbDocket(
     `/rest/v1/spaces?is_private=eq.true&archived_at=is.null&or=(${orParts.join(',')})&select=id,name,is_private,owner_user_id,is_founders&order=name.asc`, env);
   const general = (defRes.ok && defRes.data) || [];
-  const privates = (ownedRes.ok && ownedRes.data) || [];
+  // A Founders' space reached only through a team share is dropped (see canAccessSpace).
+  const privates = ((ownedRes.ok && ownedRes.data) || []).filter(s => !s.is_founders || s.owner_user_id === auth.userId || direct.has(s.id));
   return [...general, ...privates].map(s => ({ id: s.id, name: s.name, is_private: s.is_private, is_owner: s.owner_user_id === auth.userId,
     ...(s.is_founders ? { is_founders: true } : {}) }));
 }
@@ -646,7 +670,7 @@ async function spaceCountsForUser(auth, spaceIds, env) {
   return (r.ok && r.data) || [];
 }
 async function getDepartments(url, auth, env) {
-  const r = await sbPodium(`/rest/v1/departments?select=id,name&order=name.asc`, env);
+  const r = await sbPodium(`/rest/v1/departments?select=id,name,active&order=name.asc`, env);
   if (!r.ok) return err('db_error', 500);
   return ok(r.data || []);
 }
@@ -676,19 +700,36 @@ async function getSpaceMembers(url, auth, env) {
   const name = {}; (up.data || []).forEach(u => { name[u.id] = u.full_name; });
   return ok((mr.data || []).map(m => ({ user_id: m.user_id, full_name: name[m.user_id] || null, is_owner: m.user_id === space.owner_user_id })));
 }
+// The teams a space is shared with (P1, 0034) — same gate as getSpaceMembers.
+async function getSpaceTeams(url, auth, env) {
+  const spaceId = url.searchParams.get('space_id');
+  if (!spaceId) return err('space_id required', 400);
+  const space = await loadSpace(spaceId, env);
+  if (!space) return err('space_not_found', 404);
+  if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
+  const tr = await sbDocket(`/rest/v1/space_teams?space_id=eq.${enc(spaceId)}&select=department_id,added_at&order=added_at.asc`, env);
+  if (!tr.ok) return err('db_error', 500);
+  const ids = uniq((tr.data || []).map(t => t.department_id));
+  const dr = ids.length ? await sbPodium(`/rest/v1/departments?id=in.${inList(ids)}&select=id,name`, env) : { ok: true, data: [] };
+  if (!dr.ok) return err('db_error', 500);
+  const name = {}; (dr.data || []).forEach(d => { name[d.id] = d.name; });
+  return ok((tr.data || []).map(t => ({ department_id: t.department_id, name: name[t.department_id] || null })));
+}
 // Admin break-glass list — metadata only (names/owner/counts), never task contents.
 async function getAllSpaces(url, auth, env) {
   const gate = requireAdmin(auth); if (gate) return gate;
-  const [spaces, members] = await Promise.all([
+  const [spaces, members, teams] = await Promise.all([
     sbDocket(`/rest/v1/spaces?select=*&order=is_default.desc,name.asc`, env),
     sbDocket(`/rest/v1/space_members?select=space_id`, env),
+    sbDocket(`/rest/v1/space_teams?select=space_id`, env),
   ]);
   if (!spaces.ok) return err('db_error', 500);
   const mCount = {}; (members.data || []).forEach(m => { mCount[m.space_id] = (mCount[m.space_id] || 0) + 1; });
+  const tCount = {}; (teams.data || []).forEach(t => { tCount[t.space_id] = (tCount[t.space_id] || 0) + 1; });
   const ownerIds = uniq((spaces.data || []).map(s => s.owner_user_id));
   const up = ownerIds.length ? await sbStore(`/rest/v1/users_profile?id=in.${inList(ownerIds)}&select=id,full_name`, env) : { data: [] };
   const oName = {}; (up.data || []).forEach(u => { oName[u.id] = u.full_name; });
-  return ok((spaces.data || []).map(s => ({ ...s, owner_name: oName[s.owner_user_id] || null, member_count: mCount[s.id] || 0 })));
+  return ok((spaces.data || []).map(s => ({ ...s, owner_name: oName[s.owner_user_id] || null, member_count: mCount[s.id] || 0, team_count: tCount[s.id] || 0 })));
 }
 
 // ── F7 dependencies (migration 0013, spec 2026-11-11-docket-dependencies.md §7) ─────────────
@@ -3015,6 +3056,36 @@ async function addSpaceMember(body, auth, env) {
   await logSpace(env, d.space_id, auth.userId, 'member_added', d.user_id);
   return ok({ space_id: d.space_id, user_id: d.user_id });
 }
+// Share a private space with a whole team (P1, 0034). Owner-only, like members. Never the Founders' space
+// (its members are plan admins by rule, §5.2) and never General (system).
+async function shareSpaceWithTeam(body, auth, env) {
+  const d = body.data || body; if (!d.space_id || !d.department_id) return err('space_id and department_id required', 400);
+  if (!isUuid(String(d.department_id))) return err('invalid department_id', 400);
+  const space = await loadSpace(d.space_id, env); const gate = await requireSpaceOwner(auth, space); if (gate) return gate;
+  if (space.is_founders) return err('founders_space', 403);
+  const dr = await sbPodium(`/rest/v1/departments?id=eq.${enc(d.department_id)}&active=eq.true&select=id,name&limit=1`, env);
+  if (!dr.ok) return err('db_error', 500);
+  if (!dr.data?.length) return err('unknown team', 422);
+  const r = await sbDocket(`/rest/v1/space_teams?on_conflict=space_id,department_id`, env, { method: 'POST', prefer: 'return=representation,resolution=ignore-duplicates',
+    body: JSON.stringify({ space_id: d.space_id, department_id: d.department_id, added_by_user_id: auth.userId }) });
+  if (!r.ok) return err('share_failed', 400);
+  const added = Array.isArray(r.data) && r.data.length > 0;   // a duplicate share changes nothing and logs nothing
+  if (added) await logSpace(env, d.space_id, auth.userId, 'team_shared', `${dr.data[0].name} (${d.department_id})`);
+  return ok({ space_id: d.space_id, department_id: d.department_id, added });
+}
+async function unshareSpaceTeam(body, auth, env) {
+  const d = body.data || body; if (!d.space_id || !d.department_id) return err('space_id and department_id required', 400);
+  if (!isUuid(String(d.department_id))) return err('invalid department_id', 400);
+  const space = await loadSpace(d.space_id, env); const gate = await requireSpaceOwner(auth, space); if (gate) return gate;
+  const r = await sbDocket(`/rest/v1/space_teams?space_id=eq.${enc(d.space_id)}&department_id=eq.${enc(d.department_id)}`, env, { method: 'DELETE', prefer: 'return=representation' });
+  if (!r.ok) return err('unshare_failed', 400);
+  const removed = Array.isArray(r.data) && r.data.length > 0;
+  if (removed) {
+    const dr = await sbPodium(`/rest/v1/departments?id=eq.${enc(d.department_id)}&select=name&limit=1`, env);
+    await logSpace(env, d.space_id, auth.userId, 'team_unshared', `${(dr.ok && dr.data?.[0]?.name) || 'team'} (${d.department_id})`);
+  }
+  return ok({ space_id: d.space_id, department_id: d.department_id, removed });
+}
 async function removeSpaceMember(body, auth, env) {
   const d = body.data || body; if (!d.space_id || !d.user_id) return err('space_id and user_id required', 400);
   const space = await loadSpace(d.space_id, env); const gate = await requireSpaceOwner(auth, space); if (gate) return gate;
@@ -4773,7 +4844,7 @@ const GET_ACTIONS = {
   getTasks, getProgramTasks, getMyTasks, getStaleTasks, searchTasks, getTask, getTaskLinks, getDashboard,
   getChecklist, getChecklistTemplates, getChecklistTemplate, getChecklistOversight, getChecklistRegister,
   getChecklistRecords, getChecklistRecord, getChecklistProducts,
-  getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
+  getPrograms, getSpaces, getSpaceMembers, getSpaceTeams, getAllSpaces,
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,
   getPlan, getPlanItem, getProposals, getPlanWeeks, getWeekScore,
@@ -4796,7 +4867,7 @@ const POST_ACTIONS = {
   addDocument, removeDocument,
   addComment, editComment, deleteComment,
   createProgram,
-  createSpace, renameSpace, archiveSpace, addSpaceMember, removeSpaceMember, transferSpaceOwnership, recoverSpace,
+  createSpace, renameSpace, archiveSpace, addSpaceMember, removeSpaceMember, shareSpaceWithTeam, unshareSpaceTeam, transferSpaceOwnership, recoverSpace,
   createScratchNote, updateScratchNote, deleteScratchNote,
   createDocketRole, updateDocketRole, deleteDocketRole, assignDocketRole,
   setDashboardPublic, addDashboardViewer, removeDashboardViewer,

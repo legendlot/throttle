@@ -67,7 +67,7 @@ export default function AdminSpacesPage() {
                     </td>
                     <td><span className="adm-badge">{s.is_default ? 'Open' : 'Private'}</span></td>
                     <td className="dt-owner">{s.is_default ? '—' : (s.owner_name || '—')}</td>
-                    <td className="num">{s.is_default ? '—' : s.member_count}</td>
+                    <td className="num">{s.is_default ? '—' : s.member_count}{!s.is_default && s.team_count ? <span className="dt-teams" title="Shared with whole teams"> + {s.team_count} {s.team_count === 1 ? 'team' : 'teams'}</span> : null}</td>
                     <td className="dt-created mono">{s.created_at ? fmtDate(s.created_at) : '—'}</td>
                     <td className="dt-act">
                       {!s.is_default && !s.is_founders && (
