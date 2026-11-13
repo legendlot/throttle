@@ -5,8 +5,10 @@
 > team. **Team** = the org unit (department). He agreed to retire the job-role catalogue ("Yes, draft the ladder").
 > Status: DRAFT. Ladder accepted by Afshaan 2026-11-13 ("Largely looks right") with Senior Director added. Per-person
 > confirmation (title, level, team, reports-to) runs in the Google Sheet "LOT org structure: title, level, team and
-> reporting (Nov 2026)" (`1VL87uVuHG7-wGu7SRVurhWWpNo5JJTTmty7OMmEpd7Y`): Vinay and Mohit confirm their reporting
-> lines, Afshaan the rest. The same sheet holds the draft pay band per level (figures live only there, not in this repo).
+> reporting (Nov 2026)" (`1eWiGuOQvBhGqyGNNgcQAVfOur-m99FVZ692qIp6M18U`): Vinay and Mohit confirm their reporting
+> lines, Afshaan the rest. The draft pay band per level is in a SEPARATE private sheet, "LOT pay bands per level
+> (draft, private, Nov 2026)" (`1VL87uVuHG7-wGu7SRVurhWWpNo5JJTTmty7OMmEpd7Y`, Afshaan only; it is the original file, so
+> its version history holds the pay data and must never be shared with editors). Figures live only there.
 > Build starts once the sheet is confirmed; Podium is then loaded from it.
 
 ## Why (measured 2026-11-13, 64 active people)
