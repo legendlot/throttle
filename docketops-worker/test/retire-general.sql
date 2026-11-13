@@ -5,37 +5,37 @@
 -- EXPECT: 1:task_ins=general_retired 2:task_move=general_retired 3:rec_ins=general_retired 4:rec_move=general_retired 5:dash=by_status_ok,sum_ok,c30=2,dept_open=3 6:grants_ok 7:general=archived,empty 8:no_default
 do $rg$
 declare
-  A uuid := '107ea993-f5ed-4221-ba97-b08e38dcd00c';   -- an actor (created_by only)
+  ACT uuid := '107ea993-f5ed-4221-ba97-b08e38dcd00c';   -- an actor (created_by only)
   G uuid := (select id from docket.spaces where is_default limit 1);
   D uuid := (select id from podium.departments order by id limit 1);
   TM uuid := (select id from docket.checklist_templates order by created_at limit 1);
   S1 uuid; S2 uuid; T1 uuid; R1 uuid; j jsonb; a jsonb; b jsonb; out text := ''; dl timestamptz := now() + interval '30 days';
   fn text := 'docket.dashboard_stats_spaces(uuid[])';
 begin
-  insert into docket.spaces (name, is_private, is_default, owner_user_id, created_by_user_id) values ('ZZ rg one', true, false, A, A) returning id into S1;
-  insert into docket.spaces (name, is_private, is_default, owner_user_id, created_by_user_id) values ('ZZ rg two', true, false, A, A) returning id into S2;
+  insert into docket.spaces (name, is_private, is_default, owner_user_id, created_by_user_id) values ('ZZ rg one', true, false, ACT, ACT) returning id into S1;
+  insert into docket.spaces (name, is_private, is_default, owner_user_id, created_by_user_id) values ('ZZ rg two', true, false, ACT, ACT) returning id into S2;
   -- S1: 2 not_started + 1 done; S2: 1 blocked + 1 done (+ 1 archived task, not counted)
   insert into docket.tasks (task_no, title, status, created_by_user_id, deadline, space_id, department_id) values
-    (docket.next_task_seq(), 'ZZ rg a', 'not_started', A, dl, S1, D) returning id into T1;
+    (docket.next_task_seq(), 'ZZ rg a', 'not_started', ACT, dl, S1, D) returning id into T1;
   insert into docket.tasks (task_no, title, status, created_by_user_id, deadline, space_id, department_id) values
-    (docket.next_task_seq(), 'ZZ rg b', 'not_started', A, dl, S1, D);
+    (docket.next_task_seq(), 'ZZ rg b', 'not_started', ACT, dl, S1, D);
   insert into docket.tasks (task_no, title, status, completed_at, created_by_user_id, deadline, space_id, department_id) values
-    (docket.next_task_seq(), 'ZZ rg c', 'done', now(), A, dl, S1, D),
-    (docket.next_task_seq(), 'ZZ rg d', 'done', now(), A, dl, S2, D);
+    (docket.next_task_seq(), 'ZZ rg c', 'done', now(), ACT, dl, S1, D),
+    (docket.next_task_seq(), 'ZZ rg d', 'done', now(), ACT, dl, S2, D);
   insert into docket.tasks (task_no, title, status, created_by_user_id, deadline, space_id, department_id) values
-    (docket.next_task_seq(), 'ZZ rg e', 'blocked', A, dl, S2, D);
+    (docket.next_task_seq(), 'ZZ rg e', 'blocked', ACT, dl, S2, D);
   insert into docket.tasks (task_no, title, status, created_by_user_id, deadline, space_id, archived_at) values
-    (docket.next_task_seq(), 'ZZ rg arch', 'in_progress', A, dl, S2, now());
+    (docket.next_task_seq(), 'ZZ rg arch', 'in_progress', ACT, dl, S2, now());
 
   -- 1/2: a task into General — insert, and a move in
-  begin insert into docket.tasks (task_no, title, created_by_user_id, deadline, space_id) values (docket.next_task_seq(), 'ZZ rg g', A, dl, G);
+  begin insert into docket.tasks (task_no, title, created_by_user_id, deadline, space_id) values (docket.next_task_seq(), 'ZZ rg g', ACT, dl, G);
     out := out || '1:task_ins=ACCEPTED';
   exception when check_violation then out := out || '1:task_ins=' || split_part(sqlerrm, ':', 1); end;
   begin update docket.tasks set space_id = G where id = T1; out := out || ' 2:task_move=ACCEPTED';
   exception when check_violation then out := out || ' 2:task_move=' || split_part(sqlerrm, ':', 1); end;
   -- 3/4: a record into General — insert, and a move in
-  insert into docket.checklist_records (template_id, title, space_id, created_by_user_id) values (TM, 'ZZ rg rec', S1, A) returning id into R1;
-  begin insert into docket.checklist_records (template_id, title, space_id, created_by_user_id) values (TM, 'ZZ rg recg', G, A);
+  insert into docket.checklist_records (template_id, title, space_id, created_by_user_id) values (TM, 'ZZ rg rec', S1, ACT) returning id into R1;
+  begin insert into docket.checklist_records (template_id, title, space_id, created_by_user_id) values (TM, 'ZZ rg recg', G, ACT);
     out := out || ' 3:rec_ins=ACCEPTED';
   exception when check_violation then out := out || ' 3:rec_ins=' || split_part(sqlerrm, ':', 1); end;
   begin update docket.checklist_records set space_id = G where id = R1; out := out || ' 4:rec_move=ACCEPTED';
