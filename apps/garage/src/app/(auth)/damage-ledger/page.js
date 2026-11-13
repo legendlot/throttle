@@ -110,6 +110,10 @@ export default function DamageLedgerPage() {
   const [outOpen,     setOutOpen]     = useState(false);
   const [outForm,     setOutForm]     = useState({ action_type: 'repair', destination: '', notes: '' });
   const [outLines,    setOutLines]    = useState(() => [BLANK_OUT_LINE()]);
+  // Restock from repair by quantity per part (Piyush, 2026-11-13) — the mirror of damage-out.
+  const [rsOpen,      setRsOpen]      = useState(false);
+  const [rsLines,     setRsLines]     = useState(() => [BLANK_OUT_LINE()]);
+  const [rsNotes,     setRsNotes]     = useState('');
 
   // Reprint manifest by batch_no
   const [reprintBatch, setReprintBatch] = useState('');
@@ -229,9 +233,9 @@ export default function DamageLedgerPage() {
     }
   }
   useEffect(() => {
-    if (view === 'summary' || outOpen) loadSummary();
+    if (view === 'summary' || outOpen || rsOpen) loadSummary();
     /* eslint-disable-next-line */
-  }, [view, outOpen, session]);
+  }, [view, outOpen, rsOpen, session]);
 
   const filteredSummary = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -253,6 +257,48 @@ export default function DamageLedgerPage() {
     value: p.part_code,
     label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''} · ${p.pending} pending`,
   })), [pendingByPart]);
+
+  const repairByPart = useMemo(() => {
+    const m = {};
+    summary.forEach(p => { if (p.sent_to_repair > 0) m[p.part_code] = p; });
+    return m;
+  }, [summary]);
+  const rsPartOpts = useMemo(() => Object.values(repairByPart).map(p => ({
+    value: p.part_code,
+    label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''} · ${p.sent_to_repair} at repair`,
+  })), [repairByPart]);
+  function openRestock(partCode) {
+    setRsNotes('');
+    setRsLines([partCode ? { part_code: partCode, qty: '' } : BLANK_OUT_LINE()]);
+    setRsOpen(true);
+  }
+  async function submitRestockByQty() {
+    const lines = rsLines.filter(l => l.part_code || String(l.qty).trim());
+    if (!lines.length) { toast('Add at least one part', 'error'); return; }
+    for (let i = 0; i < lines.length; i++) {
+      const q = Number(lines[i].qty);
+      if (!lines[i].part_code || !(q > 0) || !Number.isInteger(q)) { toast(`Line ${i + 1}: pick a part and enter a whole-number qty`, 'error'); return; }
+    }
+    const want = {};
+    lines.forEach(l => { want[l.part_code] = (want[l.part_code] || 0) + Number(l.qty); });
+    for (const [code, q] of Object.entries(want)) {
+      const avail = repairByPart[code]?.sent_to_repair || 0;
+      if (q > avail) { toast(`${code}: only ${avail} at repair, asked to restock ${q}`, 'error'); return; }
+    }
+    setActing(true);
+    try {
+      const r = await workerFetch('damageRestockByQty', {
+        data: { notes: rsNotes.trim() || null, lines: lines.map(l => ({ part_code: l.part_code, qty: Number(l.qty) })) },
+      }, session);
+      if (!r?.ok) { toast(r?.data?.error || 'Restock failed', 'error'); return; }
+      const splits = r.data?.splits || [];
+      toast(`Restocked ${r.data.total_qty} over ${r.data.item_count} entr${r.data.item_count === 1 ? 'y' : 'ies'}`
+        + (splits.length ? ` · ${splits.map(s => `${s.remainder_qty} still at repair as ${s.remainder_ledger_no}`).join(', ')}` : ''), 'success');
+      setRsOpen(false);
+      await Promise.all([loadLedger(), loadSummary()]);
+    } catch (e) { toast(e.message || 'Restock failed', 'error'); }
+    finally { setActing(false); }
+  }
 
   function openDamageOut(partCode) {
     setOutForm({ action_type: 'repair', destination: '', notes: '' });
@@ -529,6 +575,7 @@ export default function DamageLedgerPage() {
             {canEdit && (
               <>
                 <button onClick={() => openDamageOut('')} style={btnSecondary}>DAMAGE OUT BY QTY</button>
+                <button onClick={() => openRestock('')} style={{ ...btnSecondary, color: '#4ade80', borderColor: 'rgba(34,197,94,.4)' }}>RESTOCK BY QTY</button>
                 <button onClick={() => setRecordOpen(true)} style={btnSecondary}>+ RECORD DAMAGE</button>
               </>
             )}
@@ -612,6 +659,9 @@ export default function DamageLedgerPage() {
                                 <button onClick={() => { setSearch(''); setPartFilter(p.part_code); setView('ledger'); setTab('all'); }} style={btnSecondary}>ENTRIES</button>
                                 {canEdit && p.pending > 0 && (
                                   <button onClick={() => openDamageOut(p.part_code)} style={btnSecondary}>DAMAGE OUT</button>
+                                )}
+                                {canEdit && p.sent_to_repair > 0 && (
+                                  <button onClick={() => openRestock(p.part_code)} style={{ ...btnSecondary, color: '#4ade80', borderColor: 'rgba(34,197,94,.4)' }}>RESTOCK</button>
                                 )}
                               </div>
                             </td>
@@ -1083,6 +1133,84 @@ export default function DamageLedgerPage() {
           </Modal>
         );
       })()}
+
+      {/* Restock from repair by quantity */}
+      <Modal
+        open={rsOpen}
+        onClose={() => setRsOpen(false)}
+        title="Restock from repair by quantity"
+        titleColor="#4ade80"
+        size="lg"
+        confirmLabel={acting ? 'PROCESSING…' : 'RESTOCK'}
+        confirmColor="#22c55e"
+        loading={acting}
+        onConfirm={submitRestockByQty}
+      >
+        <p style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--t2)' }}>
+          Enter how many of each part came back repaired. The oldest repair entries are used first; if the
+          last one is only partly back, the rest stays at repair under a new DMG number.
+        </p>
+        {sumLoading && !summary.length ? <Spinner /> : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={{ ...tableThStyle, minWidth: 260 }}>Part</th>
+                <th style={{ ...tableThStyle, textAlign: 'right', width: 90 }}>At repair</th>
+                <th style={{ ...tableThStyle, width: 110 }}>Qty back</th>
+                <th style={{ ...tableThStyle, width: 30 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {rsLines.map((l, i) => {
+                const avail = repairByPart[l.part_code]?.sent_to_repair;
+                const over  = l.part_code && Number(l.qty) > (avail || 0);
+                return (
+                  <tr key={i}>
+                    <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>
+                      <Combobox
+                        value={l.part_code}
+                        options={rsPartOpts}
+                        portal
+                        onChange={v => setRsLines(prev => prev.map((x, j) => (j === i ? { ...x, part_code: v || '' } : x)))}
+                        placeholder={rsPartOpts.length ? 'Part at repair…' : 'Nothing at repair'}
+                      />
+                    </td>
+                    <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{avail ?? '—'}</td>
+                    <td style={tableTdStyle}>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <input type="number" min={1} step={1} value={l.qty}
+                          onChange={e => setRsLines(prev => prev.map((x, j) => (j === i ? { ...x, qty: e.target.value } : x)))}
+                          style={{ ...inputStyle, width: '100%', borderColor: over ? '#ff7070' : 'var(--border)' }} />
+                        {avail > 0 && (
+                          <button title="All at repair" onClick={() => setRsLines(prev => prev.map((x, j) => (j === i ? { ...x, qty: String(avail) } : x)))}
+                            style={{ ...btnSecondary, padding: '4px 6px', fontSize: 9 }}>ALL</button>
+                        )}
+                      </div>
+                    </td>
+                    <td style={tableTdStyle}>
+                      {rsLines.length > 1 && (
+                        <button onClick={() => setRsLines(prev => prev.filter((_, j) => j !== i))}
+                          title="Remove line" style={{ ...btnSecondary, padding: '4px 8px', color: '#ff7070' }}>×</button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+          <button onClick={() => setRsLines(prev => [...prev, BLANK_OUT_LINE()])} style={btnSecondary}>+ ADD PART</button>
+          <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+            {rsLines.reduce((s, l) => s + (Number(l.qty) > 0 ? Number(l.qty) : 0), 0)} qty back
+          </span>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <label style={labelStyle}>Notes (optional)</label>
+          <textarea rows={2} value={rsNotes} onChange={e => setRsNotes(e.target.value)}
+            style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'inherit' }} />
+        </div>
+      </Modal>
 
       {/* History drawer */}
       {historyTarget && (
