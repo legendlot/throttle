@@ -23,3 +23,5 @@ export async function garageFetch(action, params = {}, sessionOrToken) {
   const body = await res.json();
   return body.data !== undefined ? body.data : body;
 }
+export { readCache, writeCache, clearCache } from './queryCache.js';
+export { useCachedQuery } from './useCachedQuery.js';

@@ -1,9 +1,9 @@
 'use client';
-import { useState, useMemo, useEffect } from 'react';
+import { useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { garageFetch, workerFetch } from '@throttle/db';
-import { Panel, KpiCard, ProductTag, ProgressBar, StatusBadge, EmptyState, Spinner } from '@throttle/ui';
+import { garageFetch, workerFetch, useCachedQuery } from '@throttle/db';
+import { Panel, KpiCard, ProductTag, ProgressBar, StatusBadge, EmptyState, Skeleton } from '@throttle/ui';
 import { countPresent } from '@throttle/domain';
 import {
   ListChecks, Inbox, Send, Undo2, AlertTriangle, Users,
@@ -24,10 +24,19 @@ import { useProducts } from '../../../hooks/useProducts.js';
 // Now" feed that FOLDS the old standalone Alerts page (reorder flags +
 // submitted runs awaiting issue) + Producibility + Recent Activity +
 // Returns-by-channel. All wired to the EXISTING Garage endpoints
-// (getDashboard, getGRNSummary, getIssues, getReturns, getShipments,
-// getProductionRuns, getActivityLog) plus getKitAvailability (one call for the
+// (getDashboard, getReturnsSummary, getProductionRuns, getActivityLog,
+// getOperatorAttendance) plus getKitAvailability (one call for the
 // Producibility panel — was one calcKit per product until 2026-11-13).
 // ════════════════════════════════════════════════════════════════════
+
+// IST stamp for the freshness line: "21:04" today, "12 Nov 21:04" otherwise.
+function istStamp(ms) {
+  const d = new Date(ms);
+  const hhmm = d.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+  const day = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  if (day === istToday()) return hhmm;
+  return `${d.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' })} ${hhmm}`;
+}
 
 const fmt = (n) => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('en-IN');
 
@@ -70,95 +79,85 @@ const SEV_FG = { bad: 'var(--bad-fg)', warn: 'var(--warn-fg)', info: 'var(--info
 const SEV_BADGE = { bad: 'error', warn: 'warning', info: 'info', ok: 'success' };
 
 export default function OverviewPage() {
-  const { session } = useAuth();
+  const { session, userId } = useAuth();
   const router = useRouter();
   const { setRefreshing } = useRefreshState();
   const { PRODUCTS, loading: productsLoading } = useProducts();
 
-  const [kpis, setKpis] = useState(null);
-  const [sections, setSections] = useState({ grns: [], issues: [], returns: [], shipments: [] });
-  const [submittedRuns, setSubmittedRuns] = useState([]);
-  const [producible, setProducible] = useState([]);
-  const [producibleError, setProducibleError] = useState(false);
-  const [activity, setActivity] = useState([]);
-  const [storeOps, setStoreOps] = useState(null); // distinct store operators present today (null = unknown/no access)
-  const [mainLoading, setMainLoading] = useState(true);
-  const [mainError, setMainError] = useState(null);
+  // One cached query per data source (instant-load pilot): each panel paints the
+  // last-known result from this tab's sessionStorage straight away and fills in as its
+  // own call returns, instead of the whole page waiting on the slowest of six. Each
+  // fetcher is exactly the call + normalisation the page made before.
+  const live = !!session;
+  // total_stock_value is dropped before it is held or cached: nothing here reads it, and
+  // a stock valuation has no business sitting in sessionStorage.
+  const kpisQ = useCachedQuery({ key: 'garage:dashboard:kpis', userId, enabled: live,
+    fetcher: () => garageFetch('getDashboard', {}, session).then(d => {
+      if (!d || typeof d !== 'object' || Array.isArray(d)) return d;
+      const rest = { ...d };
+      delete rest.total_stock_value;
+      return rest;
+    }) });
+  // ⚠️ Was getReturns → store.returns_log, the v1 table with ZERO rows. Returns v2
+  // (RULE-RET-001, S104) moved to return_units and this panel was never repointed, so
+  // it read "No returns in the last 30 days" against 6,517 real returns — for months,
+  // and silently, because an empty panel looks like a quiet week rather than a fault.
+  // Same 30-day window as before, now applied SERVER-side (it used to slice client-side
+  // over whatever the 100-row cap returned).
+  const returnsQ = useCachedQuery({ key: 'garage:dashboard:returns', userId, enabled: live,
+    fetcher: () => garageFetch('getReturnsSummary', { from: daysAgoStr(30) }, session) });
+  // A failure is an ERROR now, not an empty list: "0 awaiting issue" / "All clear" must
+  // never stand on a call that did not answer.
+  const runsQ = useCachedQuery({ key: 'garage:dashboard:submitted-runs', userId, enabled: live,
+    fetcher: () => garageFetch('getProductionRuns', { status: 'Submitted' }, session).then(d => Array.isArray(d) ? d : []) });
 
-  async function loadMain() {
-    setRefreshing(true); setMainError(null);
-    try {
-      const [kpisRes, grnsRes, issuesRes, returnsRes, shipRes, subRuns] = await Promise.all([
-        garageFetch('getDashboard',  {}, session),
-        garageFetch('getGRNSummary', {}, session),
-        garageFetch('getIssues',     {}, session),
-        // ⚠️ Was getReturns → store.returns_log, the v1 table with ZERO rows. Returns v2
-        // (RULE-RET-001, S104) moved to return_units and this panel was never repointed, so
-        // it read "No returns in the last 30 days" against 6,517 real returns — for months,
-        // and silently, because an empty panel looks like a quiet week rather than a fault.
-        // Same 30-day window as before, now applied SERVER-side (it used to slice client-side
-        // over whatever the 100-row cap returned).
-        garageFetch('getReturnsSummary', { from: daysAgoStr(30) }, session),
-        garageFetch('getShipments',  {}, session),
-        garageFetch('getProductionRuns', { status: 'Submitted' }, session).then(d => Array.isArray(d) ? d : []).catch(() => []),
-      ]);
-      setKpis(kpisRes);
-      setSections({ grns: grnsRes, issues: issuesRes, returns: returnsRes, shipments: shipRes });
-      setSubmittedRuns(subRuns);
-    } catch (e) {
-      setMainError(e.message);
-    } finally {
-      setMainLoading(false); setRefreshing(false);
-    }
-  }
+  // ONE request for every product. This used to be one `calcKit` call per product — 64
+  // requests every 60 s (measured 2026-11-13). The rules moved to the worker unchanged
+  // (01_worker/lib/kitavail.js: bottleneck = the minimum, RULE-LUMP-001, platform rows,
+  // format, split packaging); this only orders the answer for display. The RAW worker
+  // rows are cached; the PRODUCTS ordering is derived below, so a late catalogue never
+  // blanks the panel.
+  const kitQ = useCachedQuery({ key: 'garage:dashboard:kit', userId, enabled: live,
+    fetcher: () => garageFetch('getKitAvailability', {}, session) });
 
-  async function loadProducible() {
-    // ONE request for every product. This used to be one `calcKit` call per product — 64
-    // requests every 60 s (measured 2026-11-13). The rules moved to the worker unchanged
-    // (01_worker/lib/kitavail.js: bottleneck = the minimum, RULE-LUMP-001, platform rows,
-    // format, split packaging); this only orders the answer for display.
-    try {
-      const data = await garageFetch('getKitAvailability', {}, session);
-      const byProduct = new Map((Array.isArray(data) ? data : []).map(r => [r.product, r]));
-      // PRODUCTS decides WHICH products show and breaks ties in the sort, as before.
-      const rows = PRODUCTS.map(p => byProduct.get(p)).filter(Boolean).sort((a, b) => a.max - b.max);
-      setProducible(rows);
-      setProducibleError(false);
-    } catch {
-      // One call now carries every product, so a failure must SAY so. Keep the last good
-      // rows on a failed refresh; with none to keep, the panel shows the message below
-      // instead of "Calculating…" forever.
-      setProducibleError(true);
-    }
-  }
+  const activityQ = useCachedQuery({ key: 'garage:dashboard:activity', userId, enabled: live,
+    fetcher: async () => {
+      try {
+        const data = await garageFetch('getActivityLog', { limit: 8 }, session);
+        return Array.isArray(data) ? data : [];
+      } catch (e) {
+        // By design the worker 403s `err('forbidden', 403)` for a user with neither
+        // audit-log nor dashboard permission — that card stays the plain empty state, as
+        // before. Any OTHER failure is an error the panel shows.
+        if (e?.message === 'forbidden') return [];
+        throw e;
+      }
+    } });
 
-  async function loadActivity() {
-    try {
-      const data = await garageFetch('getActivityLog', { limit: 8 }, session);
-      setActivity(Array.isArray(data) ? data : []);
-    } catch { setActivity([]); }
-  }
+  // Distinct store-team operators with an attendance row today. Gated by
+  // canManageFloor in the worker — degrade to null (shows "—") on no-access.
+  const storeOpsQ = useCachedQuery({ key: 'garage:dashboard:store-ops', userId, enabled: live,
+    fetcher: async () => {
+      try {
+        const today = istToday();
+        const res = await workerFetch('getOperatorAttendance', { data: { date_from: today, date_to: today, team: 'store' } }, session);
+        if (!res.ok) return null;
+        const rows = Array.isArray(res.data) ? res.data : [];
+        // An attendance row is NOT the same as being present — see countPresent() in
+        // @throttle/domain for the full rule and the five surfaces this was wrong on.
+        return countPresent(rows);
+      } catch { return null; }
+    } });
 
-  async function loadStoreOps() {
-    // Distinct store-team operators with an attendance row today. Gated by
-    // canManageFloor in the worker — degrade to null (shows "—") on no-access.
-    try {
-      const today = istToday();
-      const res = await workerFetch('getOperatorAttendance', { data: { date_from: today, date_to: today, team: 'store' } }, session);
-      if (!res.ok) { setStoreOps(null); return; }
-      const rows = Array.isArray(res.data) ? res.data : [];
-      // An attendance row is NOT the same as being present — see countPresent() in
-      // @throttle/domain for the full rule and the five surfaces this was wrong on.
-      setStoreOps(countPresent(rows));
-    } catch { setStoreOps(null); }
-  }
+  const mainQs = [kpisQ, returnsQ, runsQ];
+  const allQs = [...mainQs, kitQ, activityQ, storeOpsQ];
 
   function loadAll() {
-    if (!session || productsLoading) return;
-    loadMain(); loadProducible(); loadActivity(); loadStoreOps();
+    if (!session) return;
+    allQs.forEach(q => q.refresh());
   }
 
-  useAutoRefresh(loadAll, 60000, !session || productsLoading);
+  useAutoRefresh(loadAll, 60000, !session);
 
   // Manual refresh from the topbar refresh button.
   useEffect(() => {
@@ -166,6 +165,52 @@ export default function OverviewPage() {
     window.addEventListener('garage:refresh', h);
     return () => window.removeEventListener('garage:refresh', h);
   }); // eslint-disable-line
+
+  // The topbar spinner tracks the main calls, as it did when they were one Promise.all.
+  const mainInFlight = mainQs.some(q => q.loading || q.refreshing);
+  useEffect(() => { setRefreshing(mainInFlight); }, [mainInFlight]); // eslint-disable-line
+  useEffect(() => () => setRefreshing(false), []); // eslint-disable-line
+
+  // Same banner + message as before: any of the main calls failing.
+  const mainError = mainQs.find(q => q.error)?.error?.message || null;
+
+  const kpis = kpisQ.data ?? null;
+  const submittedRuns = useMemo(() => runsQ.data ?? [], [runsQ.data]);
+  const storeOps = storeOpsQ.data ?? null; // distinct store operators present today (null = unknown/no access)
+  const activity = activityQ.data ?? [];
+  const returnsRows = returnsQ.data;
+
+  // PRODUCTS decides WHICH products show and breaks ties in the sort, as before.
+  const producible = useMemo(() => {
+    const data = kitQ.data;
+    const byProduct = new Map((Array.isArray(data) ? data : []).map(r => [r.product, r]));
+    return PRODUCTS.map(p => byProduct.get(p)).filter(Boolean).sort((a, b) => a.max - b.max);
+  }, [kitQ.data, PRODUCTS]);
+  // One call carries every product, so a failure must SAY so. Keep the last good rows on
+  // a failed refresh; with none to keep, the panel shows the message below instead of
+  // "Calculating…" forever.
+  const producibleError = !!kitQ.error;
+
+  // Per-panel readiness: no data yet → skeleton; a failure with no data → inline retry.
+  const has = (q) => q.data !== undefined;
+  const failedEmpty = (q) => !!q.error && q.data === undefined;
+  const kpisReady = has(kpisQ) || failedEmpty(kpisQ);
+  const runsReady = has(runsQ) || failedEmpty(runsQ);
+  const attentionReady = kpisReady && runsReady;
+  const attentionFailed = failedEmpty(kpisQ) || failedEmpty(runsQ);
+  const returnsReady = has(returnsQ) || failedEmpty(returnsQ);
+  const kitReady = (has(kitQ) && !productsLoading) || failedEmpty(kitQ);
+
+  // Freshness: always the OLDEST data on the page. "Updating…" while anything is in
+  // flight; "Couldn't refresh" when any call failed — with stale data showing OR with
+  // none (a failed empty panel must not sit under a grey "Updated").
+  const anyInFlight = allQs.some(q => q.loading || q.refreshing);
+  const stamps = allQs.map(q => q.updatedAt).filter(Boolean);
+  const oldest = stamps.length ? istStamp(Math.min(...stamps)) : null;
+  const anyFailed = allQs.some(q => q.error);
+  const freshness = anyInFlight ? (oldest ? `Updating… (showing ${oldest})` : 'Updating…')
+    : anyFailed ? (oldest ? `Couldn't refresh — showing ${oldest}` : "Couldn't refresh")
+    : oldest ? `Updated ${oldest}` : '';
 
   const reorderFlags = Array.isArray(kpis?.reorder_flags) ? kpis.reorder_flags : [];
   const reorderCount = kpis?.reorder_count ?? reorderFlags.length;
@@ -196,11 +241,11 @@ export default function OverviewPage() {
   // Disposition, not channel: v2 records where a returned unit is GOING (UDR back out,
   // CXR/BRV to repair, Loss written off), and has no channel at all. The worker already
   // aggregates and applies the window, so this only shapes it for the bar list.
-  const returnsByDisposition = useMemo(() => (sections.returns || [])
+  const returnsByDisposition = useMemo(() => (returnsRows || [])
     .map((r) => [DISPO_SHORT[r.disposition] || r.disposition, Number(r.units) || 0])
     .filter(([, n]) => n > 0)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 6), [sections.returns]);
+    .slice(0, 6), [returnsRows]);
   const returnsMax = returnsByDisposition.length ? Math.max(...returnsByDisposition.map(([, q]) => q)) : 0;
 
   return (
@@ -210,7 +255,10 @@ export default function OverviewPage() {
           <div className="eyebrow" style={{ marginBottom: 5 }}>Garage · Triage</div>
           <h1 className="title" style={{ fontSize: 27, lineHeight: 1, margin: 0 }}>Overview</h1>
         </div>
-        <span className="num" style={{ fontSize: 12, color: 'var(--t3)' }}>{kpis?.as_of || ''}</span>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+          <span aria-live="polite" style={{ fontSize: 12, color: anyFailed && !anyInFlight ? 'var(--warn-fg)' : 'var(--t3)' }}>{freshness}</span>
+          <span className="num" style={{ fontSize: 12, color: 'var(--t3)' }}>{kpis?.as_of || ''}</span>
+        </div>
       </div>
 
       {mainError && (
@@ -222,25 +270,25 @@ export default function OverviewPage() {
         </Panel>
       )}
 
-      {mainLoading && !kpis && !mainError ? (
-        <div style={{ padding: 48, textAlign: 'center' }}><Spinner /></div>
-      ) : (
-        <>
           {/* KPI rail */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(168px, 1fr))', gap: 12, marginBottom: 18 }}>
-            <KpiCard eyebrow="Open Work Orders" value={kpis?.open_work_orders ?? '—'} tone="brand" icon={ListChecks} sub={`${fmt(submittedRuns.length)} awaiting issue`} onClick={() => router.push('/issue-queue')} />
-            <KpiCard eyebrow="Today's GRNs" value={kpis?.today_grn_count ?? '—'} tone="info" icon={Inbox} sub="received today" onClick={() => router.push('/grn')} />
-            <KpiCard eyebrow="WOs Issued Today" value={kpis?.today_wo_count ?? '—'} tone="ok" icon={Send} sub="store issues" onClick={() => router.push('/store-history')} />
-            <KpiCard eyebrow="Pending Returns" value={kpis?.pending_returns ?? '—'} tone="warn" icon={Undo2} sub="to process" onClick={() => router.push('/returns/shipments')} />
-            <KpiCard eyebrow="Reorder Flags" value={reorderCount ?? '—'} tone={reorderCount > 0 ? 'bad' : 'ok'} icon={AlertTriangle} sub="parts at reorder" onClick={() => router.push('/stock')} />
-            <KpiCard eyebrow="Store Present" value={storeOps ?? '—'} tone="info" icon={Users} sub="operators today" onClick={() => router.push('/manpower')} />
+            {kpisReady && runsReady ? <KpiCard eyebrow="Open Work Orders" value={kpis?.open_work_orders ?? '—'} tone="brand" icon={ListChecks} sub={`${failedEmpty(runsQ) ? '—' : fmt(submittedRuns.length)} awaiting issue`} onClick={() => router.push('/issue-queue')} /> : <KpiSkeleton />}
+            {kpisReady ? <KpiCard eyebrow="Today's GRNs" value={kpis?.today_grn_count ?? '—'} tone="info" icon={Inbox} sub="received today" onClick={() => router.push('/grn')} /> : <KpiSkeleton />}
+            {kpisReady ? <KpiCard eyebrow="WOs Issued Today" value={kpis?.today_wo_count ?? '—'} tone="ok" icon={Send} sub="store issues" onClick={() => router.push('/store-history')} /> : <KpiSkeleton />}
+            {kpisReady ? <KpiCard eyebrow="Pending Returns" value={kpis?.pending_returns ?? '—'} tone="warn" icon={Undo2} sub="to process" onClick={() => router.push('/returns/shipments')} /> : <KpiSkeleton />}
+            {/* With no KPI data at all (failed load) the count is unknown — '—', never a false 0. */}
+            {kpisReady ? <KpiCard eyebrow="Reorder Flags" value={failedEmpty(kpisQ) ? '—' : (reorderCount ?? '—')} tone={failedEmpty(kpisQ) ? undefined : (reorderCount > 0 ? 'bad' : 'ok')} icon={AlertTriangle} sub="parts at reorder" onClick={() => router.push('/stock')} /> : <KpiSkeleton />}
+            {has(storeOpsQ) ? <KpiCard eyebrow="Store Present" value={storeOps ?? '—'} tone="info" icon={Users} sub="operators today" onClick={() => router.push('/manpower')} /> : <KpiSkeleton />}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.7fr) minmax(0,1fr)', gap: 16, alignItems: 'start' }}>
             {/* LEFT — attention + producibility */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <Panel title="Needs Attention Now" icon={Zap} padding={0}
-                action={urgentCount > 0 ? <StatusBadge variant="error">{urgentCount} urgent</StatusBadge> : <StatusBadge variant="success">All clear</StatusBadge>}>
+                action={!attentionReady || attentionFailed ? null : urgentCount > 0 ? <StatusBadge variant="error">{urgentCount} urgent</StatusBadge> : <StatusBadge variant="success">All clear</StatusBadge>}>
+                {!attentionReady ? <RowsSkeleton rows={3} /> : attentionFailed ? (
+                  <PanelError message={failedEmpty(kpisQ) ? 'Could not load reorder flags.' : 'Could not load the issue queue.'} onRetry={() => { kpisQ.refresh(); runsQ.refresh(); }} pad="20px 14px" />
+                ) : <>
                 {visibleAttention.length === 0 ? (
                   <div style={{ padding: '28px 16px', textAlign: 'center', color: 'var(--t3)', fontSize: 13.5 }}>Nothing needs you right now — reorder levels and the issue queue are clear.</div>
                 ) : visibleAttention.map((a, i) => (
@@ -267,13 +315,15 @@ export default function OverviewPage() {
                 {attention.length > visibleAttention.length && (
                   <div style={{ padding: '10px 14px', fontSize: 12, color: 'var(--t3)', borderTop: '1px solid var(--border)' }}>+ {attention.length - visibleAttention.length} more need attention</div>
                 )}
+                </>}
               </Panel>
 
               <Panel title="Producibility" icon={Target}
                 action={<button onClick={() => router.push('/producibility')} style={linkBtn}>View all<ArrowRight size={12} strokeWidth={1.75} /></button>}>
-                {producible.length === 0 ? (
+                {!kitReady ? <TilesSkeleton /> : producible.length === 0 ? (
                   <div style={{ fontSize: 13, color: 'var(--t3)', padding: '6px 2px' }}>
                     {producibleError ? 'Could not load producible units. It will retry on the next refresh.' : 'Calculating producible units…'}
+                    {producibleError && <button onClick={kitQ.refresh} style={{ ...retryBtn, marginLeft: 12 }}>Retry</button>}
                   </div>
                 ) : (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))', gap: 10 }}>
@@ -298,7 +348,9 @@ export default function OverviewPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <Panel title="Returns by Disposition" icon={TrendingUp}
                 action={<button onClick={() => router.push('/returns/shipments')} style={linkBtn}>Open<ArrowRight size={12} strokeWidth={1.75} /></button>}>
-                {returnsByDisposition.length === 0 ? (
+                {!returnsReady ? <BarsSkeleton /> : failedEmpty(returnsQ) ? (
+                  <PanelError message="Could not load returns." onRetry={returnsQ.refresh} />
+                ) : returnsByDisposition.length === 0 ? (
                   <div style={{ fontSize: 13, color: 'var(--t3)' }}>No returns in the last 30 days.</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
@@ -318,7 +370,9 @@ export default function OverviewPage() {
 
               <Panel title="Recent Activity" icon={ActivityIcon} padding={0}
                 action={<button onClick={() => router.push('/activity')} style={linkBtn}>All<ArrowRight size={12} strokeWidth={1.75} /></button>}>
-                {activity.length === 0 ? (
+                {failedEmpty(activityQ) ? (
+                  <PanelError message="Could not load recent activity." onRetry={activityQ.refresh} pad="20px 14px" />
+                ) : !has(activityQ) ? <RowsSkeleton rows={4} /> : activity.length === 0 ? (
                   <div style={{ padding: '20px 14px', fontSize: 13, color: 'var(--t3)' }}>No recent activity.</div>
                 ) : activity.map((e, i) => {
                   const tone = ACT_TONE[e.entity_type] || 'gray';
@@ -335,8 +389,79 @@ export default function OverviewPage() {
               </Panel>
             </div>
           </div>
-        </>
-      )}
+    </div>
+  );
+}
+
+const retryBtn = { background: 'var(--surface-2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 14px', borderRadius: 'var(--r-sm)', cursor: 'pointer', fontFamily: 'var(--font-display)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' };
+
+// A failed panel with nothing to fall back on says so — never zeros, never a skeleton
+// that spins forever.
+function PanelError({ message, onRetry, pad }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, fontSize: 13, color: 'var(--t3)', padding: pad }}>
+      <span>{message}</span>
+      <button onClick={onRetry} style={retryBtn}>Retry</button>
+    </div>
+  );
+}
+
+// Skeletons, each laid out like the content it stands in for.
+function KpiSkeleton() {
+  return (
+    <div aria-busy="true" style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: '13px 15px', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, boxShadow: 'var(--shadow-card)' }}>
+      <Skeleton width="60%" height={11} />
+      <Skeleton width="40%" height={26} />
+      <Skeleton width="70%" height={12} />
+    </div>
+  );
+}
+
+function RowsSkeleton({ rows }) {
+  return (
+    <div aria-busy="true">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 14px', borderBottom: i < rows - 1 ? '1px solid var(--border)' : 'none' }}>
+          <Skeleton width={8} height={8} radius="50%" />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Skeleton width="65%" height={13} />
+            <Skeleton width="40%" height={10} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TilesSkeleton() {
+  return (
+    <div aria-busy="true" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))', gap: 10 }}>
+      {Array.from({ length: 4 }, (_, i) => (
+        <div key={i} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: 9 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Skeleton width="45%" height={16} />
+            <Skeleton width={36} height={17} />
+          </div>
+          <Skeleton width="70%" height={11} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BarsSkeleton() {
+  return (
+    <div aria-busy="true" style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+      {Array.from({ length: 3 }, (_, i) => (
+        <div key={i}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 5 }}>
+            <Skeleton width="50%" height={13} />
+            <span style={{ flex: 1 }} />
+            <Skeleton width={28} height={14} />
+          </div>
+          <Skeleton height={6} radius={9999} />
+        </div>
+      ))}
     </div>
   );
 }

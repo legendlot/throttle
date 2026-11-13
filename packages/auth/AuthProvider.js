@@ -1,6 +1,6 @@
 'use client';
 import { createContext, useContext, useEffect, useState, useRef } from 'react';
-import { supabase, workerFetch, getValidSession } from '@throttle/db';
+import { supabase, workerFetch, getValidSession, clearCache as clearQueryCache } from '@throttle/db';
 
 const BRAND_USER_CACHE_KEY = 'throttle-brand-user';
 function readCache(userId) {
@@ -103,6 +103,7 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
         if (nextSession) {
           await loadIdentity(nextSession);
         } else {
+          clearQueryCache(); // signed out: no cached page data may outlive the session
           setUser(null);
           setRole(null);
           setPerms(null);
@@ -239,6 +240,7 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
 
   async function signOut() {
     clearCache();
+    clearQueryCache();
     await supabase.auth.signOut();
     setSession(null);
     setUser(null);
