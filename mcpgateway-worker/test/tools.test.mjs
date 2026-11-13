@@ -714,3 +714,38 @@ test('docket_update_task: program_id null removes the program — the explicit n
   const post = seen.find(x => x.init.method === 'POST');
   assert.deepEqual(JSON.parse(post.init.body), { action: 'updateTask', data: { id: U, program_id: null } });
 });
+
+// ---- 2026-11-13: Mohit's 57-call loop (one breakdown per product per month). One call now answers it.
+import { breakdownWorkerParams } from '../src/tools/odo.js';
+test('breakdown variant_channel: one call, each product split by channel, products filter applied', async () => {
+  const rows = [];
+  const ch = [['c1', 'Amazon - FBA'], ['c2', 'Website']];
+  for (let d = 1; d <= 3; d++) for (const [id, name] of ch) for (const pc of ['COBA', 'HCBA', 'GSRD']) {
+    rows.push({ grp_key: id, grp_label: name, sale_date: `2026-10-0${d}`, channel_id: id, product_code: pc, units: '2', gross_value: '50', discount_value: 0, tax_value: 0, returned_units: 0, returned_value: 0 });
+  }
+  let asked;
+  const env = { ODOOPS: { fetch: async u => { asked = new URL(u).searchParams; return new Response(JSON.stringify({ ok: true, data: { rows } }), { status: 200 }); } } };
+  const t = findTool('odo_sales');
+  const parsed = t.parse({ report: 'breakdown', from: '2026-10-01', to: '2026-10-31', group: 'variant_channel', products: ['COBA', 'HCBA'] }, NOW);
+  assert.ok(parsed.ok, parsed.error);
+  const r = await t.run({ env, sbAccess: 'J', input: parsed.value });
+  assert.equal(asked.get('group'), 'channel');          // the worker is asked for channel rows
+  assert.equal(asked.get('products'), null);            // never forwarded: the worker has no such filter
+  assert.equal(asked.get('product_code'), null);        // two products: no single-product filter
+  assert.equal(r.data.result.groups, 4);                 // 2 products x 2 channels
+  const coAmz = r.data.result.rows.find(x => x.product_code === 'COBA' && x.channel === 'Amazon - FBA');
+  assert.deepEqual([coAmz.units, coAmz.gross_value, coAmz.channel_id], [6, 150, 'c1']);
+  assert.ok(!r.data.result.rows.some(x => x.product_code === 'GSRD'));
+  assert.equal(r.data.params.group, 'variant_channel');  // what Claude asked for is echoed back
+});
+test('breakdown: products filter on the default grouping; one product uses the worker filter', () => {
+  assert.deepEqual(breakdownWorkerParams({ from: 'a', to: 'b', products: 'COBA' }), { from: 'a', to: 'b', product_code: 'COBA' });
+  assert.deepEqual(breakdownWorkerParams({ group: 'variant_channel', products: 'A,B' }), { group: 'channel' });
+  assert.deepEqual(breakdownWorkerParams({ products: 'coba' }), { product_code: 'COBA' });
+  const both = findTool('odo_sales').parse({ report: 'breakdown', product_code: 'X', products: ['Y'] }, NOW);
+  assert.equal(both.ok, false); assert.match(both.error, /either `product_code` or `products`/);
+  assert.equal(groupSalesRows({ rows: [{ grp_key: 'COBA', product_code: 'COBA', units: 1 }] }, { products: 'coba' }).groups, 1);
+  const g = groupSalesRows({ rows: [{ grp_key: 'COBA', grp_label: 'Cobra', product_code: 'COBA', units: 1, gross_value: 9 }, { grp_key: 'HCBA', grp_label: 'H', product_code: 'HCBA', units: 1, gross_value: 9 }] }, { products: 'COBA' });
+  assert.deepEqual(g.rows.map(x => x.key), ['COBA']);
+  assert.equal(groupSalesRows({ rows: [{ grp_key: 'V', units: 1 }] }).groups, 1); // old call shape still works
+});

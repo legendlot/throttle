@@ -76,18 +76,32 @@ const ODO_DROP = ['raw', 'request', 'meta_response', 'asset_url'];
 // getSales returns day × channel × variant rows whatever `group` says; sum them to the asked grain here so
 // a long range is complete instead of cut (hostile review 2026-11-09). Not net revenue: use odo_sales_summary.
 const SUM = ['units', 'gross_value', 'discount_value', 'tax_value', 'returned_units', 'returned_value'];
-export function groupSalesRows(d) {
-  const rows = (d && Array.isArray(d.rows)) ? d.rows : [];
+// p = the call's params: `products` (comma list) keeps only those product codes; group 'variant_channel'
+// splits each product by channel (the worker is asked for group=channel, so grp_key/label are the channel).
+export function groupSalesRows(d, p = {}) {
+  let rows = (d && Array.isArray(d.rows)) ? d.rows : [];
+  if (p.products) { const only = new Set(String(p.products).toUpperCase().split(',')); rows = rows.filter(r => only.has(String(r.product_code ?? '').toUpperCase())); }
+  const both = p.group === 'variant_channel';
   const by = new Map();
   for (const r of rows) {
-    const k = String(r.grp_key ?? '');
-    const a = by.get(k) || { key: r.grp_key, label: r.grp_label, ...Object.fromEntries(SUM.map(f => [f, 0])) };
+    const k = both ? `${r.product_code ?? ''}|${r.grp_key ?? ''}` : String(r.grp_key ?? '');
+    const base = both ? { product_code: r.product_code, channel: r.grp_label, channel_id: r.grp_key } : { key: r.grp_key, label: r.grp_label };
+    const a = by.get(k) || { ...base, ...Object.fromEntries(SUM.map(f => [f, 0])) };
     for (const f of SUM) a[f] += Number(r[f]) || 0;
     by.set(k, a);
   }
   const out = [...by.values()].map(a => ({ ...a, ...Object.fromEntries(SUM.map(f => [f, Math.round(a[f])])) }))
     .sort((x, y) => y.gross_value - x.gross_value);
   return { note: 'Gross is tax-incl and before discounts/returns; this is not net revenue (use odo_sales_summary for that).', groups: out.length, rows: out };
+}
+// The worker has no product-list filter and no two-way grouping: ask it for channel rows (which carry
+// product_code) and let groupSalesRows filter + split. One product → the worker's own product_code filter.
+export function breakdownWorkerParams(p) {
+  const { products, ...w } = p;
+  if (w.group === 'variant_channel') w.group = 'channel';
+  const list = products ? String(products).toUpperCase().split(',') : [];
+  if (list.length === 1 && !w.product_code) w.product_code = list[0];
+  return w;
 }
 // Feed/connector error strings are third-party text: cap them (prompt-injection surface, hostile review).
 export function clipErrors(v) {
@@ -141,7 +155,7 @@ const odoTools = [
     system: 'odo', name: 'odo_sales', title: 'Odo sales detail', binding: 'ODOOPS', scrubEmails: true, dropKeys: ODO_DROP, visible: canView, deny: needView, paramAbout: PA,
     description: 'Odo sales broken down by variant, channel or day; order-line drill-through; the live website order feed; the unmapped accessories memo line. For the headline net revenue use odo_sales_summary.',
     reports: {
-      breakdown: { action: 'getSales', about: 'gross value, units, discounts, returns summed by variant (default), channel or date (not net revenue)', params: { ...range, ...chan, product_code: T.code, group: T.oneOf('variant', 'channel', 'date') }, shape: groupSalesRows },
+      breakdown: { action: 'getSales', about: 'gross value, units, discounts, returns summed by variant (default), channel, date, or variant_channel (every product split by channel: one call per MONTH, never one call per product; rows carry product_code, names come from odo_lookup report=variants; if `groups` is more than the rows returned, it was cut: narrow with `products`); `products` limits it to those product codes (not net revenue)', params: { ...range, ...chan, product_code: T.code, products: { ...T.codeList, about: 'Product codes to include.' }, group: T.oneOf('variant', 'channel', 'date', 'variant_channel') }, shape: groupSalesRows, workerParams: breakdownWorkerParams, check: p => (p.product_code && p.products ? 'give either `product_code` or `products`, not both' : null) },
       order_lines: { action: 'getCellOrders', about: 'individual order lines (order ref, SKU, qty, value, cancelled) behind a slice; no customer details', params: { ...range, ...chan, products: { ...T.codeList, about: 'Product codes to include.' }, limit: T.int(1, 500) } },
       live_website: { action: 'getLiveSales', about: 'the website order feed right now: recent orders, totals and products, for today (IST) or a rolling N hours', params: { hours: { ...T.int(1, 72), about: 'Rolling window in hours. Omit for today (IST, from midnight).' }, limit: T.int(1, 200) } },
       accessories: { action: 'getAccessories', about: 'memo line for unmapped spares/gift-wrap/service SKUs; NOT included in any Odo total', params: { ...range, ...chan } },

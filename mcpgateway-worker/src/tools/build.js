@@ -93,7 +93,8 @@ export function reportTool(spec) {
       const r = spec.reports[input.report];
       // Per-report gate, for apps whose screens gate finer than the tool (Snorkel nav / page gates).
       if (r.allow && !r.allow(gate)) return { ok: false, reason: spec.reportDenied || 'worker denied' };
-      const res = await getAs(env[spec.binding], sbAccess, r.action, input.params);
+      // workerParams: what the worker is asked for, when the gateway shapes a finer answer itself (shape still sees input.params).
+      const res = await getAs(env[spec.binding], sbAccess, r.action, r.workerParams ? r.workerParams(input.params) : input.params);
       if (!res.ok) return res;
       const { data, truncated } = capPayload(scrub(r.shape ? r.shape(res.data, input.params) : res.data, { emails: !!spec.scrubEmails, dropKeys: spec.dropKeys || [], dropMatch: spec.dropMatch || null, dropIds: !!spec.dropIds }));
       return { ok: true, data: { report: input.report, params: input.params, ...(truncated.length ? { truncated } : {}), result: data } };
