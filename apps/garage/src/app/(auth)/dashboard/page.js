@@ -91,7 +91,9 @@ export default function OverviewPage() {
   const live = !!session;
   // total_stock_value is dropped before it is held or cached: nothing here reads it, and
   // a stock valuation has no business sitting in sessionStorage.
-  const kpisQ = useCachedQuery({ key: 'garage:dashboard:kpis', userId, enabled: live,
+  // kpis + store-ops carry "today" figures, so their cache key carries the IST date: a tab
+  // reopened after midnight must not seed yesterday's numbers under today's labels.
+  const kpisQ = useCachedQuery({ key: `garage:dashboard:kpis:${istToday()}`, userId, enabled: live,
     fetcher: () => garageFetch('getDashboard', {}, session).then(d => {
       if (!d || typeof d !== 'object' || Array.isArray(d)) return d;
       const rest = { ...d };
@@ -136,7 +138,7 @@ export default function OverviewPage() {
 
   // Distinct store-team operators with an attendance row today. Gated by
   // canManageFloor in the worker — degrade to null (shows "—") on no-access.
-  const storeOpsQ = useCachedQuery({ key: 'garage:dashboard:store-ops', userId, enabled: live,
+  const storeOpsQ = useCachedQuery({ key: `garage:dashboard:store-ops:${istToday()}`, userId, enabled: live,
     fetcher: async () => {
       try {
         const today = istToday();

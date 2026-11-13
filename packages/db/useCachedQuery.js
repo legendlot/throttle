@@ -16,8 +16,16 @@ export function identityOf(userId, key) {
 // refresh(): JOIN the request already in flight for the same identity — an endpoint
 // slower than the page's 60 s loop must still land, not be superseded every minute.
 // A request for a DIFFERENT identity (sign-out, another user) never blocks a new one.
-export function planRefresh(inFlight, id) {
-  return inFlight && inFlight.id === id ? 'join' : 'start';
+// And a request that has been in flight longer than JOIN_MAX_MS is treated as HUNG: the
+// fetch helpers have no timeout, so a dropped mobile connection would otherwise leave the
+// section on a skeleton (or "Updating…") until a reload, with every tick and every Retry
+// joining the dead promise. Starting a new one bumps the counter, so if the old request
+// ever does answer it is dropped. Two minutes: comfortably past the 60 s loop it protects.
+export const JOIN_MAX_MS = 120000;
+export function planRefresh(inFlight, id, now = Date.now()) {
+  if (!inFlight || inFlight.id !== id) return 'start';
+  if (inFlight.startedAt && now - inFlight.startedAt > JOIN_MAX_MS) return 'start';
+  return 'join';
 }
 
 // A response is applied only if the component is still mounted and nothing newer (an
@@ -98,7 +106,7 @@ export function useCachedQuery({ key, userId, enabled = true, fetcher }) {
     if (!hasDataRef.current) setError(null);
     // Registered BEFORE the request runs: a fetcher that fails synchronously finishes
     // inside the call below, and its `finally` must find (and clear) this entry.
-    const entry = { id, seq, promise: null };
+    const entry = { id, seq, promise: null, startedAt: Date.now() };
     inFlightRef.current = entry;
     entry.promise = (async () => {
       try {

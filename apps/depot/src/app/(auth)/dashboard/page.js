@@ -11,15 +11,23 @@
    · getManpowerLog (per-line roster) · getOperatorAttendance
    (on-floor headcount) · getAllocatedByChannel · getDispatchPipeline
    · getShippedByChannel.
+   Instant load (2026-11-13, Garage's pattern): one useCachedQuery
+   per call — each section paints its last-known result from this
+   tab's sessionStorage and fills in as its own call lands; a
+   failure with nothing to show is an error + Retry, never zeros.
    ════════════════════════════════════════════════════════════ */
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { garageFetch, workerFetch } from '@throttle/db';
-import { Panel, Chip, EmptyState, Spinner, StatusBadge } from '@throttle/ui';
+import { garageFetch, workerFetch, useCachedQuery } from '@throttle/db';
+import { Panel, Chip, EmptyState, StatusBadge, Skeleton } from '@throttle/ui';
 import { isPresent } from '@throttle/domain';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
+import {
+  isForbidden, pickCounts, pickLines, pickChannelRows, pickScanSummary, countRequests,
+  rosterByLine, floorOpsCount, slimPipeline, dispatchedToday, freshness, panelAsOf,
+} from '../../../lib/overview.mjs';
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '0'; }
@@ -123,21 +131,9 @@ function LineCard({ row, rostered }) {
 
 // ── Overview page ─────────────────────────────────────────────
 export default function DepotOverview() {
-  const { session } = useAuth();
+  const { session, userId } = useAuth();
   const router = useRouter();
-  const { setRefreshing, setLastRefreshed } = useRefreshState();
-
-  const [pendingReqs, setPendingReqs] = useState(0);   // open fulfilment requests
-  const [counts,    setCounts]    = useState(null);
-  const [lines,     setLines]     = useState([]);
-  const [today,     setToday]     = useState(null);   // getDispatchScanSummary
-  const [allocByLine, setAllocByLine] = useState({}); // { D1: n, D2: n } rostered
-  const [floorOps,  setFloorOps]  = useState(null);   // distinct present dispatch operators
-  const [alloc,     setAlloc]     = useState([]);
-  const [stock,     setStock]     = useState(null);   // pipeline products
-  const [stockLoad, setStockLoad] = useState(false);
-  const [shipped,   setShipped]   = useState([]);
-  const [shippedLoad, setShippedLoad] = useState(false);
+  const { setRefreshing } = useRefreshState();
 
   const [preset,     setPreset]     = useState('10days');
   const [shippedFrom, setShippedFrom] = useState('');
@@ -145,77 +141,81 @@ export default function DepotOverview() {
   const [customFrom,  setCustomFrom]  = useState('');
   const [customTo,    setCustomTo]    = useState('');
 
+  // One cached query per call. Each fetcher is the call + normalisation the page made
+  // before, slimmed to what it renders (lib/overview.mjs says what is dropped and why).
+  // A failure now THROWS instead of leaving the last value or a silent []/0 behind.
+  const live = !!session;
+  // Today-scoped calls carry the IST date in their cache key, so a tab reopened after
+  // midnight never seeds yesterday's figures as today's. The same `day` goes to the call.
+  const day = istToday();
+
   // ── Live reads (cheap RPCs) — auto-refresh 30s ──────────────
-  const loadLive = useCallback(async () => {
+  const countsQ = useCachedQuery({ key: 'depot:dashboard:counts', userId, enabled: live,
+    fetcher: () => garageFetch('getDispatchDashboard', { limit: '1' }, session).then(pickCounts) });
+  const linesQ = useCachedQuery({ key: `depot:dashboard:lines:${day}`, userId, enabled: live,
+    fetcher: () => garageFetch('getDispatchLineView', {}, session).then(pickLines) });
+  const allocQ = useCachedQuery({ key: 'depot:dashboard:allocated', userId, enabled: live,
+    fetcher: () => garageFetch('getAllocatedByChannel', {}, session).then(pickChannelRows) });
+  const scanQ = useCachedQuery({ key: `depot:dashboard:scan-summary:${day}`, userId, enabled: live,
+    fetcher: () => garageFetch('getDispatchScanSummary', { date: day }, session).then(pickScanSummary) });
+  const requestsQ = useCachedQuery({ key: 'depot:dashboard:requests', userId, enabled: live,
+    fetcher: () => garageFetch('getFulfilmentRequests', { status: 'pending' }, session).then(countRequests) });
+  const liveQs = [countsQ, linesQ, allocQ, scanQ, requestsQ];
+
+  function loadLive() {
     if (!session) return;
-    setRefreshing(true);
-    const tdy = istToday();
-    try {
-      const [dash, lv, ab, dss, fr] = await Promise.allSettled([
-        garageFetch('getDispatchDashboard',  { limit: '1' }, session),
-        garageFetch('getDispatchLineView',   {}, session),
-        garageFetch('getAllocatedByChannel', {}, session),
-        garageFetch('getDispatchScanSummary', { date: tdy }, session),
-        garageFetch('getFulfilmentRequests', { status: 'pending' }, session),
-      ]);
-      if (dash.status === 'fulfilled') setCounts(dash.value?.counts || null);
-      if (lv.status   === 'fulfilled') setLines(Array.isArray(lv.value?.dispatch_lines) ? lv.value.dispatch_lines : []);
-      if (ab.status   === 'fulfilled') setAlloc(Array.isArray(ab.value) ? ab.value : []);
-      if (dss.status  === 'fulfilled') setToday(dss.value || null);
-      if (fr.status   === 'fulfilled') setPendingReqs(Array.isArray(fr.value) ? fr.value.length : 0);
-    } finally {
-      setRefreshing(false);
-      setLastRefreshed(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }));
-    }
-  }, [session, setRefreshing, setLastRefreshed]);
+    liveQs.forEach(q => q.refresh());
+  }
 
   useAutoRefresh(loadLive, 30000, !session);
 
   // ── Floor people (roster per line + on-floor headcount) ─────
-  // workerFetch / canManageFloor-gated; degrade silently if the
-  // viewer lacks the permission (manpower figures just show —).
-  const loadFloorPeople = useCallback(async () => {
-    if (!session) return;
-    const tdy = istToday();
-    const [logRes, attRes] = await Promise.allSettled([
-      workerFetch('getManpowerLog',         { data: { shift_date: tdy } }, session),
-      workerFetch('getOperatorAttendance',  { data: { date_from: tdy, date_to: tdy, team: 'dispatch' } }, session),
-    ]);
-    if (logRes.status === 'fulfilled') {
-      const log = logRes.value?.data;
-      if (log && typeof log === 'object' && !Array.isArray(log)) {
-        setAllocByLine({
-          D1: Array.isArray(log.D1) ? log.D1.length : 0,
-          D2: Array.isArray(log.D2) ? log.D2.length : 0,
-        });
+  // workerFetch / canManageFloor-gated: the worker 403s by design for a viewer without
+  // the permission, and the page shows what it always has then (no roster on the line
+  // cards; "—" on the floor). Any OTHER failure is an error the section shows.
+  const rosterQ = useCachedQuery({ key: `depot:dashboard:roster:${day}`, userId, enabled: live,
+    fetcher: async () => {
+      try {
+        return rosterByLine(await workerFetch('getManpowerLog', { data: { shift_date: day } }, session));
+      } catch (e) {
+        if (isForbidden(e)) return {};
+        throw e;
       }
-    }
-    if (attRes.status === 'fulfilled') {
-      const rows = Array.isArray(attRes.value?.data) ? attRes.value.data
-        : Array.isArray(attRes.value) ? attRes.value : [];
-      // `!clock_out` alone is not enough: someone marked `absent`/`leave` who has not clocked
-      // out yet would still count as on-floor. Today no absent row has an open shift (0 of 27,
-      // measured 2026-08-28), so this was latent rather than live — closed anyway now that the
-      // rule has one home. See isPresent() in @throttle/domain.
-      const present = new Set(rows.filter(r => !r.clock_out && isPresent(r)).map(r => r.operator_id));
-      setFloorOps(present.size);
-    }
-  }, [session]);
+    } });
+  // `!clock_out` alone is not enough: someone marked `absent`/`leave` who has not clocked
+  // out yet would still count as on-floor. Today no absent row has an open shift (0 of 27,
+  // measured 2026-08-28), so this was latent rather than live — closed anyway now that the
+  // rule has one home. See isPresent() in @throttle/domain.
+  const floorOpsQ = useCachedQuery({ key: `depot:dashboard:floor-ops:${day}`, userId, enabled: live,
+    fetcher: async () => {
+      try {
+        return floorOpsCount(await workerFetch('getOperatorAttendance', { data: { date_from: day, date_to: day, team: 'dispatch' } }, session), isPresent);
+      } catch (e) {
+        if (isForbidden(e)) return null;
+        throw e;
+      }
+    } });
+  const floorQs = [rosterQ, floorOpsQ];
+
+  function loadFloorPeople() {
+    if (!session) return;
+    floorQs.forEach(q => q.refresh());
+  }
 
   useAutoRefresh(loadFloorPeople, 60000, !session);
 
-  // ── On-hand stock by product (heavier pipeline read) — once + manual ──
-  const loadStock = useCallback(async () => {
-    if (!session) return;
-    setStockLoad(true);
-    try {
-      const r = await garageFetch('getDispatchPipeline', {}, session);
-      setStock(Array.isArray(r?.products) ? r.products : []);
-    } catch { setStock([]); }
-    finally { setStockLoad(false); }
-  }, [session]);
+  // At IST midnight the dated keys change and those panels drop to their skeleton; fetch
+  // the new day now rather than on the next 30/60 s tick. (On mount this joins the
+  // requests the auto-refresh loops have just started — no extra call.)
+  useEffect(() => {
+    if (session) [linesQ, scanQ, rosterQ, floorOpsQ].forEach(q => q.refresh());
+  }, [day, live]); // eslint-disable-line
 
-  useEffect(() => { loadStock(); }, [loadStock]);
+  // ── On-hand stock by product (heavier pipeline read) — once + manual ──
+  const stockQ = useCachedQuery({ key: 'depot:dashboard:pipeline', userId, enabled: live,
+    fetcher: () => garageFetch('getDispatchPipeline', {}, session).then(slimPipeline) });
+
+  useEffect(() => { if (session) stockQ.refresh(); }, [session]); // eslint-disable-line
 
   // ── Shipped by channel (date presets) ───────────────────────
   function applyPreset(p) {
@@ -244,24 +244,55 @@ export default function DepotOverview() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadShipped = useCallback(async () => {
-    if (!session || !shippedFrom || !shippedTo) return;
-    setShippedLoad(true);
-    try {
-      const r = await garageFetch('getShippedByChannel', { date_from: shippedFrom, date_to: shippedTo }, session);
-      setShipped(Array.isArray(r) ? r : []);
-    } catch { setShipped([]); }
-    finally { setShippedLoad(false); }
-  }, [session, shippedFrom, shippedTo]);
+  // With a date blank (Custom before both are picked) nothing is fetched and the last
+  // complete range's cards remain on screen, as before — the query stays keyed on that last
+  // complete range. Each complete range is its own cache entry: changing to one shows that
+  // range's cached data or a skeleton until it answers.
+  const shippedRangeRef = useRef(null);
+  if (shippedFrom && shippedTo) shippedRangeRef.current = { from: shippedFrom, to: shippedTo };
+  const shippedRange = shippedRangeRef.current;
+  const shippedQ = useCachedQuery({
+    key: shippedRange ? `depot:dashboard:shipped:${shippedRange.from}:${shippedRange.to}` : null,
+    userId, enabled: live && !!shippedRange,
+    fetcher: () => garageFetch('getShippedByChannel', { date_from: shippedRange.from, date_to: shippedRange.to }, session).then(pickChannelRows) });
 
-  useEffect(() => { loadShipped(); }, [loadShipped]);
+  useEffect(() => { if (session) shippedQ.refresh(); }, [session, shippedRange?.from, shippedRange?.to]); // eslint-disable-line
+
+  // ── Topbar + freshness ──────────────────────────────────────
+  // The Live/Sync dot tracks the 30 s live calls, as it did when they were one allSettled.
+  const liveInFlight = liveQs.some(q => q.loading || q.refreshing);
+  useEffect(() => { setRefreshing(liveInFlight); }, [liveInFlight]); // eslint-disable-line
+  useEffect(() => () => setRefreshing(false), []); // eslint-disable-line
+  // The freshness line below the header replaces the topbar's "Updated h:mm" on this page
+  // (one indicator, not two — and the topbar's is hidden on phones); DepotTopbar hides its
+  // stamp on /dashboard. It covers the POLLED calls only: On-Hand and Sent Out are loaded
+  // once and carry their own "as of" in their headers.
+  const fresh = freshness([...liveQs, ...floorQs]);
+  const stockAsOf = panelAsOf(stockQ);
+  const shippedAsOf = panelAsOf(shippedQ);
+
+  // Per-section readiness: no data yet → skeleton; a failure with no data → inline retry.
+  const has = (q) => q.data !== undefined;
+  const failedEmpty = (q) => !!q.error && q.data === undefined;
+  const settled = (q) => has(q) || failedEmpty(q);
 
   // ── Derived ─────────────────────────────────────────────────
+  const counts = countsQ.data ?? null;
+  const lines = linesQ.data ?? [];
+  const today = scanQ.data ?? null;              // getDispatchScanSummary
+  const pendingReqs = requestsQ.data ?? 0;       // open fulfilment requests
+  const allocByLine = rosterQ.data ?? {};        // { D1: n, D2: n } rostered
+  const floorOps = floorOpsQ.data ?? null;       // distinct present dispatch operators
+  const alloc = allocQ.data ?? [];
+  const stock = stockQ.data ?? null;             // pipeline products
+  const shipped = shippedQ.data ?? [];
+
   const c = counts || {};
   const inArea = (c.rtd_count || 0) + (c.handed_over_count || 0) + (c.allocated_count || 0);
 
   const todayPacked = lines.reduce((s, l) => s + (l.pack_count || 0), 0);
-  const dispatchedToday = today?.DOUT != null ? Number(today.DOUT) : lines.reduce((s, l) => s + (l.dout_count || 0), 0);
+  // Two calls (DOUT from the scan summary, else the line sum) — see dispatchedToday().
+  const dispatched = dispatchedToday(scanQ, linesQ);
   const shipmentsToday  = today?.shipments_out != null ? Number(today.shipments_out) : null;
 
   const allocTotal = alloc.reduce((s, r) => s + (r.unit_count || 0), 0);
@@ -289,19 +320,24 @@ export default function DepotOverview() {
   const vendorPipe = (stock || []).reduce((s, p) => s + (p.totals?.vendor_at || 0) + (p.totals?.vendor_in_transit || 0) + (p.totals?.vendor_receiving || 0), 0);
 
   // ── Pipeline stat cards (live state + today throughput) ─────
+  // `state` per card: its own query's readiness (Dispatched: both of its calls).
+  const qState = (q) => ({ state: has(q) ? 'ready' : failedEmpty(q) ? 'error' : 'loading', retry: [q] });
   const statCards = [
     { label: 'Fulfilment Requests', value: pendingReqs,
       sub: pendingReqs ? 'Awaiting accept / reject →' : 'None pending',
       color: pendingReqs ? 'var(--red)' : 'var(--border)', tag: 'open',
-      onClick: () => router.push('/fulfilment-requests') },
+      onClick: () => router.push('/fulfilment-requests'), ...qState(requestsQ) },
+    // Only once the pipeline has answered, as before (no data → no card, not a skeleton
+    // for a card that may not exist; a failed pipeline says so in its own section).
     ...(vendorPipe > 0 ? [{ label: 'At Vendors', value: vendorPipe, sub: 'Outpost — packed, on the road or in QC →', color: 'var(--t3)', tag: 'now',
-      onClick: () => router.push('/outpost-monitor') }] : []),
-    { label: 'With Production', value: c.rtd_count,         sub: 'Awaiting handover',   color: 'var(--amber)',  tag: 'now' },
-    { label: 'With Dispatch',   value: c.handed_over_count, sub: 'Awaiting allocation', color: 'var(--yellow)', tag: 'now' },
-    { label: 'Allocated',       value: c.allocated_count,   sub: 'Awaiting ship',       color: 'var(--blue)',   tag: 'now' },
-    { label: 'Dispatched',      value: dispatchedToday,     sub: 'Sent out (DOUT)',     color: 'var(--green)',  tag: 'today' },
-    { label: 'Shipments',       value: shipmentsToday,      sub: 'Manifests sent out',  color: '#14b8a6',       tag: 'today' },
+      onClick: () => router.push('/outpost-monitor'), state: 'ready' }] : []),
+    { label: 'With Production', value: c.rtd_count,         sub: 'Awaiting handover',   color: 'var(--amber)',  tag: 'now', ...qState(countsQ) },
+    { label: 'With Dispatch',   value: c.handed_over_count, sub: 'Awaiting allocation', color: 'var(--yellow)', tag: 'now', ...qState(countsQ) },
+    { label: 'Allocated',       value: c.allocated_count,   sub: 'Awaiting ship',       color: 'var(--blue)',   tag: 'now', ...qState(countsQ) },
+    { label: 'Dispatched',      value: dispatched.value,    sub: 'Sent out (DOUT)',     color: 'var(--green)',  tag: 'today', state: dispatched.state, retry: dispatched.retry },
+    { label: 'Shipments',       value: shipmentsToday,      sub: 'Manifests sent out',  color: '#14b8a6',       tag: 'today', ...qState(scanQ) },
   ];
+  const retryAll = (qs) => () => qs.forEach(q => q.refresh());
 
   return (
     <div style={{ maxWidth: 1180, margin: '0 auto' }}>
@@ -311,14 +347,19 @@ export default function DepotOverview() {
           <div>
             <h1 className="font-display" style={{ fontSize: 26, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t1)', margin: 0 }}>Depot</h1>
             <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13.5, color: 'var(--t3)' }}>Warehouse · finished goods · dispatch</div>
+            <div aria-live="polite" style={{ fontFamily: 'var(--font-ui)', fontSize: 12, minHeight: 16, marginTop: 4, color: fresh.warn ? 'var(--amber)' : 'var(--t3)' }}>{fresh.text}</div>
           </div>
           <div style={{ display: 'flex', gap: 28, alignItems: 'flex-end' }}>
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontFamily: 'var(--cond)', fontSize: 40, fontWeight: 800, color: 'var(--yellow)', lineHeight: 1 }}>{fmt(inArea)}</div>
+              {has(countsQ)
+                ? <div style={{ fontFamily: 'var(--cond)', fontSize: 40, fontWeight: 800, color: 'var(--yellow)', lineHeight: 1 }}>{fmt(inArea)}</div>
+                : failedEmpty(countsQ) ? <HeroError onRetry={countsQ.refresh} /> : <HeroSkeleton />}
               <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t3)', marginTop: 4 }}>units in the dispatch area</div>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontFamily: 'var(--cond)', fontSize: 40, fontWeight: 800, color: floorOps ? 'var(--green)' : 'var(--t2)', lineHeight: 1 }}>{floorOps != null ? fmt(floorOps) : '—'}</div>
+              {has(floorOpsQ)
+                ? <div style={{ fontFamily: 'var(--cond)', fontSize: 40, fontWeight: 800, color: floorOps ? 'var(--green)' : 'var(--t2)', lineHeight: 1 }}>{floorOps != null ? fmt(floorOps) : '—'}</div>
+                : failedEmpty(floorOpsQ) ? <HeroError onRetry={floorOpsQ.refresh} /> : <HeroSkeleton />}
               <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t3)', marginTop: 4 }}>operators on the floor</div>
             </div>
           </div>
@@ -328,7 +369,9 @@ export default function DepotOverview() {
       {/* ── Pipeline stat cards (replaces the funnel) ────────── */}
       <section style={{ marginBottom: 30 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-          {statCards.map(s => <StatCard key={s.label} {...s} />)}
+          {statCards.map(({ state, retry, ...s }) => state === 'ready' ? <StatCard key={s.label} {...s} />
+            : state === 'error' ? <StatCardError key={s.label} {...s} onRetry={retryAll(retry)} />
+            : <StatCardSkeleton key={s.label} color={s.color} />)}
         </div>
       </section>
 
@@ -336,16 +379,29 @@ export default function DepotOverview() {
       <section style={{ marginBottom: 30 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
           <h2 style={sectionLabel}>Today on the Floor</h2>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
-            {fmt(todayPacked)} packed{floorOps != null ? ` · ${fmt(floorOps)} on floor` : ''}
-          </span>
+          {/* Two calls (packed: line view · on floor: attendance) — shown once both have answered. */}
+          {has(linesQ) && settled(floorOpsQ) ? (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
+              {fmt(todayPacked)} packed{floorOps != null ? ` · ${fmt(floorOps)} on floor` : ''}
+            </span>
+          ) : !failedEmpty(linesQ) && <Skeleton width={150} height={12} />}
         </div>
-        {lines.length === 0 ? (
+        {/* Line cards pair the line view with the roster — held until both have answered. */}
+        {failedEmpty(linesQ) ? (
+          <Panel><PanelError message="Could not load today's dispatch lines." onRetry={linesQ.refresh} /></Panel>
+        ) : !(has(linesQ) && settled(rosterQ)) ? (
+          <LineCardsSkeleton />
+        ) : lines.length === 0 ? (
           <Panel padding={0}><EmptyState message="No dispatch line activity yet today" /></Panel>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
-            {lines.map(l => <LineCard key={l.line} row={l} rostered={allocByLine[l.line]} />)}
-          </div>
+          <>
+            {failedEmpty(rosterQ) && (
+              <div style={{ marginBottom: 12 }}><PanelError message="Could not load the line roster." onRetry={rosterQ.refresh} /></div>
+            )}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+              {lines.map(l => <LineCard key={l.line} row={l} rostered={allocByLine[l.line]} />)}
+            </div>
+          </>
         )}
       </section>
 
@@ -353,9 +409,15 @@ export default function DepotOverview() {
       <section style={{ marginBottom: 30 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
           <h2 style={{ ...sectionLabel }}>Allocated — Awaiting Ship</h2>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--blue)' }}>{fmt(allocTotal)} units</span>
+          {has(allocQ)
+            ? <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--blue)' }}>{fmt(allocTotal)} units</span>
+            : !failedEmpty(allocQ) && <Skeleton width={70} height={12} />}
         </div>
-        {allocSorted.length === 0 ? (
+        {failedEmpty(allocQ) ? (
+          <Panel><PanelError message="Could not load allocated units." onRetry={allocQ.refresh} /></Panel>
+        ) : !has(allocQ) ? (
+          <ChannelCardsSkeleton />
+        ) : allocSorted.length === 0 ? (
           <Panel padding={0}><EmptyState message="Nothing allocated and awaiting ship" /></Panel>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
@@ -368,11 +430,16 @@ export default function DepotOverview() {
       <section style={{ marginBottom: 30 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
           <h2 style={{ ...sectionLabel }}>On-Hand Finished Goods</h2>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>{fmt(stockOnHandTotal)} unallocated on hand</span>
+          {has(stockQ)
+            ? <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>{fmt(stockOnHandTotal)} unallocated on hand</span>
+            : !failedEmpty(stockQ) && <Skeleton width={160} height={12} />}
+          <PanelAsOf asOf={stockAsOf} />
         </div>
         <Panel padding={0}>
-          {stockLoad && !stock ? (
-            <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+          {failedEmpty(stockQ) ? (
+            <PanelError message="Could not load finished goods on hand." onRetry={stockQ.refresh} pad="20px 14px" />
+          ) : !has(stockQ) ? (
+            <TableSkeleton />
           ) : stockRows.length === 0 ? (
             <EmptyState message="No finished goods in the dispatch area" />
           ) : (
@@ -408,6 +475,7 @@ export default function DepotOverview() {
       <section style={{ marginBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
           <h2 style={{ ...sectionLabel }}>Sent Out by Channel</h2>
+          <PanelAsOf asOf={shippedAsOf} />
           <div style={{ flex: 1 }} />
           <Chip active={preset === '10days'}    onClick={() => applyPreset('10days')}>10 Days</Chip>
           <Chip active={preset === 'thisweek'}  onClick={() => applyPreset('thisweek')}>This Week</Chip>
@@ -424,13 +492,17 @@ export default function DepotOverview() {
               value={customTo} onChange={e => { setCustomTo(e.target.value); setShippedTo(e.target.value); }} />
           </div>
         )}
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', marginBottom: 12, letterSpacing: '0.04em' }}>
-          <span style={{ color: 'var(--green)' }}>{fmt(shippedSale)} sold</span>{' · '}
-          <span>{fmt(shippedNonSale)} non-sale</span>{' · '}
-          <span style={{ color: 'var(--t1)' }}>{fmt(shippedTotal)} total</span>
-        </div>
-        {shippedLoad ? (
-          <Panel padding={0}><div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div></Panel>
+        {has(shippedQ) ? (
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', marginBottom: 12, letterSpacing: '0.04em' }}>
+            <span style={{ color: 'var(--green)' }}>{fmt(shippedSale)} sold</span>{' · '}
+            <span>{fmt(shippedNonSale)} non-sale</span>{' · '}
+            <span style={{ color: 'var(--t1)' }}>{fmt(shippedTotal)} total</span>
+          </div>
+        ) : !failedEmpty(shippedQ) && <Skeleton width={260} height={12} style={{ marginBottom: 12 }} />}
+        {failedEmpty(shippedQ) ? (
+          <Panel><PanelError message="Could not load units sent out in this range." onRetry={shippedQ.refresh} /></Panel>
+        ) : !has(shippedQ) ? (
+          <ChannelCardsSkeleton />
         ) : shippedSorted.length === 0 ? (
           <Panel padding={0}><EmptyState message="No units shipped in this range" /></Panel>
         ) : (
@@ -439,6 +511,115 @@ export default function DepotOverview() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+// ── Loading / error states ────────────────────────────────────
+const retryBtn = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '5px 12px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase' };
+
+// A failed section with nothing to fall back on says so — never zeros, never an empty
+// state, never a skeleton that spins forever.
+function PanelError({ message, onRetry, pad }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t3)', padding: pad }}>
+      <span>{message}</span>
+      <button onClick={onRetry} style={retryBtn}>Retry</button>
+    </div>
+  );
+}
+
+function HeroError({ onRetry }) {
+  return (
+    <div style={{ height: 40, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t3)' }}>
+      <span>Couldn't load</span>
+      <button onClick={onRetry} style={retryBtn}>Retry</button>
+    </div>
+  );
+}
+
+function StatCardError({ label, color, tag, onRetry }) {
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 16, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: color || 'var(--border)' }} />
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6 }}>
+        <span style={{ fontFamily: 'var(--cond)', fontSize: 12.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--t2)' }}>{label}</span>
+        {tag && <span style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t4)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px' }}>{tag}</span>}
+      </div>
+      <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t3)', marginTop: 12 }}>Couldn't load</div>
+      <button onClick={onRetry} style={{ ...retryBtn, marginTop: 8 }}>Retry</button>
+    </div>
+  );
+}
+
+// A once-loaded panel's own freshness (never polled, so the header line does not cover it).
+function PanelAsOf({ asOf }) {
+  if (!asOf) return null;
+  return <span aria-live="polite" style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: asOf.warn ? 'var(--amber)' : 'var(--t4)' }}>{asOf.text}</span>;
+}
+
+// Skeletons, each laid out like the content it stands in for.
+function HeroSkeleton() {
+  return <div aria-busy="true" style={{ display: 'flex', justifyContent: 'flex-end' }}><Skeleton width={84} height={40} /></div>;
+}
+
+function StatCardSkeleton({ color }) {
+  return (
+    <div aria-busy="true" style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 16, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: color || 'var(--border)' }} />
+      <Skeleton width="60%" height={13} />
+      <Skeleton width="45%" height={34} style={{ marginTop: 10 }} />
+      <Skeleton width="70%" height={11} style={{ marginTop: 8 }} />
+    </div>
+  );
+}
+
+function LineCardsSkeleton() {
+  return (
+    <div aria-busy="true" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+      {Array.from({ length: 2 }, (_, i) => (
+        <div key={i} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+            <Skeleton width={44} height={22} />
+            <Skeleton width={110} height={26} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 12 }}>
+            {[0, 1, 2].map(k => <div key={k}><Skeleton width="60%" height={22} /><Skeleton width="70%" height={10} style={{ marginTop: 4 }} /></div>)}
+          </div>
+          <Skeleton width="40%" height={18} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ChannelCardsSkeleton() {
+  return (
+    <div aria-busy="true" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+      {Array.from({ length: 4 }, (_, i) => (
+        <div key={i} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, gap: 8 }}>
+            <Skeleton width="55%" height={16} />
+            <Skeleton width={44} height={16} />
+          </div>
+          <Skeleton width="35%" height={24} />
+          <Skeleton width="45%" height={11} style={{ marginTop: 6 }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TableSkeleton() {
+  return (
+    <div aria-busy="true">
+      {Array.from({ length: 5 }, (_, i) => (
+        <div key={i} style={{ display: 'flex', gap: 14, padding: '10px 14px', borderBottom: '1px solid rgba(64,64,64,.5)' }}>
+          <Skeleton width="28%" height={14} />
+          <span style={{ flex: 1 }} />
+          {[0, 1, 2, 3].map(k => <Skeleton key={k} width={48} height={14} />)}
+        </div>
+      ))}
     </div>
   );
 }

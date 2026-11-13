@@ -25,7 +25,9 @@ export function DepotTopbar({ refreshing = false, lastRefreshed = null, right })
   const hit = resolveNav(pathname);
   const crumb = hit?.crumb || 'Depot';
   const title = hit?.item?.label || '';
-  const updated = fmtTime(lastRefreshed);
+  // The Overview carries its own freshness line under its header (instant-load pattern),
+  // so the topbar stamp is hidden there — also against a late stamp from the page just left.
+  const updated = /^\/dashboard\/?$/.test(pathname || '') ? null : fmtTime(lastRefreshed);
 
   return (
     <header className="dp-topbar" style={{ height: 56, borderBottom: '1px solid var(--border)', display: 'flex',
