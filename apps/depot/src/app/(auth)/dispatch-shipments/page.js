@@ -377,7 +377,7 @@ export default function DispatchShipmentsPage() {
   }
 
   const canVendorShip = (s) => !!s.fulfilment_request_id && !['shipped', 'cancelled'].includes(s.status)
-    && !(Number(s.packed_count) > 0) && !(Number(s.pool_count) > 0);   // allocated units → ship the normal way
+    && !(Number(s.packed_count) > 0);   // pool_count is CHANNEL-wide, not this shipment — the worker checks allocations
   function openVendorShip(s) { setVendorName(''); setVendorDate(istTodayISO()); setVendorShip(s); }
   async function submitVendorShip() {
     const s = vendorShip;
