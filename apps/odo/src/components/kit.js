@@ -140,8 +140,11 @@ export function SegmentedToggle({ options, value, onChange, size = 'md' }) {
 // ── range picker ─────────────────────────────────────────────────────────────
 // Preset segmented control + from/to date inputs. One control for every page's date range.
 // onChange({ from, to, preset }). `right` renders extra controls flush-right on the same row.
-export function RangePicker({ from, to, onChange, right }) {
-  const activePreset = PRESETS.find(p => p.from === from && p.to === to)?.key || '';
+// `presets` (optional) = a list recomputed by the caller at render time, for a page that rolls
+// its range over IST midnight; without it the module-load list is used, exactly as before.
+export function RangePicker({ from, to, onChange, right, presets }) {
+  const PRESETS_NOW = presets || PRESETS;
+  const activePreset = PRESETS_NOW.find(p => p.from === from && p.to === to)?.key || '';
   // Sticky filter bar: pins to the top of the scrolling area (.so-scroll) so the range controls
   // stay reachable while the page scrolls. top:-22px cancels .so-scroll's 22px top padding so the
   // bar pins FLUSH under the app header (top:0 would pin at the padding edge, leaving a gap where
@@ -151,7 +154,7 @@ export function RangePicker({ from, to, onChange, right }) {
   return (
     <div className="so-rangebar" style={{ position: 'sticky', top: -22, zIndex: 30, background: 'rgba(8,9,12,.86)', backdropFilter: 'blur(8px)', borderBottom: '1px solid var(--row-border)', padding: '10px 0', display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
       <div className="so-seg">
-        {PRESETS.map(p => (
+        {PRESETS_NOW.map(p => (
           <button key={p.key} className={activePreset === p.key ? 'on' : ''}
             onClick={() => onChange({ from: p.from, to: p.to, preset: p.key })}>
             {p.label}
