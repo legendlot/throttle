@@ -3,6 +3,17 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [2.2.0] - 2026-11-13
+### Added
+- **Record Checklists** (new chapter in the Checklists part, `/checklist`): record templates and the kind switch,
+  the Records tab and filters, starting a record, the record page, ticking (anyone who can see it), N/A with a
+  reason, progress "6/11 (1 N/A)", self-completing records, who can edit or archive, pulling template updates,
+  Create task from an item, the "DKT-n is done, tick this?" suggestion, linking tasks and the space rule,
+  archived records, error texts.
+### Changed
+- **Inside a Task**: the Checklists strip and + Checklist / Link checklist.
+- **Signing In & Getting Around**: the command bar finds record checklists.
+
 ## [2.1.0] - 2026-11-13
 ### Changed
 - **Programs are back** as a free label alongside the Plan: the Programs chapter returns to Organising

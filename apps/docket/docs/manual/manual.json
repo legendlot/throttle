@@ -2,7 +2,7 @@
   "title": "Docket",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to Legend of Toys' org-wide task manager: capturing, owning and tracking work across every department.",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "date": "2026-11-13",
   "app_url": "docket.legendoftoys.com",
   "owner": "Legend of Toys",
@@ -244,6 +244,17 @@
           "title": "Checklists",
           "route": "/checklist",
           "file": "checklists.html",
+          "roles": [
+            "mem",
+            "view",
+            "adm"
+          ]
+        },
+        {
+          "id": "checklist-records",
+          "title": "Record Checklists",
+          "route": "/checklist",
+          "file": "checklist-records.html",
           "roles": [
             "mem",
             "view",

@@ -191,7 +191,7 @@ used**. Better screens won't fix that on their own. What would:
 | Phase | Contents | Size |
 |---|---|---|
 | **P1: Register + adherence** | `run_scope` + backfill stamp (small migration), `getChecklistRegister`, Register grid + Today/Register toggle, flat-task register, manual chapter | ~1 session |
-| **P2: Records** | migration 0014 (3 tables + `kind`/`version`), 10 handlers, Records list, Record page, task strip, ⌘K, manual | ~1.5–2 sessions |
+| **P2: Records** ✅ BUILT 2026-11-13 (`91dda8c0`, migration 0032 not 0014) | migration 0014 (3 tables + `kind`/`version`), 10 handlers, Records list, Record page, task strip, ⌘K, manual | ~1.5–2 sessions |
 
 P1 and P2 are independent. P2 can ship first if the launch checklist is the more pressing need.
 

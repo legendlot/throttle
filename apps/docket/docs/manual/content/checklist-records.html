@@ -1,0 +1,106 @@
+<p class="lead">A <strong>record checklist</strong> is a copy of a checklist for one product or launch, ticked <em>once</em> instead of on a schedule. You start it from a <strong>record template</strong> (for example a launch checklist), give it a title like &ldquo;Launch: Badger&rdquo;, and the team works through the items together. When every item is done or marked N/A, the record finishes itself.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">One-off, multi-team checklists per launch.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who ticks</div><div class="g-val">Anyone who can see the record.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mem">Member</span> <span class="role view">Reviewer</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Find it</div><div class="g-val"><strong>Checklist</strong>, then the <strong>Records</strong> tab.</div></div>
+</div>
+
+<h2 class="sec">Routines vs records</h2>
+<p>A routine (see <em>Checklists</em>) repeats on a schedule and is ticked day after day. A record is a single run: it has no schedule and nobody is &ldquo;assigned&rdquo; it. It belongs to a <strong>space</strong>, and like a task, <strong>who can see it follows that space&rsquo;s privacy</strong>. A record in a private space is invisible to people outside it.</p>
+
+<h2 class="sec">Making a record template</h2>
+<p>On <strong>Manage</strong>, open <strong>New template</strong>. The editor starts with a <strong>Kind</strong> switch: <strong>Routine</strong> or <strong>Record</strong>. Choose <strong>Record</strong> to hide the schedule, chart type and assignees, then add sections and items as usual (an item can carry short help text). A record template shows a <strong>Record &middot; v1</strong> tag in the list.</p>
+<ul>
+  <li>The kind is fixed once the template is saved. You can&rsquo;t turn a routine into a record template or back.</li>
+  <li>Editing the items later bumps the version (v2, v3 &hellip;). Records you already started are offered the new items (see <em>Pulling template updates</em>).</li>
+  <li>Archiving a record template stops new records starting from it; existing records keep their items.</li>
+</ul>
+
+<h2 class="sec">The Records tab</h2>
+<p>The <strong>Records</strong> tab lists every record you can see, each with its title, product, template, owner, space, status and a progress bar. Click a title to open the record. Four filters sit above the list: <strong>template</strong>, <strong>product</strong>, <strong>status</strong> (Open + complete by default; also Open, Complete, Archived, All) and <strong>owner</strong>.</p>
+<h3>Starting a record</h3>
+<ol class="steps">
+  <li><span class="s-title">Click New record.</span> The button is greyed out until at least one record template exists.</li>
+  <li><span class="s-title">Type a title</span>, such as <em>Launch: Badger</em>, and pick the <strong>Template</strong>.</li>
+  <li><span class="s-title">Optionally pick a Product.</span> Launches usually begin before the product is in the catalog, so this can stay empty; set it later when the product exists.</li>
+  <li><span class="s-title">Choose the Space and Owner.</span> The space defaults to General and the owner to you. Remember that the space decides who can see the record.</li>
+  <li><span class="s-title">Click Create.</span> The items are copied from the template and you land on the record.</li>
+</ol>
+
+<h2 class="sec">The record page</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Header</div><div class="a-val"><p>The title, a status (<strong>Open</strong>, <strong>Complete</strong> or <strong>Archived</strong>), and below it the <strong>Product</strong>, <strong>Owner</strong>, <strong>Space</strong>, <strong>Template</strong> (with the version the copy was made from) and <strong>Progress</strong>.</p></div></div>
+  <div class="a-row"><div class="a-key">Linked tasks</div><div class="a-val"><p>The tasks tied to this record, each with status, <code>DKT-</code> number, title and owner. Click one to open it; the <strong>x</strong> unlinks it (shown only if you can edit that task). Tasks in spaces you can&rsquo;t open appear only as a count.</p></div></div>
+  <div class="a-row"><div class="a-key">Sections and items</div><div class="a-val"><p>Each section shows its own progress. Each item has a tick box, its title and help text, who ticked it and when, a <strong>Note</strong> box, and its buttons.</p></div></div>
+  <div class="a-row"><div class="a-key">History</div><div class="a-val"><p>A <strong>History</strong> list at the foot records every change: ticks, N/A, notes, linked tasks, template updates, renames and archiving, each with who and when.</p></div></div>
+</div>
+
+<h2 class="sec">Ticking, N/A and progress</h2>
+<p><strong>Anyone who can see the record can tick it.</strong> A launch crosses teams: content ticks content, operations ticks sourcing. Every tick shows who did it and when. Click the box to tick; click again to un-tick (the item reopens).</p>
+<p>If an item does not apply, press <strong>N/A</strong> and give a short reason (for example &ldquo;No new tooling needed&rdquo;). The reason is required and must be under 300 characters. An N/A item <strong>counts as complete</strong>; <strong>Undo N/A</strong> brings it back to open.</p>
+<p>Progress counts done plus N/A against all items and reads like <strong>6/11 (1 N/A)</strong>: six of eleven items finished, one of those marked N/A. The same figure appears in the list, on each section and in the header.</p>
+<div class="callout note">
+  <div class="c-title">&#9432; The record completes itself</div>
+  <p>When the last open item is ticked or marked N/A, the record becomes <strong>Complete</strong> and Docket says so. Re-open any item and the record goes back to <strong>Open</strong>. Nobody presses a &ldquo;finish&rdquo; button.</p>
+</div>
+<p>You can also use <strong>Add item</strong> at the foot to add an item only this record needs, choosing which section it joins. It does not change the template.</p>
+
+<h2 class="sec">Who can change what</h2>
+<table class="tbl">
+  <thead><tr><th>Action</th><th>Who</th></tr></thead>
+  <tbody>
+    <tr><td>See the record</td><td>Anyone who can see its space (same as a task).</td></tr>
+    <tr><td>Tick, mark N/A, write notes, add an item, create a task from an item, pull template updates</td><td>Anyone who can see the record. If a control is missing on the page, your role does not allow it.</td></tr>
+    <tr><td>Rename, change the product or owner, archive or un-archive</td><td>The record&rsquo;s owner, its creator or an <span class="role adm">Admin</span>. Others see these as plain text.</td></tr>
+  </tbody>
+</table>
+<p>If you try something you may not do, Docket says <em>Only the record&rsquo;s owner, its creator or an admin can change that.</em></p>
+
+<h2 class="sec">Pulling template updates</h2>
+<p>When the template gains items after a record was started, an <strong>open</strong> record shows a banner: <em>Template has 2 new items &mdash; add them? Nothing already ticked changes.</em> Press <strong>Add them</strong> to copy only the missing items.</p>
+<ul>
+  <li>It <strong>never removes or un-ticks</strong> anything.</li>
+  <li>An item deleted from the template <strong>stays</strong> on records already made, labelled <em>No longer in template</em>.</li>
+  <li>Complete and archived records are not offered the update.</li>
+</ul>
+
+<h2 class="sec">Creating a task from an item</h2>
+<p>An open item without a task has a <strong>Create task</strong> button. It opens a small line prefilled with the item and the record title (for example &ldquo;Order sample stock &mdash; Launch: Badger&rdquo;); edit it if you like, then press <span class="kbd">Enter</span> or <strong>Create task</strong>.</p>
+<ul>
+  <li>The task is made in <strong>the record&rsquo;s space</strong>, with <strong>you as the owner</strong> (change the owner on the task afterwards).</li>
+  <li>It is linked to the record automatically, and the item now shows the task&rsquo;s <code>DKT-</code> number, owner and status. An item holds one task.</li>
+  <li>Only an open item can become a task.</li>
+</ul>
+<div class="callout tip">
+  <div class="c-title">&#10003; &ldquo;DKT-123 is done &mdash; tick this?&rdquo;</div>
+  <p>When a task made from an item is finished and the item is still open, the item offers a one-click <strong>DKT-123 is done &mdash; tick this?</strong> button. <strong>Docket never ticks for you</strong>: finishing the task does not change the item until someone presses it, because the person ticking is vouching for the result.</p>
+</div>
+
+<h2 class="sec">Linking an existing task</h2>
+<p>You can tie any task to a record from the task itself (see <em>Inside a Task</em>). The rules:</p>
+<ul>
+  <li>You need <strong>edit rights on the task</strong>.</li>
+  <li>The record must be <strong>in the task&rsquo;s space, or in General</strong>. Anything else is refused: <em>A checklist can be linked only to a task in its own space, or from General.</em></li>
+  <li>A recurring (routine) task can&rsquo;t take a record checklist, and an abandoned task must be reactivated before linking (unlinking still works).</li>
+  <li>A task linked to a record <strong>can&rsquo;t be moved to a space that would break the rule</strong>. Docket refuses with <em>This task is tied to a record checklist in another space. Unlink it (or move the checklist&rsquo;s work) first.</em> Unlink, then move.</li>
+</ul>
+
+<h2 class="sec">Archiving</h2>
+<p>An owner, creator or admin can <strong>Archive</strong> a record (a confirm box appears). An archived record stays readable but <strong>read-only</strong>: ticking, notes and renaming stop, and trying gives <em>This record is archived. Un-archive it to change it.</em> <strong>Un-archive</strong> restores it. Archived records show only under the <strong>Archived</strong> or <strong>All</strong> status filter.</p>
+
+<h2 class="sec">Finding a record</h2>
+<p>Press <span class="kbd">&#8984;K</span> and type at least two letters of a record&rsquo;s title or product: matches appear under <strong>Checklists</strong> with their progress, and <span class="kbd">Enter</span> opens the record. You only find records in spaces you can open.</p>
+
+<h2 class="sec">If something goes wrong</h2>
+<table class="tbl">
+  <thead><tr><th>You try</th><th>Docket says</th></tr></thead>
+  <tbody>
+    <tr><td>Mark N/A with no reason</td><td><em>Say briefly why it doesn&rsquo;t apply.</em></td></tr>
+    <tr><td>Open a record you can&rsquo;t see</td><td><em>Record not found</em>: it isn&rsquo;t there, or lives in a space you can&rsquo;t open.</td></tr>
+    <tr><td>Start a record from an archived template</td><td><em>That template is archived.</em></td></tr>
+    <tr><td>Pick a product not in the catalog</td><td><em>That product isn&rsquo;t in the catalog.</em> Leave it empty and link it later.</td></tr>
+    <tr><td>Create a task on an item that has one</td><td><em>This item already has a task.</em></td></tr>
+  </tbody>
+</table>
