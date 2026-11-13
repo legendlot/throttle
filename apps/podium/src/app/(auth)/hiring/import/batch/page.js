@@ -11,6 +11,7 @@ import { podiumopsGet, podiumopsPost } from '../../../../../lib/podiumopsFetch.j
 import { Card, Note, ghostBtn, primaryBtn, dangerBtn, backBtn, muted } from '../../../../../components/HiringBits.js';
 import { FilterChip } from '../../../../../components/ui.js';
 import { SOURCES, MAX_UPLOAD_BYTES } from '../../../../../lib/hiring.js';
+import { takePendingFiles } from '../../../../../lib/cvHandoff.js';
 import { AiSpendLine, CvItemCard, draftOf, draftPayload, errText } from '../../../../../components/CvImportBits.js';
 
 const DOC_BUCKET = 'podium-documents';
@@ -44,6 +45,9 @@ function BatchInner() {
   const inflight = useRef(new Set());
   const coolUntil = useRef({});
   const [tick, setTick] = useState(0);
+  const pickedUp = useRef(null);
+  const loadSeq = useRef(0);               // only the latest getCvImport answer is applied
+  const uploadedSince = useRef(new Set()); // items this tab uploaded since that load started (kept if the answer predates them)
 
   const upsertItem = useCallback((it) => {
     setItems(prev => {
@@ -69,11 +73,24 @@ function BatchInner() {
 
   const load = useCallback(async () => {
     if (!session || !id) return;
+    const seq = ++loadSeq.current;
+    uploadedSince.current = new Set();
     try {
       const d = await podiumopsGet('getCvImport', { id }, session);
+      if (seq !== loadSeq.current) return;
+      const onServer = new Set(d.items.map(i => i.id));
       setData(d);
-      setItems([]); d.items.forEach(upsertItem);
-    } catch (e) { showToast(errText(e), 'error'); setData({ error: true }); }
+      // The server list replaces ours, except CVs uploaded here after this load started (not in its snapshot yet).
+      setItems(prev => prev.filter(it => uploadedSince.current.has(it.id) && !onServer.has(it.id)));
+      d.items.forEach(upsertItem);
+    } catch (e) {
+      if (seq !== loadSeq.current) return;
+      showToast(errText(e), 'error'); setData({ error: true });
+      // CVs handed over from the opening page can't upload into a batch that didn't load — say so, don't keep them.
+      pickedUp.current = id;
+      const lost = takePendingFiles(id);
+      if (lost.length) showToast(`${lost.length} CV${lost.length === 1 ? '' : 's'} weren't uploaded — open the batch again and drop them`, 'error');
+    }
   }, [session, id, upsertItem, showToast]);
   useEffect(() => { load(); }, [load]);
 
@@ -114,6 +131,7 @@ function BatchInner() {
         const { error } = await supabase.storage.from(DOC_BUCKET).uploadToSignedUrl(m.storage_path, m.token, file);
         if (error) throw error;
         const it = await podiumopsPost('cvImportFileDone', { import_id: id, storage_path: m.storage_path, file_name: file.name }, session);
+        uploadedSince.current.add(it.id);
         upsertItem(it);
         setUploading(u => ({ ...u, done: u.done + 1 }));
       } catch (e) {
@@ -121,6 +139,15 @@ function BatchInner() {
       }
     });
   }
+
+  // C5 D4: CVs picked on the opening's "Upload CV" arrive through the handoff — once the batch has loaded they go
+  // through addFiles, the drop zone's own path. Taken once per id (the ref + take-deletes guard dev double effects).
+  useEffect(() => {
+    if (!data || data.error || !session || pickedUp.current === id) return;
+    pickedUp.current = id;
+    const files = takePendingFiles(id);
+    if (files.length) addFiles(files);
+  }, [data, session, id]); // eslint-disable-line react-hooks/exhaustive-deps -- addFiles reads id/session, both in deps
 
   const dupesBy = useMemo(() => {
     const byEmail = {}, byPhone = {};
@@ -205,7 +232,7 @@ function BatchInner() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button onClick={() => router.push('/hiring/import')} style={backBtn}><ArrowLeft size={13} /> Imports</button>
         <span style={{ fontSize: 18, fontWeight: 700 }}>{data.opening.designation}</span>
-        <span style={muted}>{data.opening.opening_code} · {SOURCES.find(s => s.id === data.import.source)?.label || data.import.source}{data.import.source_detail ? ` · ${data.import.source_detail}` : ''}</span>
+        <span style={muted}>{data.opening.opening_code} · {SOURCES.find(s => s.id === data.import.source)?.label || data.import.source}{data.referrer ? ` · referred by ${data.referrer.full_name}` : ''}{data.import.source_detail ? ` · ${data.import.source_detail}` : ''}</span>
         <span style={{ flex: 1 }} />
         <AiSpendLine spend={data.spend} ready={data.ai_ready} />
       </div>

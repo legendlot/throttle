@@ -27,6 +27,7 @@ import { intParam } from './params.mjs';
 import { sanitizeRich } from './richtext.mjs';   // S396 — review-box HTML whitelist, see richtext.mjs
 import {
   ACTIVE_APP_STATUSES, TERMINAL_APP_STATUSES, isTerminalStatus, APP_TRANSITIONS, checkTransition, APP_SOURCES,
+  referralError, REFERRER_REQUIRED_MSG,
   OPENING_STATUSES, resolveApprover, checkBandDecider, openingRoles, canSeeOpening, canEditOpening, canManageApps,
   canSeeSalary, canChangeChain, CANDIDATE_DOC_TYPES, docTier, canSeeCandidateDoc, JD_REQUIRED_MSG, jdGate,
   JD_EXTS, CANDIDATE_DOC_EXTS, fileOk, retainUntil, normEmailKey, normPhoneKey, parseBand,
@@ -4360,6 +4361,7 @@ async function createCandidate(body, auth, env) {
   if (!cc.patch.full_name) return err('full_name required', 400);
   const ca = cleanApplication(d, canSeeSalary(x.roles));
   if (ca.error) return err(ca.error, 400);
+  if (referralError(ca.patch.source, ca.patch.referrer_employee_id, ca.patch.source_detail)) return errCode('referrer_required', REFERRER_REQUIRED_MSG, 400);
   // Person + application `new` + both events in one transaction (0007); CAN-NNNN minted inside.
   const r = await hiringRpc(env, 'hiring_create_candidate', {
     opening_id: x.o.id, candidate: cc.patch, application: ca.patch,
@@ -4383,6 +4385,7 @@ async function addApplication(body, auth, env) {
   if (!sc.canSee) return err('forbidden — ask HR / hiring to add this person to your opening', 403);
   const ca = cleanApplication(d, canSeeSalary(x.roles));
   if (ca.error) return err(ca.error, 400);
+  if (referralError(ca.patch.source, ca.patch.referrer_employee_id, ca.patch.source_detail)) return errCode('referrer_required', REFERRER_REQUIRED_MSG, 400);
   const ai = await sb(`/rest/v1/applications`, env, { method: 'POST', body: JSON.stringify([{
     ...ca.patch, candidate_id: d.candidate_id, opening_id: x.o.id, status: 'new', created_by: auth.userId,
   }]) });
@@ -4430,6 +4433,9 @@ async function updateApplication(body, auth, env) {
   const ca = cleanApplication(d, canSeeSalary(x.roles));
   if (ca.error) return err(ca.error, 400);
   if (!Object.keys(ca.patch).length) return err('no_patch', 400);
+  // The row as it would be after this patch — clearing the referrer on a referral is refused too.
+  const fin = { ...app, ...ca.patch };
+  if (referralError(fin.source, fin.referrer_employee_id, fin.source_detail)) return errCode('referrer_required', REFERRER_REQUIRED_MSG, 400);
   const r = await sb(`/rest/v1/applications?id=eq.${app.id}`, env, { method: 'PATCH', body: JSON.stringify(ca.patch) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   // Field NAMES only — never the CTC values.
@@ -8978,8 +8984,11 @@ async function getCvImport(url, auth, env) {
   const items = it.data || [];
   const dupes = await cvImportDuplicates(auth, c.me, env, items.map(itemDraft));
   const o = c.x.o;
+  // The header's "Referred by" (a referral batch only).
+  const referrer = c.imp.referrer_employee_id
+    ? (await sb(`/rest/v1/employees?id=eq.${c.imp.referrer_employee_id}&select=id,employee_code,full_name&limit=1`, env)).data?.[0] || null : null;
   return ok({
-    import: c.imp,
+    import: c.imp, referrer,
     opening: { id: o.id, opening_code: o.opening_code, designation: o.designation, status: o.status },
     can_see_salary: c.salary,
     items: items.map(i => cvItemView(i, c.salary)),
@@ -9002,7 +9011,8 @@ async function getCvImportFileUrl(url, auth, env) {
   return signDownload(c.item.storage_path, c.item.file_name, c.item.mime_type, env);
 }
 
-// POST createCvImport {opening_id, source, source_detail}
+// POST createCvImport {opening_id, source, source_detail, referrer_employee_id} — the referrer is kept only for a
+// referral batch; cvImportAccept copies it onto every application the batch creates.
 async function createCvImport(body, auth, env) {
   const d = body.data || body;
   const edges = await loadOrgEdges(env);
@@ -9010,8 +9020,19 @@ async function createCvImport(body, auth, env) {
   const { x, res } = await intakeOpening(auth, me, env, d.opening_id);
   if (res) return res;
   if (!APP_SOURCES.includes(d.source)) return err('bad source', 400);
+  const referrer = d.source === 'referral' && d.referrer_employee_id ? d.referrer_employee_id : null;
+  const badReferrer = () => errCode('bad referrer_employee_id', 'That referrer isn\'t a current employee — pick someone else, or type the referrer\'s name', 400);
+  if (referrer && !isUuid(referrer)) return badReferrer();
+  if (referrer) {
+    const er = await sb(`/rest/v1/employees?id=eq.${referrer}&status=neq.exited&select=id&limit=1`, env);
+    if (!er.ok) return err('db_error', 500);
+    if (!er.data?.length) return badReferrer();
+  }
+  const detail = String(d.source_detail || '').trim().slice(0, 200) || null;
+  if (referralError(d.source, referrer, detail)) return errCode('referrer_required', REFERRER_REQUIRED_MSG, 400);
+  // The key is sent only when set, so a non-referral batch still inserts before 0023's column exists.
   const r = await sb(`/rest/v1/cv_imports`, env, { method: 'POST', body: JSON.stringify([{
-    opening_id: x.o.id, source: d.source, source_detail: String(d.source_detail || '').trim().slice(0, 200) || null, created_by: auth.userId }]) });
+    opening_id: x.o.id, source: d.source, source_detail: detail, ...(referrer ? { referrer_employee_id: referrer } : {}), created_by: auth.userId }]) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   return ok(r.data[0]);
 }
@@ -9237,7 +9258,7 @@ async function cvImportAccept(body, auth, env) {
   try {
     const draft = pickCvDraft(d.draft || item.final || item.extracted?.fields || {});
     const appData = { opening_id: c.imp.opening_id, source: c.imp.source, source_detail: c.imp.source_detail,
-      notice_period_days: draft.notice_period_days, current_ctc: draft.current_ctc, expected_ctc: draft.expected_ctc };
+      referrer_employee_id: c.imp.referrer_employee_id || null, notice_period_days: draft.notice_period_days, current_ctc: draft.current_ctc, expected_ctc: draft.expected_ctc };
     let candidateId = item.candidate_id, applicationId = item.application_id;
     if (!candidateId) {
       if (d.candidate_id) {

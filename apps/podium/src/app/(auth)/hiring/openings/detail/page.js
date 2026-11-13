@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { ArrowLeft, Download, Plus, Check, X, Pencil, Save, Lock, UserPlus } from 'lucide-react';
+import { ArrowLeft, Download, Plus, Check, X, Pencil, Save, Lock, UserPlus, UploadCloud, Keyboard } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../../lib/podiumopsFetch.js';
 import { fmtDate } from '../../../../../lib/format.js';
 import {
@@ -13,7 +13,9 @@ import {
 import {
   OPENING_STATUSES, APP_STATUSES, BUDGET_STATUSES, SOURCES, HIRING_EMPLOYMENT_TYPES, ACTIVE_APP_STATUSES,
   JD_REQUIRED_MSG, OFFER_STATUSES, hiringError, labelFrom, formatINR, formatBand, numOrNull, idOf, listOf, fmtDateTime,
+  sourceDetailHint, noticeLabel, CANDIDATE_DOC_ACCEPT, MAX_UPLOAD_BYTES,
 } from '../../../../../lib/hiring.js';
+import { putPendingFiles } from '../../../../../lib/cvHandoff.js';
 import { RoundsCard, InterviewSummaryLine } from '../../../../../components/InterviewBits.js';
 
 function OpeningDetailInner() {
@@ -362,6 +364,9 @@ function CandidatesCard({ opening, applications, hasJd, isOpen, canManage, canSe
   const router = useRouter();
   const { showToast } = useToast();
   const [form, setForm] = useState(null);
+  const [mode, setMode] = useState(null);       // C5 D4: null | 'choose' | 'cv' (manual = form set)
+  const [cv, setCv] = useState({ source: 'linkedin', referrer_employee_id: '', source_detail: '' });
+  const cvNeedsReferrer = cv.source === 'referral' && !cv.referrer_employee_id && !cv.source_detail.trim();
   const [dupes, setDupes] = useState(null);     // { matches: [...] } | { count }
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState('active');
@@ -412,6 +417,29 @@ function CandidatesCard({ opening, applications, hasJd, isOpen, canManage, canSe
     } catch (e) { showToast(hiringError(e), 'error'); }
     finally { setBusy(false); }
   }
+  // Upload CV: a batch for THIS opening, the picked files handed to the batch page (lib/cvHandoff.js), which runs
+  // them through its own drop-zone upload. Oversize files are dropped here with a toast, as the batch page does.
+  async function startCvImport(fileList) {
+    const files = [...(fileList || [])];
+    if (!files.length) return;
+    const ok = files.filter(f => f.size > 0 && f.size <= MAX_UPLOAD_BYTES);
+    const tooBig = files.filter(f => f.size > MAX_UPLOAD_BYTES);
+    const empty = files.filter(f => !f.size);
+    if (tooBig.length) showToast(`Not uploaded (over 15 MB): ${tooBig.map(f => f.name).join(', ')}`, 'error');
+    if (empty.length) showToast(`Skipped (empty file): ${empty.map(f => f.name).join(', ')}`, 'error');
+    if (!ok.length) { showToast('No CV left to upload — pick PDF, Word or image files under 15 MB', 'error'); return; }
+    if (cvNeedsReferrer) { showToast('Pick who referred them, or type the referrer\'s name', 'error'); return; }
+    setBusy(true);
+    try {
+      const imp = await podiumopsPost('createCvImport', {
+        opening_id: opening.id, source: cv.source, source_detail: cv.source_detail || null,
+        referrer_employee_id: cv.source === 'referral' ? (cv.referrer_employee_id || null) : null,
+      }, session);
+      putPendingFiles(imp.id, ok);
+      router.push(`/hiring/import/batch/?id=${imp.id}`);
+    } catch (e) { showToast(e?.body?.message || hiringError(e), 'error'); setBusy(false); }
+  }
+
   async function addExisting(m) {
     setBusy(true);
     try {
@@ -423,13 +451,53 @@ function CandidatesCard({ opening, applications, hasJd, isOpen, canManage, canSe
 
   return (
     <Card title={`Candidates (${applications.length})`}
-      right={canManage && !form && (
-        <button onClick={() => !blocked && setForm({ ...EMPTY_CAND })} disabled={!!blocked} title={blocked || ''}
+      right={canManage && !form && !mode && (
+        <button onClick={() => !blocked && setMode('choose')} disabled={!!blocked} title={blocked || ''}
           style={{ ...primaryBtn, opacity: blocked ? 0.45 : 1, cursor: blocked ? 'not-allowed' : 'pointer' }}>
           <UserPlus size={13} /> Add candidate
         </button>
       )}>
       {canManage && blocked && !form && <div style={{ ...muted, marginBottom: 8, color: 'var(--warn-fg)' }}>{blocked}.</div>}
+
+      {mode && !form && !blocked && (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: 12, marginBottom: 12, background: 'var(--surface-2)' }}>
+          {mode === 'choose' ? (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button onClick={() => setMode('cv')} style={primaryBtn}><UploadCloud size={13} /> Upload CV</button>
+              <button onClick={() => { setMode(null); setForm({ ...EMPTY_CAND }); }} style={ghostBtn}><Keyboard size={13} /> Enter manually</button>
+              <span style={muted}>AI reads the CV and fills the fields; you check them before anyone is added.</span>
+              <span style={{ flex: 1 }} />
+              <button onClick={() => setMode(null)} style={ghostBtn}>Cancel</button>
+            </div>
+          ) : (
+            <>
+              <Row>
+                <F label="Source">
+                  <select style={inp} value={cv.source} onChange={e => setCv(s => ({ ...s, source: e.target.value }))}>
+                    {SOURCES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                  </select>
+                </F>
+                {cv.source === 'referral' && (
+                  <F label="Referred by"><Combobox value={cv.referrer_employee_id} onChange={v => setCv(s => ({ ...s, referrer_employee_id: v }))} inputStyle={comboInp} placeholder="Search people…"
+                    options={emps.map(e => ({ value: e.id, label: e.full_name, hint: e.employee_code }))} /></F>
+                )}
+                <F label="Source detail"><input style={inp} value={cv.source_detail} onChange={e => setCv(s => ({ ...s, source_detail: e.target.value }))} placeholder={sourceDetailHint(cv.source)} /></F>
+              </Row>
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                <span style={{ ...muted, marginRight: 'auto' }}>PDF, Word or image · up to 15 MB each · several at once is fine.</span>
+                <button onClick={() => setMode('choose')} style={ghostBtn} disabled={busy}>Back</button>
+                {cvNeedsReferrer && <span style={{ ...muted, color: 'var(--warn-fg)' }}>Pick who referred them, or type the referrer's name.</span>}
+                <label title={cvNeedsReferrer ? 'Pick who referred them, or type the referrer\'s name' : ''}
+                  style={{ ...primaryBtn, opacity: busy || cvNeedsReferrer ? 0.45 : 1, cursor: busy ? 'wait' : cvNeedsReferrer ? 'not-allowed' : 'pointer' }}>
+                  <UploadCloud size={13} /> {busy ? 'Starting…' : 'Choose CV(s)'}
+                  <input type="file" multiple accept={CANDIDATE_DOC_ACCEPT} disabled={busy || cvNeedsReferrer} style={{ display: 'none' }}
+                    onChange={e => { const f = [...e.target.files]; e.target.value = ''; startCvImport(f); }} />
+                </label>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {form && (
         <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: 12, marginBottom: 12, background: 'var(--surface-2)' }}>
@@ -456,16 +524,6 @@ function CandidatesCard({ opening, applications, hasJd, isOpen, canManage, canSe
           )}
           {dupes?.count && <Note tone="warn">A candidate with this email or phone already exists elsewhere. Ask HR before creating a new record.</Note>}
           <Row>
-            <F label="Current employer"><input style={inp} value={form.current_employer} onChange={e => set('current_employer', e.target.value)} /></F>
-            <F label="Current title"><input style={inp} value={form.current_title} onChange={e => set('current_title', e.target.value)} /></F>
-            <F label="Experience (yrs)" style={{ maxWidth: 130 }}><input style={inp} inputMode="decimal" value={form.total_experience_years} onChange={e => set('total_experience_years', e.target.value)} /></F>
-          </Row>
-          <Row>
-            <F label="Location"><input style={inp} value={form.location} onChange={e => set('location', e.target.value)} /></F>
-            <F label="LinkedIn"><input style={inp} value={form.linkedin_url} onChange={e => set('linkedin_url', e.target.value)} /></F>
-            <F label="Notice (days)" style={{ maxWidth: 130 }}><input style={inp} inputMode="numeric" value={form.notice_period_days} onChange={e => set('notice_period_days', e.target.value)} /></F>
-          </Row>
-          <Row>
             <F label="Source">
               <select style={inp} value={form.source} onChange={e => set('source', e.target.value)}>
                 {SOURCES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
@@ -475,14 +533,24 @@ function CandidatesCard({ opening, applications, hasJd, isOpen, canManage, canSe
               <F label="Referred by"><Combobox value={form.referrer_employee_id} onChange={v => set('referrer_employee_id', v)} inputStyle={comboInp} placeholder="Search people…"
                 options={emps.map(e => ({ value: e.id, label: e.full_name, hint: e.employee_code }))} /></F>
             )}
-            <F label="Source detail"><input style={inp} value={form.source_detail} onChange={e => set('source_detail', e.target.value)} placeholder="Agency name, campus, post…" /></F>
+            <F label="Source detail"><input style={inp} value={form.source_detail} onChange={e => set('source_detail', e.target.value)} placeholder={sourceDetailHint(form.source)} /></F>
           </Row>
-          {canSeeSalary && (
-            <Row>
+          <Row>
+            <F label="Notice (days)" style={{ maxWidth: 130 }}><input style={inp} inputMode="numeric" value={form.notice_period_days} onChange={e => set('notice_period_days', e.target.value)} /></F>
+            {canSeeSalary && <>
               <F label="Current CTC (annual)"><input style={inp} inputMode="numeric" value={form.current_ctc} onChange={e => set('current_ctc', e.target.value)} /></F>
               <F label="Expected CTC (annual)"><input style={inp} inputMode="numeric" value={form.expected_ctc} onChange={e => set('expected_ctc', e.target.value)} /></F>
-            </Row>
-          )}
+            </>}
+          </Row>
+          <Row>
+            <F label="Current employer"><input style={inp} value={form.current_employer} onChange={e => set('current_employer', e.target.value)} /></F>
+            <F label="Current title"><input style={inp} value={form.current_title} onChange={e => set('current_title', e.target.value)} /></F>
+            <F label="Experience (yrs)" style={{ maxWidth: 130 }}><input style={inp} inputMode="decimal" value={form.total_experience_years} onChange={e => set('total_experience_years', e.target.value)} /></F>
+          </Row>
+          <Row>
+            <F label="Location"><input style={inp} value={form.location} onChange={e => set('location', e.target.value)} /></F>
+            <F label="LinkedIn"><input style={inp} value={form.linkedin_url} onChange={e => set('linkedin_url', e.target.value)} /></F>
+          </Row>
           <F label="Notes"><textarea rows={2} style={{ ...inp, resize: 'vertical' }} value={form.notes} onChange={e => set('notes', e.target.value)} /></F>
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
             <button onClick={() => { setForm(null); setDupes(null); }} style={ghostBtn} disabled={busy}>Cancel</button>
@@ -511,7 +579,10 @@ function CandidatesCard({ opening, applications, hasJd, isOpen, canManage, canSe
               {a.offer && <span style={{ fontSize: 10.5, color: 'var(--text-3)' }}>{a.offer.offer_ref} r{a.offer.revision} · {labelFrom(OFFER_STATUSES, a.offer.status)}</span>}
               <InterviewSummaryLine s={a.interviews_summary} />
             </span>
-            <span style={{ color: 'var(--text-2)', fontSize: 12 }}>{labelFrom(SOURCES, a.source)}</span>
+            <span style={{ color: 'var(--text-2)', fontSize: 12 }}>
+              {labelFrom(SOURCES, a.source)}
+              {noticeLabel(a.notice_period_days) && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{noticeLabel(a.notice_period_days)}</div>}
+            </span>
             <span className="num" style={{ fontSize: 12, color: 'var(--text-2)' }}>
               {('expected_ctc' in a || 'current_ctc' in a) ? <>{formatINR(a.current_ctc, { compact: true })} → {formatINR(a.expected_ctc, { compact: true })}</> : null}
             </span>

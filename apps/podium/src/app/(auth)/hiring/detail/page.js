@@ -14,6 +14,7 @@ import {
 import {
   APP_STATUSES, OPENING_STATUSES, SOURCES, CANDIDATE_DOC_TYPES, CANDIDATE_DOC_ACCEPT, REASON_REQUIRED, ACTIVE_APP_STATUSES, OUTCOME_REASONS,
   OFFER_OPEN_STATUSES, allowedTransitions, hiringError, labelFrom, formatINR, numOrNull, listOf, fmtDateTime,
+  sourceDetailHint, noticeLabel,
 } from '../../../../lib/hiring.js';
 import { OfferStatusBadge } from '../../../../components/OfferBits.js';
 import { WorkAccountCard, WORK_ACCOUNT_APP_STATUSES } from '../../../../components/WorkAccountBits.js';
@@ -221,7 +222,7 @@ function ApplicationRow({ a, emps, openOpenings, session, onChanged }) {
           <div style={{ ...muted, fontSize: 11 }}>
             {op.opening_code || a.opening_code}{op.status && op.status !== 'open' ? ` · opening ${labelFrom(OPENING_STATUSES, op.status).toLowerCase()}` : ''}
             {' · '}{labelFrom(SOURCES, a.source)}{a.source_detail ? ` (${a.source_detail})` : ''} · applied {fmtDate(a.created_at)}
-            {a.notice_period_days != null && ` · ${a.notice_period_days}d notice`}
+            {noticeLabel(a.notice_period_days) && ` · ${noticeLabel(a.notice_period_days)}`}
           </div>
         </div>
         <ListBadge list={APP_STATUSES} status={a.status} />
@@ -275,7 +276,7 @@ function ApplicationRow({ a, emps, openOpenings, session, onChanged }) {
               <F label="Referred by"><Combobox value={edit.referrer_employee_id} onChange={v => setEdit(s => ({ ...s, referrer_employee_id: v }))} inputStyle={comboInp}
                 options={emps.map(e => ({ value: e.id, label: e.full_name, hint: e.employee_code }))} /></F>
             )}
-            <F label="Source detail"><input style={inp} value={edit.source_detail} onChange={e => setEdit(s => ({ ...s, source_detail: e.target.value }))} /></F>
+            <F label="Source detail"><input style={inp} value={edit.source_detail} onChange={e => setEdit(s => ({ ...s, source_detail: e.target.value }))} placeholder={sourceDetailHint(edit.source)} /></F>
             <F label="Notice (days)"><input style={inp} inputMode="numeric" value={edit.notice_period_days} onChange={e => setEdit(s => ({ ...s, notice_period_days: e.target.value }))} /></F>
           </Row>
           {seesSalary && (

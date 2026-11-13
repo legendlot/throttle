@@ -41,7 +41,18 @@ export function checkTransition(from, to, reason) {
   return null;
 }
 
-export const APP_SOURCES = ['referral', 'linkedin', 'naukri', 'campus', 'walk_in', 'agency', 'careers_page', 'other'];
+export const APP_SOURCES = ['referral', 'linkedin', 'naukri', 'job_portal', 'direct_email', 'campus', 'walk_in', 'agency',
+  'careers_page', 'other'];
+
+// C5 D2: a referral names who referred them — an employee (referrer_employee_id) or, for an outside referrer, a
+// name in source_detail. Checked on the application's FINAL state (an update merges its patch over the row first).
+// null when fine, else 'referrer_required'.
+export function referralError(source, referrerId, detail) {
+  if (source !== 'referral') return null;
+  if (referrerId) return null;
+  return String(detail ?? '').trim() ? null : 'referrer_required';
+}
+export const REFERRER_REQUIRED_MSG = 'Pick who referred them, or type the referrer\'s name';
 export const OPENING_STATUSES = ['draft', 'open', 'on_hold', 'filled', 'cancelled'];
 
 // ── Approver resolution ──────────────────────────────────────────────────────

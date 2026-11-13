@@ -3,6 +3,13 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.11.0] - 2026-11-13
+### Changed
+- Add candidate (C5): on an opening it now offers Upload CV (first) or Enter manually. New source list (Other job
+  portal, Direct email, Recruitment agency added; Agency renamed). A referral must name the referrer (employee or
+  typed name); CV import now offers Referral. Manual form asks Source, Notice and (salary chain) CTC after
+  name/email/phone; the opening's list shows Notice.
+
 ## [1.10.1] - 2026-11-13
 ### Changed
 - Exits: the relieving and experience letter wording (v1) is approved by Afshaan; the draft warning is replaced.

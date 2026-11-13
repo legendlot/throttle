@@ -6,8 +6,8 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { ArrowLeft, UploadCloud } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
-import { Card, F, Row, Note, inp, primaryBtn, backBtn, muted } from '../../../../components/HiringBits.js';
-import { SOURCES, listOf, hiringError, fmtDateTime } from '../../../../lib/hiring.js';
+import { Card, F, Row, Note, inp, comboInp, primaryBtn, backBtn, muted } from '../../../../components/HiringBits.js';
+import { SOURCES, listOf, hiringError, fmtDateTime, sourceDetailHint } from '../../../../lib/hiring.js';
 import { AiSpendLine, errText } from '../../../../components/CvImportBits.js';
 
 export default function CvImportsPage() {
@@ -16,20 +16,23 @@ export default function CvImportsPage() {
   const { showToast } = useToast();
   const [data, setData] = useState(null);
   const [openings, setOpenings] = useState(null); // null = still loading
-  const [form, setForm] = useState({ opening_id: '', source: 'linkedin', source_detail: '' });
+  const [form, setForm] = useState({ opening_id: '', source: 'linkedin', source_detail: '', referrer_employee_id: '' });
+  const [emps, setEmps] = useState([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!session) return;
     podiumopsGet('getCvImports', {}, session).then(setData).catch(e => { setData({ imports: [] }); showToast(hiringError(e, 'Failed to load'), 'error'); });
     podiumopsGet('getOpenings', {}, session).then(d => setOpenings(listOf(d, 'openings').filter(o => o.status === 'open'))).catch(() => setOpenings([]));
+    podiumopsGet('getHiringLookups', {}, session).then(d => setEmps(d.employees || [])).catch(() => {});
   }, [session, showToast]);
 
   async function start() {
     if (!form.opening_id) { showToast('Pick an opening', 'error'); return; }
+    if (form.source === 'referral' && !form.referrer_employee_id && !form.source_detail.trim()) { showToast('Pick who referred them, or type the referrer\'s name', 'error'); return; }
     setBusy(true);
     try {
-      const imp = await podiumopsPost('createCvImport', form, session);
+      const imp = await podiumopsPost('createCvImport', { ...form, referrer_employee_id: form.source === 'referral' ? (form.referrer_employee_id || null) : null }, session);
       router.push(`/hiring/import/batch/?id=${imp.id}`);
     } catch (e) { showToast(errText(e), 'error'); setBusy(false); }
   }
@@ -55,11 +58,17 @@ export default function CvImportsPage() {
           </F>
           <F label="Source" style={{ flex: 1, minWidth: 150 }}>
             <select value={form.source} onChange={e => setForm(f => ({ ...f, source: e.target.value }))} style={inp}>
-              {SOURCES.filter(s => s.id !== 'referral').map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+              {SOURCES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
             </select>
           </F>
+          {form.source === 'referral' && (
+            <F label="Referred by" style={{ flex: 1, minWidth: 180 }}>
+              <Combobox value={form.referrer_employee_id} onChange={v => setForm(f => ({ ...f, referrer_employee_id: v }))} inputStyle={comboInp} placeholder="Search people…"
+                options={emps.map(e => ({ value: e.id, label: e.full_name, hint: e.employee_code }))} />
+            </F>
+          )}
           <F label="Detail (optional)" style={{ flex: 1, minWidth: 160 }}>
-            <input value={form.source_detail} onChange={e => setForm(f => ({ ...f, source_detail: e.target.value }))} placeholder="e.g. LinkedIn job post" style={inp} />
+            <input value={form.source_detail} onChange={e => setForm(f => ({ ...f, source_detail: e.target.value }))} placeholder={sourceDetailHint(form.source)} style={inp} />
           </F>
         </Row>
         <div style={{ marginTop: 12 }}>

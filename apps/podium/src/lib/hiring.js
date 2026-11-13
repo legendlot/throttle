@@ -74,15 +74,35 @@ export const BUDGET_STATUSES = [
 ];
 
 export const SOURCES = [
-  { id: 'referral',     label: 'Referral' },
   { id: 'linkedin',     label: 'LinkedIn' },
   { id: 'naukri',       label: 'Naukri' },
+  { id: 'job_portal',   label: 'Other job portal' },
+  { id: 'referral',     label: 'Referral' },
+  { id: 'direct_email', label: 'Direct email' },
+  { id: 'agency',       label: 'Recruitment agency' },
+  { id: 'careers_page', label: 'Careers page' },
   { id: 'campus',       label: 'Campus' },
   { id: 'walk_in',      label: 'Walk-in' },
-  { id: 'agency',       label: 'Agency' },
-  { id: 'careers_page', label: 'Careers page' },
   { id: 'other',        label: 'Other' },
 ];
+
+// Source-detail placeholder, per source — every form that edits a source uses it.
+export function sourceDetailHint(source) {
+  switch (source) {
+    case 'referral':     return 'Not an employee? Referrer\'s name';
+    case 'job_portal':   return 'Which portal (Indeed, Instahyre, Foundit…)';
+    case 'agency':       return 'Agency name';
+    case 'direct_email': return 'Who received it';
+    default:             return 'Campaign, post, note…';
+  }
+}
+
+// Notice period for a list line: 0 → Immediate, null → nothing.
+export function noticeLabel(days) {
+  if (days == null || days === '') return null;
+  const n = Number(days);
+  return n === 0 ? 'Immediate' : `Notice ${n}d`;
+}
 
 export const HIRING_EMPLOYMENT_TYPES = [
   { id: 'full_time', label: 'Full-time' },
@@ -121,6 +141,7 @@ const ERROR_COPY = {
   already_active: 'This candidate already has an active application on that opening',
   opening_not_open: 'The opening is not open for candidates',
   reason_required: 'A reason is required',
+  referrer_required: 'Pick who referred them, or type the referrer\'s name',
   invalid_transition: 'That status move is not allowed',
   not_pending: 'That band request has already been decided',
   stale: 'This changed since you loaded it — refresh and try again',
