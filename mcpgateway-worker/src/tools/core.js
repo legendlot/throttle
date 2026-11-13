@@ -3,7 +3,7 @@ const whoami = {
   system: null,
   name: 'whoami',
   title: 'Who am I connected as',
-  description: 'Shows which LOT account this Claude is connected as and which LOT systems that account has been granted. Returns no business data.',
+  description: 'Shows which LOT account this AI app is connected as and which LOT systems that account has been granted. Returns no business data.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   annotations: { readOnlyHint: true, openWorldHint: false },
   needsSession: false,

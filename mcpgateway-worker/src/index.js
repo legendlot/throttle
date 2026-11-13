@@ -9,8 +9,8 @@
 //   2. A named grant in store.mcp_access (off by default).
 //   3. users_profile.active, re-checked on EVERY call (store.mcp_gate).
 //   4. A valid gateway token on every /mcp request, tools/list included (workers-oauth-provider).
-//   5. /mcp, /token and /register only from Anthropic's published outbound IPs (extra layer only).
-// Redirects are an exact allowlist (Claude's hosted callback). The only write path is the Docket write
+//   5. /mcp, /token and /register only from the approved AI apps' published outbound IPs (extra layer only).
+// Redirects are an exact allowlist per approved app (src/clients.js: Claude, ChatGPT). The only write path is the Docket write
 // tools (src/tools/docket.js): one fixed single-task action each, as the person, under Docket's own rules.
 
 import { OAuthProvider, OAuthError } from '@cloudflare/workers-oauth-provider';
@@ -20,6 +20,8 @@ import {
   callOutcome, auditParams, rejectedParams,
 } from './checks.js';
 import { toolsFor, findTool } from './tools/index.js';
+import { clientAllowlists, clientLabel, CLIENT_NAMES, pageCsp } from './clients.js';
+const PAGE_CSP = pageCsp();
 
 const SCOPES = ['mcp:read'];
 const SERVER_INFO = { name: 'lot-data', version: '0.2.0' };
@@ -123,7 +125,8 @@ function page(title, body, status = 200, headers = new Headers()) {
   headers.set('Content-Type', 'text/html; charset=utf-8');
   headers.set('Cache-Control', 'no-store');
   headers.set('X-Frame-Options', 'DENY');
-  headers.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://accounts.google.com https://claude.ai https://claude.com; frame-ancestors 'none'");
+  // form-action covers redirects after a form POST (Cancel → 302 to the app), so every app's callback origin is listed.
+  headers.set('Content-Security-Policy', PAGE_CSP);
   headers.set('Referrer-Policy', 'no-referrer');
   return new Response(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title><style>
@@ -142,7 +145,7 @@ const refusePage = (msg, status = 403) =>
 // ---------------------------------------------------------------- /authorize (consent → Google)
 async function authorize(request, env) {
   const helpers = env.OAUTH_PROVIDER;
-  const allowedRedirects = parseList(env.ALLOWED_REDIRECTS);
+  const allowedRedirects = clientAllowlists(env).redirects;
 
   const miss = configMissing(env);
   if (miss.length) { console.error('[config] missing', miss.join(',')); return refusePage('The LOT data connector is not switched on yet.', 503); }
@@ -154,18 +157,19 @@ async function authorize(request, env) {
     // PKCE S256 for EVERY client: the library only requires it for public clients.
     if (!authReq.codeChallenge || authReq.codeChallengeMethod !== 'S256') return refusePage('This sign-in link is not valid.', 400);
     if (!redirectAllowed(authReq.redirectUri, allowedRedirects)) {
-      return refusePage('This sign-in link does not come from Claude.', 400);
+      return refusePage(`This sign-in link does not come from an approved AI app (${CLIENT_NAMES}).`, 400);
     }
     const d = await helpers.describeConsent(authReq);
-    if (d.clientDomain && !parseList(env.ALLOWED_CLIENT_DOMAINS).includes(d.clientDomain)) {
-      return refusePage('This sign-in link does not come from Claude.', 400);
+    if (d.clientDomain && !clientAllowlists(env).domains.includes(d.clientDomain)) {
+      return refusePage(`This sign-in link does not come from an approved AI app (${CLIENT_NAMES}).`, 400);
     }
     const tx = await helpers.beginConsent(authReq);
-    return page('Connect Claude to LOT data', `
-<h2>Connect a Claude account to LOT data</h2>
+    const app = clientLabel(authReq.redirectUri);
+    return page(`Connect ${app} to LOT data`, `
+<h2>Connect ${esc(app)} to LOT data</h2>
 <p>An app calling itself <b>${esc(d.clientName)}</b>${d.clientDomain ? ` (verified domain <code>${esc(d.clientDomain)}</code>)` : ''}
-wants access to LOT systems as <b>you</b>: reading your LOT data and, if you have been given Docket, changing Docket tasks the way you can in the Docket app (Claude asks before each change). Answers go back to <code>${esc(d.redirectHost)}</code>.</p>
-<div class="warn"><b>Only continue if you clicked “Connect” in your own Claude, just now.</b><br>
+wants access to LOT systems as <b>you</b>: reading your LOT data and, if you have been given Docket, changing Docket tasks the way you can in the Docket app (the app should ask you before each change). Answers go back to <code>${esc(d.redirectHost)}</code>.</p>
+<div class="warn"><b>Only continue if you clicked “Connect” in your own ${esc(app)}, just now.</b><br>
 If someone sent you this link, press Cancel. Whoever started it would get your access.</div>
 <p>You will sign in with your <b>@legendoftoys.com</b> Google account next. You and Afshaan get a Slack message for every new connection.</p>
 <form method="post" action="/authorize">
@@ -186,9 +190,9 @@ If someone sent you this link, press Cancel. Whoever started it would get your a
     }
     let approved;
     try { approved = await helpers.approveConsent(request, handle, { scope: SCOPES }); }
-    catch { return refusePage('This sign-in expired or was already used. Start again from Claude.', 400); }
+    catch { return refusePage('This sign-in expired or was already used. Start again from your AI app.', 400); }
     // Defence in depth: re-check the redirect after consent too.
-    if (!redirectAllowed(approved.request.redirectUri, allowedRedirects)) return refusePage('This sign-in link does not come from Claude.', 400);
+    if (!redirectAllowed(approved.request.redirectUri, allowedRedirects)) return refusePage(`This sign-in link does not come from an approved AI app (${CLIENT_NAMES}).`, 400);
     if (!approved.request.codeChallenge || approved.request.codeChallengeMethod !== 'S256') return refusePage('This sign-in link is not valid.', 400);
 
     // Google gets sha256(nonce); Supabase signInWithIdToken gets the raw nonce and checks the hash.
@@ -242,7 +246,7 @@ async function callback(request, env, ctx) {
   if (configMissing(env).length) return refusePage('The LOT data connector is not switched on yet.', 503);
   let resumed;
   try { resumed = await helpers.finishUpstream(request); }
-  catch { return refusePage('This sign-in expired or was already used. Start again from Claude.', 400); }
+  catch { return refusePage('This sign-in expired or was already used. Start again from your AI app.', 400); }
   const url = new URL(request.url);
   const deny = async (reason, email = null, userId = null) => {
     ctx.waitUntil(audit(env, { event: 'signin_denied', email, user_id: userId, ip, status: 403, detail: reason }));
@@ -289,14 +293,14 @@ async function callback(request, env, ctx) {
   // If the person's DM cannot be delivered, no connection is created.
   const revoke = await revokeUrl(env, gate.user_id);
   const when = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-  const told = await slackDm(env, gate.slack_user_id, `🔐 A Claude account is being connected to LOT data as *${c.email}* (${when} IST).\n` +
+  const told = await slackDm(env, gate.slack_user_id, `🔐 A ${clientLabel(resumed.request.redirectUri)} account is being connected to LOT data as *${c.email}* (${when} IST).\n` +
     `If this was not you, open this link and press Revoke: ${revoke}`);
   if (!told) {
     ctx.waitUntil(sbLogout(env, sb.access));
     return deny('could not send your Slack confirmation', c.email, gate.user_id);
   }
   if (gate.slack_user_id !== env.ADMIN_SLACK_ID) {
-    const ok = await slackDm(env, env.ADMIN_SLACK_ID, `🔐 New LOT MCP connection: ${c.email} at ${when} IST. Revoke all of their connections: ${revoke}`);
+    const ok = await slackDm(env, env.ADMIN_SLACK_ID, `🔐 New LOT MCP connection (${clientLabel(resumed.request.redirectUri)}): ${c.email} at ${when} IST. Revoke all of their connections: ${revoke}`);
     if (!ok) console.error('[slack] admin DM failed for', c.email);
   }
   if (!(await audit(env, { event: 'connect', email: c.email, user_id: gate.user_id, ip, status: 200, detail: `client ${resumed.request.clientId}` }))) {
@@ -331,8 +335,8 @@ async function revoke(request, env, ctx) {
   if (!timingSafeEqualHex(want, s)) return refusePage('This revoke link is not valid.', 400);
   // GET never acts: Slack and mail scanners prefetch links.
   if (request.method !== 'POST') {
-    return page('Revoke Claude connections', `<h2>Revoke Claude connections</h2>
-<p>This disconnects <b>every</b> Claude account currently connected to LOT data as this person and switches off their access. Afshaan has to grant it again before they can reconnect.</p>
+    return page('Revoke AI app connections', `<h2>Revoke AI app connections</h2>
+<p>This disconnects <b>every</b> AI app (Claude, ChatGPT) currently connected to LOT data as this person and switches off their access. Afshaan has to grant it again before they can reconnect.</p>
 <form method="post" action="/revoke"><input type="hidden" name="u" value="${esc(u)}"><input type="hidden" name="e" value="${esc(e)}"><input type="hidden" name="s" value="${esc(s)}">
 <button>Revoke</button></form>`);
   }
@@ -355,7 +359,7 @@ async function revoke(request, env, ctx) {
   } while (cursor);
   ctx.waitUntil(audit(env, { event: 'revoke', user_id: u, ip: request.headers.get('CF-Connecting-IP') || '', status: 200, detail: `${n} grant(s) revoked via link` }));
   ctx.waitUntil(slackDm(env, env.ADMIN_SLACK_ID, `🔒 LOT MCP: ${n} connection(s) revoked via the revoke link for user ${u}.`));
-  return page('Revoked', `<h2>Revoked</h2><p>Access switched off and ${n} connection(s) removed. Any Claude that was connected as this person can no longer reach LOT data.</p>`);
+  return page('Revoked', `<h2>Revoked</h2><p>Access switched off and ${n} connection(s) removed. No AI app connected as this person can reach LOT data any more.</p>`);
 }
 
 // ---------------------------------------------------------------- /mcp (JSON-RPC over Streamable HTTP, stateless)
@@ -371,7 +375,7 @@ const refuse = (msg, r) => {
 const mcpHandler = {
   async fetch(request, env, ctx) {
     const ip = request.headers.get('CF-Connecting-IP') || '';
-    if (!originAllowed(request.headers.get('Origin'), parseList(env.ALLOWED_ORIGINS))) {
+    if (!originAllowed(request.headers.get('Origin'), clientAllowlists(env).origins)) {
       return rpcError(null, -32600, 'Origin not allowed', 403);
     }
     if (request.method !== 'POST') return new Response('Method not allowed', { status: 405, headers: { Allow: 'POST' } });
@@ -391,7 +395,7 @@ const mcpHandler = {
     let gate;
     try { gate = await rpc(env, 'mcp_gate', { p_user: userId }); }
     catch {
-      ctx.waitUntil(alertOnce(env, 'gate-down', '🚨 LOT MCP: the mcp_gate call to Supabase is failing; every Claude request is being refused.'));
+      ctx.waitUntil(alertOnce(env, 'gate-down', '🚨 LOT MCP: the mcp_gate call to Supabase is failing; every AI app request is being refused.'));
       return refuse(msg, refusalText('unreachable'));
     }
     const d = gateDecision(gate);
@@ -475,7 +479,7 @@ const defaultHandler = {
 };
 
 function buildProvider(env) {
-  const allowed = parseList(env.ALLOWED_REDIRECTS);
+  const allowed = clientAllowlists(env).redirects;
   return new OAuthProvider({
     apiRoute: '/mcp',
     apiHandler: mcpHandler,
@@ -525,7 +529,7 @@ function buildProvider(env) {
     },
     clientRegistrationCallback: ({ clientMetadata }) => {
       if (!registrationAllowed(clientMetadata, allowed)) {
-        return { code: 'invalid_redirect_uri', description: 'Only Claude can register with this server.', status: 400 };
+        return { code: 'invalid_redirect_uri', description: `Only an approved AI app (${CLIENT_NAMES}) can register with this server.`, status: 400 };
       }
     },
     resourceMetadata: {
@@ -540,7 +544,7 @@ let provider, cidrs;
 export default {
   async fetch(request, env, ctx) {
     provider ||= buildProvider(env);
-    cidrs ||= parseCidrs(env.ALLOWED_CIDRS);
+    cidrs ||= parseCidrs(clientAllowlists(env).cidrs);
     const { pathname } = new URL(request.url);
     const ip = request.headers.get('CF-Connecting-IP') || '';
 

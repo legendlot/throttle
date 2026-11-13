@@ -109,28 +109,28 @@ export function esc(s) {
 // ---- What a refused person (and their Claude) is told. Plain words, says whose move it is, and
 // tells Claude not to retry: an HTTP error made Claude report "the LOT server is broken" (live test 2026-11-09).
 const REFUSALS = {
-  'gateway switched off': 'LOT data access for Claude is switched off for everyone right now. Nothing is wrong with your account. Ask Afshaan when it will be back.',
-  'no gateway grant': 'Your LOT account has not been given access to LOT data in Claude, or that access was removed. Ask Afshaan if you need it.',
-  'account deactivated': 'Your LOT account is deactivated, so Claude cannot reach LOT data for you. Ask Afshaan if this is a mistake.',
+  'gateway switched off': 'LOT data access for AI apps is switched off for everyone right now. Nothing is wrong with your account. Ask Afshaan when it will be back.',
+  'no gateway grant': 'Your LOT account has not been given access to LOT data in AI apps, or that access was removed. Ask Afshaan if you need it.',
+  'account deactivated': 'Your LOT account is deactivated, so your AI app cannot reach LOT data for you. Ask Afshaan if this is a mistake.',
   'not a LOT account': 'This connection is not signed in with a LOT Google account, so it cannot reach LOT data.',
   'unknown user': 'This connection is not linked to a LOT account. Disconnect the LOT connector and connect again with your @legendoftoys.com Google account.',
-  'no odo grant': 'Your LOT access in Claude does not include Odo. Ask Afshaan if you need it.',
+  'no odo grant': 'Your LOT access in AI apps does not include Odo. Ask Afshaan if you need it.',
   'odo denied': 'Odo says your account does not have sales access (no Odo role, or it was removed). Ask Afshaan if you need it.',
   'odo pnl denied': 'Odo P&L and product costs are only for Odo super admins.',
-  'no docket grant': 'Your LOT access in Claude does not include Docket. Ask Afshaan if you need it.',
-  'no snorkel grant': 'Your LOT access in Claude does not include Snorkel. Ask Afshaan if you need it.',
+  'no docket grant': 'Your LOT access in AI apps does not include Docket. Ask Afshaan if you need it.',
+  'no snorkel grant': 'Your LOT access in AI apps does not include Snorkel. Ask Afshaan if you need it.',
   'snorkel denied': 'Your Snorkel role does not include this area (procurement, sales orders or assets). Ask Afshaan if you need it.',
-  'no garage grant': 'Your LOT access in Claude does not include Garage. Ask Afshaan if you need it.',
-  'no redline grant': 'Your LOT access in Claude does not include Redline. Ask Afshaan if you need it.',
-  'no depot grant': 'Your LOT access in Claude does not include Depot. Ask Afshaan if you need it.',
+  'no garage grant': 'Your LOT access in AI apps does not include Garage. Ask Afshaan if you need it.',
+  'no redline grant': 'Your LOT access in AI apps does not include Redline. Ask Afshaan if you need it.',
+  'no depot grant': 'Your LOT access in AI apps does not include Depot. Ask Afshaan if you need it.',
   'ops denied': 'Your LOT role does not include this screen (the same rule as in the app). Ask Afshaan if you need it.',
   'docket denied': 'Docket does not let your account change this task: only its owner, creator, collaborators or their department can (Docket admins can change any). This is a rule on that one task, not your LOT access.',
   'worker denied': 'That LOT app says your account does not have permission for this. Ask Afshaan if you need it.',
-  'session expired': 'LOT could not confirm your LOT login just now. Try once more in a minute; if it says this again, refresh the connection: in Claude, open Settings, then Connectors, then LOT, press Disconnect, then Connect again.',
+  'session expired': 'LOT could not confirm your LOT login just now. Try once more in a minute; if it says this again, refresh the connection: in your AI app’s connector settings (Claude: Settings, then Connectors; ChatGPT: Settings, then Apps & Connectors), open LOT, disconnect it, then connect again.',
 };
 const UNREACHABLE = 'LOT systems could not be reached just now. Try again in a few minutes; if it keeps happening, tell Afshaan.';
-const FOOT_REFUSED = '(For Claude: this is a deliberate refusal, not a server fault. Tell the user this message as it is and do not retry.)';
-const FOOT_FAULT = '(For Claude: a temporary fault on the LOT side. Tell the user this message as it is and do not retry in this turn.)';
+const FOOT_REFUSED = '(For the AI assistant: this is a deliberate refusal, not a server fault. Tell the user this message as it is and do not retry.)';
+const FOOT_FAULT = '(For the AI assistant: a temporary fault on the LOT side. Tell the user this message as it is and do not retry in this turn.)';
 // Returns { text, fault }. fault=true means a real outage (alert, distinct error code), never "deliberate".
 export function refusalText(reason, { callsPerHour } = {}) {
   if (reason === 'rate limited') {
