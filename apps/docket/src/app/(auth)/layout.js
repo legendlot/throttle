@@ -40,6 +40,7 @@ function AuthLayoutInner({ children }) {
   const [programs, setPrograms] = useState([]);
   const [canViewDashboard, setCanViewDashboard] = useState(false);
   const [myEmployeeId, setMyEmployeeId] = useState(null);   // getMe.employee_id (F2 capture toast)
+  const [myDepartmentId, setMyDepartmentId] = useState(null); // getMe.department_id (P3b: template space default)
   const [showTemplates, setShowTemplates] = useState(false); // F9 R9a: the Templates nav entry (getTemplates)
   const [helpOpen, setHelpOpen] = useState(false);
   const [count, setCount] = useState(null);   // board task count, published by the tasks page
@@ -74,6 +75,7 @@ function AuthLayoutInner({ children }) {
       setSpaces(me?.spaces || []);
       setPrograms(me?.programs || []);
       setMyEmployeeId(me?.employee_id || null);
+      setMyDepartmentId(me?.department_id || null);
       const can = !!me?.can_view_dashboard;
       setCanViewDashboard(can);
       // Remembered so the next load's mobile tab bar / rail don't flip Scratchpad → Dashboard.
@@ -196,7 +198,7 @@ function AuthLayoutInner({ children }) {
   const isAdmin = !!perms?.docket_admin;
   const isPlanAdmin = !!perms?.docket_plan_admin;   // F9 R6b: the founders' catch-up nav entry
   // shellModalOpen: a layout-owned modal is up; pages fold it into their hotkey guards.
-  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
+  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, myDepartmentId, spaces, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
 
   return (
     <ChromeContext.Provider value={ctxValue}>

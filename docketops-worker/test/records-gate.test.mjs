@@ -16,11 +16,13 @@ const worker = (await import('data:text/javascript,' + encodeURIComponent(code))
 
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 // ME = auth user (employee MEE, dept D2). OWNER owns the private space and creates the records.
-const ME = U(1), MEE = U(2), OE = U(3), OWNER = U(9), D1 = U(10), D2 = U(11), G = U(20), PRIV = U(21), P2 = U(23), TPL = U(30), SEC = U(31);
+const ME = U(1), MEE = U(2), OE = U(3), OWNER = U(9), D1 = U(10), D2 = U(11), G = U(20), PRIV = U(21), P2 = U(23), TPL = U(30), SEC = U(31), PERS = U(27), HOME = U(32);   // PERS: ME's personal space (ensure_personal_space); HOME: D2's home space
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const SPACES = {
   [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false, archived_at: null },
   [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: OWNER, is_founders: true, archived_at: null },
+  [PERS]: { id: PERS, name: 'Personal', is_default: false, is_private: true, owner_user_id: ME, is_founders: false, is_personal: true, archived_at: null },
+  [HOME]: { id: HOME, name: 'ZZ home', is_default: false, is_private: true, owner_user_id: OWNER, is_founders: false, is_personal: false, archived_at: null, home_department_id: D2 },
   [P2]: { id: P2, name: 'ZZ team space', is_default: false, is_private: true, owner_user_id: OWNER, is_founders: false, archived_at: null },
 };
 const REC = (n, o) => ({ id: U(200 + n), template_id: TPL, template_version: 1, title: `ZZ rec ${n}`, product: null, space_id: G,
@@ -36,7 +38,7 @@ const inIds = (v) => (v || '').replace(/^in\.\(|\)$/g, '').split(',');
 
 // race: a task id that "wins" the item claim between createTaskFromRecordItem's read and its claim.
 // archivedTrigger: the 0032 trigger refusing an item write on an archived record. tmplItems: the template's items.
-function stub({ records = [], items = [], links = [], tasks = [], members = [], perms = {}, history = [], race = null, archivedTrigger = false, tmplItems = [], fail = {} } = {}) {
+function stub({ records = [], items = [], links = [], tasks = [], members = [], perms = {}, history = [], race = null, archivedTrigger = false, tmplItems = [], fail = {}, home = false } = {}) {   // home: D2 has a home space (HOME)
   const db = { records: records.map(r => ({ ...r })), items: items.map(i => ({ ...i })), links: links.map(l => ({ ...l })), tasks: tasks.map(t => ({ ...t })) };
   const calls = [];
   const fn = async (input, init = {}) => {
@@ -55,11 +57,13 @@ function stub({ records = [], items = [], links = [], tasks = [], members = [], 
     if (p.startsWith('/rest/v1/docket_user_roles?user_id=eq.')) return body(Object.keys(perms).length ? [{ role_key: 'zz_role' }] : []);
     if (p.startsWith('/rest/v1/docket_roles?')) return body([{ role_key: 'zz_role', permissions: perms }]);
     if (p.includes('/employees?auth_user_id=eq.' + ME)) return body([{ id: MEE, full_name: 'ZZ Me', department_id: D2, status: 'active' }]);
+    if (p.includes('/rpc/ensure_personal_space')) return body(PERS);
     if (p.includes('/rpc/next_task_seq')) return body('DKT-900');
     if (p.includes('/rpc/')) return body([]);
     // spaces: accessibleSpaces (General + private where owner/member), loadSpace, keepAccessible
+    if (p.startsWith('/rest/v1/spaces?home_department_id=eq.')) return body(home && eq('home_department_id') === D2 ? [SPACES[HOME]] : []);
     if (p.startsWith('/rest/v1/spaces?is_default=eq.true')) return body([SPACES[G]]);
-    if (p.startsWith('/rest/v1/spaces?is_private=eq.true')) return body(Object.values(SPACES).filter(s => s.is_private && (s.owner_user_id === ME || members.includes(s.id))));
+    if (p.startsWith('/rest/v1/spaces?is_private=eq.true')) return body(Object.values(SPACES).filter(s => s.is_private && !s.is_personal /* PERS opens by id only; the list tests predate it */ && (s.owner_user_id === ME || members.includes(s.id))));
     if (p.startsWith('/rest/v1/spaces?id=eq.') && method === 'GET') return body(SPACES[eq('id')] ? [SPACES[eq('id')]] : []);
     if (p.startsWith('/rest/v1/spaces?id=in.')) return body(inIds(q.get('id')).map(id => SPACES[id]).filter(Boolean));
     if (p.startsWith('/rest/v1/space_members?space_id=eq.')) return body(members.includes(eq('space_id')) ? [{ user_id: ME }] : []);
@@ -372,4 +376,21 @@ test('saveChecklistTemplate: moving an item to another section keeps it; another
   assert.equal(c.status, 200, JSON.stringify(c.j));
   assert.equal(c.j.data.history_failed, true);
   assert.ok(c.j.data.id);
+});
+
+test('P3b createChecklistRecord: no space → the team\'s home space if the caller opens it, else their Personal; explicit wins', async () => {
+  const mk = (extra = {}) => ({ action: 'createChecklistRecord', data: { template_id: TPL, title: 'ZZ new', ...extra } });
+  const spaceOf = (s) => s.calls.find(c => c.method === 'POST' && c.p.startsWith('/rest/v1/checklist_records')).body[0].space_id;
+  let s = stub();                                                  // no home space → Personal (caller's team is D2)
+  let r = await run(s, { post: mk() });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(spaceOf(s), PERS);
+  s = stub({ home: true, members: [HOME] });                       // home space, caller a member
+  r = await run(s, { post: mk() });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(spaceOf(s), HOME);
+  s = stub({ home: true });                                        // home space the caller can't open
+  r = await run(s, { post: mk() });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(spaceOf(s), PERS);
+  s = stub({ home: true, members: [HOME] });                       // explicit space wins
+  r = await run(s, { post: mk({ space_id: G }) });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(spaceOf(s), G);
 });

@@ -393,7 +393,7 @@ async function keepAccessible(auth, tasks, env, { involvement = true } = {}) {
   noteSpaces(auth, sr.data || []);
   const member = new Set((mr.data || []).map(m => m.space_id));
   const ok = new Set((sr.data || []).filter(sp => sp.is_default || sp.owner_user_id === auth.userId || member.has(sp.id) || (team.has(sp.id) && !sp.is_founders)
-    || planAdminSpace(auth, sp)).map(sp => sp.id));
+    || planAdminSpace(auth, sp) || viewAllSpace(auth, sp)).map(sp => sp.id));
   if (!involvement) return tasks.filter(t => ok.has(t.space_id));
   // Involvement: only rows read WITH the involvement fields, in a known space that isn't the Founders' space.
   const sealed = new Set((sr.data || []).filter(sp => sp.is_founders).map(sp => sp.id));
@@ -614,11 +614,24 @@ function personalSpaceId(auth, env) {
   }
   return auth._personalP;
 }
+// P3b (0038): a team's home space (spaces.home_department_id) if the caller can open it, else null. A failed read
+// (e.g. before 0038) is null too — the caller then falls back to Personal, never to a space it can't open.
+async function homeSpaceFor(auth, deptId, env) {
+  if (!deptId || !isUuid(String(deptId))) return null;
+  const r = await sbDocket(`/rest/v1/spaces?home_department_id=eq.${deptId}&archived_at=is.null&select=${SPACE_COLS}&limit=1`, env);
+  const sp = r.ok ? r.data?.[0] : null;
+  return sp && await canWriteSpace(auth, sp, env) ? sp.id : null;
+}
+// Where work lands when the caller names no space — that team's home space, else the caller's Personal space.
+// Null only if both fail (the caller errors).
+async function defaultTargetSpace(auth, deptId, env) {
+  return (await homeSpaceFor(auth, deptId, env)) || personalSpaceId(auth, env);
+}
 // A task row that only its caller needs to see (P2): owned by the caller (never ownerless — that belongs in
 // The Grid), no other team, no hand-off, no plan / program link, not a checklist task, no collaborators. Only
-// such a task may be MOVED into a personal space (a personal space hides it from the team, view_all, admins
-// and any later owner / receiver until P3's "people on a task always see it" rule). P2 deliberately does NOT
-// route no-space creates there yet (hostile review 2026-11-13): that switch ships with P3.
+// such a task may be MOVED into a personal space (a personal space hides it from the team, view_all and admins;
+// its owner / receivers / collaborators still see it — P3a). A create with no space lands there only when its
+// team has no home space the caller can open (defaultTargetSpace, P3b).
 function isJustMine(t, auth) {
   if (!auth.employeeId || !t.owner_employee_id || lcId(t.owner_employee_id) !== lcId(auth.employeeId)) return false;
   if (t.department_id && lcId(t.department_id) !== lcId(auth.departmentId || '')) return false;
@@ -666,10 +679,22 @@ function planAdminSpace(auth, space) {
   return isPlanAdmin(auth) && !!space && !!space.is_private && !space.is_default && space.is_personal === false
     && 'archived_at' in space && !space.archived_at;
 }
+// P3b (Afshaan 2026-11-13): docket_view_all / docket_admin holders keep seeing every team's work once General's tasks
+// move into team spaces — READ every live team space, never a personal one or the Founders' space. Read only: they
+// can't add, move or apply into it (canWriteSpace), and edits stay canEditTask's (the space adds nothing).
+function viewAllSpace(auth, space) {
+  return canViewAll(auth) && !!space && !!space.is_private && !space.is_default && space.is_personal === false
+    && space.is_founders === false && 'archived_at' in space && !space.archived_at;
+}
 // Can the caller READ a space at all? General = everyone; private = owner, member, or a member of a team
 // it is shared with; a plan admin, any team space (planAdminSpace). (docket_admin is NOT special here — strict
 // separation — unless they've broken-glass in.)
 async function canAccessSpace(auth, space, env) {
+  return planAdminSpace(auth, space) || viewAllSpace(auth, space) || canAccessSpaceDirect(auth, space, env);
+}
+// May the caller PUT work in this space (create, move in, apply a template, a new record)? As canAccessSpace, less
+// the view-all read (viewAllSpace).
+async function canWriteSpace(auth, space, env) {
   return planAdminSpace(auth, space) || canAccessSpaceDirect(auth, space, env);
 }
 // The same rule WITHOUT planAdminSpace: real rights in the space (owner, member, team share), for what a plan admin's
@@ -719,14 +744,16 @@ async function accessibleSpaces(auth, env) {
   const direct = new Set(directIds);
   const orParts = [`owner_user_id.eq.${auth.userId}`];
   if (memberIds.length) orParts.push(`id.in.${inList(memberIds)}`);
-  if (isPlanAdmin(auth)) orParts.push('is_personal.is.false');   // every team space (is_private=eq.true below)
+  if (isPlanAdmin(auth) || canViewAll(auth)) orParts.push('is_personal.is.false');   // every team space (is_private=eq.true below)
   const ownedRes = await sbDocket(
-    `/rest/v1/spaces?is_private=eq.true&archived_at=is.null&or=(${orParts.join(',')})&select=id,name,is_private,owner_user_id,is_founders,is_personal,archived_at&order=name.asc`, env);
+    `/rest/v1/spaces?is_private=eq.true&archived_at=is.null&or=(${orParts.join(',')})&select=id,name,is_private,owner_user_id,is_founders,is_personal,archived_at,home_department_id&order=name.asc`, env);
   const general = (defRes.ok && defRes.data) || [];
   // A Founders' space reached only through a team share is dropped (see canAccessSpace).
   const privates = ((ownedRes.ok && ownedRes.data) || []).filter(s => !s.is_founders || s.owner_user_id === auth.userId || direct.has(s.id) || planAdminSpace(auth, s));
+  // (viewAllSpace never opens the Founders' space; the filter above already drops it for a non-member.)
   return [...general, ...privates].map(s => ({ id: s.id, name: s.name, is_private: s.is_private, is_owner: s.owner_user_id === auth.userId,
-    ...(s.is_founders ? { is_founders: true } : {}), ...(s.is_personal ? { is_personal: true } : {}) }));
+    ...(s.is_founders ? { is_founders: true } : {}), ...(s.is_personal ? { is_personal: true } : {}),
+    ...(s.home_department_id ? { home_department_id: s.home_department_id } : {}) }));
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2036,10 +2063,19 @@ async function createTaskCore(d, auth, env) {
     if (d.program_id === undefined)  d.program_id        = parent.program_id || null;
     if (d.department_id == null)     d.department_id     = parent.department_id || null;
   }
-  if (!spaceId) spaceId = await defaultSpaceId(env);
+  // P3b: no space named → the task's team's home space (its team, or its owner's), else the caller's Personal.
+  // A task filed for ANOTHER team (an explicit team that isn't yours) whose space you can't open is refused, not
+  // dropped into your Personal space where that team would never see it (hostile review P3b #4) — hand it off.
+  if (!spaceId) {
+    const team = d.department_id || (d.owner_employee_id ? await employeeDept(d.owner_employee_id, env) : null);
+    const home = await homeSpaceFor(auth, team, env);
+    if (!home && d.department_id && lcId(d.department_id) !== lcId(auth.departmentId || '')) return err('team_space_closed', 422);
+    spaceId = home || await personalSpaceId(auth, env);
+    if (!spaceId) return err('no_default_space', 500);
+  }
   const space = await loadSpace(spaceId, env);
   if (!space) return err('space_not_found', 404);
-  if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
+  if (!(await canWriteSpace(auth, space, env))) return err('forbidden_space', 403);
   // Defaults — explicit values always win: a top-level task in your personal space is yours; a task with an
   // owner and no team takes the owner's team (a sub-task takes its parent's first, above). On create, null / ''
   // mean "not chosen" (forms send '' for an untouched field); there is nothing to clear yet.
@@ -2771,7 +2807,7 @@ async function bulkMoveTasks(body, auth, env) {
   if (!d.space_id) return err('space_id required', 400);
   const target = await loadSpace(d.space_id, env);
   if (!target) return err('space_not_found', 404);
-  if (!(await canAccessSpace(auth, target, env))) return err('forbidden_space', 403);
+  if (!(await canWriteSpace(auth, target, env))) return err('forbidden_space', 403);
 
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
   if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
@@ -2921,7 +2957,7 @@ async function moveTask(body, auth, env) {
   if (INVOLVED_ONLY.has(task)) return err('forbidden_space', 403);
   const target = await loadSpace(d.space_id, env);
   if (!target) return err('space_not_found', 404);
-  if (!(await canAccessSpace(auth, target, env))) return err('forbidden_space', 403);
+  if (!(await canWriteSpace(auth, target, env))) return err('forbidden_space', 403);
   if (task.space_id === d.space_id) return ok({ id: task.id, unchanged: true });
   // A sub-task lives in its parent's space; moving one alone would put parent and child on two sides of
   // a space wall, and getTask's parent/children hydration would then read titles across it.
@@ -4539,13 +4575,24 @@ async function archiveTemplate(body, auth, env) {
     p_archive: d.archive !== false }, env);
   return r.error || ok({ id: d.id, archived: r.data.archived });
 }
-// POST { action:'applyTemplate', id, anchor_id, anchor_date, roles } — everything or nothing (the RPC).
+// POST { action:'applyTemplate', id, anchor_id, anchor_date, roles, space_id? } — everything or nothing (the RPC).
+// P3b: tasks land in the space the caller picks (one they can open, not archived); none → their team's home space,
+// else their Personal space. A restricted theme still puts them in the Founders' space (the RPC decides that).
 async function applyTemplate(body, auth, env) {
   const d = body.data || body;
   if (!isUuid(String(d.id || ''))) return templateErr({ code: 'not_found' });
   if (d.roles != null && (typeof d.roles !== 'object' || Array.isArray(d.roles))) return templateErr({ code: 'bad_role' });
+  let spaceId = d.space_id || null;   // '' = none, as on create
+  if (spaceId) {
+    const sp = isUuid(String(spaceId)) ? await loadSpace(spaceId, env) : null;
+    if (!sp || sp.archived_at || !(await canWriteSpace(auth, sp, env))) return templateErr({ code: 'forbidden_space' });
+  } else {
+    spaceId = await defaultTargetSpace(auth, auth.departmentId, env);
+    if (!spaceId) return err('no_default_space', 500);
+  }
   const r = await templateRpc('plan_template_apply', { ...planArgs(auth), p_template_id: d.id,
-    p_payload: { anchor_id: d.anchor_id ?? null, anchor_date: d.anchor_date ?? null, roles: d.roles || {} }, p_source: auth.source || 'app' }, env);
+    p_payload: { anchor_id: d.anchor_id ?? null, anchor_date: d.anchor_date ?? null, roles: d.roles || {}, space_id: spaceId },
+    p_source: auth.source || 'app' }, env);
   return r.error || ok({ items: r.data.items || [], tasks: r.data.tasks || [] });
 }
 
@@ -4789,10 +4836,12 @@ async function createChecklistRecord(body, auth, env) {
   if (!tmpl) return err('template_not_found', 404);
   if (tmpl.kind !== 'record') return err('not_a_record_template', 422);
   if (!tmpl.is_active || tmpl.archived_at) return err('template_inactive', 422);
-  const spaceId = d.space_id || await defaultSpaceId(env);
+  // P3b: no space named → the owner's team's home space, else the caller's Personal (as a task).
+  const spaceId = d.space_id || await defaultTargetSpace(auth,
+    d.owner_employee_id ? await employeeDept(d.owner_employee_id, env) : auth.departmentId, env);
   const space = spaceId ? await loadSpace(spaceId, env) : null;
   if (!space) return err('space_not_found', 404);
-  if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
+  if (!(await canWriteSpace(auth, space, env))) return err('forbidden_space', 403);
   if (space.archived_at) return err('space_archived', 422);
   const product = d.product == null ? '' : String(d.product).trim();
   if (product) { const ex = await productExists(product, env); if (ex === null) return err('db_error: product', 500); if (!ex) return err('unknown_product', 400); }

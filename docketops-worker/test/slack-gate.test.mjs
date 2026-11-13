@@ -20,7 +20,7 @@ const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const SECRET = 'zz-signing';
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a', SLACK_DOCKET_SIGNING_SECRET: SECRET, SLACK_DOCKET_BOT_TOKEN: 'xoxb-zz' };
 // ME = auth user of employee MEE (Slack UME). OTHER = an employee with a login (Slack UOT). NOLOGIN has none (UNL).
-const ME = U(1), MEE = U(2), OTH = U(3), OTE = U(4), NLE = U(5), G = U(20), D1 = U(10), D2 = U(11), TASK = U(100), PLAN = U(30);
+const ME = U(1), MEE = U(2), OTH = U(3), OTE = U(4), NLE = U(5), G = U(20), PERS = U(27), D1 = U(10), D2 = U(11), TASK = U(100), PLAN = U(30);
 const EMPS = [
   { id: MEE, full_name: 'Zzme Me', department_id: D1, auth_user_id: ME, status: 'active', work_email: 'zz.me@legendoftoys.com', slack: 'UME0001' },
   { id: OTE, full_name: 'Zzother Other', department_id: D2, auth_user_id: OTH, status: 'active', work_email: 'zz.other@legendoftoys.com', slack: 'UOT0001' },
@@ -85,6 +85,7 @@ function stub({ cached = [], tasks = [], profileActive = true, hooksDown = false
     if (p.includes('/employees?id=eq.')) return body(EMPS.filter(e => e.id === eq('id')).map(({ slack, ...e }) => e));
     if (p.includes('/employees?id=in.')) return body(EMPS.filter(e => inIds(q.get('id')).includes(e.id)).map(({ slack, ...e }) => e));
     if (p.includes('/departments')) return body([{ id: D1, name: 'ZZ one' }, { id: D2, name: 'ZZ two' }]);
+    if (p.includes('/rpc/ensure_personal_space')) return body(PERS);
     if (p.includes('/rpc/next_task_seq')) return body('DKT-77');
     if (p.includes('/rpc/plan_propose')) { rpcs.push({ fn: 'plan_propose', body: reqBody }); return body({ ok: true, id: U(40) }); }
     if (p.includes('/rpc/task_set_deadline')) { rpcs.push({ fn: 'task_set_deadline', body: reqBody }); return body({ ok: true }); }
@@ -93,7 +94,11 @@ function stub({ cached = [], tasks = [], profileActive = true, hooksDown = false
     if (p.includes('/rpc/list_my_tasks')) return body(db.tasks);
     if (p.includes('/rpc/')) return body([]);
     if (p.startsWith('/rest/v1/spaces?is_default=eq.true')) return body([{ id: G }]);
-    if (p.startsWith('/rest/v1/spaces?id=eq.') || p.startsWith('/rest/v1/spaces?id=in.')) return body([{ id: G, name: 'General', is_default: true, is_private: false, is_founders: false, owner_user_id: null }]);
+    if (p.startsWith('/rest/v1/spaces?id=eq.') || p.startsWith('/rest/v1/spaces?id=in.')) {
+      const SP = { [G]: { id: G, name: 'General', is_default: true, is_private: false, is_founders: false, owner_user_id: null },
+        [PERS]: { id: PERS, name: 'Personal', is_default: false, is_private: true, is_founders: false, is_personal: true, owner_user_id: ME } };
+      return body(inIds(q.get('id').replace(/^eq\./, '')).map(id => SP[id]).filter(Boolean));
+    }
     if (p.startsWith('/rest/v1/task_history') && method === 'POST') { history.push(...[].concat(reqBody)); return body([]); }
     if (p.startsWith('/rest/v1/task_documents') && method === 'POST') { docs.push(...reqBody); return body([]); }
     if (p.startsWith('/rest/v1/task_comments') && method === 'POST') { comments.push(...[].concat(reqBody)); return body([{ id: U(50), ...[].concat(reqBody)[0] }]); }

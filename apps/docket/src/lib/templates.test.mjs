@@ -117,6 +117,17 @@ test('apply: dates from the anchor, people by role (case-insensitive), body only
   assert.deepEqual(T.applyBody('tid', { anchorId: 'a', anchorDate: '2026-11-30', roles: { Lead: 'e1', Designer: 'e2', Old: 'e9' }, labels: ['Lead', 'Designer'] }),
     { id: 'tid', anchor_id: 'a', anchor_date: '2026-11-30', roles: { Lead: 'e1', Designer: 'e2' } });
   assert.equal(T.applyBody('tid', { anchorId: 'a', anchorDate: '2026-13-01', roles: {}, labels: [] }), null);
+  // P3b: the picked space rides along; none → no space_id (the worker picks the default)
+  assert.equal(T.applyBody('tid', { anchorId: 'a', anchorDate: '2026-11-30', roles: {}, labels: [], spaceId: 's1' }).space_id, 's1');
+  assert.equal('space_id' in T.applyBody('tid', { anchorId: 'a', anchorDate: '2026-11-30', roles: {}, labels: [] }), false);
+  // applySpaces: never General; the caller's team's home space first, else Personal, else nothing
+  const sp = [{ id: 'g', name: 'General', is_private: false }, { id: 'p', name: 'Personal', is_private: true, is_personal: true },
+    { id: 'n', name: 'NPD', is_private: true, home_department_id: 'dN' }, { id: 'x', name: 'Side project', is_private: true }];
+  assert.deepEqual(T.applySpaces(sp, 'dN'), { options: [{ value: 'p', label: 'Personal (only you)' }, { value: 'n', label: 'NPD' }, { value: 'x', label: 'Side project' }], defaultId: 'n' });
+  assert.equal(T.applySpaces(sp, 'dOther').defaultId, 'p');
+  assert.deepEqual(T.applySpaces([{ id: 'f', name: 'Founders', is_private: true, is_founders: true }], null).options, []);   // review #9
+  assert.equal(T.applySpaces(sp, null).defaultId, 'p');
+  assert.deepEqual(T.applySpaces([{ id: 'g', name: 'General', is_private: false }], 'dN'), { options: [], defaultId: '' });
   assert.equal(T.nodeDate('2026-12-31', 1), '2027-01-01');
   assert.equal(T.dayHint(0), 'the anchor day');
   assert.equal(T.dayHint(3), 'day 3 after');
@@ -137,7 +148,7 @@ test('errors: words, never codes; key → node title; label → role', () => {
   const r = Object.assign(new Error('role_unmapped'), { detail: { label: 'Designer' } });
   assert.match(T.templateErrorText(r), /role “Designer”/);
   assert.equal(T.templateErrorText(new Error('missing_fields')), 'Owner, due date and done-when are required.');   // plan_create's own code
-  assert.match(T.templateErrorText(new Error('forbidden_space')), /Founders’ space/);
+  assert.match(T.templateErrorText(new Error('forbidden_space')), /can’t add tasks to that space/);
   const odd = T.templateErrorText(new Error('weird_trigger_code'));
   assert.ok(!odd.includes('weird_trigger_code'));
   assert.ok(!T.errorCodeText('zzz').includes('zzz'));

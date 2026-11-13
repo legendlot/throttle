@@ -50,8 +50,8 @@ export function ChecklistRecords({ session, employees = [], me }) {
   }, [session, filters, showToast]);
   useEffect(() => { load(); }, [load]);
 
-  const general = spaces.find(s => !s.is_private);
-  function openNew() { setDraft({ template_id: templates[0]?.id || '', title: '', product: '', space_id: general?.id || '', owner_employee_id: me?.employee_id || '' }); }
+  // P3b: no space preset — the worker puts a new record in its owner's team space, else your Personal space.
+  function openNew() { setDraft({ template_id: templates[0]?.id || '', title: '', product: '', space_id: '', owner_employee_id: me?.employee_id || '' }); }
   async function create() {
     if (!draft.template_id || !draft.title.trim()) return;
     setBusy(true);
@@ -84,7 +84,7 @@ export function ChecklistRecords({ session, employees = [], me }) {
               options={templates.map(t => ({ value: t.id, label: t.name }))} onChange={v => setDraft(d => ({ ...d, template_id: v || '' }))} /></label>
             <label className="cl-field"><span>Product (optional)</span><Combobox value={draft.product} allowClear placeholder="Not in the catalog yet" style={{ width: '100%' }}
               options={prodOpts} onChange={v => setDraft(d => ({ ...d, product: v || '' }))} /></label>
-            <label className="cl-field"><span>Space</span><Combobox value={draft.space_id} allowClear={false} style={{ width: '100%' }}
+            <label className="cl-field"><span>Space</span><Combobox value={draft.space_id} allowClear={false} placeholder="Owner's team space (or your Personal)" style={{ width: '100%' }}
               options={spaces.map(s => ({ value: s.id, label: s.name }))} onChange={v => setDraft(d => ({ ...d, space_id: v || '' }))} /></label>
             <label className="cl-field"><span>Owner</span><Combobox value={draft.owner_employee_id} allowClear style={{ width: '100%' }}
               options={empOpts} onChange={v => setDraft(d => ({ ...d, owner_employee_id: v || '' }))} /></label>

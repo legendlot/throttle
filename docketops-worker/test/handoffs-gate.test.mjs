@@ -40,6 +40,9 @@ SPACES[PERS] = { id: PERS, name: 'Personal', is_default: false, is_private: true
 const PERS9 = U(28);  // P3a: someone else's (U(9)'s) personal space — the one kind a plan admin never opens
 SPACES[PERS9] = { id: PERS9, name: 'Personal', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: true };
 const ARCHT = U(29);  // P3a: an ARCHIVED team space (not personal) — a plan admin never opens it
+const HOMEOK = U(30), HOMENO = U(31);   // P3b: a team's home space — one ME is a member of (opens), one ME isn't (doesn't)
+SPACES[HOMEOK] = { id: HOMEOK, name: 'ZZ home open', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: false, archived_at: null };
+SPACES[HOMENO] = { id: HOMENO, name: 'ZZ home shut', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: false, archived_at: null };
 SPACES[ARCHT] = { id: ARCHT, name: 'ZZ old team', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: false, archived_at: '2026-11-01T00:00:00Z' };
 const DEPTS = [{ id: D1, name: 'ZZ team 1' }, { id: D2, name: 'ZZ team 2' }, { id: D3, name: 'ZZ team 3' }];
 // podium.employees.status is 'active' | 'exited' (live, 2026-11-12).
@@ -54,7 +57,8 @@ const T = (n, o) => ({ id: U(100 + n), task_no: `DKT-${n}`, title: `ZZ t${n}`, s
 const inIds = (v) => (v || '').replace(/^in\.\(|\)$/g, '').split(',');
 const OPEN = ['not_started', 'in_progress', 'blocked'];
 
-function stub({ tasks = [], superAdmin = false, dept = D2, members = [], archivedSpaces = [], scoreRows = [], others = {}, teams = {}, exited = false, personal = PERS, hidePersonal = false, collabs = [], comments = [], records = [] } = {}) {
+function stub({ tasks = [], superAdmin = false, dept = D2, members = [], archivedSpaces = [], scoreRows = [], others = {}, teams = {}, exited = false, personal = PERS, hidePersonal = false, collabs = [], comments = [], records = [], homes = {}, perms = null } = {}) {   // perms: the zz_super role's permissions (default plan admin)
+     // homes: { departmentId: homeSpaceId } (P3b)
   let ensured = false;
   const db = tasks.map(t => ({ ...t }));
   const calls = [], history = [], posted = [], patches = [], teamWrites = [], spaceLog = [];
@@ -73,7 +77,7 @@ function stub({ tasks = [], superAdmin = false, dept = D2, members = [], archive
     if (p.startsWith('/rest/v1/users_profile?id=in.')) return body([{ id: ME, full_name: 'ZZ Me' }, { id: U(8), full_name: 'ZZ Giver user' }].filter(x => inIds(q.get('id')).includes(x.id)));
     if (p.startsWith('/rest/v1/docket_user_roles?user_id=eq.')) return body(superAdmin ? [{ role_key: 'zz_super' }] : []);
     if (p.startsWith('/rest/v1/docket_user_roles?')) return body([]);
-    if (p.startsWith('/rest/v1/docket_roles?')) return body([{ role_key: 'zz_super', permissions: { docket_plan_admin: true } }]);
+    if (p.startsWith('/rest/v1/docket_roles?')) return body([{ role_key: 'zz_super', permissions: perms || { docket_plan_admin: true } }]);
     if (p.includes('/employees?auth_user_id=')) return body([{ id: MEE, full_name: 'ZZ Me', department_id: dept, status: exited ? 'exited' : 'active' }]);
     if (p.includes('/employees?id=eq.')) return body(EMPS.filter(e => e.id === eq('id')));
     if (p.includes('/employees?id=in.')) return body(EMPS.filter(e => inIds(q.get('id')).includes(e.id)));
@@ -107,6 +111,7 @@ function stub({ tasks = [], superAdmin = false, dept = D2, members = [], archive
       const teamSpaces = or.includes('is_personal.is.false');   // P3a: a plan admin's every team space
       return body(Object.values(SPACES).filter(sp => sp.is_private && !sp.archived_at && (sp.owner_user_id === owner || ids.includes(sp.id) || (teamSpaces && !sp.is_personal)) && !(hidePersonal && sp.id === PERS && !ensured)));
     }
+    if (p.startsWith('/rest/v1/spaces?home_department_id=eq.')) return body(homes[eq('home_department_id')] ? [SPACES[homes[eq('home_department_id')]]] : []);
     if (p.startsWith('/rest/v1/spaces?is_default=eq.true')) return body([{ id: G }]);
     if (p.startsWith('/rest/v1/spaces?id=eq.')) return body(SPACES[eq('id')] ? [SPACES[eq('id')]] : []);
     if (p.startsWith('/rest/v1/spaces?id=in.')) return body(inIds(q.get('id')).map(id => SPACES[id]).filter(Boolean));
@@ -665,8 +670,11 @@ test('create defaults: team = owner\'s team; owner = me in a personal space only
   let r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ a', owner_employee_id: OE } } });
   assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].department_id, D1);   // OE is in D1
   s = stub({ dept: D2 });
-  await run(s, { post: { action: 'createTask', data: { title: 'ZZ b', owner_employee_id: OE, department_id: D3 } } });
+  await run(s, { post: { action: 'createTask', data: { title: 'ZZ b', owner_employee_id: OE, department_id: D3, space_id: G } } });
   assert.equal(s.posted[0].department_id, D3);                                                       // explicit team wins
+  s = stub({ dept: D2 });                                                                            // P3b review #4: another team,
+  r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ b2', owner_employee_id: OE, department_id: D3 } } });   // no space
+  assert.equal(r.status, 422); assert.equal(r.j.error, 'team_space_closed'); assert.equal(s.posted.length, 0);   // it can open → refused
   s = stub({ dept: D2 });
   await run(s, { post: { action: 'createTask', data: { title: 'ZZ c', space_id: G } } });
   assert.equal(s.posted[0].owner_employee_id, null); assert.equal(s.posted[0].department_id, null);  // General: stays blank (The Grid)
@@ -797,14 +805,43 @@ test('a stray team row on the Founders\' space opens nothing: getTask, sidebar, 
 });
 
 // ── P2 personal spaces (migration 0036) ──
-test('P2 holds create routing for P3: a task created with no space still goes to General, whoever owns it', async () => {
-  for (const o of [{}, { assign_self: true }, { owner_employee_id: MEE }, { owner_employee_id: OE }, { department_id: D2 }]) {
-    const s = stub({ dept: D2 });
+test('P3b create routing: no space + the owner\'s team has a home space the caller can open → that space', async () => {
+  const s = stub({ dept: D2, homes: { [D1]: HOMEOK }, members: [HOMEOK] });
+  const r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ p', owner_employee_id: OE } } });   // OE is in D1
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].space_id, HOMEOK); assert.equal(r.j.data.space_is_personal, false);
+  assert.ok(!s.calls.some(c => c.p.includes('ensure_personal_space')));
+  const s2 = stub({ dept: D2, homes: { [D3]: HOMEOK }, members: [HOMEOK] });                                   // an explicit team wins over the owner's
+  await run(s2, { post: { action: 'createTask', data: { title: 'ZZ p2', owner_employee_id: OE, department_id: D3 } } });
+  assert.equal(s2.posted[0].space_id, HOMEOK);
+});
+
+test('P3b create routing: the team has a home space the caller CANNOT open → the caller\'s Personal', async () => {
+  const s = stub({ dept: D2, homes: { [D1]: HOMENO } });
+  const r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ p', owner_employee_id: OE } } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].space_id, PERS); assert.equal(r.j.data.space_is_personal, true);
+});
+
+test('P3b create routing: no team / no home space → the caller\'s Personal', async () => {
+  for (const o of [{}, { assign_self: true }, { owner_employee_id: MEE }, { owner_employee_id: OE }, { owner_employee_id: NOD }, { department_id: D2 }]) {
+    const s = stub({ dept: D2 });   // no home spaces anywhere
     const r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ p', ...o } } });
     assert.equal(r.status, 200, JSON.stringify([o, r.j]));
-    assert.equal(s.posted[0].space_id, G, JSON.stringify(o)); assert.equal(r.j.data.space_is_personal, false);
-    assert.ok(!s.calls.some(c => c.p.includes('ensure_personal_space')), JSON.stringify(o));
+    assert.equal(s.posted[0].space_id, PERS, JSON.stringify(o)); assert.equal(r.j.data.space_is_personal, true);
   }
+});
+
+test('P3b create routing: an explicit space_id still wins over a home space', async () => {
+  const s = stub({ dept: D2, homes: { [D1]: HOMEOK, [D2]: HOMEOK }, members: [HOMEOK] });
+  const r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ p', owner_employee_id: OE, space_id: G } } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].space_id, G);
+  assert.ok(!s.calls.some(c => c.p.includes('home_department_id') || c.p.includes('ensure_personal_space')));
+});
+
+test('P3b create routing: a sub-task still takes its parent\'s space, not the home space or Personal', async () => {
+  const s = stub({ dept: D2, homes: { [D1]: HOMEOK, [D2]: HOMEOK }, members: [HOMEOK], tasks: [T(1, { owner_employee_id: MEE, department_id: D2, space_id: G })] });
+  const r = await run(s, { post: { action: 'createSubtask', data: { title: 'ZZ sub', parent_task_id: U(101) } } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].space_id, G);
+  assert.ok(!s.calls.some(c => c.p.includes('home_department_id') || c.p.includes('ensure_personal_space')));
 });
 
 test('moving into a personal space: only a task family that is just mine; bulk skips and names the rest', async () => {
@@ -936,6 +973,31 @@ test('P3a: an involved collaborator comments on a private-space task (seesTask);
   s = stub({ dept: D2, tasks: [T(1, { space_id: PRIV, owner_employee_id: MEE })] });               // the owner edits, as everywhere
   r = await run(s, { post: { action: 'changeStatus', id: U(101), status: 'done' } });
   assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.patches.length, 1);
+});
+
+test('P3b: a view-all holder (not a plan admin) READS every team space — never the Founders\' or a personal one — and can\'t add to it', async () => {
+  const VA = { docket_view_all: true };
+  let r = await run(stub({ superAdmin: true, perms: VA, dept: D1 }), { get: { action: 'getSpaces' } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  const ids = r.j.data.map(x => x.id);
+  assert.ok(ids.includes(PRIV), JSON.stringify(ids));
+  assert.ok(!ids.includes(FND) && !ids.includes(PERS9) && !ids.includes(ARCH), JSON.stringify(ids));
+  const tasks = [T(1, { space_id: PRIV }), T(2, { space_id: PERS9 }), T(3, { space_id: FND })];
+  r = await run(stub({ superAdmin: true, perms: VA, dept: D1, tasks }), { get: { action: 'getTask', id: U(101) } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  for (const id of [U(102), U(103)]) {
+    r = await run(stub({ superAdmin: true, perms: VA, dept: D1, tasks }), { get: { action: 'getTask', id } });
+    assert.equal(r.status, 404, id);
+  }
+  // read, not write: no create / move into a team space they only read; docket_admin (implies view_all) the same
+  for (const perms of [VA, { docket_admin: true }]) {
+    let s = stub({ superAdmin: true, perms, dept: D1 });
+    r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ va', space_id: PRIV } } });
+    assert.equal(r.status, 403, JSON.stringify(r.j)); assert.equal(r.j.error, 'forbidden_space'); assert.equal(s.posted.length, 0);
+    s = stub({ superAdmin: true, perms, dept: D1, tasks: [T(4, { space_id: G, created_by_user_id: ME })] });
+    r = await run(s, { post: { action: 'moveTask', id: U(104), space_id: PRIV } });
+    assert.equal(r.status, 403, JSON.stringify(r.j));
+  }
 });
 
 test('P3a: a plan admin lists every team space and opens its task; never someone\'s personal space', async () => {

@@ -185,11 +185,20 @@ export function applyPreview(nodes = [], anchorDate, roles = {}, employees = [])
   });
 }
 // The applyTemplate body; null while a role has no person or the date is bad.
-export function applyBody(templateId, { anchorId, anchorDate, roles = {}, labels = [] } = {}) {
+export function applyBody(templateId, { anchorId, anchorDate, roles = {}, labels = [], spaceId = '' } = {}) {
   if (!templateId || !anchorId || !isDateStr(anchorDate)) return null;
   const out = {};
   for (const l of labels) { const id = roles[l]; if (!id) return null; out[l] = id; }
-  return { id: templateId, anchor_id: anchorId, anchor_date: anchorDate, roles: out };
+  return { id: templateId, anchor_id: anchorId, anchor_date: anchorDate, roles: out, ...(spaceId ? { space_id: spaceId } : {}) };
+}
+// P3b: the spaces a template's tasks can land in (live ones the caller can open, never General) and the default —
+// the caller's team's home space if they can open it, else their Personal space.
+export function applySpaces(spaces = [], myDepartmentId = null) {
+  // Never General; never the Founders' space (a restricted theme puts them there on its own — review #9).
+  const opts = (spaces || []).filter(s => s && s.is_private && !s.is_founders)
+    .map(s => ({ value: s.id, label: s.is_personal ? 'Personal (only you)' : s.name, home: s.home_department_id || null, personal: !!s.is_personal }));
+  const def = (myDepartmentId && opts.find(o => o.home === myDepartmentId)) || opts.find(o => o.personal) || null;
+  return { options: opts.map(({ value, label }) => ({ value, label })), defaultId: def ? def.value : '' };
 }
 export function spanText(span) {
   if (!span || span.min_offset == null || span.max_offset == null) return '';
@@ -225,7 +234,7 @@ const TEMPLATE_ERR = {
   bad_role: 'A role in the request isn’t one this template uses — reload and try again.',
   bad_date: 'Pick a valid anchor date.',
   bad_source: 'Something went wrong — try again.',
-  forbidden_space: 'These would go in the Founders’ space, and you’re not a member of it.',
+  forbidden_space: 'You can’t add tasks to that space — nothing was created.',
   founders_space_missing: 'There’s no Founders’ space to put these tasks in — ask an admin.',
 };
 export function templateErrorText(e, { nodeTitle } = {}) {

@@ -323,10 +323,9 @@ function TasksBoard() {
     for (const t of tasks) { if (t.space_id) counts[t.space_id] = (counts[t.space_id] || 0) + 1; }
     let best = '', n = -1;
     for (const [sid, c] of Object.entries(counts)) { if (c > n) { n = c; best = sid; } }
-    if (best) return best;
-    const general = spaces.find(s => !s.is_private);
-    return general ? general.id : (spaces[0]?.id || '');
-  }, [inProgramMode, programReady, tasks, spaces]);
+    // P3b: none yet → no space; the worker puts it in your team's space, else your Personal space.
+    return best;
+  }, [inProgramMode, programReady, tasks]);
   // Only an explicit pick from the space picker is stored; the default stays derived (never frozen in).
   const [programSpace, setProgramSpace] = useState('');
   useEffect(() => { setProgramSpace(''); }, [viewProgramId]);
@@ -341,8 +340,9 @@ function TasksBoard() {
     if (!programReady) return false;   // program page still loading its tasks: no capture yet
     const body = mineMode ? { title, assign_self: true }
       : inProgramMode ? { title, space_id: (programSpace || programDefaultSpace) || undefined, program_id: viewProgramId }
-      // General's own add row names General: since P2 a create with NO space goes to your personal space.
-      : { title, space_id: spaceId || (spaces.find(s => !s.is_private) || {}).id || undefined };
+      // P3b: General's add row names no space — the worker puts it in its team's space, else your Personal space
+      // (General is being retired; the toast says where it went).
+      : { title, space_id: spaceId || undefined };
     // The active single-value filters carry into the new task, so it lands in the view you're looking at
     // (Afshaan 2026-11-13). The group's value is narrower and goes over them; quick-add tokens go over both.
     if (!mineMode) {
@@ -372,11 +372,13 @@ function TasksBoard() {
       const owner = (res && 'owner_employee_id' in res ? res.owner_employee_id : body.owner_employee_id || (body.assign_self ? myEmployeeId : null)) || null;
       const mine = !!owner && owner === myEmployeeId;
       const ownerName = owner && !mine ? (employees.find(e => e.id === owner)?.full_name || '').split(/\s+/)[0] : '';
+      // P3b: a create that landed in another space than the board you're on says where it went.
+      const elsewhere = !mineMode && !inProgramMode && res && res.space_id && res.space_id !== (spaceId || null) ? (res.space_name || 'another space') : '';
       const where = mineMode ? (mine ? 'Added to your list' : ownerName ? `Added — owned by ${ownerName}` : 'Added')
-        : inProgramMode ? 'Added to program' : 'Added';
+        : inProgramMode ? 'Added to program' : elsewhere ? `Added to ${elsewhere}` : 'Added';
       const missing = !owner && !body.deadline ? 'an owner and a deadline' : !owner ? 'an owner' : !body.deadline ? 'a deadline' : '';
       showToast(!missing ? where
-        : (!mineMode && !inProgramMode) ? 'Captured to The Grid'
+        : (!mineMode && !inProgramMode && !elsewhere) ? 'Captured to The Grid'
         : `${where} — in The Grid until it has ${missing}`, 'success');
       return true;
     } catch (e) { showToast(planErrorText(e) || 'Create failed', 'error'); return false; }

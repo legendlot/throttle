@@ -15,12 +15,13 @@ const code = readFileSync(join(SRC, 'index.js'), 'utf8').replace(/from '\.\/([^'
 const worker = (await import('data:text/javascript,' + encodeURIComponent(code))).default;
 
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-const ME = U(1), MEE = U(2), D1 = U(10), D2 = U(11), G = U(20), PRIV = U(21), FND = U(22);
+const ME = U(1), MEE = U(2), D1 = U(10), D2 = U(11), G = U(20), PRIV = U(21), FND = U(22), PERS = U(27);   // PERS: ME's personal space — what ensure_personal_space returns (P3b: no-space creates land there)
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const SPACES = {
   [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false },
   [PRIV]: { id: PRIV, name: 'ZZ Private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false },
   [FND]: { id: FND, name: 'Founders', is_default: false, is_private: true, owner_user_id: U(9), is_founders: true },
+  [PERS]: { id: PERS, name: 'Personal', is_default: false, is_private: true, owner_user_id: ME, is_founders: false, is_personal: true },
 };
 const inIds = (v) => (v || '').replace(/^in\.\(|\)$/g, '').split(',');
 
@@ -43,6 +44,7 @@ function stub({ role = null, planRows = [], readings = [], readingsFail = false,
     if (p.includes('/employees?auth_user_id=')) return body([{ id: MEE, full_name: 'ZZ Me', department_id: D1 }]);
     if (p.includes('/employees?')) return body([{ id: MEE, full_name: 'ZZ Me', department_id: D1, status: 'active' }, ...employees].filter(x => inIds(q.get('id')).includes(x.id)));
     if (p.includes('/departments?')) return body([{ id: D1, name: 'ZZ D1' }, { id: D2, name: 'ZZ D2' }]);
+    if (p.includes('/rpc/ensure_personal_space')) return body(PERS);
     if (p.includes('/rpc/plan_items_for')) return body(planRows);
     if (p.includes('/rpc/plan_history_for')) return body([]);
     if (p.includes('/rpc/week_score')) return body(scores[reqBody.p_date] || { week_end: reqBody.p_date, final: false, totals: { cohort: 0 }, teams: [], tasks: [] });

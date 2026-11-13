@@ -21,7 +21,7 @@ import { istDate, shortDay } from '../../../../lib/weeks.js';
 import { fmtPlanDate } from '../../../../lib/plan.js';
 import {
   AUDIENCE_LABEL, KIND_LABEL, LIMITS, childKinds, orderedNodes, validateTemplate, addNode, removeNode, updateNode, moveNode,
-  fromServerNodes, toSaveBody, templateRoles, applyPreview, applyBody, dayHint, spanText, templateErrorText, errorCodeText,
+  fromServerNodes, toSaveBody, templateRoles, applyPreview, applyBody, applySpaces, dayHint, spanText, templateErrorText, errorCodeText,
 } from '../../../../lib/templates.js';
 
 const changed = () => { if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:templates-changed')); };
@@ -234,7 +234,7 @@ function Editor({ id, audience: newAudience, canCreate, session, onDone }) {
 // ── preview + apply ──────────────────────────────────────────────────────────
 function ApplyView({ id, session, isSuper, startApply, onBack }) {
   const { showToast } = useToast();
-  const { myEmployeeId } = useChrome();
+  const { myEmployeeId, myDepartmentId, spaces } = useChrome();
   const planItems = usePlanItems(session);
   const [d, setD] = useState(null);
   const [employees, setEmployees] = useState([]);
@@ -242,6 +242,7 @@ function ApplyView({ id, session, isSuper, startApply, onBack }) {
   const [anchorId, setAnchorId] = useState('');
   const [anchorDate, setAnchorDate] = useState(istDate(Date.now()));
   const [roles, setRoles] = useState({});
+  const [spaceId, setSpaceId] = useState('');   // '' = the default below until the caller picks
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [done, setDone] = useState(null);
@@ -261,7 +262,9 @@ function ApplyView({ id, session, isSuper, startApply, onBack }) {
     .map(i => ({ value: i.id, label: [i.code, i.title].filter(Boolean).join(' · ') })), [planItems, kind, isSuper, myEmployeeId]);
   const people = useMemo(() => employees.map(e => ({ value: e.id, label: e.full_name })), [employees]);
   const preview = useMemo(() => applyPreview(nodes, anchorDate, roles, employees), [nodes, anchorDate, roles, employees]);
-  const body = applyBody(id, { anchorId, anchorDate, roles, labels });
+  const spaceOpts = useMemo(() => applySpaces(spaces, myDepartmentId), [spaces, myDepartmentId]);
+  const pickedSpace = spaceId || spaceOpts.defaultId;
+  const body = applyBody(id, { anchorId, anchorDate, roles, labels, spaceId: pickedSpace });
 
   async function apply() {
     if (!body) return;
@@ -319,6 +322,9 @@ function ApplyView({ id, session, isSuper, startApply, onBack }) {
             {anchors.length === 0
               ? <span className="rv-none">{kind === 'theme' ? 'No agreed themes yet.' : 'You don’t own an agreed milestone to apply it under.'}</span>
               : <Combobox value={anchorId} options={anchors} placeholder={kind === 'theme' ? 'Pick a theme…' : 'Pick a milestone…'} onChange={(v) => setAnchorId(v || '')} style={{ width: '100%' }} />}</label>
+          <label className="pl-field"><span className="pl-lbl">Put the tasks in</span>
+            <Combobox value={pickedSpace} options={spaceOpts.options} placeholder="Pick a space…" onChange={(v) => setSpaceId(v || '')} style={{ width: '100%' }} />
+            {kind === 'theme' && <span className="rv-hidden">Under a restricted theme they go to the Founders’ space instead.</span>}</label>
           <label className="pl-field"><span className="pl-lbl">Anchor date (day 0)</span>
             <input type="date" className="pl-input" value={anchorDate} onChange={e => setAnchorDate(e.target.value)} /></label>
           {labels.length > 0 && <div className="pl-field"><span className="pl-lbl">Who plays each role</span>
