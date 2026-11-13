@@ -2,14 +2,18 @@
 // X1 — the Exit panel on a person's page (Start exit / Resign, the no-dues checklist with its live Snorkel /
 // Docket lists, HR's Close + Cancel) and the start modal. Presentation only; every gate is the worker's
 // (podiumops-worker getExit / startExit / updateExitItem / updateExit / closeExit / cancelExit).
+// X1b: the relieving + experience letters panel on the relieving_letters line (and on a closed exit) — preview,
+// issue, re-issue, download (previewExitLetter / issueExitLetter). Issuing never ticks the line; HR still ticks Done.
 import { useCallback, useEffect, useState } from 'react';
 import { useToast } from '@throttle/ui';
-import { LogOut, Check, Ban, RotateCcw, X, AlertTriangle, Users, ChevronDown, ChevronRight } from 'lucide-react';
+import { LogOut, Check, Ban, RotateCcw, X, AlertTriangle, Users, ChevronDown, ChevronRight, FileText, Download } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
 import { fmtDate, fmtMoney } from '../lib/format.js';
-import { EXIT_REASONS, CHECKLIST_OWNERS, AUTO_SOURCE_LABELS, blockerText, exitError, addDaysIso, labelOfList } from '../lib/exits.js';
+import { EXIT_REASONS, CHECKLIST_OWNERS, AUTO_SOURCE_LABELS, blockerText, exitError, addDaysIso, labelOfList,
+  EXIT_LETTER_KINDS, letterError, letterBlockText } from '../lib/exits.js';
 import { fmtNum } from '../lib/leave.js';
 import { ToneBadge, Card, KV, F, Row, inp, primaryBtn, ghostBtn, dangerBtn, muted } from './HiringBits.js';
+import { LetterPreview } from './OfferBits.js';
 
 const ITEM_TONE = { open: 'warn', done: 'ok', na: 'neutral' };
 const ITEM_LABEL = { open: 'Open', done: 'Done', na: 'N/A' };
@@ -65,10 +69,18 @@ export function ExitPanel({ employeeId, session, onChanged }) {
       right={canStart ? <button onClick={() => setStarting(true)} style={d.role === 'employee' ? ghostBtn : dangerBtn}><LogOut size={13} /> {startLabel}</button> : null}>
       {starting && <StartExitModal d={d} session={session} onClose={() => setStarting(false)} onStarted={() => { setStarting(false); load(); onChanged && onChanged(); }} />}
       {!x ? <div style={muted}>No exit recorded.</div>
-        : !open ? <ClosedExit x={x} role={d.role} session={session} onSaved={load} />
+        : !open ? <>
+          <ClosedExit x={x} role={d.role} session={session} onSaved={load} />
+          {(d.role === 'hr' || (d.letters || []).length > 0) && (
+            <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>Relieving and experience letters</div>
+              <LettersPanel d={d} exit={x} session={session} onIssued={load} />
+            </div>
+          )}
+        </>
         : <>
           <ExitHeader x={x} d={d} session={session} onSaved={load} />
-          <Checklist items={d.items} live={d.live} exit={x} role={d.role} docs={docs} busy={busy}
+          <Checklist items={d.items} live={d.live} exit={x} role={d.role} docs={docs} busy={busy} d={d} session={session} onIssued={load}
             onSet={(item, status, note, document_id) => run('updateExitItem', { item_id: item.id, status, note, ...(document_id !== undefined ? { document_id } : {}) }, null)} />
           {d.can_manage && (
             <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
@@ -178,7 +190,7 @@ function ExitHeader({ x, d, session, onSaved }) {
   );
 }
 
-function Checklist({ items, live, exit, role, docs, busy, onSet }) {
+function Checklist({ items, live, exit, role, docs, busy, onSet, d, session, onIssued }) {
   const groups = CHECKLIST_OWNERS.map(o => ({ ...o, items: (items || []).filter(i => i.owner === o.id) })).filter(g => g.items.length);
   return (
     <div>
@@ -186,17 +198,20 @@ function Checklist({ items, live, exit, role, docs, busy, onSet }) {
       {groups.map(g => (
         <div key={g.id} style={{ marginTop: 8 }}>
           <div style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 700, marginBottom: 2 }}>{g.label}</div>
-          {g.items.map(it => <ItemRow key={it.id} it={it} live={live} exit={exit} role={role} docs={docs} busy={busy} onSet={onSet} />)}
+          {g.items.map(it => <ItemRow key={it.id} it={it} live={live} exit={exit} role={role} docs={docs} busy={busy} onSet={onSet}
+            d={d} session={session} onIssued={onIssued} />)}
         </div>
       ))}
     </div>
   );
 }
 
-function ItemRow({ it, live, exit, role, docs, busy, onSet }) {
+function ItemRow({ it, live, exit, role, docs, busy, onSet, d, session, onIssued }) {
   const [mode, setMode] = useState(null);   // 'done' | 'na' while the note box is open
   const [note, setNote] = useState(it.note || '');
-  const [doc, setDoc] = useState(it.document_id || '');
+  const isLetters = it.line_key === 'relieving_letters';
+  // K4: once both letters exist, the tick's document defaults to the latest relieving letter.
+  const [doc, setDoc] = useState(it.document_id || (isLetters ? latestBothLettersDoc(d?.letters) : '') || '');
   // Unverifiable assets: only HR, with a note (the worker + exit_update_item enforce it).
   const assetsHrOnly = it.auto_source === 'snorkel_assets' && live && !live.assets_verifiable && role !== 'hr';
   const tick = canTick(role, it) && !assetsHrOnly;
@@ -214,7 +229,7 @@ function ItemRow({ it, live, exit, role, docs, busy, onSet }) {
         {tick && !isFnf && !mode && (
           it.status === 'open'
             ? <>
-                <button onClick={() => setMode('done')} style={smallBtn} disabled={busy}><Check size={12} /> Done</button>
+                <button onClick={() => { setMode('done'); if (isLetters && !doc) setDoc(latestBothLettersDoc(d?.letters)); }} style={smallBtn} disabled={busy}><Check size={12} /> Done</button>
                 {it.allow_na && <button onClick={() => setMode('na')} style={smallBtn} disabled={busy}>N/A</button>}
               </>
             : <button onClick={() => onSet(it, 'open', it.note || '')} style={smallBtn} disabled={busy}><RotateCcw size={12} /> Reopen</button>
@@ -255,6 +270,106 @@ function ItemRow({ it, live, exit, role, docs, busy, onSet }) {
         {!live.payment_requests_verifiable && <Warn>Cannot verify automatically — no LOT login is linked to this person, so their Snorkel requests cannot be found. Finance checks by hand.</Warn>}
       </>}
       {it.auto_source === 'leave_ledger' && <LeaveAtExit it={it} live={live} exit={exit} />}
+      {isLetters && d && (d.role === 'hr' || (d.letters || []).length > 0) && <LettersPanel d={d} exit={exit} session={session} onIssued={onIssued} />}
+    </div>
+  );
+}
+
+// ── X1b — relieving + experience letters ─────────────────────────────────────
+// d.letters is newest revision first per kind; the first relieving row is the latest one.
+function latestBothLettersDoc(letters) {
+  const ls = letters || [];
+  if (!EXIT_LETTER_KINDS.every(k => ls.some(l => l.kind === k.id))) return '';
+  return ls.find(l => l.kind === 'relieving')?.document_id || '';
+}
+
+function LettersPanel({ d, exit, session, onIssued }) {
+  const { showToast } = useToast();
+  const [kind, setKind] = useState(null);   // the kind whose Issue modal is open
+  const letters = d.letters || [];
+  const hr = d.role === 'hr';
+  async function download(l) {
+    try { const r = await podiumopsGet('getExitLetterUrl', { letter_id: l.id }, session); window.open(r.url, '_blank'); }
+    catch (e) { showToast(letterError(e), 'error'); }
+  }
+  return (
+    <div style={{ marginTop: 4, paddingLeft: 4, fontSize: 12 }}>
+      {letters.length === 0 ? <div style={muted}>No letters issued yet.</div> : (
+        <ul style={{ margin: '2px 0 0', paddingLeft: 18 }}>
+          {letters.map(l => (
+            <li key={l.id} style={{ marginBottom: 2 }}>
+              {labelOfList(EXIT_LETTER_KINDS, l.kind)} · <b>{l.letter_ref}</b>{l.revision > 1 ? ` (r${l.revision})` : ''}
+              <span style={muted}> · {fmtDate(l.issue_date)}</span>{' '}
+              <button onClick={() => download(l)} style={{ ...smallBtn, padding: '1px 7px' }}><Download size={11} /> Download</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {hr && exit.status !== 'cancelled' && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+          {EXIT_LETTER_KINDS.map(k => {
+            const has = letters.some(l => l.kind === k.id);
+            return <button key={k.id} onClick={() => setKind(k.id)} style={smallBtn}><FileText size={12} /> {has ? `Re-issue ${k.label.toLowerCase()}` : k.label}</button>;
+          })}
+        </div>
+      )}
+      {hr && <div style={{ ...muted, marginTop: 4 }}>Issuing stores the PDF on the person’s documents; it does not tick this line. Podium never emails it.</div>}
+      {kind && <LetterModal d={d} exit={exit} kind={kind} session={session} onClose={() => setKind(null)}
+        onIssued={() => { setKind(null); onIssued && onIssued(); }} />}
+    </div>
+  );
+}
+
+function LetterModal({ d, exit, kind, session, onClose, onIssued }) {
+  const { showToast } = useToast();
+  const sigs = (d.letter_signatories || []).filter(s => s.employee_id !== d.employee.id);
+  const [sig, setSig] = useState(sigs[0]?.id || '');
+  const [p, setP] = useState(null);         // null = loading, false = failed
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setP(null);
+    podiumopsGet('previewExitLetter', { exit_id: exit.id, kind, signatory_id: sig }, session)
+      .then(setP).catch(e => { setP(false); showToast(letterError(e), 'error'); });
+  }, [exit.id, kind, sig, session, showToast]);
+  const label = labelOfList(EXIT_LETTER_KINDS, kind);
+  async function issue() {
+    const again = p.revision > 1;
+    if (!window.confirm(again
+      ? `Re-issue the ${label.toLowerCase()} as ${p.letter_ref} revision ${p.revision}? The earlier revision stays on record.`
+      : `Issue the ${label.toLowerCase()} for ${d.employee.full_name} as ${p.letter_ref}? It is stored on their documents (not emailed).`)) return;
+    setBusy(true);
+    try { await podiumopsPost('issueExitLetter', { exit_id: exit.id, kind, signatory_id: sig }, session); showToast(`${label} issued`, 'success'); onIssued(); }
+    catch (e) { showToast(letterError(e), 'error'); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div style={overlay}>
+      <div style={{ ...modal, width: 'min(760px, 100%)' }} role="dialog" aria-modal="true" aria-label={label}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 14, marginBottom: 12 }}>
+          <FileText size={16} /> {label} — {d.employee.full_name}
+          <span style={{ flex: 1 }} /><button onClick={onClose} style={{ ...smallBtn, border: 'none' }}><X size={14} /></button>
+        </div>
+        <F label="Signatory">
+          <select style={inp} value={sig} onChange={e => setSig(e.target.value)}>
+            <option value="">Pick…</option>
+            {sigs.map(s => <option key={s.id} value={s.id}>{s.display_name}{s.title ? ` · ${s.title}` : ''}</option>)}
+          </select>
+        </F>
+        {p === null && <div style={muted}>Rendering…</div>}
+        {p && (
+          <>
+            <div style={{ ...muted, margin: '4px 0 8px' }}>
+              {p.letter_ref}{p.revision > 1 ? ` · revision ${p.revision}` : ''} · dated {fmtDate(p.issue_date)} · template v{p.template?.version}
+            </div>
+            {p.block && <Warn>{letterBlockText(p.block)}{p.detail ? ` (${String(p.detail).replace(/_/g, ' ')})` : ''}</Warn>}
+            {p.view && <div style={{ marginTop: 8, maxHeight: '55vh', overflow: 'auto' }}><LetterPreview view={p.view} /></div>}
+          </>
+        )}
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 12 }}>
+          <button onClick={onClose} style={ghostBtn} disabled={busy}>Cancel</button>
+          <button onClick={issue} style={primaryBtn} disabled={busy || !p || !!p.block}><FileText size={13} /> {busy ? 'Issuing…' : p?.revision > 1 ? 'Re-issue' : 'Issue'}</button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -2,14 +2,18 @@
 // X1 — the no-dues checklist template + the "other tools" list (admin data, L4/L8). HR / admin edit them
 // here; no code change needed. A started exit keeps its own snapshot, so edits apply to the NEXT exit.
 // Live-checked lines (auto_source) keep their behaviour — only wording, owner and flags are editable.
+// X1b: the relieving + experience letter templates (versioned like the offer templates: saving = a new version,
+// issued letters keep the version they used).
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { ListChecks, Wrench, Plus, Save } from 'lucide-react';
+import { ListChecks, Wrench, Plus, Save, Eye, FileText } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
 import { EMPLOYMENT_TYPES } from '../../../../lib/format.js';
-import { CHECKLIST_OWNERS, AUTO_SOURCE_LABELS, exitError } from '../../../../lib/exits.js';
-import { Card, inp, primaryBtn, ghostBtn, muted } from '../../../../components/HiringBits.js';
+import { CHECKLIST_OWNERS, AUTO_SOURCE_LABELS, EXIT_LETTER_KINDS, exitError } from '../../../../lib/exits.js';
+import { fmtDateTime } from '../../../../lib/hiring.js';
+import { Card, F, Note, inp, primaryBtn, ghostBtn, muted } from '../../../../components/HiringBits.js';
+import { LetterPreview } from '../../../../components/OfferBits.js';
 
 const th = { textAlign: 'left', padding: '6px', fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', fontWeight: 700 };
 const td = { padding: '6px', borderBottom: '1px solid var(--border)', verticalAlign: 'top', fontSize: 13 };
@@ -127,6 +131,93 @@ export default function ExitChecklistPage() {
           </tbody>
         </table>
       </Card>
+
+      <LetterTemplates session={session} />
+    </div>
+  );
+}
+
+// ── X1b — Letter templates ───────────────────────────────────────────────────
+function LetterTemplates({ session }) {
+  const [data, setData] = useState(null);
+  const [key, setKey] = useState('relieving');
+  const load = useCallback(() => {
+    if (!session) return;
+    podiumopsGet('getExitLetterTemplates', {}, session).then(setData).catch(() => setData(false));
+  }, [session]);
+  useEffect(() => { load(); }, [load]);
+  const title = <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><FileText size={13} /> Letter templates</span>;
+  if (data === false) return <Card title={title}><div style={muted}>Could not load the letter templates.</div></Card>;
+  if (!data) return <Card title={title}><Spinner /></Card>;
+  const versions = (data.templates || []).filter(t => t.template_key === key);
+  const current = versions.find(t => t.is_current) || versions[0] || null;
+  return (
+    <Card title={title}>
+      <div style={{ ...muted, marginBottom: 8 }}>The relieving and experience letters HR issues from an exit. Saving makes a new version; letters already issued keep theirs.</div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        {EXIT_LETTER_KINDS.map(t => (
+          <button key={t.id} onClick={() => setKey(t.id)} style={{ ...ghostBtn, ...(key === t.id ? { color: 'var(--text-1)', borderColor: 'var(--podium-accent)' } : {}) }}>{t.label}</button>
+        ))}
+      </div>
+      <LetterTemplateEditor key={current?.id || key} templateKey={key} current={current} versions={versions} fields={data.fields || []} session={session} onSaved={load} />
+    </Card>
+  );
+}
+
+function LetterTemplateEditor({ templateKey, current, versions, fields, session, onSaved }) {
+  const { showToast } = useToast();
+  const [f, setF] = useState(() => ({
+    title: current?.title || '', body: current?.body || '', entity_name: current?.entity_name || '',
+    entity_address: (current?.entity_address || []).join('\n'), notes: '',
+  }));
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const set = (k, v) => setF(s => ({ ...s, [k]: v }));
+  const body = () => ({ template_key: templateKey, ...f, entity_address: f.entity_address.split('\n').map(s => s.trim()).filter(Boolean) });
+  async function doPreview() {
+    try { const r = await podiumopsPost('previewExitLetterTemplate', body(), session); setPreview(r.view); }
+    catch (e) { setPreview(null); showToast(exitError(e), 'error'); }
+  }
+  async function save() {
+    if (!window.confirm('Save as a new version? Letters issued from now on use it; letters already issued keep theirs.')) return;
+    setBusy(true);
+    try { const t = await podiumopsPost('saveExitLetterTemplate', body(), session); showToast(`Saved as v${t?.version}`, 'success'); onSaved(); }
+    catch (e) { showToast(exitError(e), 'error'); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(340px, 1fr) minmax(340px, 1fr)', gap: 14, alignItems: 'start' }}>
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{current ? `Current: v${current.version}` : 'No version yet'}</div>
+        {current?.notes && <Note>{current.notes}</Note>}
+        <F label="Title"><input style={inp} value={f.title} onChange={e => set('title', e.target.value)} /></F>
+        <F label="Body — {{field}} merges; {{#field}}…{{/field}} shows only when the field is set; blank line = new paragraph">
+          <textarea rows={14} style={{ ...inp, resize: 'vertical', fontSize: 12 }} value={f.body} onChange={e => set('body', e.target.value)} />
+        </F>
+        <F label="Entity *"><input style={inp} value={f.entity_name} onChange={e => set('entity_name', e.target.value)} /></F>
+        <F label="Letterhead address (one line each)"><textarea rows={3} style={{ ...inp, resize: 'vertical' }} value={f.entity_address} onChange={e => set('entity_address', e.target.value)} /></F>
+        <F label="Version note (what changed)"><input style={inp} value={f.notes} onChange={e => set('notes', e.target.value)} /></F>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button style={ghostBtn} onClick={doPreview}><Eye size={13} /> Preview</button>
+          <button style={primaryBtn} disabled={busy} onClick={save}><Save size={13} /> Save new version</button>
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <div style={{ ...muted, marginBottom: 4 }}>Merge fields</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {fields.map(k => <code key={k} style={{ fontSize: 11, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px' }}>{`{{${k}}}`}</code>)}
+          </div>
+          <div style={{ ...muted, marginTop: 6 }}>has_department and has_signatory_title are for sections. The letter closes with “For &lt;entity&gt;”, the signatory and their title.</div>
+        </div>
+        {versions.length > 1 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ ...muted, marginBottom: 4 }}>Versions</div>
+            {versions.map(v => <div key={v.id} style={{ fontSize: 12 }}>v{v.version}{v.is_current ? ' (current)' : ''} · {fmtDateTime(v.created_at)}{v.notes ? ` · ${v.notes}` : ''}</div>)}
+          </div>
+        )}
+      </div>
+      <div>
+        {preview ? <LetterPreview view={preview} /> : <div style={muted}>Preview renders the template with sample data (no real person).</div>}
+      </div>
     </div>
   );
 }

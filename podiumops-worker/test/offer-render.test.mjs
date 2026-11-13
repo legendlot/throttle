@@ -149,3 +149,17 @@ test('closing prints the signatory title only when one is set', () => {
   assert.equal(v.closing.title, null);
   assert.equal(renderOfferText({ template: EMP, offer: OFFER, annexure: null, signatory: { ...SIG, title: 'Director' }, candidate: CAND }).closing.title, 'Director');
 });
+
+// X1b: the letter layout was factored out of renderOfferPdf (shared with the exit letters). Offer PDFs already
+// issued are stored files whose SHA-256 is the record, so the same inputs must keep giving the same bytes —
+// these hashes were computed BEFORE the refactor and must never change.
+test('PDF bytes pinned: the shared letter layout did not change an offer PDF', async () => {
+  const emp = await renderOfferPdf({ template: EMP, offer: OFFER, annexure: annex(), signatory: SIG, candidate: CAND });
+  assert.equal(await sha256Hex(emp), '80d780f843351b9fececa386ae2071d6ca210abfae9aaa455b22759039e39e96', 'employment + annexure');
+  const io = { ...OFFER, mode: 'stipend', fixed_annual: null, variable_annual: 0, stipend_monthly: 15000, internship_months: 6 };
+  const int = await renderOfferPdf({ template: INT, offer: io, annexure: computeAnnexure(io, R26), signatory: { ...SIG, title: 'Director' }, candidate: CAND });
+  assert.equal(await sha256Hex(int), 'a42776d140618c165b17217027b9dc744bb8751c71fb58a1da0d08dd5881ddc8', 'internship + titled signatory');
+  const long = await renderOfferPdf({ template: { ...EMP, body: `${EMP.body}\n\n${EMP.body}\n\n${EMP.body}` }, offer: OFFER, annexure: null,
+    signatory: SIG, candidate: { full_name: 'Zoë Test ₹ —' } });
+  assert.equal(await sha256Hex(long), '74cc2c1cc8cdc80e9b689cc13c79a2d06fd3490c21e3505bba515d52d1e2de5f', 'multi-page letter, no annexure');
+});

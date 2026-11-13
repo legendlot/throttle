@@ -78,6 +78,10 @@ import {
   appendCertificatePage,
 } from './offer-render.js';   // C3 letter + PDF renderer (test/offer-render.test.mjs)
 import {
+  EXIT_LETTER_KINDS, EXIT_LETTER_FIELDS, exitLetterBlock, exitLetterView, renderExitLetterPdf, nextExitLetterRef,
+  exitLetterPath, exitLetterFileName, exitLetterTitle, validateExitLetterBody, sampleExitLetterArgs, unsupportedCharField,
+} from './exit-letters.js';   // X1b relieving + experience letters (test/exit-letters.test.mjs)
+import {
   newLinkToken, hashLinkToken, linkTokenShapeOk, namesMatch, firstName, DECLINE_REASONS, declineReasonList, TEXT_MAX,
   isLinkLive, LINK_INVALID, linkState, linkDbErrorCode, addressOk, buildOfferMime, offerSubject, offerMessageId,
   renderOfferEmail, renderConfirmationEmail, renderAlertEmail, LINK_DOC_TYPES, LINK_DOC_TYPE_KEYS, LINK_DOC_MIMES,
@@ -756,7 +760,9 @@ async function getMyCompensation(url, auth, env) {
 // J1 review: the salary letters are a tighter tier still — the salary allow-list (canComp) or the person
 // themselves; HR/admin alone no longer suffice (RULE-PODIUM-002: pay is allow-list only, not role-derived).
 // Non-self reads of them are logged to comp_access_log like every other salary read.
-const RESTRICTED_DOC_TYPES = new Set(['bank_details', 'id_proof', 'address_proof', 'offer_letter', 'increment_letter', 'appraisal_letter']);
+// X1b: the relieving / experience letters are self + HR (no pay on them, so not SALARY_DOC_TYPES).
+const RESTRICTED_DOC_TYPES = new Set(['bank_details', 'id_proof', 'address_proof', 'offer_letter', 'increment_letter', 'appraisal_letter',
+  'relieving_letter', 'experience_letter']);
 const SALARY_DOC_TYPES = new Set(['offer_letter', 'increment_letter', 'appraisal_letter']);
 
 // J2: a document the person uploaded themselves (<employee_id>/self/…, /welcome) is restricted like the
@@ -1253,6 +1259,9 @@ async function deleteDocument(body, auth, env) {
   const dr = await sb(`/rest/v1/documents?id=eq.${body.id}&select=storage_path&limit=1`, env);
   const path = dr.data?.[0]?.storage_path;
   const r = await sb(`/rest/v1/documents?id=eq.${body.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  // X1b: exit_letters.document_id is ON DELETE RESTRICT — an issued letter's file is the record (row and file stay).
+  if (!r.ok && r.data?.code === '23503' && /exit_letters/.test(String(r.data?.message || '')))
+    return errCode('letter_is_record', 'An issued letter is the record and cannot be deleted — issue a new revision instead', 409);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   if (path) {
     const seg = String(path).split('/').map(encodeURIComponent).join('/');
@@ -7238,6 +7247,21 @@ const X1_COPY = {
   manager_has_no_google_account: 'The manager has no Google account to receive the Drive — suspend only, or fix the manager',
   drive_app_not_found: 'Google did not list the Drive and Docs transfer app',
   google_error: 'Google refused the request',
+  // X1b — relieving + experience letters
+  bad_kind: 'Pick relieving or experience letter',
+  exit_cancelled: 'This exit was cancelled — no letters for it',
+  no_joining_date: 'This person has no joining date on record — add it before an experience letter',
+  no_designation: 'This person has no designation on record — add it first',
+  bad_signatory: 'Pick an active signatory (not the person leaving)',
+  template_error: 'The letter template has an unknown field or an unclosed section — fix it under Letter templates',
+  template_missing: 'No current template for this letter',
+  pdf_store_failed: 'The PDF could not be stored — try again',
+  ref_conflict: 'Another letter was issued at the same moment — try again',
+  bad_storage_path: 'The letter file is not under this person’s documents',
+  bad_template: 'Check the template: title, body and the entity name are required',
+  no_self_letter: 'You cannot issue your own relieving or experience letter — another HR person does',
+  unsupported_characters: 'A value on the letter has a character the PDF font cannot print — correct it on the person’s record first',
+  letters_issued: 'Letters were already issued for this exit — it can’t be cancelled; ask Afshaan',
   google_item_exists: 'This person already has an open Google item',
   bad_line: 'Check the line: key, title and owner are required',
   bad_tool: 'A tool needs a name',
@@ -7360,7 +7384,8 @@ async function getExit(url, auth, env) {
     history: rows.filter(x => x !== exit).map(x => ({ id: x.id, status: x.status, reason_code: x.reason_code, lwd: x.lwd })),
   };
   if (!exit) return ok({ ...base, exit: null, items: [], live: null, blockers: [], progress: null });
-  const items = await exitItems(env, exit.id);
+  const [items, letters] = await Promise.all([exitItems(env, exit.id),
+    exitLettersFor(env, exit.id, c.role).catch(e => { console.error('[getExit] letters', e?.message || e); return { rows: [], signatories: [] }; })]);
   if (!items) return err('db_error', 500);
   let live = null, blockers = [];
   if (exit.status === 'open') {
@@ -7372,7 +7397,21 @@ async function getExit(url, auth, env) {
     if (!l.ok || (lv && !lv.ok)) blockers.push({ code: 'live_check_failed' });
   }
   return ok({ ...base, exit: projectExit(exit, c.role), items, live, blockers, progress: itemProgress(items),
-    days_left: exit.status === 'open' ? daysLeft(exit.lwd, today) : null });
+    days_left: exit.status === 'open' ? daysLeft(exit.lwd, today) : null, letters: letters.rows, letter_signatories: letters.signatories });
+}
+
+// X1b — the exit's issued letters (newest revision first). Letters are self + HR documents (RESTRICTED_DOC_TYPES), so
+// the manager chain gets none; HR also gets the active signatories for the Issue modal. → { rows, signatories } (never fails)
+async function exitLettersFor(env, exitId, role) {
+  if (role !== 'hr' && role !== 'employee') return { rows: [], signatories: [] };
+  const [lr, sr] = await Promise.all([
+    sb(`/rest/v1/exit_letters?exit_id=eq.${exitId}&select=id,kind,revision,letter_ref,issue_date,issued_at,document_id,sha256&order=kind.asc,revision.desc`, env),
+    role === 'hr' ? sb(`/rest/v1/offer_signatories?active=eq.true&select=id,display_name,title,employee_id&order=display_name.asc`, env) : Promise.resolve({ ok: true, data: [] }),
+  ]);
+  // The letters must never take the exit panel down (e.g. 0022 not applied yet): log and show none.
+  if (!lr.ok || !Array.isArray(lr.data)) console.error('[getExit] exit_letters read failed', lr.status, JSON.stringify(lr.data));
+  if (!sr.ok || !Array.isArray(sr.data)) console.error('[getExit] offer_signatories read failed', sr.status);
+  return { rows: lr.ok && Array.isArray(lr.data) ? lr.data : [], signatories: sr.ok && Array.isArray(sr.data) ? sr.data : [] };
 }
 
 // GET getMyTeamExits — self-serve: the caller's own exit status + everyone below them in the chain (the /me
@@ -7577,13 +7616,18 @@ async function updateExit(body, auth, env) {
 }
 
 // POST cancelExit {exit_id, reason} (HR) — e.g. the resignation was withdrawn. The checklist stays as history.
-async function cancelExit(body, auth, env) {
+export async function cancelExit(body, auth, env) {
   const d = body.data || body;
   const c = await exitWriteCtx(auth, env, d.exit_id);
   if (c.res) return c.res;
   if (!canManageExit(c.role)) return x1Err('forbidden', 403);
   const reason = String(d.reason || '').trim();
   if (reason.length < 5) return x1Err('cancel_reason_required', 400);
+  // X1b: issued letters are the record of a relieving — that exit can't be cancelled (0022's trigger re-checks under
+  // the row lock, so a letter issued mid-cancel still refuses it).
+  const lr = await sb(`/rest/v1/exit_letters?exit_id=eq.${c.exit.id}&select=id&limit=1`, env);
+  if (!lr.ok || !Array.isArray(lr.data)) return err('db_error', 500);
+  if (lr.data.length) return x1Err('letters_issued');
   const r = await sb(`/rest/v1/employee_exits?id=eq.${c.exit.id}&status=eq.open`, env, { method: 'PATCH',
     body: JSON.stringify({ status: 'cancelled', cancelled_at: nowIso(), cancelled_by: auth.userId, cancel_reason: reason.slice(0, 500) }) });
   if (!r.ok) return x1DbError(r);
@@ -7843,6 +7887,202 @@ async function saveExitTool(body, auth, env) {
   if (!r.ok) return d.id && !isUuid(d.id) ? err('bad id', 400) : x1DbError(r);
   return ok(r.data?.[0] || null);
 }
+// ── X1b — relieving + experience letters (HR). Plan docs/superpowers/plans/2026-11-13-podium-x1b-exit-letters.md ──
+// Pure half: src/exit-letters.js · SQL: migrations/0022_exit_letters.sql (exit_letter_issue). Issuing never ticks the
+// relieving_letters checklist line (K4) and works on open AND closed exits. Never emailed by Podium (K6).
+
+const exitLetterErr = (code, status = 409, extra = {}) => x1Err(code, status, code === 'before_lwd'
+  ? { message: 'Letters are issued on or after the last working day', ...extra } : extra);
+const EXIT_LETTER_STATUS = { bad_kind: 400, exit_not_found: 404, bad_signatory: 400, template_error: 422, template_missing: 500,
+  no_self_letter: 403, unsupported_characters: 422 };
+
+// Everything a letter needs, read fresh. d = { exit_id, kind, signatory_id? }.
+// → { res } | { exit, emp, department, template, signatory, issueDate, next: {ref, revision}, block, detail }
+// Self ranks above HR (as exitRole): an HR person never previews or issues their own letter (no_self_letter).
+async function exitLetterCtx(env, d, auth) {
+  if (!EXIT_LETTER_KINDS.includes(d.kind)) return { res: exitLetterErr('bad_kind', 400) };
+  const exit = await loadExit(env, d.exit_id);
+  if (!exit) return { res: exitLetterErr('exit_not_found', 404) };
+  const issueDate = istToday();
+  const year = Number(issueDate.slice(0, 4));
+  const none = Promise.resolve({ ok: true, data: [] });
+  const [er, tr, sr, lr, cr] = await Promise.all([
+    sb(`/rest/v1/employees?id=eq.${exit.employee_id}&select=id,employee_code,full_name,job_title,date_joined,auth_user_id,department:department_id(name)&limit=1`, env),
+    sb(`/rest/v1/exit_letter_templates?template_key=eq.${d.kind}&is_current=eq.true&select=*&limit=1`, env),
+    isUuid(d.signatory_id) ? sb(`/rest/v1/offer_signatories?id=eq.${d.signatory_id}&select=*&limit=1`, env) : none,
+    sb(`/rest/v1/exit_letters?exit_id=eq.${exit.id}&kind=eq.${d.kind}&select=kind,revision,letter_ref&order=revision.desc&limit=1`, env),
+    sb(`/rest/v1/exit_letter_counters?kind=eq.${d.kind}&year=eq.${year}&select=last_n&limit=1`, env),
+  ]);
+  if (![er, tr, sr, lr, cr].every(r => r.ok && Array.isArray(r.data))) return { res: err('db_error', 500) };
+  const emp = er.data[0];
+  if (!emp) return { res: exitLetterErr('exit_not_found', 404) };
+  if (emp.auth_user_id && emp.auth_user_id === auth?.userId) return { res: exitLetterErr('no_self_letter', 403) };
+  const template = tr.data[0];
+  if (!template) return { res: exitLetterErr('template_missing', 500) };
+  const signatory = sr.data[0] || null;
+  const next = nextExitLetterRef({ kind: d.kind, prior: lr.data, counterLastN: cr.data[0]?.last_n || 0, year });
+  const c = { exit, emp, department: emp.department || null, template, signatory, issueDate, next, detail: null,
+    block: exitLetterBlock({ kind: d.kind, exit, employee: emp, signatory, today: issueDate }) };
+  if (!c.block) {
+    const bad = await unsupportedCharField(exitLetterArgs(c));
+    if (bad) { c.block = 'unsupported_characters'; c.detail = bad; }
+  }
+  return c;
+}
+const exitLetterArgs = (c) => ({ exit: c.exit, employee: c.emp, department: c.department, template: c.template,
+  signatory: c.signatory, issueDate: c.issueDate, ref: c.next.ref, revision: c.next.revision });
+
+// GET previewExitLetter?exit_id=&kind=&signatory_id= (HR) — the letter as it would be issued now + the refusal Issue
+// would hit (null = it can be issued). A template error comes back as block 'template_error' with no view.
+async function previewExitLetter(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const c = await exitLetterCtx(env, { exit_id: url.searchParams.get('exit_id'), kind: url.searchParams.get('kind'),
+    signatory_id: url.searchParams.get('signatory_id') }, auth);
+  if (c.res) return c.res;
+  let view = null, block = c.block, detail = c.detail;
+  try { view = exitLetterView(exitLetterArgs(c)); }
+  catch (e) { if (e?.code !== 'template_error') throw e; if (!block) { block = 'template_error'; detail = e.detail; } }
+  return ok({ kind: url.searchParams.get('kind'), view, block, detail, letter_ref: c.next.ref, revision: c.next.revision,
+    issue_date: c.issueDate, template: { id: c.template.id, version: c.template.version } });
+}
+
+// A definite refusal from the function itself (`raise exception 'podium_…'` → PostgREST 4xx): the transaction rolled
+// back, so nothing points at the uploaded file. Anything else (status 0 / 5xx / network) may have committed.
+const definiteRaise = (r) => !!r && r.status >= 400 && r.status < 500 && /^podium_[a-z_]+$/.test(String(rpcError(r) || ''));
+
+// The letter whose document points at this storage path (a call that committed but whose response was lost).
+async function letterHoldingPath(env, path) {
+  const dr = await sb(`/rest/v1/documents?storage_path=eq.${encodeURIComponent(path)}&select=id&limit=1`, env).catch(() => ({ ok: false }));
+  if (!dr.ok || !Array.isArray(dr.data)) return { ok: false };
+  if (!dr.data.length) return { ok: true, letter: null };
+  const lr = await sb(`/rest/v1/exit_letters?document_id=eq.${dr.data[0].id}&select=*&limit=1`, env).catch(() => ({ ok: false }));
+  return { ok: true, letter: lr.ok ? lr.data?.[0] || null : null, document: { id: dr.data[0].id } };
+}
+
+// POST issueExitLetter {exit_id, kind, signatory_id} (HR, never their own). Render → upload (a fresh nonce path per
+// attempt, no upsert) → exit_letter_issue (ref + revision allocated under the exit lock; document + letter rows in one
+// transaction). The ref is printed on the letter, so it is predicted before rendering. Only a lost COUNTER race — the
+// prediction was revision 1 and the exit still has no letter of this kind — re-renders (up to 3 attempts); any other
+// conflict comes back as ref_conflict (never a silent r2). The uploaded file is deleted only on a definite podium_*
+// refusal; an indefinite failure keeps it and looks for a committed row first.
+export async function issueExitLetter(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  const me = callerEmployee(await loadOrgEdges(env), auth.userId);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const c = await exitLetterCtx(env, d, auth);
+    if (c.res) return c.res;
+    if (attempt > 0 && c.next.revision !== 1) return exitLetterErr('ref_conflict', 409);
+    if (c.block) return exitLetterErr(c.block, EXIT_LETTER_STATUS[c.block] || 409, c.detail ? { detail: c.detail } : {});
+    let bytes;
+    try { bytes = await renderExitLetterPdf(exitLetterArgs(c)); }
+    catch (e) { if (e?.code === 'template_error') return exitLetterErr('template_error', 422, { detail: e.detail }); throw e; }
+    const sha = await sha256Hex(bytes);
+    const { ref, revision } = c.next;
+    const path = exitLetterPath(c.emp.id, ref, revision, sha, crypto.randomUUID());
+    const up = await storageFetch(`/object/${DOC_BUCKET}/${path}`, env, {
+      method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: bytes,
+    }).catch(() => ({ ok: false, status: 0 }));
+    if (!up.ok) return exitLetterErr('pdf_store_failed', 502);   // nothing referenced it; a fresh path is never reused
+    let r;
+    try {
+      r = await hiringRpc(env, 'exit_letter_issue', {
+        exit_id: c.exit.id, kind: d.kind, expected_ref: ref, expected_revision: revision, year: Number(c.issueDate.slice(0, 4)),
+        template_id: c.template.id, signatory_id: c.signatory.id, issue_date: c.issueDate, sha256: sha, storage_path: path,
+        file_name: exitLetterFileName(ref, revision), file_size: bytes.length, title: exitLetterTitle(d.kind, ref, revision),
+        actor_user_id: auth.userId, actor_employee_id: me?.id || null,
+      });
+    } catch (e) { r = { ok: false, status: 0, data: { message: String(e?.message || e) } }; }
+    if (r.ok) return ok({ letter: r.data?.letter || null, document: r.data?.document || null });
+    if (!definiteRaise(r)) {
+      // Maybe committed: keep the file; if a row holds it, that IS the issued letter.
+      const held = await letterHoldingPath(env, path);
+      if (held.ok && held.letter) return ok({ letter: held.letter, document: held.document });
+      return x1DbError(r);
+    }
+    await storageFetch(`/object/${DOC_BUCKET}/${path}`, env, { method: 'DELETE' }).catch(() => null);
+    const code = rpcError(r);
+    if (code === 'podium_before_lwd') return exitLetterErr('before_lwd');
+    if (code !== 'podium_ref_conflict') return x1DbError(r);
+    if (revision !== 1) return exitLetterErr('ref_conflict', 409);   // a revision race — the user re-checks, no silent r2
+  }
+  return exitLetterErr('ref_conflict', 409);
+}
+
+// GET getExitLetterUrl?letter_id= — self-serve: HR, or the person the letter is for (their own, after they leave
+// HR's view). A short-lived signed URL to the stored file; the document must sit under that employee's prefix.
+export async function getExitLetterUrl(url, auth, env) {
+  const id = url.searchParams.get('letter_id');
+  if (!isUuid(id)) return err('letter_id required', 400);
+  const lr = await sb(`/rest/v1/exit_letters?id=eq.${id}&select=id,employee_id,document_id&limit=1`, env);
+  if (!lr.ok) return err('db_error', 500);
+  const l = lr.data?.[0];
+  if (!l) return err('not_found', 404);
+  if (!isHr(auth)) {
+    const edges = await loadOrgEdgesStrict(env);
+    if (!edges) return x1Err('org_check_failed', 503);
+    const me = callerEmployee(edges, auth.userId);
+    if (!me || me.id !== l.employee_id) return err('forbidden', 403);
+  }
+  const dr = await sb(`/rest/v1/documents?id=eq.${l.document_id}&select=id,employee_id,storage_path,file_name,mime_type&limit=1`, env);
+  if (!dr.ok) return err('db_error', 500);
+  const doc = dr.data?.[0];
+  if (!doc || doc.employee_id !== l.employee_id || !String(doc.storage_path).startsWith(`${l.employee_id}/`)) return err('forbidden', 403);
+  const seg = String(doc.storage_path).split('/').map(encodeURIComponent).join('/');
+  const sr = await storageFetch(`/object/sign/${DOC_BUCKET}/${seg}`, env, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresIn: 120 }),
+  });
+  if (!sr.ok || !sr.data?.signedURL) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  return ok({ url: `${env.SUPABASE_URL}/storage/v1${sr.data.signedURL}`, file_name: doc.file_name, mime_type: doc.mime_type });
+}
+
+// GET getExitLetterTemplates (HR) — every version of both templates (current first per key) + the merge fields.
+async function getExitLetterTemplates(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const r = await sb(`/rest/v1/exit_letter_templates?select=*&order=template_key.asc,version.desc`, env);
+  if (!r.ok) return err('db_error', 500);
+  return ok({ templates: r.data || [], fields: EXIT_LETTER_FIELDS, kinds: EXIT_LETTER_KINDS });
+}
+
+function cleanExitLetterTemplate(d) {
+  if (!EXIT_LETTER_KINDS.includes(d.template_key)) return { error: 'bad_kind' };
+  const title = String(d.title || '').trim();
+  const body = String(d.body || '').replace(/\r\n?/g, '\n').trim();
+  const entity = String(d.entity_name || '').trim();
+  if (!title || title.length > 120 || !body || body.length > 20000 || !entity) return { error: 'bad_template' };
+  const addr = (Array.isArray(d.entity_address) ? d.entity_address : String(d.entity_address || '').split('\n'))
+    .map(x => String(x).trim()).filter(Boolean);
+  if (addr.length > 6) return { error: 'bad_template' };
+  return { t: { template_key: d.template_key, title, body, entity_name: entity, entity_address: addr,
+    footer_note: String(d.footer_note || '').trim() || null, notes: String(d.notes || '').trim() || null } };
+}
+
+// POST previewExitLetterTemplate {template_key, title, body, entity_name, entity_address} (HR) — the editor's
+// Preview, with synthetic sample data (never a real person).
+async function previewExitLetterTemplate(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const ci = cleanExitLetterTemplate(body.data || body);
+  if (ci.error) return exitLetterErr(ci.error, 400);
+  const bad = validateExitLetterBody(ci.t.body);
+  if (bad) return exitLetterErr('template_error', 422, { detail: bad });
+  return ok({ view: exitLetterView(sampleExitLetterArgs(ci.t, ci.t.template_key)) });
+}
+
+// POST saveExitLetterTemplate {template_key, title, body, entity_name, entity_address, footer_note, notes} (HR) — a new
+// version, made current. Issued letters keep the version they used (exit_letters.template_id).
+async function saveExitLetterTemplate(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const ci = cleanExitLetterTemplate(body.data || body);
+  if (ci.error) return exitLetterErr(ci.error, 400);
+  // Dry render: an unknown merge field or unclosed section never becomes a current template.
+  const bad = validateExitLetterBody(ci.t.body);
+  if (bad) return exitLetterErr('template_error', 422, { detail: bad });
+  const r = await hiringRpc(env, 'exit_letter_template_new_version', { ...ci.t, actor_user_id: auth.userId });
+  if (!r.ok) return x1DbError(r);
+  return ok(r.data?.template || null);
+}
+// ── end X1b
+
 // ── end X1
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -10989,6 +11229,8 @@ const GET_ACTIONS = {
   getWorkAccount, checkWorkEmail,
   // X1 — exits (getExit is self-serve, self-scoped by exitCtx; the rest need podium_view)
   getExit, getExits, getExitChecklist, getMyTeamExits,
+  // X1b — relieving + experience letters (requireHr inside)
+  previewExitLetter, getExitLetterTemplates, getExitLetterUrl,
   // J2 — onboarding + profile completion (self-serve ones listed in SELF_SERVE_GET)
   getMyProfile, getPolicyFile, getOnboarding, getEmployeePrivate, exportXPayroll,
   getOnboardingBoard, getProfileCompletion, getProfileChangeRequests, getOnboardingTemplate, getPolicies,
@@ -11049,6 +11291,8 @@ const POST_ACTIONS = {
   // X1 — exits (startExit is self-serve, self-scoped by exitCtx; the rest need podium_view)
   startExit, updateExitItem, updateExit, cancelExit, closeExit, backfillExit, actGoogleExitItem,
   saveExitChecklistLine, saveExitTool, revokeExitedAccess, openGoogleExitItem,
+  // X1b — relieving + experience letters (requireHr inside)
+  issueExitLetter, previewExitLetterTemplate, saveExitLetterTemplate,
   // J2 — onboarding + profile completion (self-serve ones listed in SELF_SERVE_POST)
   saveMyProfile, createMyDocumentUploadUrl, recordMyDocument, acknowledgePolicy, updateOnboardingItem, withdrawMyChangeRequest,
   startOnboarding, completeOnboarding, cancelOnboarding, launchProfileCampaign, decideProfileChange,
@@ -11100,6 +11344,8 @@ const SELF_SERVE_GET = new Set([
   // X1 — your own exit (Resign) / your reports' exits; exitCtx self-scopes (self, manager chain, HR).
   // getMyTeamExits = the caller's own chain only (the /me "Your team" list).
   'getExit', 'getMyTeamExits',
+  // X1b — the person's own issued letter (or HR): getExitLetterUrl checks isHr / callerEmployee = the letter's employee.
+  'getExitLetterUrl',
   // J2 — a brand-new joiner holds NO Podium role, so their own profile / policies / onboarding must be here.
   // getMyProfile self-scopes on auth_user_id; getPolicyFile = HR or a policy that applies to the caller;
   // getOnboarding self-scopes via onboardingCtx (self, manager chain, HR); getEmployeePrivate = self / HR / comp

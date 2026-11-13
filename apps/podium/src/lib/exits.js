@@ -100,7 +100,33 @@ const COPY = {
   leave_after_lwd: 'This person has leave pending or approved after the last working day — cancel it first',
   leave_pending: 'This person has a leave request still pending — decide or withdraw it first',
   leave_changed: 'Leave changed since the balance was confirmed — confirm it again',
+  // X1b — relieving + experience letters
+  bad_kind: 'Pick relieving or experience letter',
+  exit_cancelled: 'This exit was cancelled — no letters for it',
+  no_joining_date: 'This person has no joining date on record — add it before an experience letter',
+  no_designation: 'This person has no designation on record — add it first',
+  bad_signatory: 'Pick an active signatory (not the person leaving)',
+  template_error: 'The letter template has an unknown field or an unclosed section — fix it under Admin → Exit checklist → Letter templates',
+  template_missing: 'No current template for this letter',
+  pdf_store_failed: 'The PDF could not be stored — try again',
+  ref_conflict: 'Another letter was issued at the same moment — try again',
+  bad_template: 'Title, body and the entity name are required',
+  letter_is_record: 'An issued letter is the record and cannot be deleted — issue a new revision instead',
+  no_self_letter: 'You cannot issue your own relieving or experience letter — another HR person does',
+  unsupported_characters: 'A value on the letter has a character the PDF font cannot print — correct it on the person’s record first',
+  letters_issued: 'Letters were already issued for this exit — it can’t be cancelled; ask Afshaan',
 };
+// X1b: the same codes on the letters panel, where before_lwd means the letter (not the close).
+export const EXIT_LETTER_KINDS = [
+  { id: 'relieving', label: 'Relieving letter' },
+  { id: 'experience', label: 'Experience letter' },
+];
+export function letterError(e) {
+  const code = ((e && e.message) || '').split(/[:\s]/)[0];
+  if (code === 'before_lwd') return 'Letters are issued on or after the last working day';
+  return exitError(e);
+}
+export function letterBlockText(code) { return code ? letterError({ message: code }) : ''; }
 export function exitError(e, fallback = 'Something went wrong') {
   const msg = (e && e.message) || '';
   const code = msg.split(/[:\s]/)[0];

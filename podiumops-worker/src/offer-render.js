@@ -91,19 +91,20 @@ export function offerFields({ offer = {}, signatory = null, candidate = null, en
   };
 }
 
-// body + fields → paragraphs (each an array of lines). Throws TemplateError.
-export function mergeBody(body, fields) {
+// body + fields → paragraphs (each an array of lines). Throws TemplateError. allowed = the template family's
+// field set (offers by default; the X1b exit letters pass their own — src/exit-letters.js).
+export function mergeBody(body, fields, allowed = FIELD_SET) {
   let s = String(body ?? '').replace(/\r\n?/g, '\n');
   const SECTION = /\{\{#\s*([a-z_]+)\s*\}\}([\s\S]*?)\{\{\/\s*\1\s*\}\}/;
   for (let guard = 0; guard < 200; guard++) {
     const m = s.match(SECTION);
     if (!m) break;
-    if (!FIELD_SET.has(m[1])) throw new TemplateError(`unknown_field:${m[1]}`);
+    if (!allowed.has(m[1])) throw new TemplateError(`unknown_field:${m[1]}`);
     s = s.slice(0, m.index) + (fields[m[1]] ? m[2] : '') + s.slice(m.index + m[0].length);
   }
   if (/\{\{\s*[#/]/.test(s)) throw new TemplateError('unclosed_section');
   s = s.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (_, k) => {
-    if (!FIELD_SET.has(k)) throw new TemplateError(`unknown_field:${k}`);
+    if (!allowed.has(k)) throw new TemplateError(`unknown_field:${k}`);
     const val = fields[k];
     return val == null || typeof val === 'boolean' ? '' : String(val);
   });
@@ -189,6 +190,14 @@ function sanitizer(font) {
   };
 }
 
+// X1b: the same sanitizer without a document in hand — the exit letters refuse a value it would alter
+// (unsupported_characters) instead of printing a '?'. Built once per isolate.
+let cleanerP = null;
+export function letterTextCleaner() {
+  cleanerP = cleanerP || PDFDocument.create().then(d => d.embedFont(StandardFonts.Helvetica)).then(sanitizer);
+  return cleanerP;
+}
+
 function wrap(text, font, size, width) {
   const words = String(text).split(' ');
   const lines = [];
@@ -209,8 +218,12 @@ function pdfDate(iso) {
   return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - 5.5 * 3600 * 1000);
 }
 
-export async function renderOfferPdf({ template, offer, annexure, signatory, candidate = null }) {
-  const view = renderOfferText({ template, offer, annexure, signatory, candidate });
+// The shared letter layout (offer letters + X1b exit letters): letterhead on every page, centred title,
+// paragraphs, closing block, an optional extra section (the offer's annexure page), footer on every page, fixed
+// metadata. view = { title, letterhead: {entity_name, address_lines, phone}, paragraphs, closing: {salutation,
+// name, title}, footer }. ⚠️ Offer PDFs already issued are stored files whose SHA-256 is the record: the draw
+// order and every coordinate here are pinned by test/offer-render.test.mjs ("PDF bytes pinned").
+export async function renderLetterPdf(view, { issueDate = null, drawExtra = null } = {}) {
   const doc = await PDFDocument.create({ updateMetadata: false });
   const reg = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
@@ -236,79 +249,35 @@ export async function renderOfferPdf({ template, offer, annexure, signatory, can
     return { page, y: y - 22 };
   }
 
+  // L = the cursor (page, y) the extra section continues from.
+  const L = { reg, bold, clean, W, H, textW, left, right, page: null, y: 0 };
+  L.newPage = () => { ({ page: L.page, y: L.y } = newPage()); };
+  L.ensure = (need) => { if (L.y - need < BOTTOM) L.newPage(); };
+
   // Page 1+ — the letter.
-  let { page, y } = newPage();
+  L.newPage();
   const tsz = 15;
   const title = clean(view.title);
-  page.drawText(title, { x: (W - bold.widthOfTextAtSize(title, tsz)) / 2, y, size: tsz, font: bold, color: INK });
-  y -= 30;
+  L.page.drawText(title, { x: (W - bold.widthOfTextAtSize(title, tsz)) / 2, y: L.y, size: tsz, font: bold, color: INK });
+  L.y -= 30;
   const size = 10.5, lead = 14.5;
-  const ensure = (need) => { if (y - need < BOTTOM) ({ page, y } = newPage()); };
   for (const para of view.paragraphs) {
     for (const line of para) {
       for (const l of wrap(clean(line), reg, size, textW)) {
-        ensure(lead);
-        left(page, l, MX, y, reg, size);
-        y -= lead;
+        L.ensure(lead);
+        left(L.page, l, MX, L.y, reg, size);
+        L.y -= lead;
       }
     }
-    y -= 8;
+    L.y -= 8;
   }
-  ensure(lead * 3);
-  y -= 6;
-  left(page, view.closing.salutation, MX, y, reg, size); y -= lead;
-  if (view.closing.name) { left(page, view.closing.name, MX, y, bold, size); y -= lead; }
-  if (view.closing.title) { left(page, view.closing.title, MX, y, reg, 9.5, GREY); y -= lead; }
+  L.ensure(lead * 3);
+  L.y -= 6;
+  left(L.page, view.closing.salutation, MX, L.y, reg, size); L.y -= lead;
+  if (view.closing.name) { left(L.page, view.closing.name, MX, L.y, bold, size); L.y -= lead; }
+  if (view.closing.title) { left(L.page, view.closing.title, MX, L.y, reg, 9.5, GREY); L.y -= lead; }
 
-  // Annexure page.
-  if (view.annexure) {
-    const a = view.annexure;
-    ({ page, y } = newPage());
-    left(page, a.heading, MX, y, bold, 12.5); y -= 26;
-    const colR = [null, MX + 340, W - MX];   // right edges of the two figure columns
-    const rowH = 17, fs = 10;
-    const rightAt = (pg, t, xr, yy, f, s) => { const c = clean(t); pg.drawText(c, { x: xr - f.widthOfTextAtSize(c, s), y: yy, size: s, font: f, color: INK }); };
-    const hdr = (cells) => {
-      left(page, cells[0], MX, y, bold, fs);
-      rightAt(page, cells[1], colR[1], y, bold, fs);
-      rightAt(page, cells[2], colR[2], y, bold, fs);
-      y -= 6;
-      page.drawLine({ start: { x: MX, y }, end: { x: W - MX, y }, thickness: 0.6, color: RULE });
-      y -= rowH - 6;
-    };
-    hdr(a.columns);
-    for (const r of a.rows) {
-      ensure(rowH);
-      const f = r.kind === 'subtotal' || r.kind === 'total' ? bold : reg;
-      if (r.kind === 'total') {
-        page.drawLine({ start: { x: MX, y: y + rowH - 5 }, end: { x: W - MX, y: y + rowH - 5 }, thickness: 0.6, color: RULE });
-      }
-      left(page, r.cells[0], MX, y, f, fs);
-      rightAt(page, r.cells[1], colR[1], y, f, fs);
-      rightAt(page, r.cells[2], colR[2], y, f, fs);
-      y -= rowH;
-    }
-    y -= 4;
-    for (const n of a.notes) {
-      for (const l of wrap(clean(n), reg, 9, textW)) { ensure(12); left(page, l, MX, y, reg, 9, GREY); y -= 12; }
-    }
-    if (a.deductions.length || a.in_hand) {
-      y -= 16; ensure(rowH * (a.deductions.length + 3));
-      left(page, 'Deductions and estimated monthly in-hand', MX, y, bold, 11); y -= 20;
-      for (const d of a.deductions) {
-        left(page, d.label, MX, y, reg, fs);
-        rightAt(page, d.value, colR[2], y, reg, fs);
-        y -= rowH;
-      }
-      if (a.in_hand) {
-        page.drawLine({ start: { x: MX, y: y + rowH - 5 }, end: { x: W - MX, y: y + rowH - 5 }, thickness: 0.6, color: RULE });
-        left(page, a.in_hand.label, MX, y, bold, fs);
-        rightAt(page, a.in_hand.value, colR[2], y, bold, fs);
-        y -= rowH;
-        if (a.in_hand.note) { left(page, a.in_hand.note, MX, y, reg, 9, GREY); y -= 12; }
-      }
-    }
-  }
+  if (drawExtra) drawExtra(L);
 
   // Footer on every page.
   const foot = clean(view.footer);
@@ -317,7 +286,7 @@ export async function renderOfferPdf({ template, offer, annexure, signatory, can
   }
 
   // Fixed metadata — no clock, no producer string with a version, so the bytes are reproducible.
-  const when = pdfDate(offer?.issue_date);
+  const when = pdfDate(issueDate);
   doc.setTitle(clean(`${view.title}${view.footer ? ` - ${view.footer}` : ''}`));
   if (view.letterhead.entity_name) doc.setAuthor(clean(view.letterhead.entity_name));
   doc.setCreator('Podium');
@@ -325,6 +294,61 @@ export async function renderOfferPdf({ template, offer, annexure, signatory, can
   doc.setCreationDate(when);
   doc.setModificationDate(when);
   return doc.save({ useObjectStreams: false });
+}
+
+// The offer's annexure page (CTC break-up / stipend), drawn after the letter on a page of its own.
+function drawAnnexure(L, a) {
+  const { reg, bold, clean, W, textW, left } = L;
+  L.newPage();
+  left(L.page, a.heading, MX, L.y, bold, 12.5); L.y -= 26;
+  const colR = [null, MX + 340, W - MX];   // right edges of the two figure columns
+  const rowH = 17, fs = 10;
+  const rightAt = (pg, t, xr, yy, f, s) => { const c = clean(t); pg.drawText(c, { x: xr - f.widthOfTextAtSize(c, s), y: yy, size: s, font: f, color: INK }); };
+  const hdr = (cells) => {
+    left(L.page, cells[0], MX, L.y, bold, fs);
+    rightAt(L.page, cells[1], colR[1], L.y, bold, fs);
+    rightAt(L.page, cells[2], colR[2], L.y, bold, fs);
+    L.y -= 6;
+    L.page.drawLine({ start: { x: MX, y: L.y }, end: { x: W - MX, y: L.y }, thickness: 0.6, color: RULE });
+    L.y -= rowH - 6;
+  };
+  hdr(a.columns);
+  for (const r of a.rows) {
+    L.ensure(rowH);
+    const f = r.kind === 'subtotal' || r.kind === 'total' ? bold : reg;
+    if (r.kind === 'total') {
+      L.page.drawLine({ start: { x: MX, y: L.y + rowH - 5 }, end: { x: W - MX, y: L.y + rowH - 5 }, thickness: 0.6, color: RULE });
+    }
+    left(L.page, r.cells[0], MX, L.y, f, fs);
+    rightAt(L.page, r.cells[1], colR[1], L.y, f, fs);
+    rightAt(L.page, r.cells[2], colR[2], L.y, f, fs);
+    L.y -= rowH;
+  }
+  L.y -= 4;
+  for (const n of a.notes) {
+    for (const l of wrap(clean(n), reg, 9, textW)) { L.ensure(12); left(L.page, l, MX, L.y, reg, 9, GREY); L.y -= 12; }
+  }
+  if (a.deductions.length || a.in_hand) {
+    L.y -= 16; L.ensure(rowH * (a.deductions.length + 3));
+    left(L.page, 'Deductions and estimated monthly in-hand', MX, L.y, bold, 11); L.y -= 20;
+    for (const d of a.deductions) {
+      left(L.page, d.label, MX, L.y, reg, fs);
+      rightAt(L.page, d.value, colR[2], L.y, reg, fs);
+      L.y -= rowH;
+    }
+    if (a.in_hand) {
+      L.page.drawLine({ start: { x: MX, y: L.y + rowH - 5 }, end: { x: W - MX, y: L.y + rowH - 5 }, thickness: 0.6, color: RULE });
+      left(L.page, a.in_hand.label, MX, L.y, bold, fs);
+      rightAt(L.page, a.in_hand.value, colR[2], L.y, bold, fs);
+      L.y -= rowH;
+      if (a.in_hand.note) { left(L.page, a.in_hand.note, MX, L.y, reg, 9, GREY); L.y -= 12; }
+    }
+  }
+}
+
+export async function renderOfferPdf({ template, offer, annexure, signatory, candidate = null }) {
+  const view = renderOfferText({ template, offer, annexure, signatory, candidate });
+  return renderLetterPdf(view, { issueDate: offer?.issue_date, drawExtra: view.annexure ? (L) => drawAnnexure(L, view.annexure) : null });
 }
 
 // O1 — the acceptance certificate: the issued PDF's pages untouched, plus one page of evidence lines

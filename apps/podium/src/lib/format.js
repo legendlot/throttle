@@ -26,6 +26,8 @@ export const DOC_TYPES = [
   { id: 'address_proof',        label: 'Address Proof' },
   { id: 'appraisal_letter',     label: 'Appraisal Letter' },
   { id: 'increment_letter',     label: 'Increment Letter' },
+  { id: 'relieving_letter',     label: 'Relieving Letter' },
+  { id: 'experience_letter',    label: 'Experience Letter' },
   { id: 'other',                label: 'Other' },
 ];
 

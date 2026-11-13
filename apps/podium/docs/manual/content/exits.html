@@ -29,6 +29,32 @@
 <h2 class="sec">Closing the exit</h2>
 <p>HR sees <strong>Close exit</strong> and <strong>Cancel exit</strong> at the bottom. Under <strong>Before it can close</strong> Podium lists the live blockers: it is before the last working day, required lines are open, assets still assigned, open Docket tasks. Close stays greyed out until the list is empty. On close, the person becomes <strong>Exited</strong> on their last working day, their LOT login, Podium role and salary access end, and their direct reports move up a level. <strong>Closing is the only way to mark someone exited</strong>; the Google sync no longer exits anyone. <strong>Cancel exit</strong> (for example a withdrawn resignation) asks for a reason. After closing, HR can still add exit-interview notes and the private rehire flag.</p>
 
+<h2 class="sec">Relieving and experience letters</h2>
+<p>HR issues both letters from Podium. They appear in the <strong>Relieving and experience letters</strong> area: on the <strong>Relieving letters</strong> line of the checklist while the exit is open, and on the Exit card once it is closed. Letters are available <strong>on or after the last working day</strong>, on open and closed exits, but never on a cancelled exit.</p>
+<ol class="steps">
+  <li><span class="s-title">Pick the letter.</span> Press <strong>Relieving letter</strong> or <strong>Experience letter</strong>. If one has already been issued the button reads <strong>Re-issue&hellip;</strong>.</li>
+  <li><span class="s-title">Pick a signatory.</span> Choose from the active signatories. The person leaving cannot sign their own letter.</li>
+  <li><span class="s-title">Preview.</span> The letter is shown as it will be issued, with its reference, date and template version. If something blocks it, a warning says what and <strong>Issue</strong> stays greyed out.</li>
+  <li><span class="s-title">Press Issue</span> and confirm.</li>
+</ol>
+<ul>
+  <li><strong>References.</strong> Relieving letters are numbered <code>REL-YYYY-NNN</code> and experience letters <code>EXP-YYYY-NNN</code>. <strong>Re-issuing keeps the same reference</strong> and bumps the revision (r2, r3&hellip;); the earlier revisions stay on record.</li>
+  <li><strong>Where they are stored.</strong> Each letter is saved as a PDF among the person's documents, visible to HR and to the person. It can be downloaded from the list under the line. An issued letter is the record and cannot be deleted; issue a new revision instead.</li>
+  <li><strong>Podium never emails them.</strong> HR downloads the PDF and sends it.</li>
+  <li><strong>The checklist line is separate.</strong> Issuing a letter does not tick <strong>Relieving letters</strong>. HR ticks <strong>Done</strong> themselves; once both letters exist, the document attached to that tick defaults to the latest relieving letter.</li>
+</ul>
+<div class="callout warn">
+  <div class="c-title">&#9888; When a letter is refused</div>
+  <p>The <strong>experience</strong> letter is refused if the person has no <strong>joining date</strong> on record. Both letters are refused if they have no <strong>designation</strong>. Fix the profile first, then preview again. Issuing before the last working day is also refused (&ldquo;Letters are issued on or after the last working day&rdquo;).</p>
+</div>
+
+<h2 class="sec">Editing the letter wording</h2>
+<p>HR edits the wording at <strong>Admin &rarr; Exit Checklist</strong>, in the <strong>Letter templates</strong> card at the bottom. Pick Relieving or Experience, then change the title, body, entity name and letterhead address. The body uses merge fields such as <code>{{employee_name}}</code> (the full list is shown under the editor); a blank line starts a new paragraph. Add a short version note, press <strong>Preview</strong> to see it with sample data, then <strong>Save new version</strong>. Each save makes a new version that is used from then on; letters already issued keep the version they were made with. A template with an unknown field or an unclosed section cannot be saved.</p>
+<div class="callout warn">
+  <div class="c-title">&#9888; Draft wording</div>
+  <p>The first version (v1) of both letters is a draft awaiting Afshaan's approval. Check it before relying on it for real leavers.</p>
+</div>
+
 <h2 class="sec">The Exits page</h2>
 <p>Four cards, top to bottom:</p>
 <div class="anatomy">
@@ -39,5 +65,5 @@
 </div>
 <div class="callout note">
   <div class="c-title">&#9432; Checklist lines are editable</div>
-  <p>HR can change which lines exist and who owns them at <strong>Admin &rarr; Exit Checklist</strong>.</p>
+  <p>HR can change which lines exist and who owns them at <strong>Admin &rarr; Exit Checklist</strong>, where the letter wording is also edited.</p>
 </div>

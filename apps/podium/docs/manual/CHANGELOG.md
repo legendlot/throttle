@@ -3,6 +3,14 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.10.0] - 2026-11-13
+### Added
+- Exits chapter: relieving and experience letters (X1b). HR only; on or after the last working day, on open and
+  closed exits (not cancelled); signatory, preview, Issue; REL/EXP references with revisions on re-issue; stored
+  as the person's documents; never emailed by Podium; issuing does not tick the checklist line; when a letter is
+  refused (no joining date, no designation); editing wording under Exit Checklist, Letter templates (draft v1 wording,
+  awaiting approval).
+
 ## [1.9.1] - 2026-11-13
 ### Changed
 - Leave: work from home is approved by the manager (the manager's manager or HR can also approve it);
