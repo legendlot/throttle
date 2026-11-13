@@ -58,5 +58,7 @@ export const EVENT_LABEL = {
   handoff_set: 'Hand-off set',               // F9 R8 — new_value = receiving department id, note = receiver
   handoff_cleared: 'Hand-off cleared',
   handoff_accepted: 'Hand-off accepted',
+  checklist_linked: 'Checklist linked',        // F8 P2 — the worker renders the record title behind its space gate
+  checklist_unlinked: 'Checklist unlinked',
 };
 export function eventLabel(ev) { return EVENT_LABEL[ev] || ev; }

@@ -38,7 +38,9 @@ export async function docketopsGet(action, params = {}, session) {
 // Plan writes (F9) hold no tasks either — a split re-links tasks but moves none between spaces; proposals
 // (R3) hold none at all.
 // R9a: saving / archiving a template holds no tasks (applying one creates tasks — it refreshes).
-const NO_COUNT_CHANGE = /ScratchNote|Checklist|PlanItem|Proposal|Review|FounderFocus|saveTemplate|archiveTemplate/i;
+// F8 P2: record writes hold no tasks (…Checklist… covers create / update / link) — except
+// createTaskFromRecordItem, which creates one and so is deliberately NOT matched here.
+const NO_COUNT_CHANGE = /ScratchNote|Checklist|PlanItem|Proposal|Review|FounderFocus|saveTemplate|archiveTemplate|setRecordItemState|addRecordItem|pullTemplateUpdates/i;
 
 export async function docketopsPost(action, body = {}, session) {
   const res = await fetch(`${DK_URL}/?action=${action}`, {

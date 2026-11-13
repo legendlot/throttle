@@ -31,6 +31,8 @@
  * Spec: docs/superpowers/specs/2026-06-03-docket-design.md ; systems/docket.md
  */
 import { istDateStr, isExpired, isDueOn, istHM, lateFlag, buildRegister } from './register-core.mjs';
+import { recordProgress, progressLabel, flattenTemplate, snapshotRows, templateDiff, itemStatePatch, itemEvent, suggestTick,
+  linkAllowed, templateItemsDiff, searchTerm, unarchivedStatus, RECORD_STATUSES, RECORD_TITLE_MAX, ITEM_TITLE_MAX } from './records-core.mjs';
 import { isUuid, validatePlanFields, validateActPayload, planErrStatus, PLAN_ACT_ACTIONS,
   linkError, effectiveLink, taskPlan, planLinkLabel, planDbError,
   validateSplitPayload, validateProposal, validateDecision, PROPOSAL_MAX } from './plan-core.mjs';
@@ -488,6 +490,20 @@ function canEditTemplate(auth, tmpl) {
 async function loadTemplate(id, env) {
   const r = await sbDocket(`/rest/v1/checklist_templates?id=eq.${enc(id)}&select=*&limit=1`, env);
   return (r.ok && r.data?.[0]) || null;
+}
+// F8 P2: 'routine' (S127 / P1 — recurring, assigned, ticked per date) or 'record' (copied per subject, ticked once).
+const TEMPLATE_KINDS = ['routine', 'record'];
+const RECORD_RECURRENCE = { freq: 'none' };   // isDueOn → never due; record templates are never assigned
+// A template's sections, each with its items (paged reads, not one per section) — for snapshots, pulls and the
+// version diff. null when either read fails: a half-read template must never become a record or a diff.
+async function templateSections(templateId, env) {
+  const sr = await sbAll(sbDocket, `/rest/v1/checklist_template_sections?template_id=eq.${enc(templateId)}&select=id,title,sort_order&order=sort_order.asc,id.asc`, env);
+  if (!sr.ok) return null;
+  const secs = sr.data || [];
+  const ir = await sbInAll(sbDocket, secs.map(x => x.id), l => `/rest/v1/checklist_template_items?section_id=in.${l}&select=id,section_id,title,help_text,sort_order&order=sort_order.asc,id.asc`, env);
+  if (!ir.ok) return null;
+  const bySec = {}; (ir.data || []).forEach(i => { (bySec[i.section_id] ||= []).push(i); });
+  return secs.map(x => ({ ...x, items: bySec[x.id] || [] }));
 }
 // The set of employee_ids a caller may MONITOR (Oversight scope, R1):
 // view_all → everyone; else direct reports ∪ people I assigned a template/recurring task to.
@@ -1112,9 +1128,16 @@ async function getTask(url, auth, env) {
   // stores the item id only (never a title); it is rendered here at the viewer's level.
   const planHistIds = uniq((histRes.data || []).filter(h => h.field === 'plan_item_id')
     .flatMap(h => [h.old_value, h.new_value]).filter(v => isUuid(v || '')));
-  const [links, depCards, planCtx] = await Promise.all([
+  // F8 P2: linked records (one you can't open is a count only) and the records named in checklist_linked /
+  // _unlinked history rows (id only → the title when visible, else "a checklist you can't see").
+  const clHistIds = uniq((histRes.data || []).filter(h => h.field === 'checklist').flatMap(h => [h.old_value, h.new_value]).filter(v => isUuid(v || '')));
+  const [links, depCards, planCtx, cls, clLabels] = await Promise.all([
     buildLinks(task.id, auth, env), taskCards(depIds, auth, env), planContext([task], auth, env, planHistIds),
+    taskChecklists(task.id, auth, env), checklistLabels(clHistIds, auth, env),
   ]);
+  // A failed checklist read never fails the task: the strip shows nothing and says it couldn't load.
+  const clsOk = !cls.error;
+  const clLabel = v => (isUuid(v || '') ? (clLabels[v] || 'a checklist you can’t see') : v);
   const depLabel = v => (v && /^[0-9a-f-]{36}$/i.test(v)) ? cardLabel(depCards[v]) : v;
   const planLabel = v => (isUuid(v || '') ? planLinkLabel(taskPlan(planCtx.links[v])) : null);
   const planned = withPlan(task, planCtx);
@@ -1144,12 +1167,16 @@ async function getTask(url, auth, env) {
       ...h, actor_name: userName[h.actor_user_id] || null,
       ...(h.field === 'dependency' ? { old_value: depLabel(h.old_value), new_value: depLabel(h.new_value) } : {}),
       ...(h.field === 'plan_item_id' ? { old_value: planLabel(h.old_value), new_value: planLabel(h.new_value) } : {}),
+      ...(h.field === 'checklist' ? { old_value: clLabel(h.old_value), new_value: clLabel(h.new_value) } : {}),
       ...(h.field === 'handoff' ? { old_value: deptName[h.old_value] || (h.old_value ? 'a team' : null), new_value: deptName[h.new_value] || (h.new_value ? 'a team' : null),
         note: isUuid(h.note || '') ? (empName[h.note] || 'someone') : h.note } : {}),
       // done-vs-abandoned of a blocker you can't open is not yours to know (hostile review #5).
       ...(h.event_type === 'unblocked' && !depCards[h.new_value]?.visible ? { note: null } : {}),
     })),
     links,
+    checklists: clsOk ? cls.list : [],
+    checklists_hidden: clsOk ? cls.hidden : 0,
+    ...(clsOk ? {} : { checklists_failed: true }),
     _can_edit: canEditTask(auth, task),
   });
 }
@@ -1881,22 +1908,45 @@ async function toggleChecklistOccurrence(body, auth, env) {
 async function saveChecklistTemplate(body, auth, env) {
   const d = body.data || body;
   if (!d.name || !String(d.name).trim()) return err('name required', 400);
-  const recErr = validateTemplateRecurrence(d.recurrence); if (recErr) return err(recErr, 400);
-  const rec = normalizeTemplateRecurrence(d.recurrence);
+  if (d.kind !== undefined && !TEMPLATE_KINDS.includes(d.kind)) return err('bad_kind', 400);
   const sectionsIn = Array.isArray(d.sections) ? d.sections : [];
 
-  let template;
+  let template, before = [], curSecs = [];
   if (d.id) {
     template = await loadTemplate(d.id, env);
     if (!template) return err('not_found', 404);
     if (!canEditTemplate(auth, template)) return err('forbidden', 403);
+    // F8 P2: a template's kind is fixed at creation (records snapshot a record template; routines carry ticks).
+    if (d.kind !== undefined && d.kind !== (template.kind || 'routine')) return err('kind_locked', 422);
+    const secs = await templateSections(d.id, env);
+    if (!secs) return err('db_error: template', 500);   // the version diff must see the whole template
+    before = flattenTemplate(secs);
+    curSecs = secs;
+  }
+  // Only this template's sections and items are written (an editor of A must not rewrite B's rows by id) —
+  // refused before anything is written.
+  const existSecIds = curSecs.map(x => x.id);
+  const ownItemIds = new Set(curSecs.flatMap(x => x.items.map(i => i.id)));
+  if (sectionsIn.some(x => x.id && !existSecIds.includes(x.id))) return err('section_not_in_template', 422);
+  const payloadItemIds = new Set(sectionsIn.flatMap(x => (Array.isArray(x.items) ? x.items : []).map(i => i.id).filter(Boolean)));
+  if ([...payloadItemIds].some(id => !ownItemIds.has(id))) return err('item_not_in_template', 422);
+  const kind = template ? (template.kind || 'routine') : (d.kind || 'routine');
+  // A record template has no cadence (C3: copied per subject, ticked once) — it stores the inert { freq: 'none' }.
+  let rec = RECORD_RECURRENCE;
+  if (kind === 'routine') {
+    const recErr = validateTemplateRecurrence(d.recurrence); if (recErr) return err(recErr, 400);
+    rec = normalizeTemplateRecurrence(d.recurrence);
+  }
+  const diff = templateItemsDiff(before, sectionsIn);
+
+  if (d.id) {
     const upd = {
       name: String(d.name).trim(), role_label: d.role_label || null,
       department_id: d.department_id || null, description: d.description || null,
       recurrence: rec, is_active: d.is_active !== false,
       updated_at: nowIso(), updated_by_user_id: auth.userId,
     };
-    if (d.run_scope !== undefined) {
+    if (d.run_scope !== undefined && kind === 'routine') {
       const want = d.run_scope === 'shared' ? 'shared' : 'per_person';
       if (want !== (template.run_scope || 'per_person')) {
         // Switching chart type would re-read every past tick differently — locked once anything is ticked.
@@ -1919,25 +1969,20 @@ async function saveChecklistTemplate(body, auth, env) {
         name: String(d.name).trim(), role_label: d.role_label || null,
         department_id: d.department_id || null, description: d.description || null,
         recurrence: rec, created_by_user_id: auth.userId,
-        run_scope: d.run_scope === 'shared' ? 'shared' : 'per_person',
+        run_scope: kind === 'routine' && d.run_scope === 'shared' ? 'shared' : 'per_person',
+        kind, version: 1,
       }]) });
     if (!r.ok || !r.data?.[0]) return err('create_failed: ' + JSON.stringify(r.data), 400);
     template = r.data[0];
   }
 
-  // Diff-upsert sections + items. Delete sections/items not present in the payload
-  // (CASCADE drops their items + any completions/comments — acceptable: editing structure).
-  // Bounded fan-out (a template has ~7 sections × ~8 items, well under the 50-subrequest limit).
-  const existSecRes = await sbDocket(
-    `/rest/v1/checklist_template_sections?template_id=eq.${enc(template.id)}&select=id`, env);
-  const existSecIds = (existSecRes.data || []).map(s => s.id);
-  const keepSecIds = sectionsIn.map(s => s.id).filter(Boolean);
-  const dropSecIds = existSecIds.filter(id => !keepSecIds.includes(id));
-  if (dropSecIds.length) {
-    await sbDocket(`/rest/v1/checklist_template_sections?id=in.${inList(dropSecIds)}`, env,
-      { method: 'DELETE', prefer: 'return=minimal' });
-  }
-
+  // Diff-upsert sections + items. Moves are written BEFORE anything is dropped: an item is deleted only when its
+  // id is nowhere in the payload (one DELETE after the loop), and dropped sections go last, so their CASCADE takes
+  // only items that left the template (and their completions / comments — acceptable: editing structure). Every
+  // write is checked: on a failure nothing more is written, the version is not bumped, and the answer carries the
+  // template id (a create is already committed).
+  const fail = (code, r) => json({ ok: false, error: `${code}: ` + JSON.stringify(r?.data ?? null), id: template.id, partial: true }, 400);
+  const ownSecIds = [...existSecIds];
   for (let si = 0; si < sectionsIn.length; si++) {
     const s = sectionsIn[si];
     const secRow = {
@@ -1948,24 +1993,17 @@ async function saveChecklistTemplate(body, auth, env) {
     };
     let sectionId = s.id;
     if (sectionId) {
-      await sbDocket(`/rest/v1/checklist_template_sections?id=eq.${enc(sectionId)}`, env,
+      const sr = await sbDocket(`/rest/v1/checklist_template_sections?id=eq.${enc(sectionId)}&template_id=eq.${enc(template.id)}`, env,
         { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(secRow) });
+      if (!sr.ok) return fail('section_failed', sr);
     } else {
       const sr = await sbDocket(`/rest/v1/checklist_template_sections`, env,
         { method: 'POST', body: JSON.stringify([secRow]) });
-      if (!sr.ok || !sr.data?.[0]) return err('section_failed: ' + JSON.stringify(sr.data), 400);
+      if (!sr.ok || !sr.data?.[0]) return fail('section_failed', sr);
       sectionId = sr.data[0].id;
+      ownSecIds.push(sectionId);
     }
     const itemsIn = Array.isArray(s.items) ? s.items : [];
-    const existItemRes = await sbDocket(
-      `/rest/v1/checklist_template_items?section_id=eq.${enc(sectionId)}&select=id`, env);
-    const existItemIds = (existItemRes.data || []).map(i => i.id);
-    const keepItemIds = itemsIn.map(i => i.id).filter(Boolean);
-    const dropItemIds = existItemIds.filter(id => !keepItemIds.includes(id));
-    if (dropItemIds.length) {
-      await sbDocket(`/rest/v1/checklist_template_items?id=in.${inList(dropItemIds)}`, env,
-        { method: 'DELETE', prefer: 'return=minimal' });
-    }
     const toInsert = [];
     for (let ii = 0; ii < itemsIn.length; ii++) {
       const it = itemsIn[ii];
@@ -1974,18 +2012,47 @@ async function saveChecklistTemplate(body, auth, env) {
         help_text: it.help_text || null, tags: sanitizeTags(it.tags), sort_order: ii,
       };
       if (it.id) {
-        await sbDocket(`/rest/v1/checklist_template_items?id=eq.${enc(it.id)}`, env,
+        const ir = await sbDocket(`/rest/v1/checklist_template_items?id=eq.${enc(it.id)}&section_id=in.${inList(ownSecIds)}`, env,
           { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(itemRow) });
+        if (!ir.ok) return fail('item_failed', ir);
       } else {
         toInsert.push(itemRow);
       }
     }
     if (toInsert.length) {
-      await sbDocket(`/rest/v1/checklist_template_items`, env,
+      const ir = await sbDocket(`/rest/v1/checklist_template_items`, env,
         { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(toInsert) });
+      if (!ir.ok) return fail('item_failed', ir);
     }
   }
-  return ok({ id: template.id });
+  const dropItemIds = [...ownItemIds].filter(id => !payloadItemIds.has(id));
+  if (dropItemIds.length) {
+    const dr = await sbDocket(`/rest/v1/checklist_template_items?id=in.${inList(dropItemIds)}&section_id=in.${inList(existSecIds)}`, env,
+      { method: 'DELETE', prefer: 'return=minimal' });
+    if (!dr.ok) return fail('item_drop_failed', dr);
+  }
+  const keepSecIds = sectionsIn.map(x => x.id).filter(Boolean);
+  const dropSecIds = existSecIds.filter(id => !keepSecIds.includes(id));
+  if (dropSecIds.length) {
+    const dr = await sbDocket(`/rest/v1/checklist_template_sections?id=in.${inList(dropSecIds)}&template_id=eq.${enc(template.id)}`, env,
+      { method: 'DELETE', prefer: 'return=minimal' });
+    if (!dr.ok) return fail('section_drop_failed', dr);
+  }
+  // F8 P2: bump the version when items were added, removed, renamed or reordered, and log every save. The
+  // structure is saved by now, so a failure here is reported as a flag on success, never as an error.
+  // Open records compare by source_item_id (pullTemplateUpdates), so the number is for people, not matching.
+  let version = Number(template.version) || 1;
+  const flags = {};
+  if (d.id && diff.changed) {
+    const v = await sbDocket(`/rest/v1/checklist_templates?id=eq.${enc(template.id)}`, env,
+      { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ version: version + 1 }) });
+    if (v.ok) version += 1; else flags.version_failed = true;
+  }
+  const h = await sbDocket(`/rest/v1/checklist_template_history`, env, { method: 'POST', prefer: 'return=minimal',
+    body: JSON.stringify({ template_id: template.id, event: d.id ? 'saved' : 'created', actor_user_id: auth.userId,
+      detail: { version, added: diff.added, removed: diff.removed, renamed: diff.renamed, reordered: diff.reordered } }) });
+  if (!h.ok) flags.history_failed = true;
+  return ok({ id: template.id, version, ...flags });
 }
 
 async function archiveChecklistTemplate(body, auth, env) {
@@ -1998,7 +2065,9 @@ async function archiveChecklistTemplate(body, auth, env) {
     method: 'PATCH', prefer: 'return=minimal',
     body: JSON.stringify({ archived_at: nowIso(), is_active: false, updated_at: nowIso(), updated_by_user_id: auth.userId }) });
   if (!r.ok) return err('archive_failed: ' + JSON.stringify(r.data), 400);
-  return ok({ archived: d.id });
+  const h = await sbDocket(`/rest/v1/checklist_template_history`, env, { method: 'POST', prefer: 'return=minimal',
+    body: JSON.stringify({ template_id: d.id, event: 'archived', actor_user_id: auth.userId, detail: {} }) });
+  return ok({ archived: d.id, ...(h.ok ? {} : { history_failed: true }) });
 }
 
 // ── Checklist template assignment (RULE-DOCKET-009) ─────────────────────────
@@ -2009,6 +2078,7 @@ async function assignChecklistTemplate(body, auth, env) {
   if (!d.template_id || !d.employee_id) return err('template_id + employee_id required', 400);
   const tmpl = await loadTemplate(d.template_id, env);
   if (!tmpl) return err('template_not_found', 404);
+  if (tmpl.kind === 'record') return err('record_template_not_assignable', 422);   // F8 P2: copied, not assigned
   const exists = await sbDocket(
     `/rest/v1/checklist_assignments?template_id=eq.${enc(d.template_id)}&employee_id=eq.${enc(d.employee_id)}&unassigned_at=is.null&select=id&limit=1`, env);
   if (exists.ok && exists.data?.length) return ok({ template_id: d.template_id, employee_id: d.employee_id, already: true });
@@ -2434,9 +2504,15 @@ async function bulkMoveTasks(body, auth, env) {
   const movable = editable.filter(t => !t.parent_task_id);
   const movableIds = new Set(movable.map(t => t.id));
   const orphanSubs = editable.filter(t => t.parent_task_id && !movableIds.has(t.parent_task_id)).length;
-  const skipped = ids.length - editable.length + orphanSubs;
-  const targets = movable.filter(t => t.space_id !== d.space_id);
-  if (!targets.length) return ok({ updated: 0, skipped, space_id: d.space_id });
+  let skipped = ids.length - editable.length + orphanSubs;
+  const moving = movable.filter(t => t.space_id !== d.space_id);
+  // F8 P2: tasks tied to a record checklist in another space (themselves or a sub-task) are skipped and named.
+  const rb = await recordMoveBlocks(moving.map(t => t.id), d.space_id, env);
+  if (rb.error) return rb.error;
+  const record_link_space = moving.filter(t => rb.blocked.has(t.id)).map(t => t.task_no);
+  const targets = moving.filter(t => !rb.blocked.has(t.id));
+  skipped += record_link_space.length;
+  if (!targets.length) return ok({ updated: 0, skipped, space_id: d.space_id, record_link_space });
   // A4: leaving the Founders' space needs a plan admin (spaceOf: keepAccessible read these spaces).
   if (!isPlanAdmin(auth) && targets.some(t => spaceOf(auth, t)?.is_founders)) return err('founders_move_out', 403);
   const targetIds = targets.map(t => t.id);
@@ -2459,7 +2535,7 @@ async function bulkMoveTasks(body, auth, env) {
   }
   await logHistoryBatch(env, auth, targets.map(t => ({
     task_id: t.id, event_type: 'space_changed', field: 'space_id', old: t.space_id, new: d.space_id })));
-  return ok({ updated: targets.length, skipped, space_id: d.space_id });
+  return ok({ updated: targets.length, skipped, space_id: d.space_id, record_link_space });
 }
 
 // Abandon N tasks with ONE reason.
@@ -2569,6 +2645,10 @@ async function moveTask(body, auth, env) {
   if (task.parent_task_id) return err('subtask_moves_with_parent: move its parent task instead', 422);
   // A4: a task leaves the Founders' space only with a plan admin (it stays founders-only, linked or not).
   if (TASK_SPACE.get(task)?.is_founders && !isPlanAdmin(auth)) return err('founders_move_out', 403);
+  // F8 P2: a task (or a sub-task moving with it) tied to a record checklist moves only where the link rule holds.
+  const rb = await recordMoveBlocks([task.id], d.space_id, env);
+  if (rb.error) return rb.error;
+  if (rb.blocked.size) return err(RECORD_LINK_SPACE, 422);
   // The R2 trigger refuses a move that would take a restricted-linked task out of the Founders' space.
   // Sub-tasks first (one level), checked: if the trigger refuses them nothing has moved; if the parent
   // is then refused, they go back. A parent never lands in a space without its children (review R2 #10).
@@ -4143,12 +4223,497 @@ async function applyTemplate(body, auth, env) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// F8 P2 — record checklists (spec 2026-11-11-docket-checklists-v2.md §3.2–3.4, decisions C3–C6; migration 0032)
+// A record is a copy of a kind='record' template for one subject ("Launch: Badger"). VISIBILITY = its space,
+// exactly like a task: by id through loadSpace + canAccessSpace (an archived private space stays readable by
+// its members — decisions 2026-11-13), lists through accessibleSpaces, tasks shown on it through
+// visibleTaskRows. A record in a space you can't open is a 404 by id, absent from lists, and on a task only a
+// count ("1 checklist you can't see"). Ticking (setRecordItemState), adding an item and pulling template
+// updates = anyone who can see it (C6). Title / owner / product / archive = the record's owner, its creator or
+// a docket_admin (RULE-DOCKET-009's edit pattern). Completion AND every history row are the DB triggers' (0032)
+// — a change and its history commit together; the worker only stamps the actor (updated_by_user_id /
+// created_by_user_id / removed_by_user_id) in the same write. Arithmetic is records-core.mjs.
+// LINK RULE: a task ↔ record link needs the record visible, edit rights on the task (as F7 dependencies), and
+// the record in the task's own space or in General — so a private / Founders' record is never named on a task
+// outside its space (link_cross_space). Moving a linked task (or an item's task, or a sub-task moving with its
+// parent) to a space where that no longer holds is refused (record_link_space — moveTask / bulkMoveTasks).
+// Every read whose emptiness would drive a write is checked: a failed read aborts, never reads as "nothing".
+// ════════════════════════════════════════════════════════════════════════════
+const sbPublic = sbProfile('public');
+const RECORD_COLS = 'id,template_id,template_version,title,product,space_id,owner_employee_id,status,created_by_user_id,created_at,updated_at,completed_at,archived_at';
+const RECORD_TASK_COLS = PW_TASK_COLS + ',archived_at';
+const dbErr = (r) => err('db_error: ' + JSON.stringify(r?.data ?? null), 500);
+// The record the caller may open by id → { rec, space } | null (→ 404, no existence leak).
+async function loadRecordFor(id, auth, env) {
+  if (!isUuid(String(id || ''))) return null;
+  const r = await sbDocket(`/rest/v1/checklist_records?id=eq.${enc(id)}&select=${RECORD_COLS}&limit=1`, env);
+  const rec = r.ok && r.data?.[0];
+  if (!rec) return null;
+  const space = await loadSpace(rec.space_id, env);
+  if (!space || !(await canAccessSpace(auth, space, env))) return null;
+  return { rec, space };
+}
+function canEditRecord(auth, rec) {
+  return isAdmin(auth) || rec.created_by_user_id === auth.userId || (!!auth.employeeId && rec.owner_employee_id === auth.employeeId);
+}
+// A write the 0032 trigger refused because the record is archived → 409; anything else → 400.
+function recordWriteErr(prefix, r) {
+  if (/record_archived/.test(JSON.stringify(r?.data ?? ''))) return err('record_archived', 409);
+  return err(prefix + JSON.stringify(r?.data ?? null), 400);
+}
+// Item states of many records (paged) → { [record_id]: [{state}] } | null on a failed read.
+async function recordItemStates(recordIds, env) {
+  const r = await sbInAll(sbDocket, recordIds, l => `/rest/v1/checklist_record_items?record_id=in.${l}&select=record_id,state&order=id.asc`, env);
+  if (!r.ok) return null;
+  const by = {}; (r.data || []).forEach(i => { (by[i.record_id] ||= []).push(i); });
+  return by;
+}
+// → true | false | null (the read failed)
+async function productExists(product, env) {
+  const r = await sbPublic(`/rest/v1/product_master?product=eq.${enc(product)}&select=product&limit=1`, env);
+  return r.ok ? !!r.data?.length : null;
+}
+async function activeEmployee(id, env) {
+  if (!isUuid(String(id || ''))) return false;
+  const r = await sbPodium(`/rest/v1/employees?id=eq.${enc(id)}&status=eq.active&select=id&limit=1`, env);
+  return r.ok ? !!r.data?.length : null;
+}
+const progressOf = (items) => { const p = recordProgress(items); return { ...p, label: progressLabel(p) }; };
+// Record titles behind the gate, for task_history rows naming a record (field 'checklist') → { id: title }.
+async function checklistLabels(ids, auth, env) {
+  if (!ids.length) return {};
+  const rr = await sbIn(sbDocket, ids, l => `/rest/v1/checklist_records?id=in.${l}&select=id,title,space_id`, env);
+  const vis = await keepAccessible(auth, (rr.ok && rr.data) || [], env);   // fails closed → "a checklist you can't see"
+  const out = {}; vis.forEach(r => { out[r.id] = r.title; });
+  return out;
+}
+
+// moveTask / bulkMoveTasks: which of these top-level tasks may NOT move to `targetSpaceId`, because they — or a
+// sub-task that moves with them — are linked to a record, or are a record item's task, whose space is neither
+// General nor the target. Batched (children, links, item tasks, records, spaces). → { blocked: Set } | { error }
+async function recordMoveBlocks(rootIds, targetSpaceId, env) {
+  if (!rootIds.length) return { blocked: new Set() };
+  const kr = await sbInAll(sbDocket, rootIds, l => `/rest/v1/tasks?parent_task_id=in.${l}&select=id,parent_task_id&order=id.asc`, env);
+  if (!kr.ok) return { error: dbErr(kr) };
+  const rootOf = new Map(rootIds.map(id => [id, id]));
+  (kr.data || []).forEach(k => rootOf.set(k.id, k.parent_task_id));
+  const all = [...rootOf.keys()];
+  const [lr, ir] = await Promise.all([
+    sbInAll(sbDocket, all, l => `/rest/v1/task_checklist_links?task_id=in.${l}&select=task_id,record_id&order=id.asc`, env),
+    sbInAll(sbDocket, all, l => `/rest/v1/checklist_record_items?task_id=in.${l}&select=task_id,record_id&order=id.asc`, env),
+  ]);
+  if (!lr.ok) return { error: dbErr(lr) };
+  if (!ir.ok) return { error: dbErr(ir) };
+  const pairs = [...(lr.data || []), ...(ir.data || [])];
+  if (!pairs.length) return { blocked: new Set() };
+  const rr = await sbIn(sbDocket, uniq(pairs.map(p => p.record_id)), l => `/rest/v1/checklist_records?id=in.${l}&select=id,space_id`, env);
+  if (!rr.ok) return { error: dbErr(rr) };
+  const sr = await sbIn(sbDocket, uniq((rr.data || []).map(r => r.space_id)), l => `/rest/v1/spaces?id=in.${l}&select=id,is_default`, env);
+  if (!sr.ok) return { error: dbErr(sr) };
+  const general = new Set((sr.data || []).filter(s => s.is_default).map(s => s.id));
+  const recSpace = new Map((rr.data || []).map(r => [r.id, r.space_id]));
+  const blocked = new Set();
+  for (const p of pairs) {
+    const sp = recSpace.get(p.record_id);
+    if (!sp || !linkAllowed({ id: sp, is_default: general.has(sp) }, targetSpaceId)) blocked.add(rootOf.get(p.task_id));
+  }
+  return { blocked };
+}
+const RECORD_LINK_SPACE = 'record_link_space: this task (or a sub-task) is tied to a record checklist in another space — it can move only to that space, or the checklist must be in General';
+
+// GET ?action=getChecklistRecords[&template_id][&product][&status=open|complete|archived|all][&owner_employee_id][&q][&limit]
+// Default status: everything but archived. q matches title or product (⌘K / + Link checklist).
+async function getChecklistRecords(url, auth, env) {
+  const q = url.searchParams;
+  const spaces = await accessibleSpaces(auth, env);
+  if (!spaces.length) return ok([]);
+  const spaceName = {}; spaces.forEach(s => { spaceName[s.id] = s.name; });
+  let path = `/rest/v1/checklist_records?space_id=in.${inList(spaces.map(s => s.id))}&select=${RECORD_COLS}`;
+  const status = q.get('status');
+  if (status === 'all') { /* every status */ }
+  else if (RECORD_STATUSES.includes(status)) path += `&status=eq.${status}`;
+  else path += `&status=neq.archived`;
+  if (isUuid(q.get('template_id') || '')) path += `&template_id=eq.${enc(q.get('template_id'))}`;
+  if (isUuid(q.get('owner_employee_id') || '')) path += `&owner_employee_id=eq.${enc(q.get('owner_employee_id'))}`;
+  if (q.get('product')) path += `&product=eq.${enc(q.get('product'))}`;
+  const term = searchTerm(q.get('q'));
+  if (term) path += `&or=(title.ilike.*${enc(term)}*,product.ilike.*${enc(term)}*)`;
+  const limit = Math.min(Math.max(Math.round(Number(q.get('limit')) || 200), 1), 200);
+  const r = await sbDocket(`${path}&order=created_at.desc&limit=${limit}`, env);
+  if (!r.ok) return dbErr(r);
+  const rows = r.data || [];
+  if (!rows.length) return ok([]);
+  const [states, tRes, eRes] = await Promise.all([
+    recordItemStates(rows.map(x => x.id), env),
+    sbIn(sbDocket, uniq(rows.map(x => x.template_id)), l => `/rest/v1/checklist_templates?id=in.${l}&select=id,name,version`, env),
+    sbIn(sbPodium, uniq(rows.map(x => x.owner_employee_id)), l => `/rest/v1/employees?id=in.${l}&select=id,full_name`, env),
+  ]);
+  if (!states) return err('db_error: item states', 500);
+  const tmpl = {}; ((tRes.ok && tRes.data) || []).forEach(t => { tmpl[t.id] = t; });
+  const emp = {}; ((eRes.ok && eRes.data) || []).forEach(e => { emp[e.id] = e.full_name; });
+  return ok(rows.map(x => ({ ...x, space_name: spaceName[x.space_id] || null, template_name: tmpl[x.template_id]?.name || null,
+    owner_name: emp[x.owner_employee_id] || null, progress: progressOf(states[x.id] || []), _can_edit: canEditRecord(auth, x) })));
+}
+
+// GET ?action=getChecklistProducts — the product_master family names for the optional product picker (C5).
+async function getChecklistProducts(url, auth, env) {
+  const r = await sbAll(sbPublic, `/rest/v1/product_master?is_active=eq.true&select=product&order=product.asc`, env);
+  if (!r.ok) return dbErr(r);
+  return ok(uniq((r.data || []).map(p => p.product)));
+}
+
+// GET ?action=getChecklistRecord&id= — the record, its items (who/when, the spun-out task behind the task gate,
+// the C4 tick suggestion, "no longer in template"), linked tasks (hidden ones as a count), template updates
+// (C3, matched by source_item_id; offered only while the record is open) and history (task ids → task_no only
+// when visible).
+async function getChecklistRecord(url, auth, env) {
+  const got = await loadRecordFor(url.searchParams.get('id'), auth, env);
+  if (!got) return err('not_found', 404);
+  const { rec, space } = got;
+  const [itRes, lkRes, hiRes, tmpl, secs] = await Promise.all([
+    sbAll(sbDocket, `/rest/v1/checklist_record_items?record_id=eq.${enc(rec.id)}&select=*&order=sort_order.asc,created_at.asc,id.asc`, env),
+    sbAll(sbDocket, `/rest/v1/task_checklist_links?record_id=eq.${enc(rec.id)}&select=id,task_id,created_at&order=created_at.asc,id.asc`, env),
+    sbDocket(`/rest/v1/checklist_record_history?record_id=eq.${enc(rec.id)}&select=*&order=at.desc,seq.desc&limit=100`, env),
+    loadTemplate(rec.template_id, env),
+    templateSections(rec.template_id, env),
+  ]);
+  for (const r of [itRes, lkRes, hiRes]) if (!r.ok) return dbErr(r);
+  if (!secs) return err('db_error: template', 500);
+  const items = itRes.data || [];
+  const links = lkRes.data || [];
+  const diff = templateDiff(flattenTemplate(secs), items);
+  const gone = new Set(diff.removed);
+  const hist = hiRes.data || [];
+  // Every task the page names (linked, spun out, in history), through the getTask gate, batched.
+  const taskIds = uniq([...links.map(l => l.task_id), ...items.map(i => i.task_id), ...hist.map(h => h.detail?.task_id).filter(v => isUuid(v || ''))]);
+  const tRes = await sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?id=in.${l}&select=${RECORD_TASK_COLS}`, env);
+  if (!tRes.ok) return dbErr(tRes);
+  const visible = await visibleTaskRows(auth, tRes.data || [], env);
+  const userIds = uniq([rec.created_by_user_id, ...items.map(i => i.done_by_user_id), ...hist.map(h => h.actor_user_id)]);
+  const [eRes, uRes] = await Promise.all([
+    sbIn(sbPodium, uniq([rec.owner_employee_id, ...visible.map(t => t.owner_employee_id)]), l => `/rest/v1/employees?id=in.${l}&select=id,full_name`, env),
+    sbIn(sbStore, userIds, l => `/rest/v1/users_profile?id=in.${l}&select=id,full_name`, env),
+  ]);
+  const emp = {}; ((eRes.ok && eRes.data) || []).forEach(e => { emp[e.id] = e.full_name; });
+  const usr = {}; ((uRes.ok && uRes.data) || []).forEach(u => { usr[u.id] = u.full_name; });
+  const card = {};
+  visible.forEach(t => { card[t.id] = { id: t.id, task_no: t.task_no, title: t.title, status: t.status, owner_name: emp[t.owner_employee_id] || null }; });
+  const linkedIds = new Set(links.map(l => l.task_id));
+  // A history row naming a task carries its id only — its number shown when visible, never its title.
+  const histOut = hist.map(h => {
+    const tid = h.detail?.task_id;
+    const detail = tid ? (card[tid] ? { task_no: card[tid].task_no } : { hidden_task: true }) : h.detail;
+    return { ...h, detail, actor_name: usr[h.actor_user_id] || null };
+  });
+  return ok({
+    ...rec,
+    space: { id: space.id, name: space.name, is_private: !!space.is_private, is_founders: !!space.is_founders },
+    template: tmpl ? { id: tmpl.id, name: tmpl.name, version: Number(tmpl.version) || 1, archived: !!tmpl.archived_at } : null,
+    owner_name: emp[rec.owner_employee_id] || null,
+    creator_name: usr[rec.created_by_user_id] || null,
+    progress: progressOf(items),
+    template_updates: { new_items: diff.missing.length, version: Number(tmpl?.version) || 1 },
+    template_has_updates: diff.missing.length > 0 && rec.status === 'open',
+    items: items.map(i => {
+      const c = i.task_id ? card[i.task_id] : null;
+      return { ...i, task_id: c ? i.task_id : null, task: c || (i.task_id ? { hidden: true } : null),
+        done_by_name: usr[i.done_by_user_id] || null, no_longer_in_template: gone.has(i.id), suggest_tick: suggestTick(i, c) };
+    }),
+    // can_edit: unlinking needs edit rights on the task (linkEnds); the page shows ✕ only then.
+    linked_tasks: links.filter(l => card[l.task_id]).map(l => ({ link_id: l.id, ...card[l.task_id],
+      can_edit: canEditTask(auth, visible.find(t => t.id === l.task_id)) })),
+    linked_hidden: [...linkedIds].filter(id => !card[id]).length,
+    history: histOut,
+    _can_edit: canEditRecord(auth, rec),
+    _can_tick: rec.status !== 'archived',
+  });
+}
+
+// getTask's Checklists strip: the records linked to a task, the visible ones with progress, the rest a count.
+// → { list, hidden } | { error }
+async function taskChecklists(taskId, auth, env) {
+  const lr = await sbAll(sbDocket, `/rest/v1/task_checklist_links?task_id=eq.${enc(taskId)}&select=record_id&order=record_id.asc`, env);
+  if (!lr.ok) return { error: dbErr(lr) };
+  const ids = uniq((lr.data || []).map(l => l.record_id));
+  if (!ids.length) return { list: [], hidden: 0 };
+  const rr = await sbIn(sbDocket, ids, l => `/rest/v1/checklist_records?id=in.${l}&select=${RECORD_COLS}`, env);
+  if (!rr.ok) return { error: dbErr(rr) };
+  const vis = await keepAccessible(auth, rr.data || [], env);   // fails closed → all hidden
+  const states = await recordItemStates(vis.map(r => r.id), env);
+  if (!states) return { error: err('db_error: item states', 500) };
+  const list = vis.map(r => {
+    const p = progressOf(states[r.id] || []);
+    return { record_id: r.id, title: r.title, product: r.product, status: r.status, done: p.done, na: p.na, total: p.total, label: p.label };
+  }).sort((a, b) => a.title.localeCompare(b.title));
+  return { list, hidden: ids.length - vis.length };
+}
+
+// POST createChecklistRecord { template_id, title, product?, space_id?, owner_employee_id? } — snapshots the
+// template's items (later template edits never rewrite it). Space default General; the caller must open it.
+async function createChecklistRecord(body, auth, env) {
+  const d = body.data || body;
+  const title = String(d.title || '').trim();
+  if (!title) return err('title required', 400);
+  if (title.length > RECORD_TITLE_MAX) return err('title_too_long', 400);
+  if (!isUuid(String(d.template_id || ''))) return err('template_id required', 400);
+  const tmpl = await loadTemplate(d.template_id, env);
+  if (!tmpl) return err('template_not_found', 404);
+  if (tmpl.kind !== 'record') return err('not_a_record_template', 422);
+  if (!tmpl.is_active || tmpl.archived_at) return err('template_inactive', 422);
+  const spaceId = d.space_id || await defaultSpaceId(env);
+  const space = spaceId ? await loadSpace(spaceId, env) : null;
+  if (!space) return err('space_not_found', 404);
+  if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
+  if (space.archived_at) return err('space_archived', 422);
+  const product = d.product == null ? '' : String(d.product).trim();
+  if (product) { const ex = await productExists(product, env); if (ex === null) return err('db_error: product', 500); if (!ex) return err('unknown_product', 400); }
+  const owner = d.owner_employee_id || auth.employeeId || null;
+  if (d.owner_employee_id) { const ex = await activeEmployee(d.owner_employee_id, env); if (ex === null) return err('db_error: owner', 500); if (!ex) return err('bad_owner', 400); }
+  const secs = await templateSections(tmpl.id, env);
+  if (!secs) return err('db_error: template', 500);   // never a record copied from a half-read template
+  const flat = flattenTemplate(secs);
+  const ins = await sbDocket(`/rest/v1/checklist_records`, env, { method: 'POST', body: JSON.stringify([{
+    template_id: tmpl.id, template_version: Number(tmpl.version) || 1, title, product: product || null,
+    space_id: space.id, owner_employee_id: owner, created_by_user_id: auth.userId, updated_by_user_id: auth.userId }]) });
+  const rec = ins.ok && ins.data?.[0];
+  if (!rec) return err('create_failed: ' + JSON.stringify(ins.data), 400);
+  if (flat.length) {
+    const ir = await sbDocket(`/rest/v1/checklist_record_items`, env, { method: 'POST', prefer: 'return=minimal',
+      body: JSON.stringify(snapshotRows(rec.id, flat, 'snapshot').map(x => ({ ...x, updated_by_user_id: auth.userId }))) });
+    if (!ir.ok) {   // no half-made record: the copy is the template's items or nothing
+      const del = await sbDocket(`/rest/v1/checklist_records?id=eq.${enc(rec.id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+      return err(`create_failed${del.ok ? '' : ` (and the empty record ${rec.id} could not be removed)`}: ` + JSON.stringify(ir.data), del.ok ? 400 : 500);
+    }
+  }
+  return ok({ id: rec.id });
+}
+
+// POST updateChecklistRecord { id, title?, product?, owner_employee_id?, archived? } — owner / creator / admin.
+async function updateChecklistRecord(body, auth, env) {
+  const d = body.data || body;
+  const got = await loadRecordFor(d.id, auth, env);
+  if (!got) return err('not_found', 404);
+  const { rec } = got;
+  if (!canEditRecord(auth, rec)) return err('forbidden', 403);
+  const patch = {};
+  if (d.title !== undefined) {
+    const t = String(d.title || '').trim();
+    if (!t) return err('title required', 400);
+    if (t.length > RECORD_TITLE_MAX) return err('title_too_long', 400);
+    if (t !== rec.title) patch.title = t;
+  }
+  if (d.product !== undefined) {
+    const p = d.product == null ? '' : String(d.product).trim();
+    if (p) { const ex = await productExists(p, env); if (ex === null) return err('db_error: product', 500); if (!ex) return err('unknown_product', 400); }
+    if ((p || null) !== rec.product) patch.product = p || null;
+  }
+  if (d.owner_employee_id !== undefined) {
+    const o = d.owner_employee_id || null;
+    if (o) { const ex = await activeEmployee(o, env); if (ex === null) return err('db_error: owner', 500); if (!ex) return err('bad_owner', 400); }
+    if (o !== rec.owner_employee_id) patch.owner_employee_id = o;
+  }
+  if (d.archived !== undefined) {
+    const want = d.archived === true || d.archived === 'true';
+    if (want && rec.status !== 'archived') Object.assign(patch, { status: 'archived', archived_at: nowIso() });
+    else if (!want && rec.status === 'archived') {
+      const states = await recordItemStates([rec.id], env);
+      if (!states) return err('db_error: item states', 500);   // never re-open / clear completed_at on a failed read
+      const st = unarchivedStatus(states[rec.id] || []);
+      Object.assign(patch, { status: st, archived_at: null, completed_at: st === 'complete' ? (rec.completed_at || nowIso()) : null });
+    }
+  }
+  if (!Object.keys(patch).length) return ok({ id: rec.id, changed: false });
+  // The 0032 trigger logs each changed field with updated_by_user_id, in this same statement.
+  const r = await sbDocket(`/rest/v1/checklist_records?id=eq.${enc(rec.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ ...patch, updated_by_user_id: auth.userId, updated_at: nowIso() }) });
+  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ id: rec.id, changed: true });
+}
+
+// An item + the record it belongs to, if the caller can open the record.
+async function loadRecordItemFor(itemId, auth, env) {
+  if (!isUuid(String(itemId || ''))) return null;
+  const r = await sbDocket(`/rest/v1/checklist_record_items?id=eq.${enc(itemId)}&select=*&limit=1`, env);
+  const item = r.ok && r.data?.[0];
+  if (!item) return null;
+  const got = await loadRecordFor(item.record_id, auth, env);
+  return got ? { item, ...got } : null;
+}
+
+// POST setRecordItemState { item_id, state?: open|done|na, na_reason?, note? } — anyone who can see the record
+// (C6). The triggers log it and complete / re-open the record; the answer carries its status after the write.
+async function setRecordItemState(body, auth, env) {
+  const d = body.data || body;
+  const got = await loadRecordItemFor(d.item_id, auth, env);
+  if (!got) return err('not_found', 404);
+  const { item, rec } = got;
+  if (rec.status === 'archived') return err('record_archived', 409);
+  const p = itemStatePatch(d, item, auth.userId, nowIso());
+  if (p.error) return err(p.error, 400);
+  if (!p.patch) return ok({ item_id: item.id, state: item.state, record_status: rec.status, changed: false });
+  const r = await sbDocket(`/rest/v1/checklist_record_items?id=eq.${enc(item.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ ...p.patch, updated_by_user_id: auth.userId, updated_at: nowIso() }) });
+  if (!r.ok) return recordWriteErr('update_failed: ', r);
+  const after = await sbDocket(`/rest/v1/checklist_records?id=eq.${enc(rec.id)}&select=status&limit=1`, env);
+  return ok({ item_id: item.id, state: p.patch.state ?? item.state, record_status: (after.ok && after.data?.[0]?.status) || null, changed: true });
+}
+
+// POST addRecordItem { record_id, title, section_title?, help_text? } — an item only this copy has.
+async function addRecordItem(body, auth, env) {
+  const d = body.data || body;
+  const got = await loadRecordFor(d.record_id, auth, env);
+  if (!got) return err('not_found', 404);
+  const { rec } = got;
+  if (rec.status === 'archived') return err('record_archived', 409);
+  const title = String(d.title || '').trim();
+  if (!title) return err('title required', 400);
+  if (title.length > ITEM_TITLE_MAX) return err('title_too_long', 400);
+  const section = d.section_title == null ? null : (String(d.section_title).trim() || null);
+  const ex = await sbAll(sbDocket, `/rest/v1/checklist_record_items?record_id=eq.${enc(rec.id)}&select=section_title,sort_order&order=sort_order.asc,id.asc`, env);
+  if (!ex.ok) return dbErr(ex);
+  const rows = ex.data || [];
+  const inSec = rows.filter(x => (x.section_title || null) === section).map(x => Number(x.sort_order));
+  const all = rows.map(x => Number(x.sort_order));
+  const sort = inSec.length ? Math.max(...inSec) + 1 : (all.length ? Math.max(...all) + 1000 : 0);
+  const r = await sbDocket(`/rest/v1/checklist_record_items`, env, { method: 'POST', body: JSON.stringify([{
+    record_id: rec.id, source_item_id: null, section_title: section, title, help_text: d.help_text ? String(d.help_text).trim() || null : null,
+    sort_order: Math.round(sort), state: 'open', origin: 'added', updated_by_user_id: auth.userId }]) });
+  if (!r.ok || !r.data?.[0]) return recordWriteErr('create_failed: ', r);
+  return ok({ id: r.data[0].id });
+}
+
+// POST pullTemplateUpdates { record_id } — C3: copy only the template items this record is missing (by
+// source_item_id). Never removes or un-ticks anything; a repeat adds nothing (UNIQUE record_id, source_item_id).
+async function pullTemplateUpdates(body, auth, env) {
+  const d = body.data || body;
+  const got = await loadRecordFor(d.record_id, auth, env);
+  if (!got) return err('not_found', 404);
+  const { rec } = got;
+  if (rec.status !== 'open') return err(rec.status === 'archived' ? 'record_archived' : 'record_complete', 409);
+  const [tmpl, secs, ex] = await Promise.all([
+    loadTemplate(rec.template_id, env), templateSections(rec.template_id, env),
+    sbAll(sbDocket, `/rest/v1/checklist_record_items?record_id=eq.${enc(rec.id)}&select=id,source_item_id&order=id.asc`, env),
+  ]);
+  if (!tmpl) return err('template_not_found', 404);
+  if (!secs) return err('db_error: template', 500);
+  if (!ex.ok) return dbErr(ex);
+  const { missing } = templateDiff(flattenTemplate(secs), ex.data || []);
+  let added = 0;
+  if (missing.length) {
+    const r = await sbDocket(`/rest/v1/checklist_record_items?on_conflict=record_id,source_item_id`, env, {
+      method: 'POST', prefer: 'return=representation,resolution=ignore-duplicates',
+      body: JSON.stringify(snapshotRows(rec.id, missing, 'pull').map(x => ({ ...x, updated_by_user_id: auth.userId }))) });
+    if (!r.ok) return recordWriteErr('pull_failed: ', r);
+    added = Array.isArray(r.data) ? r.data.length : 0;
+  }
+  const version = Number(tmpl.version) || 1;
+  const v = await sbDocket(`/rest/v1/checklist_records?id=eq.${enc(rec.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ template_version: version, updated_by_user_id: auth.userId, updated_at: nowIso() }) });
+  if (!v.ok) return err(`version_failed (${added} item${added === 1 ? '' : 's'} added): ` + JSON.stringify(v.data), 500);
+  return ok({ added, version });
+}
+
+// Insert a task ↔ record link (idempotent: a repeat adds nothing, and logs nothing — the trigger fires per
+// inserted row). → { ok: true, inserted } | { error: r }
+async function insertRecordLink(taskId, recordId, auth, env) {
+  const r = await sbDocket(`/rest/v1/task_checklist_links?on_conflict=task_id,record_id`, env, { method: 'POST',
+    prefer: 'return=representation,resolution=ignore-duplicates',
+    body: JSON.stringify([{ task_id: taskId, record_id: recordId, created_by_user_id: auth.userId, source: auth.source || 'app' }]) });
+  return r.ok ? { ok: true, inserted: Array.isArray(r.data) && r.data.length > 0 } : { error: r };
+}
+
+// POST createTaskFromRecordItem { item_id, title?, owner_employee_id?, deadline?, priority?, department_id?, description? }
+// The task goes through createTaskCore (the createTask path: validation, source, deadline rules) in the
+// record's space, owned by the caller and in the caller's department unless given (so General viewers of the
+// record can see it); then record_item.task_id is set (only if still empty) and the task is linked to the
+// record. Every write is checked; a failure after the task exists names it.
+async function createTaskFromRecordItem(body, auth, env) {
+  const d = body.data || body;
+  const got = await loadRecordItemFor(d.item_id, auth, env);
+  if (!got) return err('not_found', 404);
+  const { item, rec } = got;
+  if (rec.status === 'archived') return err('record_archived', 409);
+  if (item.task_id) return err('item_has_task', 409);
+  if (item.state !== 'open') return err('item_not_open', 422);
+  const td = { title: String(d.title || '').trim() || `${item.title} — ${rec.title}`, space_id: rec.space_id,
+    owner_employee_id: auth.employeeId || null, department_id: auth.departmentId || null };
+  for (const k of ['owner_employee_id', 'deadline', 'priority', 'department_id', 'description']) if (d[k] !== undefined) td[k] = d[k];
+  const res = await createTaskCore(td, auth, env);
+  const j = await res.clone().json();
+  if (!j.ok) return res;
+  const task = j.data;
+  const named = (code, status, extra = {}) => json({ ok: false, error: `${code}: created ${task.task_no}`, task_id: task.id, task_no: task.task_no, ...extra }, status);
+  // Claim the item only while it has no task. The loser of a simultaneous create keeps its task, still linked
+  // to the record (same space, so the link rule holds), and is told which task the item already has.
+  const claim = await sbDocket(`/rest/v1/checklist_record_items?id=eq.${enc(item.id)}&task_id=is.null`, env, {
+    method: 'PATCH', prefer: 'return=representation', body: JSON.stringify({ task_id: task.id, updated_by_user_id: auth.userId, updated_at: nowIso() }) });
+  if (!claim.ok) return named('claim_failed', 500);
+  const link = await insertRecordLink(task.id, rec.id, auth, env);
+  if (link.error) return named('link_failed', 500);
+  if (!claim.data?.length) {
+    const cur = await sbDocket(`/rest/v1/checklist_record_items?id=eq.${enc(item.id)}&select=task_id&limit=1`, env);
+    const otherId = cur.ok ? cur.data?.[0]?.task_id : null;
+    let other = null;
+    if (otherId) {
+      const tr = await sbDocket(`/rest/v1/tasks?id=eq.${enc(otherId)}&select=${RECORD_TASK_COLS}&limit=1`, env);
+      other = (await visibleTaskRows(auth, (tr.ok && tr.data) || [], env))[0] || null;
+    }
+    return json({ ok: false, error: 'item_has_task', task_id: task.id, task_no: task.task_no, other_task_no: other?.task_no || null }, 409);
+  }
+  return ok({ id: task.id, task_no: task.task_no, item_id: item.id });
+}
+
+// The task + record a link names → { task, rec, space } | { error }. The record must be visible and the caller
+// must be able to EDIT the task (F7 dependencies' rule).
+async function linkEnds(d, auth, env) {
+  const task = isUuid(String(d.task_id || '')) ? await loadTaskFor(d.task_id, auth, env) : null;
+  if (!task || !(await seesTask(auth, task, env))) return { error: err('task_not_found', 404) };
+  if (!canEditTask(auth, task)) return { error: err('forbidden', 403) };
+  const got = await loadRecordFor(d.record_id, auth, env);
+  if (!got) return { error: err('record_not_found', 404) };
+  return { task, ...got };
+}
+// POST linkTaskChecklist { task_id, record_id } — idempotent (a repeat is ok, already: true). The trigger writes
+// the record's task_linked and the task's checklist_linked history rows in the same insert.
+async function linkTaskChecklist(body, auth, env) {
+  const d = body.data || body;
+  const e = await linkEnds(d, auth, env);
+  if (e.error) return e.error;
+  if (e.task.status === 'abandoned') return abandonedRO();
+  if (e.task.is_recurring) return err('recurring_task: a recurring (checklist) task takes no record checklist', 422);   // as dependencies
+  if (e.rec.status === 'archived') return err('record_archived', 409);
+  if (!linkAllowed(e.space, e.task.space_id)) return err('link_cross_space: a checklist links only to tasks in its own space (or from General)', 422);
+  const r = await insertRecordLink(e.task.id, e.rec.id, auth, env);
+  if (r.error) return err('link_failed: ' + JSON.stringify(r.error.data), 400);
+  return ok({ task_id: e.task.id, record_id: e.rec.id, already: !r.inserted });
+}
+// POST unlinkTaskChecklist { task_id, record_id } — works on an abandoned task too. Stamps who is removing it
+// (removed_by_user_id / removed_source), then deletes; the delete trigger logs both sides with that actor.
+async function unlinkTaskChecklist(body, auth, env) {
+  const d = body.data || body;
+  const e = await linkEnds(d, auth, env);
+  if (e.error) return e.error;
+  const q = `task_id=eq.${enc(e.task.id)}&record_id=eq.${enc(e.rec.id)}`;
+  const st = await sbDocket(`/rest/v1/task_checklist_links?${q}`, env, { method: 'PATCH', prefer: 'return=representation',
+    body: JSON.stringify({ removed_by_user_id: auth.userId, removed_source: auth.source || 'app' }) });
+  if (!st.ok) return err('unlink_failed: ' + JSON.stringify(st.data), 400);
+  if (!st.data?.length) return err('not_linked', 404);
+  // Delete only the row THIS caller stamped: a concurrent unlink that re-stamped it (and so owns the history row)
+  // leaves this one with nothing to delete → 409, never a mis-attributed unlink.
+  const r = await sbDocket(`/rest/v1/task_checklist_links?${q}&removed_by_user_id=eq.${enc(auth.userId)}`, env, { method: 'DELETE', prefer: 'return=representation' });
+  if (!r.ok) return err('unlink_failed: ' + JSON.stringify(r.data), 400);
+  if (!r.data?.length) return err('unlink_conflict: someone else is unlinking it — reload', 409);
+  return ok({ removed: true });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Dispatch
 // ════════════════════════════════════════════════════════════════════════════
 const GET_ACTIONS = {
   getMe, getDepartments, getEmployees,
   getTasks, getProgramTasks, getMyTasks, getStaleTasks, searchTasks, getTask, getTaskLinks, getDashboard,
   getChecklist, getChecklistTemplates, getChecklistTemplate, getChecklistOversight, getChecklistRegister,
+  getChecklistRecords, getChecklistRecord, getChecklistProducts,
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,
@@ -4166,6 +4731,8 @@ const POST_ACTIONS = {
   saveChecklistTemplate, archiveChecklistTemplate,
   assignChecklistTemplate, unassignChecklistTemplate,
   toggleChecklistItem, saveSectionComment,
+  createChecklistRecord, updateChecklistRecord, setRecordItemState, addRecordItem, pullTemplateUpdates,
+  createTaskFromRecordItem, linkTaskChecklist, unlinkTaskChecklist,
   addCollaborator, removeCollaborator,
   addDocument, removeDocument,
   addComment, editComment, deleteComment,

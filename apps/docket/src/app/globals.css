@@ -1053,6 +1053,36 @@ tfoot .rg-rowh, tfoot td { border-bottom: none; }
 .cl-tagbtn.on { color: var(--accent); background: var(--accent-soft); }
 .cl-additem { align-self: flex-start; }
 
+/* F8 P2 — record checklists (Records tab, /checklist/record, the task's Checklists strip). */
+.rc-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 10px; }
+.rc-bar { display: inline-block; width: 80px; height: 6px; border-radius: var(--r-full); background: var(--surface-3); overflow: hidden; flex-shrink: 0; }
+.rc-bar-fill { display: block; height: 100%; background: var(--st-done); border-radius: inherit; }
+.rc-prog { min-width: 72px; text-align: right; font-family: var(--f-mono); font-size: 11.5px; color: var(--text-2); }
+.rc-status { font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.rc-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.rc-title { margin: 0; flex: 1; min-width: 0; font-size: 20px; font-weight: 600; color: var(--text-1); }
+.rc-title-input { flex: 1; min-width: 0; height: 36px; padding: 0 8px; border: none; border-radius: var(--r-ctl); background: transparent; font-size: 20px; font-weight: 600; color: var(--text-1); outline: none; }
+.rc-title-input:hover { background: var(--surface); }
+.rc-title-input:focus { background: var(--surface); box-shadow: var(--focus-ring); }
+.rc-meta { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; margin-bottom: 12px; font-size: 12.5px; color: var(--text-2); }
+.rc-meta-f { display: inline-flex; align-items: center; gap: 8px; }
+.rc-meta-f > span:first-child { font-size: 11.5px; color: var(--text-3); }
+.rc-meta-f b { font-weight: 500; color: var(--text-1); }
+.rc-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; padding: 8px 12px; border-radius: var(--r-card); background: var(--state-warning-bg); color: var(--state-warning); font-size: 13px; }
+.rc-banner .ui-btn { margin-left: auto; }
+.rc-na { font-size: 12px; color: var(--text-3); font-style: italic; }
+.rc-suggest { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; height: 24px; padding: 0 10px; border-radius: var(--r-full); background: var(--surface-2); box-shadow: var(--ring); font-size: 12px; color: var(--st-done); }
+.rc-suggest:hover { background: var(--surface-3); }
+.rc-capture { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.rc-note { width: 100%; min-height: 26px; margin-top: 4px; padding: 4px 8px; border: none; border-radius: var(--r-ctl); background: transparent; font-size: 12.5px; color: var(--text-2); outline: none; resize: vertical; line-height: 1.5; }
+.rc-note:hover, .rc-note:focus { background: var(--surface); }
+.rc-note:focus { box-shadow: var(--focus-ring); }
+.rc-task { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: var(--r-full); background: var(--surface-2); font-size: 12px; }
+.rc-task:hover { background: var(--surface-3); }
+.rc-history { margin-top: 16px; font-size: 12.5px; color: var(--text-2); }
+.rc-history summary { cursor: pointer; color: var(--text-3); }
+.rc-history ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+
 /* oversight (R1): one row per person, drill-in to their read-only run */
 .cl-ovr-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
 .cl-ovr-row { border-bottom: 1px solid var(--border); }

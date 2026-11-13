@@ -17,9 +17,11 @@
 // Until the user moves the highlight it follows the TOP row, so a late exact hit (DKT-247 from
 // another space) takes it — the best match leads. Once they arrow or hover, it is held by key
 // and a late reply never moves it (if their row drops out of the results, it returns to the top).
+// F8 P2: the same debounced query (≥2 chars) also asks getChecklistRecords (q = title or product, the caller's
+// spaces only) → a "Checklists" group that opens the Record page.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Target, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Hash, Lock, Flag,
-  SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info, Loader2, OctagonMinus } from 'lucide-react';
+  SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info, Loader2, OctagonMinus, ClipboardCheck } from 'lucide-react';
 import { fuzzyMatch, dktQuery, rankGroups, scoreTask, serverFloor } from '../lib/fuzzy.js';
 import { docketopsGet } from '../lib/docketopsFetch.js';
 import { getCommandSource } from '../lib/commandSources.js';
@@ -36,6 +38,7 @@ const SEARCH_DEBOUNCE = 180;
 const GROUPS = [
   ['recent', 'Recent'],
   ['tasks', 'Tasks'],
+  ['records', 'Checklists'],
   ['places', 'Spaces & programs'],
   ['nav', 'Navigation'],
   ['commands', 'Commands'],
@@ -83,6 +86,8 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
   // Cross-space server search (F5). rows are kept for the query they answered (q).
   const [remote, setRemote] = useState({ q: '', rows: [], status: 'idle' });
   const reqRef = useRef(0);
+  const [records, setRecords] = useState({ q: '', rows: [] });   // F8 P2 record search (best-effort, no status line)
+  const recReqRef = useRef(0);
   const [snap] = useState(() => (typeof window === 'undefined' ? { tasks: null, view: null, taskView: null, recent: [] } : snapshot(userId)));
   const mod = useModLabel();
   const inputRef = useRef(null);
@@ -110,6 +115,17 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
       docketopsGet('searchTasks', { q: query }, session)
         .then(rows => { if (reqRef.current === id) setRemote({ q: query, rows: Array.isArray(rows) ? rows : [], status: 'done' }); })
         .catch(() => { if (reqRef.current === id) setRemote({ q: query, rows: [], status: 'error' }); });
+    }, SEARCH_DEBOUNCE);
+    return () => clearTimeout(t);
+  }, [q, open, session]);
+  useEffect(() => {
+    const query = q.trim();
+    const id = ++recReqRef.current;
+    if (!open || !session || query.length < 2 || dktQuery(query)) { setRecords(r => (r.rows.length ? { q: '', rows: [] } : r)); return undefined; }
+    const t = setTimeout(() => {
+      docketopsGet('getChecklistRecords', { q: query, limit: CAP, status: 'all' }, session)
+        .then(rows => { if (recReqRef.current === id) setRecords({ q: query, rows: Array.isArray(rows) ? rows : [] }); })
+        .catch(() => { if (recReqRef.current === id) setRecords({ q: query, rows: [] }); });
     }, SEARCH_DEBOUNCE);
     return () => clearTimeout(t);
   }, [q, open, session]);
@@ -226,6 +242,16 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
         const r = scoreTask(it, query, num, floorById.get(t.id) ?? null);
         if (r) push(it, r);
       }
+      if (records.q.toLowerCase() === query) {
+        for (const r of records.rows) {
+          const route = `/checklist/record/?id=${r.id}`;
+          const it = { key: 'record:' + r.id, group: 'records', kind: 'nav', label: r.title || 'Record', sub: r.product || 'Checklist',
+            meta: r.progress?.label || '', icon: ClipboardCheck, route, run: () => go(route) };
+          const m = fuzzyMatch(query, it.label.toLowerCase());
+          // The server matched title or product; a product-only hit still shows, ranked below title hits.
+          push(it, { score: m ? m.score : 1, idx: m?.idx || [] });
+        }
+      }
       for (const g of Object.keys(groups)) groups[g].sort((a, b) => b._score - a._score);
     }
     const out = [];
@@ -237,7 +263,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
     // 3000, so it still leads), which makes row 0 — the default Enter — the overall best.
     // Empty query keeps the fixed order.
     return query ? rankGroups(out) : out;
-  }, [q, index, snap, remote]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [q, index, snap, remote, records]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const flat = useMemo(() => rows.flatMap(r => r.items.map(it => ({ ...it, _k: r.group + '|' + it.key }))), [rows]);
   const searching = remote.status === 'loading';
@@ -288,7 +314,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
         <div className="cmdk-input">
           <Search size={16} strokeWidth={2} aria-hidden />
           <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
-            placeholder="Search tasks, spaces, programs, commands…"
+            placeholder="Search tasks, checklists, spaces, programs, commands…"
             role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-autocomplete="list"
             aria-activedescendant={cur >= 0 ? optId(cur) : undefined} autoComplete="off" spellCheck={false} />
           <Kbd>Esc</Kbd>

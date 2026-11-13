@@ -1,10 +1,11 @@
 'use client';
 // Checklist — per-person recurring tasks (flat, RULE-DOCKET-008) + structured template
-// runs (RULE-DOCKET-009), with a My day / Manage / Oversight tab set.
+// runs (RULE-DOCKET-009), with a My day / Records / Manage / Oversight tab set. Records (F8 P2) are
+// copies of a record template per product or launch — ChecklistRecords + /checklist/record.
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { Plus, Check, Repeat, Pencil, Ban, Archive, ChevronLeft, ChevronRight, ListChecks, CalendarDays, Eye, Grid3x3 } from 'lucide-react';
+import { Plus, Check, Repeat, Pencil, Ban, Archive, ChevronLeft, ChevronRight, ListChecks, CalendarDays, Eye, Grid3x3, ClipboardCheck } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { RecurrencePopover } from '../../../components/RecurrencePopover.js';
 import { GroupHeader } from '../../../components/tasks/GroupHeader.js';
@@ -14,6 +15,7 @@ import { ChecklistRun } from '../../../components/ChecklistRun.js';
 import { ChecklistTemplateEditor } from '../../../components/ChecklistTemplateEditor.js';
 import { OversightPanel } from '../../../components/OversightPanel.js';
 import { ChecklistRegister } from '../../../components/ChecklistRegister.js';
+import { ChecklistRecords } from '../../../components/ChecklistRecords.js';
 import { TaskView } from '../../../components/task/TaskView.js';
 import { recurrenceSummary, templateRecurrenceSummary, fmtTime, fmtISTDate, isValidRecurrence, isDueOn, isExpired, restOfWeek, WEEKDAYS } from '../../../lib/recurrence.js';
 import { fmtClockIST } from '../../../lib/checklist.js';
@@ -37,7 +39,9 @@ const shiftISO = (iso, days) => {
 export default function ChecklistPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
-  const [tab, setTab] = useState('day');           // 'day' | 'manage' | 'oversight'
+  const [tab, setTab] = useState('day');           // 'day' | 'records' | 'manage' | 'oversight'
+  // ?tab=records (the Record page's back link) — read after mount so the static render stays 'day'.
+  useEffect(() => { try { const t = new URLSearchParams(window.location.search).get('tab'); if (['records', 'manage', 'oversight'].includes(t)) setTab(t); } catch { /* ignore */ } }, []);
   // F8 P1: My day shows the same ticks two ways — the Today list or the Register chart. Remembered per device.
   const [dayView, setDayViewState] = useState(() => { try { return localStorage.getItem('docket.checklist.view') === 'register' ? 'register' : 'today'; } catch { return 'today'; } });
   const setDayView = (v) => { setDayViewState(v); try { localStorage.setItem('docket.checklist.view', v); } catch { /* private mode */ } };
@@ -173,7 +177,7 @@ export default function ChecklistPage() {
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
   async function archiveTemplate(t) {
-    if (!window.confirm(`Archive "${t.name}"? It stops appearing on assignees' checklists.`)) return;
+    if (!window.confirm(t.kind === 'record' ? `Archive "${t.name}"? No new records can start from it; existing records keep their items.` : `Archive "${t.name}"? It stops appearing on assignees' checklists.`)) return;
     try { await docketopsPost('archiveChecklistTemplate', { id: t.id }, session); showToast('Archived', 'success'); loadTemplates(); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
@@ -187,7 +191,7 @@ export default function ChecklistPage() {
   return (
     <div className="screen checklist">
       <SegmentedTabs className="cl-tabs" label="Checklist" value={tab} onChange={setTab}
-        tabs={[{ value: 'day', label: 'My day', icon: ListChecks }, { value: 'manage', label: 'Manage', icon: Repeat }, { value: 'oversight', label: 'Oversight', icon: Eye }]} />
+        tabs={[{ value: 'day', label: 'My day', icon: ListChecks }, { value: 'records', label: 'Records', icon: ClipboardCheck }, { value: 'manage', label: 'Manage', icon: Repeat }, { value: 'oversight', label: 'Oversight', icon: Eye }]} />
 
       {tab === 'day' && (<>
         <div className="cl-head">
@@ -334,16 +338,17 @@ export default function ChecklistPage() {
               <ChecklistTemplateEditor templateId={editorTemplateId} employees={employees} departments={departments} session={session}
                 onSaved={() => { setEditorOpen(false); setEditorTemplateId(null); loadTemplates(); }}
                 onCancel={() => { setEditorOpen(false); setEditorTemplateId(null); }} />
-            ) : templates.length === 0 ? <div className="cl-empty">No templates yet. Create one to define a role’s daily checklist.</div> : (
+            ) : templates.length === 0 ? <div className="cl-empty">No templates yet. Create a routine (a role’s daily checklist) or a record template (copied per product launch).</div> : (
               <ul className="cl-rows">
                 {templates.map(t => (
                   <li key={t.id} className="cl-item">
                     <ListChecks className="cl-row-ic" size={14} aria-hidden />
                     <button className="cl-item-title" disabled={!t._can_edit} onClick={() => { if (t._can_edit) { setEditorTemplateId(t.id); setEditorOpen(true); } }}>{t.name}</button>
                     <span className="cl-item-meta">
+                      {t.kind === 'record' && <span className="cl-team">Record · v{t.version || 1}</span>}
                       {t.role_label && <span className="cl-team">{t.role_label}</span>}
-                      <span className="cl-sub">{t.section_count} sections · {t.item_count} items · {t.assignee_count} assigned</span>
-                      <span className="cl-rec">{templateRecurrenceSummary(t.recurrence)}</span>
+                      <span className="cl-sub">{t.section_count} sections · {t.item_count} items{t.kind === 'record' ? '' : ` · ${t.assignee_count} assigned`}</span>
+                      {t.kind !== 'record' && <span className="cl-rec">{templateRecurrenceSummary(t.recurrence)}</span>}
                     </span>
                     {t._can_edit && <span className="cl-row-acts"><IconButton icon={Archive} size="sm" label="Archive" onClick={() => archiveTemplate(t)} /></span>}
                   </li>
@@ -353,6 +358,8 @@ export default function ChecklistPage() {
           </section>
         </div>
       )}
+
+      {tab === 'records' && <ChecklistRecords session={session} employees={employees} me={me} />}
 
       {tab === 'oversight' && <OversightPanel session={session} employees={employees} departments={departments} />}
 

@@ -35,6 +35,7 @@ import { recurrenceSummary } from '../../lib/recurrence.js';
 import { TaskProps } from './TaskProps.js';
 import { TaskActivity } from './TaskActivity.js';
 import { DepsStrip, DepAddFlow } from './Dependencies.js';
+import { ChecklistsStrip, ChecklistLinkFlow } from './TaskChecklists.js';
 import { linkCount, sendDone, doneConfirmText, DECLINED } from '../../lib/deps.js';
 import { useCommandSource } from '../../lib/commandSources.js';
 import { readMode, writeMode, goFull, leaveFull, readReturn, readOrder, claimFull } from './taskViewMode.js';
@@ -171,6 +172,11 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   // abandoned, not archived — the worker refuses those too).
   const showDeps = !!task && !task.is_recurring;
   const canLink = showDeps && canEdit && !task.archived_at;
+  // F8 P2: linking a record needs edit rights, like a dependency (the worker re-checks both ends and the space rule).
+  const canChecklist = canLink;
+  const hasChecklists = !!task && ((task.checklists || []).length > 0 || Number(task.checklists_hidden) > 0 || !!task.checklists_failed);
+  const clDescRef = useRef(null);
+  const [clLinking, setClLinking] = useState(false);
 
   /* ---------------- writes (the drawer's, call for call) ---------------- */
   async function saveField(field, value) {
@@ -501,12 +507,19 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
           addRef={depAddRef} onAdd={() => startDep(depAddRef)} />
       )}
 
+      {/* F8 P2 Checklists strip — under Dependencies, only when a record is linked. */}
+      {showDeps && hasChecklists && <ChecklistsStrip task={task} canLink={canChecklist} canUnlink={!!task._can_edit} session={session} onChange={mutated} />}
+
       <div className="tv-desc">
         <div className="tv-sh-row">
           <div className="tv-sh">Description</div>
           {canLink && linkCount(task.links) === 0 && (
             <button ref={depDescRef} type="button" className="tv-add dp-add" onClick={() => startDep(depDescRef)}><Plus size={12} /> Dependency</button>
           )}
+          {canChecklist && !hasChecklists && (<>
+            <button ref={clDescRef} type="button" className="tv-add dp-add" onClick={() => setClLinking(true)}><Plus size={12} /> Checklist</button>
+            <ChecklistLinkFlow open={clLinking} anchorRef={clDescRef} task={task} session={session} onClose={() => setClLinking(false)} onLinked={mutated} />
+          </>)}
         </div>
         {canEdit ? (
           <textarea ref={descRef} className="tv-desc-input" placeholder="Add a description…" value={descDraft} aria-label="Description"

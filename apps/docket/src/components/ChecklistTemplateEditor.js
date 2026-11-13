@@ -1,6 +1,8 @@
 'use client';
 // Create/edit a structured checklist template: sections → items (+ tags), schedule
 // (time-optional), role label, department, and assignees. RULE-DOCKET-009.
+// F8 P2: a kind switch — Routine (the above) or Record (copied per product / launch, ticked once): a record
+// template has no schedule, chart type or assignees. The kind is fixed once saved (the worker: kind_locked).
 import { useEffect, useState, useCallback } from 'react';
 import { Combobox, useToast } from '@throttle/ui';
 import { Plus, Trash2, ChevronUp, ChevronDown, Check, X } from 'lucide-react';
@@ -8,6 +10,7 @@ import { docketopsGet, docketopsPost } from '../lib/docketopsFetch.js';
 import { RecurrencePopover } from './RecurrencePopover.js';
 import { CHECKLIST_TAGS } from './TagPill.js';
 import { isValidTemplateRecurrence } from '../lib/recurrence.js';
+import { recordErrorText } from '../lib/records.js';
 import { SegmentedTabs, Button, IconButton } from './ui/index.js';
 
 const blankItem = () => ({ id: null, title: '', help_text: '', tags: [] });
@@ -22,13 +25,13 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
 
   useEffect(() => {
     if (!templateId) {
-      setDraft({ id: null, name: '', role_label: '', department_id: '', description: '', recurrence: { freq: 'daily' }, run_scope: 'per_person', sections: [blankSection()] });
+      setDraft({ id: null, kind: 'routine', name: '', role_label: '', department_id: '', description: '', recurrence: { freq: 'daily' }, run_scope: 'per_person', sections: [blankSection()] });
       setAssignees([]);
       return;
     }
     docketopsGet('getChecklistTemplate', { id: templateId }, session).then(t => {
       setDraft({
-        id: t.id, name: t.name || '', role_label: t.role_label || '', department_id: t.department_id || '',
+        id: t.id, kind: t.kind || 'routine', version: t.version || 1, name: t.name || '', role_label: t.role_label || '', department_id: t.department_id || '',
         description: t.description || '', recurrence: t.recurrence || { freq: 'daily' }, run_scope: t.run_scope || 'per_person',
         sections: (t.sections || []).map(s => ({ id: s.id, title: s.title, subtitle: s.subtitle || '', due_time: s.due_time || '', items: (s.items || []).map(i => ({ id: i.id, title: i.title, help_text: i.help_text || '', tags: i.tags || [] })) })),
       });
@@ -55,27 +58,41 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
 
   async function save() {
     if (!draft.name.trim()) { showToast('Name required', 'error'); return; }
-    if (!isValidTemplateRecurrence(draft.recurrence)) { showToast('Pick a valid schedule', 'error'); return; }
+    const isRecord = draft.kind === 'record';
+    if (!isRecord && !isValidTemplateRecurrence(draft.recurrence)) { showToast('Pick a valid schedule', 'error'); return; }
     setBusy(true);
     try {
       const res = await docketopsPost('saveChecklistTemplate', {
-        id: draft.id, name: draft.name.trim(), role_label: draft.role_label || null,
+        id: draft.id, kind: draft.kind, name: draft.name.trim(), role_label: draft.role_label || null,
         department_id: draft.department_id || null, description: draft.description || null,
-        recurrence: draft.recurrence, run_scope: draft.run_scope,
+        ...(isRecord ? {} : { recurrence: draft.recurrence, run_scope: draft.run_scope }),
         sections: draft.sections.map(s => ({ id: s.id, title: s.title, subtitle: s.subtitle || null, due_time: s.due_time || null, items: s.items.map(i => ({ id: i.id, title: i.title, help_text: i.help_text || null, tags: i.tags || [] })) })),
       }, session);
       const newId = res?.id || draft.id;
-      if (isNew && newId) {
+      if (isNew && newId && !isRecord) {
         for (const a of assignees) { await docketopsPost('assignChecklistTemplate', { template_id: newId, employee_id: a.employee_id }, session); }
       }
-      showToast('Saved', 'success'); onSaved();
-    } catch (e) { showToast(e.message || 'Failed', 'error'); }
+      showToast(res?.version_failed || res?.history_failed ? 'Saved (the change log didn’t record it)' : 'Saved', 'success'); onSaved();
+    } catch (e) {
+      // A refusal after the template row exists carries its id: close the editor so a retry edits it, not a copy.
+      if (e?.detail?.id && e.detail.partial) { showToast(`Saved partly — reopen the template to check it (${recordErrorText(e)})`, 'error'); onSaved(); }
+      else showToast(recordErrorText(e), 'error');
+    }
     finally { setBusy(false); }
   }
 
   if (!draft) return null;
+  const isRecord = draft.kind === 'record';
   return (
     <div className="cl-editor">
+      <div className="cl-field"><span>Kind</span>
+        {isNew ? (
+          <SegmentedTabs label="Kind" value={draft.kind} onChange={v => patch({ kind: v })}
+            tabs={[{ value: 'routine', label: 'Routine' }, { value: 'record', label: 'Record' }]} />
+        ) : <b className="cl-sub">{isRecord ? `Record · v${draft.version}` : 'Routine'}</b>}
+        <small className="cl-hint">{isRecord
+          ? 'Copied once per product or launch and ticked once. Editing items later bumps the version; open records are offered the new items.'
+          : 'Repeats on a schedule for the people assigned, ticked every time it is due.'}</small></div>
       <div className="cl-editor-grid">
         <label className="cl-field"><span>Name</span>
           <input className="cl-input" value={draft.name} placeholder="e.g. Senior Production Manager — Daily" onChange={e => patch({ name: e.target.value })} /></label>
@@ -89,6 +106,7 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
       <label className="cl-field"><span>Description</span>
         <textarea className="cl-textarea" value={draft.description} onChange={e => patch({ description: e.target.value })} /></label>
 
+      {!isRecord && <>
       <div className="cl-field"><span>Schedule</span>
         <RecurrencePopover value={draft.recurrence} hideTime onChange={r => patch({ recurrence: r })} /></div>
 
@@ -111,13 +129,14 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
             onChange={v => addAssignee(v)} />
         </div>
       </div>
+      </>}
 
       <div className="cl-sections-edit">
         {draft.sections.map((s, si) => (
           <div className="cl-section-edit" key={si}>
             <div className="cl-section-edit-head">
               <input className="cl-input" placeholder="Section title" value={s.title} onChange={e => setSection(si, { title: e.target.value })} />
-              <input className="cl-time" type="time" value={s.due_time} onChange={e => setSection(si, { due_time: e.target.value })} title="Due by (optional)" />
+              {!isRecord && <input className="cl-time" type="time" value={s.due_time} onChange={e => setSection(si, { due_time: e.target.value })} title="Due by (optional)" />}
               <IconButton icon={ChevronUp} size="sm" label="Move section up" onClick={() => moveSection(si, -1)} />
               <IconButton icon={ChevronDown} size="sm" label="Move section down" onClick={() => moveSection(si, 1)} />
               <IconButton icon={Trash2} size="sm" label="Remove section" onClick={() => setDraft(d => ({ ...d, sections: d.sections.filter((_, i) => i !== si) }))} />
