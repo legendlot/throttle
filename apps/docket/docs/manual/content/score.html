@@ -1,0 +1,46 @@
+<p class="lead">The <strong>on-time score</strong> says, for each team and each week, what share of the tasks people promised to finish that week were finished by the time they promised. It is deliberately fixed in advance: the list of promises is frozen when the week starts, so a score cannot be improved by quietly moving dates afterwards.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Measuring promises kept, by team, by week.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read only. Nothing to enter.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who sees it</div><div class="g-val">In the Weekly Review, cut to your access.</div></div>
+  <div class="g-cell"><div class="g-lbl">Counted in</div><div class="g-val">Top-level, non-recurring tasks.</div></div>
+</div>
+
+<h2 class="sec">The cohort: what is counted</h2>
+<p>The week&rsquo;s <strong>cohort</strong> is the list of tasks the score is about. It is taken at the very start of the week (just after midnight Indian time at the start of the week) and includes every open, top-level task whose deadline falls in that week. Recurring checklist items and sub-tasks are not part of it. The task&rsquo;s <strong>deadline, team and owner as they were at that moment</strong> are frozen, so moving a task to another team later does not change whose score it is.</p>
+<h3>Joining mid-week</h3>
+<ul>
+  <li>A task <strong>joins</strong> the week if it is given its <em>first</em> deadline inside the week: a new task created with a deadline this week, or an undated task dated for the first time.</li>
+  <li>A task created already <strong>done</strong> within the week counts as on time.</li>
+  <li>Re-dating a task <em>into</em> the week does <strong>not</strong> add it. If it slipped from an earlier week, that was the earlier week&rsquo;s miss.</li>
+  <li>Re-dating a task <em>out</em> of the week does <strong>not</strong> remove it.</li>
+</ul>
+
+<h2 class="sec">What counts as on time</h2>
+<table class="tbl">
+  <thead><tr><th>Outcome</th><th>When</th></tr></thead>
+  <tbody>
+    <tr><td><strong>On time</strong></td><td>At the close of the week the task is <strong>done</strong> and was completed at or before the deadline it was committed with.</td></tr>
+    <tr><td><strong>Missed</strong></td><td>Anything else in the cohort: still open, done late, re-dated and finished after the original time, <strong>abandoned during the week</strong> (a dropped promise is a miss), or done and then reopened and not finished again.</td></tr>
+  </tbody>
+</table>
+<p>The score is <strong>on time &divide; committed</strong>, per team. For example, 18 of 20 committed tasks done in time is 90%.</p>
+
+<h2 class="sec">Provisional and final</h2>
+<p>While the week is running, the review shows a <strong>PROVISIONAL</strong> score: how many were committed, how many are on time so far, how many have <em>missed so far</em> (their time has already passed) and how many are <em>still due</em>. The week closes at the end of its last day, and the score becomes <strong>FINAL</strong> and is stored unchanged. Opening and closing can lag by a few minutes. A week that was opened late says <em>opened late, not exact</em>; scores are exact from the week that began on 16 November 2026.</p>
+
+<h2 class="sec">Who can see the score</h2>
+<p>There is no score on the task list or the dashboard. It is read in the <strong>Weekly Review</strong> (see the next chapters), and you see only what your access allows:</p>
+<table class="tbl">
+  <thead><tr><th>You are</th><th>You see</th></tr></thead>
+  <tbody>
+    <tr><td><span class="role mem">A team member or lead</span></td><td>Your own team&rsquo;s score, counting only tasks you can open.</td></tr>
+    <tr><td><span class="role ass">Associate</span></td><td>Any team&rsquo;s score, counting only tasks they can open.</td></tr>
+    <tr><td><span class="role fnd">Founder</span></td><td>Any team, or all teams, with every task counted. Tasks in spaces they cannot open are included in the numbers and shown only as <em>+N in spaces you&rsquo;re not in</em>.</td></tr>
+  </tbody>
+</table>
+<div class="callout note">
+  <div class="c-title">&#9432; Why a deadline can&rsquo;t be edited quietly</div>
+  <p>The first deadline is free to set; every later change goes through <strong>Revise</strong> with a reason, and is the only way the date moves. The review shows each slipped task with its original date, its new one, how many times it moved and the reasons given.</p>
+</div>

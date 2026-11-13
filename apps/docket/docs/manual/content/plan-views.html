@@ -1,0 +1,68 @@
+<p class="lead">Besides the register itself, the Plan has four more screens, each answering a different question: <strong>Three weeks</strong> (what is due soon, and what needs a hand), <strong>Tree</strong> (how each goal is progressing), <strong>Templates</strong> (reusable plans) and <strong>Re-plan</strong> (is next month ready). They sit in the sidebar under <strong>Plan</strong>.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Looking at the plan by time, by goal, and by month.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Mostly read; Templates act.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mem">Member</span> <span class="role fnd">Founder</span> <span class="role ass">Associate</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Always cut to you</div><div class="g-val">Every screen shows only what you may see.</div></div>
+</div>
+
+<h2 class="sec">Who can open which</h2>
+<table class="tbl">
+  <thead><tr><th>Screen</th><th>Address</th><th>Who</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Plan</strong></td><td><code>/plan</code></td><td>Everyone (the register for Founders, read-only for Associates, <em>My milestones</em> for the rest).</td></tr>
+    <tr><td><strong>Three weeks</strong></td><td><code>/plan/weeks</code></td><td>Everyone.</td></tr>
+    <tr><td><strong>Tree</strong></td><td><code>/plan/tree</code></td><td>Everyone.</td></tr>
+    <tr><td><strong>Templates</strong></td><td><code>/plan/templates</code></td><td>Anyone who may make a template, or who can see one. The sidebar row appears only then.</td></tr>
+    <tr><td><strong>Re-plan</strong></td><td><code>/plan/replan</code></td><td>Founders only. The sidebar row appears only for them; anyone else who opens the address sees <em>Founders only</em>.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Three weeks</h2>
+<p>A rolling window of <strong>Overdue</strong>, <strong>This week</strong>, <strong>Next week</strong> and <strong>Week after</strong>. Each cell lists the milestones and results due in that week (a target icon, code, title and date) and the tasks due that week (a status dot, the title, the owner and date). Click a task to open it.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Rows</div><div class="a-val"><p>The <strong>Team | Person | Theme</strong> switch chooses what the rows are.</p></div></div>
+  <div class="a-row"><div class="a-key">Team</div><div class="a-val"><p>Pick <strong>All teams</strong> or one team. Founders start on all teams; everyone else starts on their own team.</p></div></div>
+  <div class="a-row"><div class="a-key">Warnings</div><div class="a-val"><p>Above the grid, four kinds of warning, each saying who needs to act (<em>For Priya</em>, <em>For the founders</em>). When there are none you see <em>No warnings</em>.</p></div></div>
+</div>
+<table class="tbl">
+  <thead><tr><th>Warning</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td><strong>No actionable tasks</strong></td><td>An agreed item is due in the window and has no open task with both an owner and a date.</td></tr>
+    <tr><td><strong>Not agreed yet</strong></td><td>A proposed milestone is due in the window.</td></tr>
+    <tr><td><strong>Linked to a theme only</strong></td><td>An open task is linked to a theme that now has agreed milestones, so it should be pointed at one. If you can edit the task, a <strong>Link to a milestone</strong> button fixes it in one click.</td></tr>
+    <tr><td><strong>Stale</strong></td><td>No update or comment for 3 or more working days.</td></tr>
+  </tbody>
+</table>
+<p>Only top-level tasks appear. Founders also see <em>+N in spaces you&rsquo;re not in</em> where open tasks sit in spaces they cannot open. With nothing due you see <em>Nothing due in the next three weeks</em>.</p>
+
+<h2 class="sec">Tree</h2>
+<p>The whole plan as a tree: theme, milestone, result, task. Click a row to fold it open or shut. Under each plan item Docket shows counts for everything beneath it (<em>12 open</em>, <em>5 done</em>, <em>2 overdue</em>) and an <strong>on time %</strong> that compares finished tasks against their <em>first</em> deadline (recurring checklist work is left out).</p>
+<ul>
+  <li><strong>Theme</strong> picks one theme or <em>All themes</em>; <strong>Mine only</strong> shows the items you own and the path down to them; <strong>Show closed</strong> adds done and dropped items; <strong>Expand all</strong> and <strong>Collapse all</strong> do what they say.</li>
+  <li>Tasks hang directly under the item they are linked to, up to 25; a <em>+N more</em> link opens the Tasks list filtered to that item. Click a task to open it.</li>
+  <li>If you cannot see an item&rsquo;s parent, it hangs under the nearest one you can see. Founders also see <em>+N hidden</em> where tasks sit in spaces they cannot open.</li>
+</ul>
+
+<h2 class="sec">Templates</h2>
+<p>A template is a reusable plan: a list of <strong>steps</strong> (milestones, results and tasks), each with a <strong>Role</strong> (such as &ldquo;Lead&rdquo;) and a <strong>Day</strong> offset from a start date. A launch, a hiring round or a monthly close are typical. Applying one creates everything in one go.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">The list</div><div class="a-val"><p>Each template has <strong>Apply</strong> and, if it is yours, <strong>Edit</strong> (otherwise <strong>Preview</strong>). <strong>Show archived</strong> includes retired ones; <strong>New template</strong> starts one. With none, the screen says <em>No templates yet</em>.</p></div></div>
+  <div class="a-row"><div class="a-key">Two kinds</div><div class="a-val"><p><strong>Founders: under a theme</strong>, made by Founders, which create milestones, results and tasks under a theme; and <strong>Leads: under a milestone</strong>, which anyone who owns an agreed milestone or result can make, and which is applied under a milestone you own.</p></div></div>
+  <div class="a-row"><div class="a-key">Editing</div><div class="a-val"><p>Name, optional description, who it is for, then the <strong>Steps</strong>. Each step has a title, a Role and a Day (0 is the start date, a negative number is before it; the screen spells it out, such as <em>3 days before</em>). Add a milestone, result or task step where it belongs, reorder with the arrows, and press <strong>Save</strong>. <strong>Archive</strong> retires it.</p></div></div>
+  <div class="a-row"><div class="a-key">Applying</div><div class="a-val"><p>Pick the theme or milestone to apply it <strong>under</strong>, the <strong>Anchor date (day 0)</strong>, and who plays each role. A preview titled <em>What will be created</em> lists every item with its date and person. Press <strong>Apply</strong>; the result reads <em>Applied &ldquo;name&rdquo;</em> with how many plan items and tasks were created.</p></div></div>
+</div>
+<div class="callout note">
+  <div class="c-title">&#9432; Applying follows the normal rules</div>
+  <p>Created items go through the same checks as ones made by hand: spaces still decide who can have a task, and a task linked to a founders-only item is created in the Founders&rsquo; space.</p>
+</div>
+
+<h2 class="sec">Re-plan <span class="role fnd">Founder</span></h2>
+<p>The monthly check that next month is ready to start. The title reads <em>Re-plan &middot; Month Year</em> and defaults to next month; use the arrows or <strong>Next month</strong> to move.</p>
+<ul>
+  <li><strong>Readiness</strong>: one row per milestone due that month, with ticks for <strong>Agreed</strong>, <strong>Owner</strong>, <strong>Data source</strong> and <strong>Tasks (first 2 wks)</strong> (how many actionable tasks are lined up for the first fortnight), and an overall <strong>Ready</strong> mark. The header counts how many are ready and not ready. Filter by <strong>Team</strong>; <strong>Not ready first</strong> floats the gaps to the top.</li>
+  <li><strong>Risks</strong>: the risks people have proposed since the last re-plan.</li>
+  <li><strong>Scores</strong>: the on-time percentage for each team for each week of the month just closed.</li>
+</ul>
+<p>The screen is read-only. Getting a row ready means doing the work elsewhere (agree the milestone, give it an owner, add tasks) and coming back.</p>

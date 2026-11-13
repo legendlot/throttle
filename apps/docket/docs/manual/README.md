@@ -18,10 +18,10 @@ python3 build.py --html     # also write manual.debug.html
 ## Structure
 
 - `manual.json` - the spine: title, version, roles (`mem` Member, `view`
-  Reviewer, `adm` Admin) and the ordered parts -> chapters. Add/reorder chapters here.
+  Reviewer, `adm` Admin, `fnd` Founder, `ass` Founders' Associate) and the ordered parts -> chapters. Add/reorder chapters here.
 - `content/*.html` - one fragment per chapter (body only; the build adds the
   title, breadcrumb and role badges).
-- `assets/theme.css` - styling (LOT dark, role classes `mem`/`view`/`adm`).
+- `assets/theme.css` - styling (LOT dark, role classes `mem`/`view`/`adm`/`fnd`/`ass`).
 - `build.py` - shared build pipeline.
 
 ## House style
@@ -33,4 +33,17 @@ chapter (for example `content/task-list.html`) to match the components.
 
 Plain language for a non-technical team: describe behaviour, not table/column or
 permission-key names. The audited deadline, abandon-not-delete, the one-owner rule,
-Spaces vs Programs and dashboard sharing are the load-bearing ideas to get right.
+the Plan (who sees what), the week and on-time score, hand-offs, Spaces and dashboard sharing are the load-bearing ideas to get right.
+
+## Plan chapters, the Slack chapter, and no real plan content
+
+The **The Plan** part (`plan`, `plan-proposals`, `plan-views`, `plan-tasks`, `weeks`, `score`, `review`,
+`handoffs`) documents the F9 plan layer. Programs are retired (no chapter; a note lives in `org-spaces`).
+Never copy a real theme, milestone, result, code, target, owner or date into a chapter: use invented
+examples ("Launch the new website", `M1`, "Priya").
+
+`content/slack.html` (the `/docket` command, shortcuts, buttons and reminder DMs) is written but **not in
+the manual.json spine** until Slack has been tried in the team. To ship it, add one chapter line to the
+"The Plan" part, e.g.
+`{ "id": "slack", "title": "Docket in Slack", "file": "slack.html", "roles": ["mem","fnd","ass"] }`,
+then bump the version and rebuild both outputs.

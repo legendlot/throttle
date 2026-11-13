@@ -20,7 +20,7 @@
   <thead><tr><th>Part</th><th>What it does</th></tr></thead>
   <tbody>
     <tr><td><strong>&lsaquo; &rsaquo; arrows</strong></td><td>Step to the previous or next task in the list you opened it from, without closing (<span class="kbd">Ctrl</span> <span class="kbd">Shift</span> <span class="kbd">&larr;</span> / <span class="kbd">&rarr;</span>). They grey out at either end.</td></tr>
-    <tr><td><strong>Breadcrumb</strong></td><td>The space, the program (if any) and the <code>DKT-</code> number. Click the number to copy it.</td></tr>
+    <tr><td><strong>Breadcrumb</strong></td><td>The space and the <code>DKT-</code> number. Click the number to copy it.</td></tr>
     <tr><td><strong>Copy link</strong></td><td>Copies a link that opens straight to this task as a full page.</td></tr>
     <tr><td><strong>More actions</strong> (&hellip;)</td><td>Copy link, Copy task id, Add sub-task, Mark done, and <strong>Abandon&hellip;</strong>. On an abandoned task it offers <strong>Reactivate</strong>.</td></tr>
     <tr><td><strong>Switch layout</strong></td><td>Modal / Side panel / Full page.</td></tr>
@@ -34,7 +34,7 @@
   <thead><tr><th>Section</th><th>What it holds</th></tr></thead>
   <tbody>
     <tr><td><strong>Title and description</strong></td><td>The title (and, on a sub-task, a link up to its parent) and a free-text description. If you can edit the task, click either to change it.</td></tr>
-    <tr><td><strong>Properties panel</strong></td><td>A tidy list of fields: Status, Owner, Collaborators, Deadline, Priority, Team, Program, Space, Created (and Completed once done). Click a value to change it. A recurring checklist item shows <strong>Repeats</strong> in place of Deadline.</td></tr>
+    <tr><td><strong>Properties panel</strong></td><td>A tidy list of fields: Status, Owner, Collaborators, Deadline, Priority, Team, Plan, Hand-off to, Space, Created (and Completed once done). A task that still carries an old Program shows it read-only as <em>Program: &hellip; &middot; retired, use Plan</em>. Click a value to change it. A recurring checklist item shows <strong>Repeats</strong> in place of Deadline.</td></tr>
     <tr><td><strong>Dependencies</strong></td><td>Waiting on, Blocking and Related links to other tasks. Shown once something is linked (see below).</td></tr>
     <tr><td><strong>Sub-tasks</strong></td><td>The child tasks, with their own owners and statuses, and a done/total count.</td></tr>
     <tr><td><strong>Documents</strong></td><td>Links to outside files (Drive, Sheets, anything with a web address). Docket stores the link, not the file.</td></tr>
@@ -42,6 +42,13 @@
   </tbody>
 </table>
 <p>Sub-tasks and Documents are sections you can fold shut by clicking their headings.</p>
+
+<h2 class="sec">Plan and hand-off properties</h2>
+<p>Two properties connect a task to the wider company, and both apply to top-level tasks only:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Plan</div><div class="a-val"><p>Click the value to search and pick a theme, milestone or result, or choose <em>Unplanned</em> to clear it. On a sub-task the field is read-only and shows the parent&rsquo;s link, labelled <em>from the parent task</em>. See <em>Linking Tasks to the Plan</em>.</p></div></div>
+  <div class="a-row"><div class="a-key">Hand-off to</div><div class="a-val"><p>Pick another team, and optionally a person in it. A status line reads <em>Waiting for&hellip; to accept</em> or <em>Accepted by&hellip;</em>, and the receiving team sees an <strong>Accept hand-off</strong> button here. You stay the owner. See <em>Hand-offs</em>.</p></div></div>
+</div>
 
 <h2 class="sec">Dependencies: waiting on, blocking, related</h2>
 <p>A dependency links two tasks so everyone can see what has to happen first. One link is shown from both ends: if DKT-12 is <em>waiting on</em> DKT-9, then DKT-9 shows as <em>blocking</em> DKT-12.</p>

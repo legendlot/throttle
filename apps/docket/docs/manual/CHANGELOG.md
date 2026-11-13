@@ -3,6 +3,27 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [2.0.0] - 2026-11-13
+The F9 plan layer, a new part and a restructure.
+### Added
+- **The Plan** (new part, 8 chapters): *Themes, Milestones & Results* (themes, milestones, results, tasks; states; actions; re-dating
+  an agreed milestone needs a reason; Split; who sees what); *Proposals, Measures & Targets* (Propose, the
+  Founders' decision, the No data source chip, readings, "Target reached"); *Plan Views* (Three weeks, Tree,
+  Templates, Re-plan and who can open each); *Linking Tasks to the Plan* (the Plan field everywhere, Plan filter
+  incl. Unplanned, sub-tasks inherit); *Weeks and Week Ending*; *The On-time Score*; *The Weekly Review*
+  (/review, Hold, Copy for Slack, Founders' catch-up, score trend); *Hand-offs* (give, Incoming, accept).
+- Roles **Founder** and **Founders' Associate** (badges `fnd`, `ass`) in the Roles chapter and the spine.
+- `content/slack.html` written (command, shortcuts, buttons, reminders) but intentionally **not yet in the spine**.
+### Changed
+- **Roles & What You Can See**, **Roles & Permissions**, **Users**, **Spaces (Admin)**: the two Plan switches,
+  Founder-only granting, the Founders' space.
+- **Signing In & Getting Around**: the Plan rail icon and sidebar entries; no Programs, no New program.
+- **The Tasks List**, **Inside a Task**: Plan column/filter/field, Group by Week ending and the Week filter, the
+  read-only week board, hand-off chip and field, Incoming on My tasks.
+- **Welcome**: how work is organised (Spaces and the Plan).
+### Removed
+- **Programs** chapter. Programs are retired (no sidebar entry, no capture); a note in *Spaces* explains it.
+
 ## [1.7.0] - 2026-11-11
 ### Added
 - **Checklists**: the Today | Register switch on My day; The Register (7D/14D/30D window, paging,

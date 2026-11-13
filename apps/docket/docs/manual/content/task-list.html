@@ -4,7 +4,7 @@
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Capturing, finding, and updating tasks.</div></div>
   <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Both: read your list and edit in place.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mem">Member</span> <span class="role view">Reviewer</span> <span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Shows</div><div class="g-val">The tasks you&rsquo;re allowed to see, in one space or program.</div></div>
+  <div class="g-cell"><div class="g-lbl">Shows</div><div class="g-val">The tasks you&rsquo;re allowed to see, in one space (or across spaces on My tasks).</div></div>
 </div>
 
 <h2 class="sec">The layout</h2>
@@ -31,7 +31,7 @@
   </tbody>
 </table>
 <p>The words that became a chip leave the title. Docket <strong>never sets a deadline in the past</strong>: a time that has already passed today rolls to tomorrow, and a date that cannot be read as a future one stays in the title. Pick a value from a chip yourself and it wins over the typed words, which go back into the title. Click the <strong>&times;</strong> on a chip to drop it and keep the words as text.</p>
-<p>You can also capture straight into a group: every group ends with a <strong>+ Add task</strong> line, and the task is created already carrying that group&rsquo;s value (grouped by Owner, a new task gets that owner; grouped by Program, that program; grouped by Status, a task added under <em>In progress</em> is created in that status straight away). The group header has an <strong>Add task</strong> button too, which jumps you to that line. With a row focused, <span class="kbd">c</span> opens its own group&rsquo;s line.</p>
+<p>You can also capture straight into a group: every group ends with a <strong>+ Add task</strong> line, and the task is created already carrying that group&rsquo;s value (grouped by Owner, a new task gets that owner; grouped by Team, that team; grouped by Status, a task added under <em>In progress</em> is created in that status straight away). The group header has an <strong>Add task</strong> button too, which jumps you to that line. With a row focused, <span class="kbd">c</span> opens its own group&rsquo;s line.</p>
 
 <div class="callout tip">
   <div class="c-title">&#10003; Capture first, tidy later</div>
@@ -62,8 +62,8 @@
     <tr><td><strong>Name</strong></td><td>The title, with the permanent <code>DKT-</code> number beside it (turn the numbers off in Customize). A <span class="mono">REV</span> tag means the deadline has been changed at least once. A sub-task count like 2/5 shows done out of total.</td></tr>
     <tr><td><strong>Status</strong></td><td>Not started / In progress / Done / Blocked / Abandoned. Always shown.</td></tr>
     <tr><td><strong>Team</strong></td><td>The department it belongs to.</td></tr>
-    <tr><td><strong>Program</strong></td><td>Its program label, if any. Hidden by default; turn it on in Columns.</td></tr>
-    <tr><td><strong>Space</strong></td><td>Which space it lives in. Appears only on My tasks and Program views, which span several spaces.</td></tr>
+    <tr><td><strong>Plan</strong></td><td>The plan item the task is linked to, shown as its code (hover for the title). An empty cell offers <em>Set plan</em>. See <em>Linking Tasks to the Plan</em>.</td></tr>
+    <tr><td><strong>Space</strong></td><td>Which space it lives in. Appears only on My tasks, which spans several spaces.</td></tr>
     <tr><td><strong>Owner</strong></td><td>The accountable person, as an initial circle (hover for the full name).</td></tr>
     <tr><td><strong>Collaborators</strong></td><td>Helpers, as small overlapping initial circles. Hover to see names.</td></tr>
     <tr><td><strong>Priority</strong></td><td>A flag for P0 (immediate) to P3 (low).</td></tr>
@@ -83,7 +83,7 @@
 
 <h2 class="sec">Shaping the columns</h2>
 <ul>
-  <li><strong>Show or hide:</strong> the <strong>Columns</strong> button lists every optional column with a tick. Name and Status are always on. <strong>Reset columns</strong> puts everything back (Program hidden again).</li>
+  <li><strong>Show or hide:</strong> the <strong>Columns</strong> button lists every optional column with a tick. Name and Status are always on. <strong>Reset columns</strong> puts everything back to the defaults.</li>
   <li><strong>Resize:</strong> drag the thin edge on the right of a column header.</li>
   <li><strong>Reorder:</strong> drag a column header onto another one.</li>
   <li><strong>Sort:</strong> click a header (Name, Status, Owner, Priority, Deadline). Click again to reverse, and a third time to switch sorting off.</li>
@@ -96,7 +96,7 @@
 <h2 class="sec">Editing without opening anything</h2>
 <p>This is the heart of the screen. If you are allowed to edit a task, most cells are <strong>click-to-edit</strong> right in the row:</p>
 <ol class="steps">
-  <li><span class="s-title">Click a property cell</span> (Status, Team, Program, Owner or Priority) and a small picker opens, with a search box for the long lists. Pick a value and it saves instantly. An empty cell shows a faint icon when you hover it.</li>
+  <li><span class="s-title">Click a property cell</span> (Status, Team, Plan, Owner or Priority) and a small picker opens, with a search box for the long lists. Pick a value and it saves instantly. An empty cell shows a faint icon when you hover it.</li>
   <li><span class="s-title">Click the Deadline cell</span> to open a calendar. The first time, you just pick a date. After that, changing it asks for a <strong>reason</strong> (see below).</li>
   <li><span class="s-title">Click the Collaborators cell&rsquo;s small + </span> to add a helper from a short list.</li>
   <li><span class="s-title">Click the row itself</span> (the title or empty space) to open the task. See <em>Inside a Task</em>.</li>
@@ -127,12 +127,12 @@
 <p>The <strong>Subtasks</strong> button in the toolbar has <strong>Expand all</strong> and <strong>Collapse all</strong>, and a choice between showing sub-tasks <strong>Nested under parent</strong> (the default) or <strong>As separate tasks</strong>, where every sub-task gets a row of its own. It appears once at least one task has sub-tasks.</p>
 
 <h2 class="sec">Groups</h2>
-<p>The <strong>Group</strong> button on the left of the toolbar regroups the list by <strong>Owner</strong>, <strong>Team</strong>, <strong>Status</strong> or <strong>Program</strong> (or <em>No grouping</em>). Each group has a header with its name and a count. Click the header to <strong>collapse or expand</strong> the group; its <strong>&hellip;</strong> menu also offers <strong>Collapse all groups</strong> and <strong>Expand all groups</strong>. Docket remembers which groups you folded. An x on the Group button clears the grouping.</p>
+<p>The <strong>Group</strong> button on the left of the toolbar regroups the list by <strong>Owner</strong>, <strong>Team</strong>, <strong>Status</strong> or <strong>Week ending</strong> (or <em>No grouping</em>). Week ending gives one group per week, with <em>Overdue</em> first and <em>No date</em> last; see <em>Weeks and Week Ending</em>. Each group has a header with its name and a count. Click the header to <strong>collapse or expand</strong> the group; its <strong>&hellip;</strong> menu also offers <strong>Collapse all groups</strong> and <strong>Expand all groups</strong>. Docket remembers which groups you folded. An x on the Group button clears the grouping.</p>
 
 <h2 class="sec">Finding tasks: search and filter</h2>
 <div class="anatomy">
   <div class="a-row"><div class="a-key">Search</div><div class="a-val"><p>The box on the right of the toolbar (press <span class="kbd">/</span> to jump in) filters as you type, instantly. It matches the ID, title, owner, team, creator and collaborator names, and every word you type must match somewhere. For a search across spaces and screens use the command bar (<span class="kbd">&#8984;K</span>).</p></div></div>
-  <div class="a-row"><div class="a-key">Filter</div><div class="a-val"><p>Opens a small panel to filter by <strong>Status</strong>, <strong>Team</strong>, <strong>Owner</strong>, <strong>Priority</strong> and <strong>Program</strong>, with quick <strong>Overdue</strong> and <strong>Revised</strong> toggles, and a <strong>Dependencies</strong> pair: <strong>Waiting on others</strong> (tasks still waiting on an open blocker) and <strong>Blocking others</strong> (tasks others are still waiting on). Only one of the two can be on at a time, and a blocker that is already done or abandoned does not count. A number on the button says how many filters are on; <em>Clear filters</em> resets them.</p></div></div>
+  <div class="a-row"><div class="a-key">Filter</div><div class="a-val"><p>Opens a small panel to filter by <strong>Status</strong>, <strong>Team</strong>, <strong>Owner</strong>, <strong>Priority</strong>, <strong>Plan</strong> (a theme, milestone or result, or <em>Unplanned</em>) and <strong>Week</strong> (<em>This week</em>, <em>Next week</em>, <em>Week ending&hellip;</em>, <em>Overdue</em>, <em>No date</em>), with quick <strong>Overdue</strong> and <strong>Revised</strong> toggles, and a <strong>Dependencies</strong> pair: <strong>Waiting on others</strong> (tasks still waiting on an open blocker) and <strong>Blocking others</strong> (tasks others are still waiting on). Only one of the two can be on at a time, and a blocker that is already done or abandoned does not count. A number on the button says how many filters are on; <em>Clear filters</em> resets them.</p></div></div>
   <div class="a-row"><div class="a-key">Me</div><div class="a-val"><p>A one-click toggle that limits the list to tasks you own, are assigned, collaborate on or raised.</p></div></div>
   <div class="a-row"><div class="a-key">Archive done</div><div class="a-val"><p>Moves finished tasks out of the main list into a collapsed <strong>Archived</strong> section at the bottom, so the list shows only live work. Untick a task there to bring it back.</p></div></div>
 </div>
@@ -141,7 +141,7 @@
 <p>The <strong>List / Board</strong> switch in the views bar flips between the two, and Docket remembers your choice. (My tasks is list-only.)</p>
 <div class="anatomy">
   <div class="a-row"><div class="a-key">List view</div><div class="a-val"><p>The default: tasks as rows, with The Grid, inline editing, sub-tasks and bulk select, all as described above.</p></div></div>
-  <div class="a-row"><div class="a-key">Board view</div><div class="a-val"><p>A Kanban: tasks become cards in columns. By default the columns are the statuses (Not started, In progress, Blocked, Done). Use <strong>Group</strong> to switch the columns to <strong>Owner</strong>, <strong>Team</strong> or <strong>Program</strong> instead.</p></div></div>
+  <div class="a-row"><div class="a-key">Board view</div><div class="a-val"><p>A Kanban: tasks become cards in columns. By default the columns are the statuses (Not started, In progress, Blocked, Done). Use <strong>Group</strong> to switch the columns to <strong>Owner</strong>, <strong>Team</strong> or <strong>Week ending</strong> instead. The week columns are read-only: a card cannot be dragged to another week, because a deadline only moves by revising it with a reason.</p></div></div>
 </div>
 <p>To move a task, <strong>drag its card into another column</strong>. On a status board, dragging a card to <strong>Done</strong> marks it done; on an Owner board it reassigns the owner, and so on. Only cards you are allowed to edit move. From the keyboard, focus a card and press <span class="kbd">Shift</span> + <span class="kbd">&larr;</span> / <span class="kbd">&rarr;</span> to move it one column; plain arrows walk between cards, and <span class="kbd">Enter</span> opens the task.</p>
 <ul>
@@ -151,15 +151,23 @@
 </ul>
 <div class="callout note">
   <div class="c-title">&#9432; What the board shows</div>
-  <p>Each card shows the title, <code>DKT-</code> number, owner, priority, deadline and any team, program or space tags, plus small sub-task, comment and document counts. Only top-level tasks appear as cards (a parent shows its sub-task count rather than separate cards), and <strong>Abandoned</strong> tasks are left off the board. Columns, Archive done, Select and row density are list-only tools. Board view also works inside a <strong>Program</strong> view.</p>
+  <p>Each card shows the title, <code>DKT-</code> number, owner, priority, deadline and any team, plan or space tags and a hand-off chip, plus small sub-task, comment and document counts. Only top-level tasks appear as cards (a parent shows its sub-task count rather than separate cards), and <strong>Abandoned</strong> tasks are left off the board. Columns, Archive done, Select and row density are list-only tools.</p>
 </div>
+
+<h2 class="sec">Plan, week and hand-off on the list</h2>
+<p>Three ideas from <em>The Plan</em> part show up on every list:</p>
+<ul>
+  <li><strong>Plan.</strong> The <strong>Plan</strong> column and the Plan chip on board cards show the goal a task is linked to; the <strong>Plan</strong> filter narrows to a theme, milestone, result or <em>Unplanned</em>. On the capture line, a <strong>Plan</strong> chip sits beside Owner, Deadline and Priority once there is something to link to. Only top-level tasks carry a link; sub-tasks inherit their parent&rsquo;s.</li>
+  <li><strong>Week.</strong> <strong>Group &rsaquo; Week ending</strong> and the <strong>Week</strong> filter work on the List, the Grid and the Board.</li>
+  <li><strong>Hand-off.</strong> A task given to another team shows a small chip such as <strong>&rarr; Design</strong> on its row, grid card and board card, amber until it is accepted. The same task appears in the receiving team&rsquo;s <strong>Incoming</strong> section on My tasks.</li>
+</ul>
 
 <h2 class="sec">Updating many tasks at once</h2>
 <p>When you need to make the same change to several tasks (assign them all to one person, push them all to next week, bump them all to P1), use <strong>bulk update</strong> instead of editing each row by hand. It works in The Grid and in the main list.</p>
 <ol class="steps">
   <li><span class="s-title">Click <strong>Select</strong></span> in the toolbar (or tick any row&rsquo;s box). A tick box appears on the left of every task you are allowed to edit. Tasks you only collaborate on or can view show a faint, locked box: you cannot pick those.</li>
   <li><span class="s-title">Tick the tasks you want.</span> Pick them one by one, or use <strong>Select all</strong> to grab every editable task currently shown (your search and filters decide what &ldquo;all&rdquo; means).</li>
-  <li><span class="s-title">Use the bar that pops up at the bottom.</span> It shows how many are selected and has one button each for <strong>Owner</strong>, <strong>Status</strong>, <strong>Priority</strong>, <strong>Deadline</strong>, <strong>Program</strong>, <strong>Collaborators</strong> (add or remove), <strong>Move</strong> (to another space) and <strong>Abandon</strong>.</li>
+  <li><span class="s-title">Use the bar that pops up at the bottom.</span> It shows how many are selected and has one button each for <strong>Owner</strong>, <strong>Status</strong>, <strong>Priority</strong>, <strong>Deadline</strong>, <strong>Collaborators</strong> (add or remove), <strong>Move</strong> (to another space) and <strong>Abandon</strong>.</li>
   <li><span class="s-title">Pick a value</span> and it applies to every selected task at once. The <strong>x</strong> at the left of the bar clears the selection; clicking <strong>Select</strong> again leaves bulk mode.</li>
 </ol>
 
@@ -174,7 +182,7 @@
 </div>
 
 <h2 class="sec">Which space am I in?</h2>
-<p>The list shows <strong>one space at a time</strong>. By default that is <strong>General</strong>, the open company-wide space. If you click a private space in the sidebar, the breadcrumb shows its name (with a padlock) and the list shows only that space&rsquo;s tasks; anything you capture lands in that space. Click a program in the sidebar instead and you see that program&rsquo;s tasks from every space. Spaces and programs have their own chapters.</p>
+<p>The list shows <strong>one space at a time</strong>. By default that is <strong>General</strong>, the open company-wide space. If you click a private space in the sidebar, the breadcrumb shows its name (with a padlock) and the list shows only that space&rsquo;s tasks; anything you capture lands in that space. Spaces have their own chapter. (Programs, which used to gather tasks from every space, are retired. An old program link still opens a read-only list of its tasks with a note pointing to the Plan.)</p>
 
 <h2 class="sec">My tasks: everything on your plate, across every space</h2>
 <p><strong>My tasks</strong> on the rail is different from the rest of the list. Instead of one space, it pulls together every task you are involved in <strong>across all the spaces you can see</strong>, in four groups (empty groups are hidden):</p>
@@ -184,6 +192,7 @@
   <div class="a-row"><div class="a-key">Collaborating</div><div class="a-val"><p>Tasks where you are a <strong>collaborator</strong> but not the owner.</p></div></div>
   <div class="a-row"><div class="a-key">Raised by me</div><div class="a-val"><p>Open tasks you created that someone else owns, so you can keep an eye on what you handed off.</p></div></div>
 </div>
+<p>When another team has handed a task to you or your team, an <strong>Incoming</strong> section appears above these groups, with <strong>To you</strong> and <strong>To your team</strong> tabs and an <strong>Accept</strong> button on each. It is hidden when nothing is incoming. See <em>Hand-offs</em>.</p>
 <p>Because it spans spaces, each row carries a <strong>Space</strong> column so you can see where a task lives. Every task is its own row here (no nesting of sub-tasks). Search, filters and bulk select work as on a normal list.</p>
 
 <h3>Clean up: the stale-work sweep</h3>

@@ -1,0 +1,65 @@
+<p class="lead">Docket has its own Slack app. From Slack you can add a task in seconds, see what is on your plate, tick a task done, move its date, comment, accept a hand-off, and propose something for the plan, without opening Docket. Docket also sends a few well-timed direct messages to keep the week on track. Everything in Slack runs <strong>as you</strong>, with your own Docket permissions.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Using Docket from inside Slack.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Both: add and update tasks, read your list.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mem">Member</span> <span class="role fnd">Founder</span> <span class="role ass">Associate</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Any Slack channel or DM: type <code>/docket</code></div></div>
+</div>
+
+<h2 class="sec">How Docket knows it is you</h2>
+<p>Docket matches your Slack account to your Docket login by your <strong>work email</strong>. There is nothing to set up. If your email does not match, Docket replies that your Slack account is not linked and asks you to have an admin check it. A Slack account that matches no active Legend of Toys employee is refused. Because it acts as you, you can only see and change what you could in Docket itself, and the same rules apply (a deadline can be set once, then moved only with a reason).</p>
+
+<h2 class="sec">The /docket command</h2>
+<p>Type <code>/docket</code> in any message box. Replies are visible only to you. <code>/docket help</code> shows the list below.</p>
+<table class="tbl">
+  <thead><tr><th>You type</th><th>What happens</th></tr></thead>
+  <tbody>
+    <tr><td><code>/docket add &lt;task&gt;</code></td><td>Adds a task, using Docket&rsquo;s own quick add: <code>@name</code> sets the owner, <code>!p0</code> to <code>!p3</code> the priority, and a date or time the deadline (<em>fri 5pm</em>, <em>tomorrow</em>, <em>12 nov</em>). Without <code>@name</code> the task is yours. Docket replies with a link to the new task.</td></tr>
+    <tr><td><code>/docket mine</code></td><td>Lists your open tasks: up to 8 overdue, 8 due today and 5 in the next 7 days, each with buttons (below). A link at the end opens the full list in Docket.</td></tr>
+    <tr><td><code>/docket propose &lt;title&gt; | &lt;why&gt;</code></td><td>Sends a proposal to the Founders. Put the title, a vertical bar, then why it matters. If you leave out the bar, the same text is used for both.</td></tr>
+    <tr><td><code>/docket help</code></td><td>Shows this list. Typing <code>/docket</code> on its own does the same.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Turning a message into a task</h2>
+<p>Two shortcuts open a small form:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Add to Docket</div><div class="a-val"><p>On any Slack message, open its <strong>&hellip;</strong> menu and choose <strong>Add to Docket</strong>. The message text becomes the task title, and the link to the message is saved on the task.</p></div></div>
+  <div class="a-row"><div class="a-key">New Docket task</div><div class="a-val"><p>From the <strong>shortcuts</strong> menu anywhere in Slack, choose <strong>New Docket task</strong> for a blank form.</p></div></div>
+</div>
+<p>The form (titled <strong>Add to Docket</strong>) has:</p>
+<ul>
+  <li><strong>Task</strong> (up to 200 characters) and <strong>Owner</strong> (defaults to you).</li>
+  <li><strong>Deadline</strong>, optional, with the hint <em>Set once, moving it later needs a reason</em>. It must be today or later, and after 6 pm Indian time today is no longer offered.</li>
+  <li><strong>Plan link</strong>, optional, if there is anything on the plan you may link to.</li>
+  <li><strong>Hand off to</strong>, optional: a person on another team, with the hint <em>Someone on another team; you stay the owner</em>.</li>
+</ul>
+<p>Press <strong>Add task</strong>. Docket confirms with a link.</p>
+
+<h2 class="sec">Buttons on your tasks</h2>
+<p>Each task in <code>/docket mine</code>, and in the reminders below, carries buttons that run as you:</p>
+<table class="tbl">
+  <thead><tr><th>Button</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Done</strong></td><td>Marks the task done. If the task is still waiting on open tasks, Docket refuses and tells you to mark it done in Docket, where you can confirm.</td></tr>
+    <tr><td><strong>Move date</strong></td><td>Opens a form with a <strong>New date</strong> and a required reason (<em>Why is it moving?</em>). The move is recorded with the reason, like a Revise in Docket.</td></tr>
+    <tr><td><strong>Comment</strong></td><td>Opens a form to write a comment on the task.</td></tr>
+    <tr><td><strong>Accept hand-off</strong></td><td>Appears on a hand-off addressed to you or your team. Accepts it, exactly as the Incoming list in Docket does.</td></tr>
+  </tbody>
+</table>
+<p>If Docket cannot do something, it says so in plain words and points you to the app. For example, an abandoned task is read-only until it is reopened in Docket.</p>
+
+<h2 class="sec">Reminder messages</h2>
+<p>Docket sends a handful of direct messages from the Docket app, in <strong>Indian time</strong>, <strong>on working days only</strong> (Docket&rsquo;s working days and holidays, see <em>Weeks and Week Ending</em>). Each message is built for its recipient and shows only what they may see. A reminder with nothing to say is not sent.</p>
+<table class="tbl">
+  <thead><tr><th>When</th><th>Who gets it</th><th>What it says</th></tr></thead>
+  <tbody>
+    <tr><td><strong>09:00, every working day</strong></td><td>Everyone who owns open tasks.</td><td><em>Good morning, your Docket tasks</em>: what is overdue, due today, and anything with no update for 3 working days. Each task has its buttons.</td></tr>
+    <tr><td><strong>09:30, every working day</strong></td><td>Founders and Associates.</td><td>The <em>Chase list</em>: open tasks due in the next 2 working days with no update in 3, and any team that raised a quiet day. Founders get a one-line version.</td></tr>
+    <tr><td><strong>Thursday 17:00</strong></td><td>Anyone who committed to a task this week that is still not done.</td><td><em>Review tomorrow</em>: the tasks you committed to this week that are not done yet, with a link to the review.</td></tr>
+    <tr><td><strong>Thursday 18:00</strong></td><td>Founders and Associates.</td><td>The review pack is ready: a summary, with a link to the full pack.</td></tr>
+    <tr><td><strong>Friday 18:00</strong></td><td>Founders.</td><td>Tomorrow&rsquo;s Founders&rsquo; catch-up: the summary, with a link to the page.</td></tr>
+  </tbody>
+</table>
+<p>A reminder is never sent twice for the same day, and tasks in the Founders&rsquo; space never appear in Slack.</p>

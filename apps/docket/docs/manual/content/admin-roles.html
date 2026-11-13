@@ -11,12 +11,14 @@
 <p>Click <strong>Admin</strong> at the bottom of the icon rail (it opens on this screen), and use the sidebar to move between <strong>Roles &amp; permissions</strong>, <strong>Users</strong> and <strong>Spaces</strong>. Admin does not appear for anyone who is not an admin.</p>
 
 <h2 class="sec">What a role is built from</h2>
-<p>A Docket role is a name plus up to two switches. That is all there is to it:</p>
+<p>A Docket role is a name plus up to four switches. The first two control the task manager; the last two control the Plan:</p>
 <table class="tbl">
   <thead><tr><th>Switch</th><th>What it grants</th></tr></thead>
   <tbody>
     <tr><td><strong>See all org tasks + the review dashboard</strong></td><td>Org-wide read access and the Dashboard. This is the Reviewer.</td></tr>
     <tr><td><strong>Manage roles, assign users &amp; edit/abandon any task</strong></td><td>Full management on top. This is the Admin.</td></tr>
+    <tr><td><strong>Super admin: the plan register: themes, milestones, targets</strong></td><td>The Founder. Full control of the Plan, including targets and founders-only themes. It also turns on the Admin switch.</td></tr>
+    <tr><td><strong>Founders&rsquo; Associate: review packs + the plan register (never targets or restricted themes)</strong></td><td>The Associate. Read-only access to the plan register and the review for any team.</td></tr>
   </tbody>
 </table>
 <p>A role with <strong>neither</strong> switch on is the baseline Member, a real, useful tier (own + team + collaborator tasks), not a locked-out account.</p>
@@ -24,6 +26,11 @@
 <div class="callout warn">
   <div class="c-title">&#9888; Admin always includes &ldquo;see all&rdquo;</div>
   <p>You cannot give someone the management switch without the see-all switch, the screen turns it on for you and won't let you turn it off. It makes no sense to manage tasks you can't see, so Docket guards against it.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Only a Founder can touch the two Plan switches</div>
+  <p>A role that carries <em>Super admin</em> or <em>Founders&rsquo; Associate</em> is locked for everyone but a Founder: only a Founder can create, edit or delete one, and the two switches are dimmed with <em>only a super admin can grant this</em> for everyone else. The super admin switch always turns Admin on, as Admin turns see-all on.</p>
 </div>
 
 <h2 class="sec">Working with roles</h2>

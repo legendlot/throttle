@@ -1,0 +1,46 @@
+<p class="lead">The <strong>Weekly Review</strong> is one page that tells a team how its week went and what is coming: the score, what slipped and why, milestones due, who has gone quiet, and the next two weeks. It is built fresh from the live tasks, so a Thursday glance and a Friday meeting read from the same source. A second page, <strong>Founders&rsquo; catch-up</strong>, is for the Founders&rsquo; own weekly conversation.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Reviewing the week and the next two.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read; Founders can Hold and set a top 5.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mem">Member</span> <span class="role fnd">Founder</span> <span class="role ass">Associate</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val"><strong>Review</strong> in the sidebar, <code>/review</code></div></div>
+</div>
+
+<h2 class="sec">The page</h2>
+<p>The title reads <em>Review &middot; week ending</em> a date, with a <strong>PROVISIONAL</strong> or <strong>FINAL</strong> tag and an <em>As of&hellip;</em> time in Indian time.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Week stepper</div><div class="a-val"><p>Left and right arrows step a week at a time; <strong>This week</strong> jumps back. A week that has not started yet says <em>Not started yet</em>, and a week that was never opened says <em>This week has no score</em>.</p></div></div>
+  <div class="a-row"><div class="a-key">Team picker</div><div class="a-val"><p>Founders and Associates choose <strong>All teams</strong> or one team. Everyone else sees their own team only. If your profile has no team you see <em>No team on your profile</em>; ask an admin.</p></div></div>
+  <div class="a-row"><div class="a-key">Copy for Slack</div><div class="a-val"><p>Copies a ready-to-paste text summary of what is on screen. It never names a task from the Founders&rsquo; space or a founders-only milestone, whoever copies it. It is greyed out until the week has a score.</p></div></div>
+  <div class="a-row"><div class="a-key">Hold <span class="role fnd">Founder</span></div><div class="a-val"><p>Stores the provisional view as a snapshot, so the minutes of a meeting can point at exactly what was on screen (<em>Held</em>). <strong>Snapshots</strong> lists the stored versions for the week; open one to read it as it was, and press <strong>Back to live</strong> to return. The final score is stored automatically when the week closes.</p></div></div>
+</div>
+
+<h2 class="sec">What is in the pack</h2>
+<p>For each team there is one card with these sections, in this order:</p>
+<table class="tbl">
+  <thead><tr><th>Section</th><th>What it shows</th></tr></thead>
+  <tbody>
+    <tr><td><strong>This week</strong></td><td>Committed, on time, missed so far (or missed), still due, and the on-time percentage, marked provisional or final. See <em>The On-time Score</em>.</td></tr>
+    <tr><td><strong>Last week</strong></td><td>The same for the week before, plus a small chart of the last four weeks.</td></tr>
+    <tr><td><strong>Slipped</strong></td><td>Each task that missed: its owner, the committed date against the current date, how many times it moved, and every revision with its reason and when.</td></tr>
+    <tr><td><strong>Milestones</strong></td><td>Milestones due this week and whether each is done; any re-dated this week, with the reason; and warnings: <em>no actionable tasks</em>, <em>no data source</em>, <em>not agreed</em>.</td></tr>
+    <tr><td><strong>Hand-offs</strong></td><td>Hand-offs that are <em>Overdue</em> or <em>Unowned</em> (no one named, or not accepted, in the next two weeks). See <em>Hand-offs</em>.</td></tr>
+    <tr><td><strong>Staleness</strong></td><td>For each person with open committed tasks, how recently they updated things and the share they touched. This week only, a banner reads <em>Quiet on&hellip;, no update on any open task</em> if the last working day was silent. Only Founders see when a colleague was last in Docket.</td></tr>
+    <tr><td><strong>Next two weeks</strong></td><td>The milestones due, then the tasks due, grouped by person.</td></tr>
+    <tr><td><strong>Unplanned</strong></td><td>How many committed tasks have no plan link, for example <em>3 of 20 committed tasks have no plan link (15%)</em>. See <em>Linking Tasks to the Plan</em>.</td></tr>
+  </tbody>
+</table>
+<p>Founders also get a <strong>Proposals</strong> card at the bottom (how many are waiting, and what was submitted this week), and, above the pack, a <strong>Score trend</strong> chart: on time, week by week, for the last closed weeks. It starts to draw once two weeks have closed (<em>The trend starts after two closed weeks</em>).</p>
+<div class="callout note">
+  <div class="c-title">&#9432; Cut to the reader, always</div>
+  <p>The pack is built for whoever opens it. A team lead sees their own team and only the tasks they can open. Founders see every team with every task counted, and tasks in spaces they cannot open appear as <em>+N in spaces you&rsquo;re not in</em>. A held snapshot is cut to the reader again when it is opened.</p>
+</div>
+
+<h2 class="sec">Founders&rsquo; catch-up <span class="role fnd">Founder</span></h2>
+<p>Open <strong>Founders&rsquo; catch-up</strong> in the sidebar (or the button at the top of the Review). Anyone else who opens it sees <em>Founders only</em>. It has a week stepper, a <strong>Review</strong> button back, and its own <strong>Copy for Slack</strong>. It holds three things:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Cross-team asks</div><div class="a-val"><p>Open top-level tasks due this week or next that are <em>waiting on</em> a task owned by another team. Each ask shows the waiting task, <em>waiting on</em>, and the task it waits for, with the team, owner and date of each. This is where blocked cross-team work gets noticed.</p></div></div>
+  <div class="a-row"><div class="a-key">Hand-offs between teams</div><div class="a-val"><p>Open hand-offs due this week or next that no one has accepted or been named for.</p></div></div>
+  <div class="a-row"><div class="a-key">Top 5</div><div class="a-val"><p>Each Founder&rsquo;s five most important things for the week, in rank order. Your own card is editable: each slot can hold a <strong>Plan item</strong> or a <strong>Task</strong> (use the buttons) and a note, or just a free-text note. Press <strong>Save</strong>; empty slots are left out. The other Founder&rsquo;s card is read-only. Once a week is over its top 5 is a record and cannot be changed.</p></div></div>
+</div>
