@@ -25,7 +25,8 @@ import { useProducts } from '../../../hooks/useProducts.js';
 // submitted runs awaiting issue) + Producibility + Recent Activity +
 // Returns-by-channel. All wired to the EXISTING Garage endpoints
 // (getDashboard, getGRNSummary, getIssues, getReturns, getShipments,
-// getProductionRuns, calcKit, getActivityLog) — no new backend.
+// getProductionRuns, getActivityLog) plus getKitAvailability (one call for the
+// Producibility panel — was one calcKit per product until 2026-11-13).
 // ════════════════════════════════════════════════════════════════════
 
 const fmt = (n) => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('en-IN');
@@ -78,6 +79,7 @@ export default function OverviewPage() {
   const [sections, setSections] = useState({ grns: [], issues: [], returns: [], shipments: [] });
   const [submittedRuns, setSubmittedRuns] = useState([]);
   const [producible, setProducible] = useState([]);
+  const [producibleError, setProducibleError] = useState(false);
   const [activity, setActivity] = useState([]);
   const [storeOps, setStoreOps] = useState(null); // distinct store operators present today (null = unknown/no access)
   const [mainLoading, setMainLoading] = useState(true);
@@ -111,33 +113,23 @@ export default function OverviewPage() {
   }
 
   async function loadProducible() {
+    // ONE request for every product. This used to be one `calcKit` call per product — 64
+    // requests every 60 s (measured 2026-11-13). The rules moved to the worker unchanged
+    // (01_worker/lib/kitavail.js: bottleneck = the minimum, RULE-LUMP-001, platform rows,
+    // format, split packaging); this only orders the answer for display.
     try {
-      const results = await Promise.all(
-        PRODUCTS.map(product =>
-          garageFetch('calcKit', { product, variant: '', colour: '', qty: 1 }, session)
-            .then(data => ({ product, kit: data.kit || [] }))
-            .catch(() => ({ product, kit: [] }))
-        )
-      );
-      const rows = results.filter(r => r.kit.length > 0).map(({ product, kit }) => {
-        // RULE-LUMP-001: a lump-sum consumable (the elastic band) is issued flat per picklist,
-        // so its stock can never cap how many units are buildable. Dropped here for the same
-        // reason getProducibility scores it `possible: 999999` — leaving it in let one low bag
-        // of elastic read as the bottleneck for every product at once.
-        const items = kit.filter(r => !r.is_lump_sum).map(r => ({
-          part_name: r.part_name,
-          max_units: r.bom_qty > 0 ? Math.floor((r.available || 0) / r.bom_qty) : 0,
-        }));
-        // Producible = the BOTTLENECK part's count (the minimum). A unit can only be
-        // built up to its most-constrained part. (Was Math.max — that showed the
-        // most-plentiful part's stock, wildly overstating producibility, e.g. 40,550
-        // "Bumble" while a 0-stock part actually allowed 0.)
-        const bottleneck = items.reduce((m, r) => r.max_units < m.max_units ? r : m, items[0]);
-        const max = Math.max(0, bottleneck?.max_units ?? 0);
-        return { product, max, bottleneck: bottleneck?.part_name || '—' };
-      }).sort((a, b) => a.max - b.max);
+      const data = await garageFetch('getKitAvailability', {}, session);
+      const byProduct = new Map((Array.isArray(data) ? data : []).map(r => [r.product, r]));
+      // PRODUCTS decides WHICH products show and breaks ties in the sort, as before.
+      const rows = PRODUCTS.map(p => byProduct.get(p)).filter(Boolean).sort((a, b) => a.max - b.max);
       setProducible(rows);
-    } catch { setProducible([]); }
+      setProducibleError(false);
+    } catch {
+      // One call now carries every product, so a failure must SAY so. Keep the last good
+      // rows on a failed refresh; with none to keep, the panel shows the message below
+      // instead of "Calculating…" forever.
+      setProducibleError(true);
+    }
   }
 
   async function loadActivity() {
@@ -280,7 +272,9 @@ export default function OverviewPage() {
               <Panel title="Producibility" icon={Target}
                 action={<button onClick={() => router.push('/producibility')} style={linkBtn}>View all<ArrowRight size={12} strokeWidth={1.75} /></button>}>
                 {producible.length === 0 ? (
-                  <div style={{ fontSize: 13, color: 'var(--t3)', padding: '6px 2px' }}>Calculating producible units…</div>
+                  <div style={{ fontSize: 13, color: 'var(--t3)', padding: '6px 2px' }}>
+                    {producibleError ? 'Could not load producible units. It will retry on the next refresh.' : 'Calculating producible units…'}
+                  </div>
                 ) : (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))', gap: 10 }}>
                     {producible.slice(0, 6).map(p => {
