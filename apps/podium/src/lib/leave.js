@@ -6,12 +6,18 @@ import { podiumopsGet, podiumopsPost } from './podiumopsFetch.js';
 
 // D2 / D12. PERIOD is labelled as itself only on the person's own view, their approver chain and HR (D11);
 // GENERIC_LABEL is what any wider view shows.
+// R2 (plan 2026-11-13-podium-leave-r2): WFH is applied like leave (no balance, no LOP; approved by the skip-level
+// manager, E4); MATERNITY / PATERNITY are HR grants only (`grant: true` — never on the apply form, E3).
 export const LEAVE_TYPES = [
   { id: 'PL',               label: 'Privilege leave', short: 'PL' },
   { id: 'SL',               label: 'Sick leave',      short: 'SL' },
   { id: 'PERIOD',           label: 'Period leave',    short: 'Period' },
   { id: 'OPTIONAL_HOLIDAY', label: 'Optional holiday', short: 'Optional' },
+  { id: 'WFH',              label: 'Work from home',  short: 'WFH' },
+  { id: 'MATERNITY',        label: 'Maternity leave', short: 'Maternity', grant: true },
+  { id: 'PATERNITY',        label: 'Paternity leave', short: 'Paternity', grant: true },
 ];
+export const GRANT_TYPES = LEAVE_TYPES.filter(t => t.grant);
 export const GENERIC_LABEL = 'Leave';
 export const LEDGER_TYPES = ['PL', 'SL'];
 export function leaveTypeLabel(id) { return LEAVE_TYPES.find(t => t.id === id)?.label || GENERIC_LABEL; }
@@ -77,6 +83,14 @@ const ERROR_COPY = {
   bad_holiday:          'Enter a date, a name and fixed / optional.',
   holiday_past:         'Only a future holiday can be added, renamed or deleted.',
   not_found:            'Not found.',
+  // R2
+  grant_only:             'Maternity and paternity leave are granted by HR.',
+  gender_unknown:         "Fill the person's gender in their profile first.",
+  maternity_not_eligible: 'Maternity leave can be granted only to a person recorded as female.',
+  paternity_not_eligible: 'Paternity leave can be granted only to a person recorded as male.',
+  too_far:                'Leave can be applied at most for next calendar year.',
+  grant_too_long:         'The end date is after the full length (maternity 182 calendar days, paternity 15 working days).',
+  report_changed:         'The report changed since you loaded it — reload, download again, then mark exported.',
 };
 export function leaveError(e, fallback = 'Something went wrong') {
   const raw = (e && (e.message || e.code || e.error)) || (typeof e === 'string' ? e : '');
@@ -108,6 +122,36 @@ export const setOpeningBalance = (employeeId, leaveType, days, note, session) =>
   podiumopsPost('setOpeningBalance', { employee_id: employeeId, leave_type: leaveType, days, delta: days, note: note || null }, session);
 export const adjustLeave = (employeeId, leaveType, delta, note, session) =>
   podiumopsPost('adjustLeave', { employee_id: employeeId, leave_type: leaveType, delta, note }, session);
+// R2 — payroll unpaid days (E1) + maternity / paternity grants (E3). HR only (the worker checks isHr).
+export const getLeaveLopReport = (month, session) => podiumopsGet('getLeaveLopReport', { month }, session);
+export const markLopExported   = (month, reportHash, session) => podiumopsPost('markLopExported', { month, report_hash: reportHash }, session);
+export const grantLeave        = (body, session) => podiumopsPost('grantLeave', body, session);
+
+// E1 CSV (built here, downloaded in the browser): code, RazorpayX id, name, LOP days, dates, check. warnings (review F):
+// requests whose holiday count changed after approval — their person's row gets the check text; someone with a warning
+// but no unpaid day in the month gets a 0 row so it is not missed.
+const HALF_TXT = { full: '', first: ' (1st half)', second: ' (2nd half)' };
+export function lopDatesText(dates) { return (dates || []).map(d => `${d.date}${HALF_TXT[d.half] || ''}`).join('; '); }
+export function lopCheckText(ws) {
+  return (ws || []).map(w => `holiday list changed — frozen LOP ${fmtNum(w.lop_days)}, placed ${fmtNum(w.placed)} (${w.start_date} – ${w.end_date})`).join('; ');
+}
+export function lopCsv(rows, warnings = []) {
+  // A cell that a spreadsheet would read as a formula gets a leading ' (CSV injection); quotes / commas are quoted.
+  const esc = (v) => { let s = v == null ? '' : String(v); if (/^[=+\-@]/.test(s)) s = `'${s}`; return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const head = ['Employee code', 'RazorpayX employee id', 'Name', 'LOP days', 'Dates', 'Check'];
+  const wBy = {};
+  for (const w of warnings || []) (wBy[w.employee_id] ||= []).push(w);
+  const extra = Object.keys(wBy).filter(id => !(rows || []).some(r => r.employee_id === id))
+    .map(id => ({ employee_id: id, employee_code: wBy[id][0].employee_code, full_name: wBy[id][0].full_name, razorpayx_employee_id: null, lop_days: 0, dates: [] }));
+  return [head, ...[...(rows || []), ...extra].map(r => [r.employee_code, r.razorpayx_employee_id, r.full_name, fmtNum(r.lop_days), lopDatesText(r.dates), lopCheckText(wBy[r.employee_id])])]
+    .map(line => line.map(esc).join(',')).join('\r\n') + '\r\n';
+}
+export function downloadText(filename, text, type = 'text/csv;charset=utf-8') {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 // ── Response readers (the worker's shapes are read defensively) ──────────────
 export const arr = (d, ...keys) => {

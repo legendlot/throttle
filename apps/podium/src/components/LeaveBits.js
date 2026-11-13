@@ -6,7 +6,7 @@ import { useToast, Combobox } from '@throttle/ui';
 import { Send, Undo2, Ban, Check, X, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { Card, F, Row, Note, ListBadge, inp, comboInp, primaryBtn, ghostBtn, dangerBtn, muted } from './HiringBits.js';
 import {
-  LEAVE_TYPES, LEAVE_STATUSES, LEDGER_KINDS, START_HALVES, END_HALVES, SINGLE_HALVES, MAX_REASON,
+  LEAVE_TYPES, GRANT_TYPES, LEAVE_STATUSES, LEDGER_KINDS, START_HALVES, END_HALVES, SINGLE_HALVES, MAX_REASON,
   leaveTypeLabel, leaveError, leaveErrorCode, previewLeave, applyLeave, withdrawLeave, cancelLeave, decideLeave,
   splitOf, personOf, arr, istToday, addDays, weekdayOf, mondayOf, monthStart, monthEnd, shiftMonth, daysBetween,
   fmtDay, fmtMonth, fmtRange, fmtDays, fmtNum, halfOn,
@@ -17,6 +17,7 @@ const smallBtn = { ...ghostBtn, padding: '4px 10px', fontSize: 11 };
 const rowLine = { display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderTop: '1px solid var(--border)', flexWrap: 'wrap', fontSize: 13 };
 
 export function LeaveStatusBadge({ status }) { return <ListBadge list={LEAVE_STATUSES} status={status} />; }
+const isGrant = (r) => GRANT_TYPES.some(t => t.id === r?.leave_type);
 
 // ── My balances ─────────────────────────────────────────────────────────────
 
@@ -71,7 +72,8 @@ export function HolidayList({ holidays }) {
 // ── Apply form with the live preview (D6/D7) ────────────────────────────────
 
 // people (HR only): [{value, label, hint}] — record a request for someone else (D8). Empty = for yourself.
-export function ApplyForm({ session, canPeriod, holidays, people, onApplied }) {
+// wfhApprover (R2 E4): getMyLeave's wfh_approver ({id, full_name} | null = HR) — shown for your own WFH request.
+export function ApplyForm({ session, canPeriod, holidays, people, onApplied, wfhApprover }) {
   const { showToast } = useToast();
   const today = istToday();
   const [forId, setForId] = useState('');
@@ -89,9 +91,10 @@ export function ApplyForm({ session, canPeriod, holidays, people, onApplied }) {
   const forOther = !!forId;
   const single = !end || end === start;
   const optionals = (holidays || []).filter(h => h.kind === 'optional' && (forOther || h.date >= today)).sort((a, b) => a.date.localeCompare(b.date));
-  const types = LEAVE_TYPES.filter(t => t.id !== 'PERIOD' || canPeriod || forOther);
-  // Notice (D8): HR recording for someone else may pick any past date; the worker re-checks.
-  const minStart = forOther ? undefined : type === 'SL' ? addDays(today, -7) : today;
+  const types = LEAVE_TYPES.filter(t => !t.grant && (t.id !== 'PERIOD' || canPeriod || forOther));
+  // Notice (D8): HR recording for someone else may pick any past date; the worker re-checks. WFH as SL (E4).
+  const minStart = forOther ? undefined : type === 'SL' || type === 'WFH' ? addDays(today, -7) : today;
+  const wfh = type === 'WFH';
 
   function pickType(t) {
     setType(t); setPv(null);
@@ -136,7 +139,7 @@ export function ApplyForm({ session, canPeriod, holidays, people, onApplied }) {
     try {
       const r = await applyLeave({ ...body(), reason: reason.trim() || null }, session);
       const mail = r?.email === 'sent' ? ' Your approver has been emailed.' : r?.email === 'failed' ? ' (The email to your approver did not go out; tell them.)' : '';
-      showToast(`Leave requested.${mail}`, 'success');
+      showToast(`${wfh ? 'Work from home' : 'Leave'} requested.${mail}`, 'success');
       setStart(''); setEnd(''); setStartHalf('full'); setEndHalf('full'); setReason(''); setPv(null);
       onApplied && onApplied();
     } catch (e) { showToast(leaveError(e), 'error'); }
@@ -145,7 +148,7 @@ export function ApplyForm({ session, canPeriod, holidays, people, onApplied }) {
 
   const blocked = !start || !!pv?.code || pvBusy || busy;
   return (
-    <Card title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><CalendarDays size={13} /> Apply for leave</span>}>
+    <Card title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><CalendarDays size={13} /> Apply for leave or work from home</span>}>
       {people && people.length > 0 && (
         <F label="For (HR: record for someone else; leave empty for yourself)">
           <Combobox value={forId} onChange={v => { setForId(v || ''); setPv(null); }} inputStyle={comboInp} placeholder="Myself" options={people} />
@@ -199,9 +202,14 @@ export function ApplyForm({ session, canPeriod, holidays, people, onApplied }) {
       <F label={`Reason (optional; only your approver and HR see it)`}>
         <textarea rows={2} maxLength={MAX_REASON} style={{ ...inp, resize: 'vertical', fontFamily: 'var(--font-ui)' }} value={reason} onChange={e => setReason(e.target.value)} />
       </F>
+      {wfh && !forOther && (
+        <div style={{ ...muted, marginBottom: 8 }}>
+          Work from home is approved by {wfhApprover?.full_name ? <b>{wfhApprover.full_name}</b> : 'HR'}{wfhApprover?.full_name ? ' (your manager’s manager, or your manager when there is none)' : ''}. It uses no leave balance.
+        </div>
+      )}
       <PreviewLine pv={pv} busy={pvBusy} type={type} />
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button onClick={submit} disabled={blocked} style={{ ...primaryBtn, opacity: blocked ? 0.6 : 1 }}><Send size={13} /> {busy ? 'Sending…' : 'Request leave'}</button>
+        <button onClick={submit} disabled={blocked} style={{ ...primaryBtn, opacity: blocked ? 0.6 : 1 }}><Send size={13} /> {busy ? 'Sending…' : wfh ? 'Request work from home' : 'Request leave'}</button>
       </div>
     </Card>
   );
@@ -236,7 +244,7 @@ export function MyRequests({ requests, session, onChanged }) {
     catch (e) { showToast(leaveError(e), 'error'); }
   }
   async function cancel(r) {
-    const note = window.prompt('Cancel this approved leave? The days go back to your balance. Note (optional):', '');
+    const note = window.prompt(r.leave_type === 'PL' || r.leave_type === 'SL' ? 'Cancel this approved leave? The days go back to your balance. Note (optional):' : 'Cancel this approved request? Note (optional):', '');
     if (note === null) return;
     try { await cancelLeave(r.id, note.trim(), session); showToast('Leave cancelled', 'success'); onChanged(); }
     catch (e) { showToast(leaveError(e), 'error'); }
@@ -258,8 +266,10 @@ export function MyRequests({ requests, session, onChanged }) {
             </div>
             <LeaveStatusBadge status={r.status} />
             {r.status === 'pending' && <button style={smallBtn} onClick={() => withdraw(r)}><Undo2 size={12} /> Withdraw</button>}
-            {r.status === 'approved' && r.start_date > today && <button style={{ ...smallBtn, ...dangerBtn, padding: '4px 10px', fontSize: 11 }} onClick={() => cancel(r)}><Ban size={12} /> Cancel</button>}
-            {r.status === 'approved' && r.start_date <= today && <span style={{ ...muted, fontSize: 11 }}>Started: ask your manager to cancel</span>}
+            {/* R2 E3: a maternity / paternity grant is changed or ended by HR (cancel + grant again). */}
+            {r.status === 'approved' && isGrant(r) && <span style={{ ...muted, fontSize: 11 }}>Granted by HR: ask HR to change or end it</span>}
+            {r.status === 'approved' && !isGrant(r) && r.start_date > today && <button style={{ ...smallBtn, ...dangerBtn, padding: '4px 10px', fontSize: 11 }} onClick={() => cancel(r)}><Ban size={12} /> Cancel</button>}
+            {r.status === 'approved' && !isGrant(r) && r.start_date <= today && <span style={{ ...muted, fontSize: 11 }}>Started: ask your manager to cancel</span>}
           </div>
         );
       })}
@@ -378,7 +388,7 @@ export function WhosOut({ mode, anchor, onMode, onAnchor, requests, holidays, se
   }
 
   return (
-    <Card title="Who's out"
+    <Card title="Who's out (and who works from home)"
       right={
         <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
           <button style={{ ...smallBtn, ...(mode === 'week' ? { color: 'var(--t1)', borderColor: 'var(--podium-accent)' } : {}) }} onClick={() => onMode('week')}>Week</button>
@@ -430,13 +440,15 @@ function Line({ p, days, hol, mode }) {
       let half = null, pending = false, type = null;
       for (const r of p.reqs) { const h = halfOn(r, d); if (h) { half = h === 'full' || half === 'full' ? 'full' : half && half !== h ? 'full' : h; pending = pending || r.status === 'pending'; type = r.leave_type; } }
       const off = we || (hol[d] && hol[d].kind === 'fixed');
-      const bg = half && !off ? (pending ? 'rgba(251,191,36,0.35)' : 'rgba(242,205,26,0.75)') : off ? 'var(--surface-2)' : 'transparent';
+      // R2 E4: work from home is not "out" — its own colour and a WFH mark.
+      const wfh = type === 'WFH';
+      const bg = half && !off ? (wfh ? (pending ? 'rgba(96,165,250,0.30)' : 'rgba(96,165,250,0.65)') : pending ? 'rgba(251,191,36,0.35)' : 'rgba(242,205,26,0.75)') : off ? 'var(--surface-2)' : 'transparent';
       const grad = half === 'first' ? `linear-gradient(90deg, ${bg} 50%, transparent 50%)` : half === 'second' ? `linear-gradient(90deg, transparent 50%, ${bg} 50%)` : bg;
       return (
         <div key={d} title={half && !off ? `${leaveTypeLabel(type)}${half !== 'full' ? ` (${half} half)` : ''}${pending ? ' · pending' : ''}` : ''}
           style={{ borderTop: '1px solid var(--border)', borderLeft: '1px solid var(--hairline)', padding: 3 }}>
           <div style={{ height: 18, borderRadius: 3, background: off && !half ? bg : grad, opacity: off && half ? 0.4 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, color: '#1f1f1f', fontWeight: 700 }}>
-            {mode === 'week' && half && !off ? (half === 'full' ? '' : half === 'first' ? '½ AM' : '½ PM') : ''}
+            {mode === 'week' && half && !off ? `${wfh ? 'WFH' : ''}${half === 'full' ? '' : `${wfh ? ' ' : ''}${half === 'first' ? '½ AM' : '½ PM'}`}` : mode === 'month' && half && !off && wfh ? 'W' : ''}
           </div>
         </div>
       );

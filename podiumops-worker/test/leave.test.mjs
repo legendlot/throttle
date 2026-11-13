@@ -6,6 +6,8 @@ import {
   pendingDebit, splitLeave, sameSplit, periodUsed, optionalUsed, limitBlock, overlaps, decideBlock, cancelBlock,
   resolveLeaveApprover, buildLeaveMail, leaveMessageId, cleanAmount, cleanNote, cleanHoliday, leaveDbErrorCode, addMonths,
   reclosePlan, splitBase, coveredFromOnChange, holidayListMissing, noHolidayListMessage, LEAVE_COPY,
+  APPLY_TYPES, GRANT_TYPES, workingHalves, lopAllocation, lopReport, lopDiff, exitLeaveFigures, exitLeaveBlock, grantPlan,
+  wfhApprover, yearEndYear, yearEndPreview, exitLeaveStale, withOpenExit, applyOpenExitsWith, lopExportRows, canonicalJson,
 } from '../src/leave.js';
 
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -14,7 +16,7 @@ const HOL = [{ date: '2026-12-25', kind: 'fixed' }, { date: '2026-12-24', kind: 
 const emp = (o = {}) => ({ id: U(1), leave_policy: 'fraternitas', date_joined: '2025-04-01', date_exited: null, ...o });
 
 test('enums match the 0016 CHECKs', () => {
-  assert.deepEqual(LEAVE_TYPES, ['PL', 'SL', 'PERIOD', 'OPTIONAL_HOLIDAY']);
+  assert.deepEqual(LEAVE_TYPES, ['PL', 'SL', 'PERIOD', 'OPTIONAL_HOLIDAY', 'MATERNITY', 'PATERNITY', 'WFH']);   // 0020
   assert.deepEqual(LEDGER_TYPES, ['PL', 'SL']);
   assert.deepEqual(LEAVE_STATUSES, ['pending', 'approved', 'rejected', 'withdrawn', 'cancelled']);
   assert.deepEqual(LEDGER_KINDS, ['opening', 'accrual', 'taken', 'cancelled', 'carry_over', 'lapse', 'adjustment']);
@@ -481,4 +483,294 @@ test('validate: at most next calendar year', () => {
   const base = { leave_type: 'PL', start_half: 'full', end_half: 'full' };
   assert.equal(validateLeaveInput({ ...base, start_date: '2028-01-05', end_date: '2028-01-05' }, { today: '2026-12-10', notice: false }).error, 'too_far');
   assert.equal(validateLeaveInput({ ...base, start_date: '2027-01-05', end_date: '2027-01-05' }, { today: '2026-12-10' }).error, undefined);
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Leave R2 (plan 2026-11-13-podium-leave-r2, E1–E5). Synthetic people only.
+// ════════════════════════════════════════════════════════════════════════════
+
+test('R2 types: apply vs grant; labels; WFH notice as SL; grants are HR-only', () => {
+  assert.deepEqual(APPLY_TYPES, ['PL', 'SL', 'PERIOD', 'OPTIONAL_HOLIDAY', 'WFH']);
+  assert.deepEqual(GRANT_TYPES, ['MATERNITY', 'PATERNITY']);
+  assert.equal(TYPE_LABELS.WFH, 'Work from home');
+  assert.equal(MAIL_TYPE_LABELS.MATERNITY, 'Maternity leave');
+  const w = { leave_type: 'WFH', start_half: 'full', end_half: 'full' };
+  // WFH may start up to 7 days back (as SL); 8 days back → notice
+  assert.equal(validateLeaveInput({ ...w, start_date: '2026-12-03', end_date: '2026-12-03' }, { today: '2026-12-10', holidays: HOL }).value.days, 1);
+  assert.equal(validateLeaveInput({ ...w, start_date: '2026-12-02', end_date: '2026-12-02' }, { today: '2026-12-10', holidays: HOL }).error, 'notice');
+  // half day + holiday counted like leave
+  assert.equal(validateLeaveInput({ ...w, start_date: '2026-12-24', end_date: '2026-12-28', end_half: 'first' }, { today: '2026-12-10', holidays: HOL }).value.days, 1.5);   // 24 · 25 hol · 28 ½
+  assert.equal(validateLeaveInput({ leave_type: 'MATERNITY', start_date: '2026-12-14', end_date: '2026-12-14' }, { today: '2026-12-10' }).error, 'grant_only');
+  // a grant: never cancelled by the person (even before it starts); HR may
+  const g = { employee_id: U(1), approver_employee_id: null, status: 'approved', start_date: '2027-01-04', leave_type: 'PATERNITY' };
+  assert.equal(cancelBlock({ mode: 'cancel', req: g, meId: U(1), hr: false, today: '2026-12-10' }), 'forbidden');
+  assert.equal(cancelBlock({ mode: 'cancel', req: g, meId: U(9), hr: true, today: '2026-12-10' }), null);
+  assert.equal(cancelBlock({ mode: 'cancel', req: g, meId: U(1), hr: true, today: '2026-12-10' }), 'forbidden');
+  // a WFH approved request still follows D10
+  assert.equal(cancelBlock({ mode: 'cancel', req: { ...g, leave_type: 'WFH' }, meId: U(1), hr: false, today: '2026-12-10' }), null);
+});
+
+test('E1 LOP allocation: the LAST working halves, across a month boundary, with half days', () => {
+  // Fri 27 Nov (2nd half) → Wed 2 Dec (1st half): 27 s · 30 f s · 1 f s · 2 f = 6 halves = 3 days
+  const req = { start_date: '2026-11-27', end_date: '2026-12-02', start_half: 'second', end_half: 'first', days: 3, lop_days: 2 };
+  assert.equal(workingHalves(req).length, 6);
+  const a = lopAllocation(req, new Set());
+  assert.deepEqual(a.months, {
+    '2026-11': { days: 0.5, dates: [{ date: '2026-11-30', half: 'second' }] },
+    '2026-12': { days: 1.5, dates: [{ date: '2026-12-01', half: 'full' }, { date: '2026-12-02', half: 'first' }] },
+  });
+  assert.equal(a.lop_days, 2);
+  assert.equal(a.recount_mismatch, false);
+  // no LOP → nothing
+  assert.deepEqual(lopAllocation({ ...req, lop_days: 0 }).months, {});
+});
+
+test('E1 LOP allocation: a holiday added after submit → allocate over what exists + recount_mismatch', () => {
+  const req = { start_date: '2026-11-27', end_date: '2026-12-02', start_half: 'second', end_half: 'first', days: 3, lop_days: 2 };
+  const a = lopAllocation(req, new Set(['2026-12-01']));   // 1 Dec became a fixed holiday: 4 halves left
+  assert.equal(a.recount_mismatch, true);
+  assert.deepEqual(a.months, {
+    '2026-11': { days: 1.5, dates: [{ date: '2026-11-27', half: 'second' }, { date: '2026-11-30', half: 'full' }] },
+    '2026-12': { days: 0.5, dates: [{ date: '2026-12-02', half: 'first' }] },
+  });
+  // fewer halves than lop_days → every half is unpaid, never more
+  const b = lopAllocation({ ...req, lop_days: 3 }, new Set(['2026-12-01']));
+  assert.equal(b.lop_days, 2);
+});
+
+test('E1 report rows: approved PL / SL only, per person per month; diff since the last export', () => {
+  const req = (o) => ({ id: U(50), employee_id: U(1), leave_type: 'PL', status: 'approved', start_half: 'full', end_half: 'full', ...o });
+  const requests = [
+    req({ id: U(51), start_date: '2026-12-07', end_date: '2026-12-08', days: 2, lop_days: 1 }),             // 8 Dec
+    req({ id: U(52), leave_type: 'SL', start_date: '2026-12-10', end_date: '2026-12-10', days: 0.5, lop_days: 0.5, start_half: 'first', end_half: 'first' }),
+    req({ id: U(53), status: 'rejected', start_date: '2026-12-14', end_date: '2026-12-14', days: 1, lop_days: 1 }),
+    req({ id: U(54), leave_type: 'WFH', start_date: '2026-12-15', end_date: '2026-12-15', days: 1, lop_days: 1 }),
+    req({ id: U(55), employee_id: U(2), start_date: '2026-11-30', end_date: '2026-12-01', days: 2, lop_days: 1 }),   // LOP on 1 Dec
+    req({ id: U(56), employee_id: U(3), start_date: '2026-11-26', end_date: '2026-11-27', days: 2, lop_days: 1 }),   // LOP in Nov only
+  ];
+  const employees = { [U(1)]: { employee_code: 'T-001', full_name: 'Test Alpha', razorpayx_employee_id: 'rx-1' },
+    [U(2)]: { employee_code: 'T-002', full_name: 'Test Beta', razorpayx_employee_id: null } };
+  const { rows, warnings } = lopReport({ month: '2026-12', requests, employees, fixedHolidays: XMAS });
+  assert.equal(rows.length, 2);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(rows[0], { employee_id: U(1), employee_code: 'T-001', full_name: 'Test Alpha', razorpayx_employee_id: 'rx-1',
+    dates: [{ date: '2026-12-08', half: 'full' }, { date: '2026-12-10', half: 'first' }], recount_mismatch: false,
+    request_ids: [U(51), U(52)], lop_days: 1.5 });
+  assert.equal(rows[1].full_name, 'Test Beta');
+  assert.deepEqual(rows[1].dates, [{ date: '2026-12-01', half: 'full' }]);
+  assert.deepEqual(lopReport({ month: '2026-13', requests }), { rows: [], warnings: [] });
+  // diff: Alpha was 1 now 1.5; Beta unchanged; Gamma dropped out (cancelled after export)
+  const prev = [{ ...rows[0], lop_days: 1, dates: [{ date: '2026-12-08', half: 'full' }] }, rows[1],
+    { employee_id: U(3), employee_code: 'T-003', full_name: 'Test Gamma', lop_days: 2, dates: [] }];
+  const diff = lopDiff(prev, rows);
+  assert.deepEqual(diff.map(x => [x.full_name, x.was, x.now]), [['Test Alpha', 1, 1.5], ['Test Gamma', 2, 0]]);
+  // same count on different dates is a change too
+  assert.equal(lopDiff([{ ...rows[1], dates: [{ date: '2026-12-02', half: 'full' }] }], [rows[1]]).length, 1);
+  assert.deepEqual(lopDiff(rows, rows), []);
+});
+
+const LG = (t, delta, d, kind = 'accrual', period = kind === 'accrual' ? d.slice(0, 7) : null) => ({ leave_type: t, delta, kind, period, effective_date: d });
+
+test('E2 exit figures: negative SL + positive PL; LWD mid-month still earns that month; next year-end applied', () => {
+  const e = emp();
+  const ledger = [LG('PL', 3, '2026-12-01', 'opening'), LG('PL', 1.5, '2026-12-01'), LG('SL', 1, '2026-12-01'),
+    LG('SL', -4, '2026-12-05', 'taken')];
+  // today 10 Dec 2026, LWD Sun 14 Feb 2027: Jan + Feb still earn (the exit month earns), nothing after
+  const f = exitLeaveFigures({ employee: e, ledger, cutoverMonth: '2026-12', lwd: '2027-02-14', today: '2026-12-10' });
+  assert.deepEqual(f, { as_at: '2027-02-14', PL: 7.5, SL: -1, lop_days: 1, projected_accrual: { PL: 3, SL: 2 }, expected: { PL: 4.5, SL: -3 } });
+  // PL above 5 at 31 Dec lapses before the next year's credits; SL negative carries as is
+  const g = exitLeaveFigures({ employee: e, ledger: [...ledger, LG('PL', 5, '2026-12-02', 'adjustment')], cutoverMonth: '2026-12', lwd: '2027-02-14', today: '2026-12-10' });
+  assert.equal(g.PL, 8);          // 9.5 → lapse 4.5 → 5, + 3
+  assert.equal(g.lop_days, 1);    // only the SL −1
+  // both negative → both are F&F LOP
+  const h = exitLeaveFigures({ employee: e, ledger: [LG('PL', -2, '2026-12-01', 'opening'), LG('SL', -1, '2026-12-01', 'opening')], cutoverMonth: '2026-12', lwd: '2026-12-31', today: '2026-12-10' });
+  assert.deepEqual([h.PL, h.SL, h.lop_days], [-0.5, 0, 0.5]);   // no Dec credit row yet → projected +1.5 / +1
+});
+
+test('E2 exit figures: LWD already past — later accruals and the later year close are not counted', () => {
+  const ledger = [LG('PL', 8, '2026-12-01', 'opening'), LG('PL', 1.5, '2026-12-01'), LG('PL', -4.5, '2026-12-31', 'lapse', '2026'),
+    LG('PL', 1.5, '2027-01-01'), LG('SL', 1, '2026-12-01'), LG('SL', -1, '2026-12-31', 'lapse', '2026'), LG('SL', 1, '2027-01-01'),
+    LG('PL', -1, '2027-01-05', 'adjustment')];   // an HR adjustment made after the LWD still counts
+  const f = exitLeaveFigures({ employee: emp(), ledger, cutoverMonth: '2026-12', lwd: '2026-12-20', today: '2027-01-05' });
+  assert.deepEqual([f.PL, f.SL, f.lop_days], [8.5, 1, 0]);
+  assert.deepEqual(f.projected_accrual, { PL: 0, SL: 0 });
+  assert.equal(exitLeaveFigures({ employee: emp(), ledger, cutoverMonth: '2026-12', lwd: 'x', today: '2027-01-05' }), null);
+});
+
+test('E2 exit Done guard: after-LWD first, then pending', () => {
+  const r = (o) => ({ status: 'approved', start_date: '2026-12-01', end_date: '2026-12-02', ...o });
+  assert.equal(exitLeaveBlock([r()], '2026-12-15'), null);
+  assert.equal(exitLeaveBlock([r({ end_date: '2026-12-16' })], '2026-12-15'), 'leave_after_lwd');
+  assert.equal(exitLeaveBlock([r({ status: 'pending' })], '2026-12-15'), 'leave_pending');
+  assert.equal(exitLeaveBlock([r({ status: 'pending', end_date: '2026-12-20' })], '2026-12-15'), 'leave_after_lwd');
+  assert.equal(exitLeaveBlock([r({ status: 'cancelled', end_date: '2026-12-20' })], '2026-12-15'), null);
+});
+
+test('E3 maternity: 182 calendar days, may cross 31 Dec; gender f; a note is required', () => {
+  const g = grantPlan({ leave_type: 'MATERNITY', start_date: '2026-10-01', note: 'Eligibility checked: 80+ days worked' }, { gender: 'f', today: '2026-09-20' });
+  assert.deepEqual(g.value, { leave_type: 'MATERNITY', start_date: '2026-10-01', start_half: 'full', end_half: 'full',
+    note: 'Eligibility checked: 80+ days worked', end_date: '2027-03-31', days: 182 });
+  assert.equal(grantPlan({ leave_type: 'MATERNITY', start_date: '2026-10-01' }, { gender: 'f' }).error, 'note_required');
+  assert.equal(grantPlan({ leave_type: 'MATERNITY', start_date: '2026-10-01', note: 'x' }, { gender: 'm' }).error, 'maternity_not_eligible');
+  assert.equal(grantPlan({ leave_type: 'MATERNITY', start_date: '2026-10-01', note: 'x' }, { gender: null }).error, 'gender_unknown');
+  assert.equal(grantPlan({ leave_type: 'PL', start_date: '2026-10-01' }, { gender: 'f' }).error, 'bad_type');
+  assert.equal(grantPlan({ leave_type: 'MATERNITY', start_date: '2028-01-03', note: 'x' }, { gender: 'f', today: '2026-12-10' }).error, 'too_far');
+});
+
+test('E3 paternity: 15 working days over holidays and 31 Dec; needs the next year\'s list', () => {
+  const hol = [{ date: '2026-12-25', kind: 'fixed' }, { date: '2027-01-01', kind: 'fixed' }, { date: '2027-01-26', kind: 'fixed' }];
+  // Mon 21 Dec: 21–24 (4), 25 hol, 28–31 (8), 1 Jan hol, 4–8 Jan (13), 11–12 Jan (15)
+  const g = grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21' }, { gender: 'm', holidays: hol });
+  assert.equal(g.value.end_date, '2027-01-12');
+  assert.equal(g.value.days, 15);
+  assert.equal(g.value.note, null);
+  // without 2027's list → refuse, naming the year
+  assert.deepEqual(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21' }, { gender: 'm', holidays: hol.slice(0, 1) }), { error: 'no_holiday_list', year: 2027 });
+  // inside one year with no holiday in range: 3 weeks of weekdays
+  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-11-16' }, { gender: 'm', holidays: hol }).value.end_date, '2026-12-04');
+  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-11-16' }, { gender: 'f', holidays: hol }).error, 'paternity_not_eligible');
+});
+
+test('E4 WFH approver: skip-level, else the manager, else HR (null)', () => {
+  const mgr = { [U(2)]: U(3), [U(3)]: null, [U(5)]: U(1) };
+  const of = (id) => mgr[id] ?? null;
+  assert.equal(wfhApprover({ id: U(1), manager_id: U(2) }, of), U(3));      // skip-level
+  assert.equal(wfhApprover({ id: U(2), manager_id: U(3) }, of), U(3));      // manager has no manager → the manager
+  assert.equal(wfhApprover({ id: U(3), manager_id: null }, of), null);      // no manager → HR
+  assert.equal(wfhApprover({ id: U(1), manager_id: U(5) }, of), U(5));      // a loop back to the person → the manager
+});
+
+test('E5 year-end window + preview (negative PL carries; PL above 5 and positive SL lapse)', () => {
+  assert.equal(yearEndYear('2026-11-01'), 2026);
+  assert.equal(yearEndYear('2026-12-31'), 2026);
+  assert.equal(yearEndYear('2027-01-31'), 2026);
+  assert.equal(yearEndYear('2026-10-31'), null);
+  const e = emp();
+  const ledger = [LG('PL', -2, '2026-11-20', 'opening'), LG('SL', 3, '2026-11-20', 'opening')];
+  const reqs = [{ status: 'pending', leave_type: 'PL', start_date: '2026-12-10', days: 2, lop_days: 0 },
+    { status: 'pending', leave_type: 'PL', start_date: '2027-01-10', days: 4, lop_days: 0 }];   // next year: not this close
+  const p = yearEndPreview({ employee: e, ledger, requests: reqs, cutoverMonth: '2026-12', today: '2026-11-20', year: 2026 });
+  // PL −2 + Dec 1.5 − 2 pending = −2.5 carries; SL 3 + 1 = 4 lapses
+  assert.deepEqual(p, { year: 2026, actual: false, PL: { projected: -2.5, carry: -2.5, lapse: 0, pending: 2 }, SL: { projected: 4, carry: 0, lapse: 4, pending: 0 } });
+  const q = yearEndPreview({ employee: e, ledger: [LG('PL', 9, '2026-11-20', 'opening')], requests: [], cutoverMonth: '2026-12', today: '2026-12-05', year: 2026 });
+  assert.deepEqual(q.PL, { projected: 9, carry: 5, lapse: 4, pending: 0 });   // in December no credit is still to come
+  // January view of last year: its own lapse row is ignored, no credits to come
+  const j = yearEndPreview({ employee: e, ledger: [LG('PL', 9, '2026-12-01', 'opening'), LG('PL', -4, '2026-12-31', 'lapse', '2026'), LG('PL', 1.5, '2027-01-01')],
+    requests: [], cutoverMonth: '2026-12', today: '2027-01-10', year: 2026 });
+  assert.deepEqual(j.PL, { projected: 9, carry: 5, lapse: 4, pending: 0 });
+});
+
+test('R2 mail: a grant says "granted", never the note', () => {
+  const m = buildLeaveMail({ kind: 'granted', from: 'hr@legendoftoys.com', fromName: 'Test HR', to: 'p@legendoftoys.com', toFirst: 'Pat',
+    personName: 'Test Person', request: { id: U(9), leave_type: 'PATERNITY', start_date: '2026-12-21', end_date: '2027-01-12', start_half: 'full', end_half: 'full', days: 15, decision_note: 'secret note' },
+    link: 'https://podium.example/leave/', messageId: leaveMessageId(U(9), 'granted', 'abcd1234') });
+  assert.match(m.subject, /^Leave granted: Paternity leave, 21 Dec 2026 – 12 Jan 2027$/);
+  assert.match(m.text, /Your paternity leave for 21 Dec 2026 – 12 Jan 2027 \(15 days\) was granted by Test HR\./);
+  assert.doesNotMatch(m.raw, /secret/);
+  assert.equal(leaveDbErrorCode({ data: { message: 'gender_unknown' } }), 'gender_unknown');
+});
+
+// ── Review fixes (hostile review + Codex on the R2 diff) ─────────────────────
+
+test('review F: a recount mismatch is a warning even when none of its LOP lands in the month', () => {
+  // Thu 26 Nov – Tue 1 Dec frozen at 2 days with 1 LOP (30 Nov + 1 Dec were holidays at submit, since deleted).
+  const r = { id: U(60), employee_id: U(1), leave_type: 'PL', status: 'approved', start_date: '2026-11-26', end_date: '2026-12-01',
+    start_half: 'full', end_half: 'full', days: 2, lop_days: 1 };
+  const emps = { [U(1)]: { employee_code: 'T-001', full_name: 'Test Alpha', razorpayx_employee_id: 'rx-1' } };
+  // today's list: 26 Nov – 1 Dec has 4 working days (26, 27, 30, 1) vs frozen 2 → mismatch; LOP = the last 2 halves = 1 Dec
+  const dec = lopReport({ month: '2026-12', requests: [r], employees: emps, fixedHolidays: new Set() });
+  assert.equal(dec.rows.length, 1);
+  assert.equal(dec.warnings.length, 1);
+  // November: no LOP lands there, but the request touches it → still warned
+  const nov = lopReport({ month: '2026-11', requests: [r], employees: emps, fixedHolidays: new Set() });
+  assert.deepEqual(nov.rows, []);
+  assert.deepEqual(nov.warnings, [{ request_id: U(60), employee_id: U(1), employee_code: 'T-001', full_name: 'Test Alpha',
+    start_date: '2026-11-26', end_date: '2026-12-01', lop_days: 1, placed: 1, placed_in_month: 0 }]);
+});
+
+test('review D: canonical JSON is key-order independent; export rows drop request ids', () => {
+  assert.equal(canonicalJson({ b: 1, a: [{ y: 2, x: null }] }), canonicalJson({ a: [{ x: null, y: 2 }], b: 1 }));
+  assert.equal(canonicalJson({ a: 1, u: undefined }), '{"a":1}');
+  assert.notEqual(canonicalJson([{ lop_days: 1 }]), canonicalJson([{ lop_days: 1.5 }]));
+  assert.deepEqual(lopExportRows([{ employee_id: 'x', request_ids: ['r'], lop_days: 1 }]), [{ employee_id: 'x', lop_days: 1 }]);
+});
+
+test('review C: a grant may end early (≤ the full length); days follow the range', () => {
+  const hol = [{ date: '2026-12-25', kind: 'fixed' }, { date: '2027-01-01', kind: 'fixed' }, { date: '2027-01-26', kind: 'fixed' }];
+  const m = grantPlan({ leave_type: 'MATERNITY', start_date: '2026-10-01', end_date: '2026-10-31', note: 'checked' }, { gender: 'f' });
+  assert.deepEqual([m.value.end_date, m.value.days], ['2026-10-31', 31]);
+  assert.equal(grantPlan({ leave_type: 'MATERNITY', start_date: '2026-10-01', end_date: '2027-04-01', note: 'checked' }, { gender: 'f' }).error, 'grant_too_long');
+  assert.equal(grantPlan({ leave_type: 'MATERNITY', start_date: '2026-10-01', end_date: '2027-03-31', note: 'checked' }, { gender: 'f' }).value.days, 182);
+  assert.equal(grantPlan({ leave_type: 'MATERNITY', start_date: '2026-10-01', end_date: '2026-09-30', note: 'checked' }, { gender: 'f' }).error, 'bad_dates');
+  // paternity Mon 21 Dec → Thu 31 Dec: 21–24, 28–31 = 8 working days (25 Dec is a holiday)
+  const p = grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21', end_date: '2026-12-31' }, { gender: 'm', holidays: hol });
+  assert.deepEqual([p.value.end_date, p.value.days], ['2026-12-31', 8]);
+  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21', end_date: '2027-01-13' }, { gender: 'm', holidays: hol }).error, 'grant_too_long');
+  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-26', end_date: '2026-12-27' }, { gender: 'm', holidays: hol }).error, 'no_working_days');
+  // ending in this year needs only this year's list
+  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21', end_date: '2026-12-31' }, { gender: 'm', holidays: hol.slice(0, 1) }).value.days, 8);
+});
+
+test('review A: a confirmed leave line goes stale on a new LWD, a ledger move, a pending or after-LWD request', () => {
+  const exit = { lwd: '2026-12-15', leave_confirmed_at: '2026-12-10T10:00:00Z', leave_as_at: '2026-12-15', leave_ledger_pl: 4.5, leave_ledger_sl: -3 };
+  const item = { auto_source: 'leave_ledger', status: 'done' };
+  const ledger = { PL: 4.5, SL: -3 };
+  assert.equal(exitLeaveStale({ exit, item, requests: [], ledger }), false);
+  assert.equal(exitLeaveStale({ exit: { ...exit, lwd: '2026-12-20' }, item, requests: [], ledger }), true);           // LWD moved
+  assert.equal(exitLeaveStale({ exit, item, requests: [], ledger: { PL: 3, SL: -3 } }), true);                          // ledger moved
+  assert.equal(exitLeaveStale({ exit, item, requests: [{ status: 'pending', end_date: '2026-12-01' }], ledger }), true);
+  assert.equal(exitLeaveStale({ exit, item, requests: [{ status: 'approved', end_date: '2026-12-16' }], ledger }), true);
+  assert.equal(exitLeaveStale({ exit, item: { ...item, status: 'open' }, requests: [{ status: 'pending', end_date: '2026-12-01' }], ledger }), false);
+  // not covered: no snapshot, only the request checks
+  const bare = { lwd: '2026-12-15', leave_confirmed_at: null };
+  assert.equal(exitLeaveStale({ exit: bare, item, requests: [], ledger: null }), false);
+  assert.equal(exitLeaveStale({ exit: bare, item, requests: [{ status: 'pending', end_date: '2026-12-01' }], ledger: null }), true);
+});
+
+test('review I: an open exit stops accrual after its LWD month (date_exited is only set at the close)', () => {
+  const e = emp();
+  // LWD 14 Jan 2027 → Jan earns, Feb and Mar do not
+  const rows = accrualPlan({ employee: withOpenExit(e, '2027-01-14'), cutoverMonth: '2026-12', currentMonth: '2027-03' });
+  assert.deepEqual([...new Set(rows.map(r => r.period))], ['2026-12', '2027-01']);
+  assert.equal(accrualPlan({ employee: e, cutoverMonth: '2026-12', currentMonth: '2027-03' }).length, 8);   // no exit: 4 months × 2
+  // a real date_exited wins; no LWD → unchanged
+  assert.equal(withOpenExit({ ...e, date_exited: '2026-12-31' }, '2027-01-14').date_exited, '2026-12-31');
+  assert.equal(withOpenExit(e, null), e);
+  // the borrow cap stops there too
+  assert.equal(borrowCap({ leaveType: 'PL', leaveYear: 2027, currentMonth: '2026-12', employee: withOpenExit(e, '2027-02-10'), cutoverMonth: '2026-12' }), 3);
+});
+
+test('review H: January shows the ACTUAL close of last year, pending as its own figure', () => {
+  const e = emp();
+  const ledger = [LG('PL', 9, '2026-12-01', 'opening'), LG('PL', -4, '2026-12-31', 'lapse', '2026'), LG('PL', 1.5, '2027-01-01'),
+    LG('SL', -2, '2026-12-01', 'opening')];
+  const reqs = [{ status: 'pending', leave_type: 'PL', start_date: '2026-12-20', days: 2, lop_days: 0 }];
+  const j = yearEndPreview({ employee: e, ledger, requests: reqs, cutoverMonth: '2026-12', today: '2027-01-10', year: 2026 });
+  assert.equal(j.actual, true);
+  assert.deepEqual(j.PL, { projected: 9, carry: 5, lapse: 4, pending: 2 });   // the written lapse, not a projection
+  assert.deepEqual(j.SL, { projected: -2, carry: -2, lapse: 0, pending: 0 });
+  const n = yearEndPreview({ employee: e, ledger: [], requests: reqs, cutoverMonth: '2026-12', today: '2026-11-20', year: 2026 });
+  assert.equal(n.actual, false);
+  assert.deepEqual(n.PL, { projected: -0.5, carry: -0.5, lapse: 0, pending: 2 });   // Dec 1.5 − 2 pending
+});
+
+test("re-verify I': a failed open-exit read throws and marks nobody checked (no accrual past an unseen LWD)", async () => {
+  const e = emp();
+  await assert.rejects(applyOpenExitsWith([e], async () => null), /open exits read/);
+  // success: the LWD is applied and the row is marked; checked rows are not re-read
+  let reads = 0;
+  const out = await applyOpenExitsWith([e], async (ids) => { reads++; return [{ employee_id: ids[0], lwd: '2027-01-14' }]; });
+  assert.equal(out[0].date_exited, '2027-01-14');
+  assert.equal(out[0]._exit_checked, true);
+  assert.deepEqual([...new Set(accrualPlan({ employee: out[0], cutoverMonth: '2026-12', currentMonth: '2027-03' }).map(r => r.period))], ['2026-12', '2027-01']);
+  await applyOpenExitsWith(out, async () => { reads++; return null; });   // nothing unchecked → no read, no throw
+  assert.equal(reads, 1);
+});
+
+test("re-verify A': a covered person's done leave line with no snapshot is stale; not covered is not", () => {
+  const item = { auto_source: 'leave_ledger', status: 'done' };
+  const exit = { lwd: '2026-12-15', leave_confirmed_at: null, leave_as_at: null };
+  assert.equal(exitLeaveStale({ exit, item, requests: [], ledger: { PL: 1, SL: 0 } }), true);
+  assert.equal(exitLeaveStale({ exit: { ...exit, leave_confirmed_at: '2026-12-10T00:00:00Z' }, item, requests: [], ledger: { PL: 1, SL: 0 } }), true);
+  assert.equal(exitLeaveStale({ exit, item, requests: [], ledger: null }), false);
 });

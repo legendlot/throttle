@@ -8,6 +8,7 @@ import { LogOut, Check, Ban, RotateCcw, X, AlertTriangle, Users, ChevronDown, Ch
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
 import { fmtDate, fmtMoney } from '../lib/format.js';
 import { EXIT_REASONS, CHECKLIST_OWNERS, AUTO_SOURCE_LABELS, blockerText, exitError, addDaysIso, labelOfList } from '../lib/exits.js';
+import { fmtNum } from '../lib/leave.js';
 import { ToneBadge, Card, KV, F, Row, inp, primaryBtn, ghostBtn, dangerBtn, muted } from './HiringBits.js';
 
 const ITEM_TONE = { open: 'warn', done: 'ok', na: 'neutral' };
@@ -67,7 +68,7 @@ export function ExitPanel({ employeeId, session, onChanged }) {
         : !open ? <ClosedExit x={x} role={d.role} session={session} onSaved={load} />
         : <>
           <ExitHeader x={x} d={d} session={session} onSaved={load} />
-          <Checklist items={d.items} live={d.live} role={d.role} docs={docs} busy={busy}
+          <Checklist items={d.items} live={d.live} exit={x} role={d.role} docs={docs} busy={busy}
             onSet={(item, status, note, document_id) => run('updateExitItem', { item_id: item.id, status, note, ...(document_id !== undefined ? { document_id } : {}) }, null)} />
           {d.can_manage && (
             <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
@@ -101,6 +102,7 @@ function ClosedExit({ x, role, session, onSaved }) {
       <KV k="Reason" v={labelOfList(EXIT_REASONS, x.reason_code)} />
       {x.reason_note && <KV k="Note" v={x.reason_note} />}
       <KV k="Last working day" v={fmtDate(x.lwd)} />
+      {x.leave_confirmed_at && <KV k="Leave at exit" v={leaveSnapshotText(x)} />}
       {x.initiated_by === 'backfill' && <div style={muted}>Recorded in the X1 backfill review (exited before exits were tracked).</div>}
       {/* A closed exit still takes the interview notes and the private rehire flag (HR) — nothing else. */}
       {role === 'hr' && x.status === 'closed' && (
@@ -176,7 +178,7 @@ function ExitHeader({ x, d, session, onSaved }) {
   );
 }
 
-function Checklist({ items, live, role, docs, busy, onSet }) {
+function Checklist({ items, live, exit, role, docs, busy, onSet }) {
   const groups = CHECKLIST_OWNERS.map(o => ({ ...o, items: (items || []).filter(i => i.owner === o.id) })).filter(g => g.items.length);
   return (
     <div>
@@ -184,14 +186,14 @@ function Checklist({ items, live, role, docs, busy, onSet }) {
       {groups.map(g => (
         <div key={g.id} style={{ marginTop: 8 }}>
           <div style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 700, marginBottom: 2 }}>{g.label}</div>
-          {g.items.map(it => <ItemRow key={it.id} it={it} live={live} role={role} docs={docs} busy={busy} onSet={onSet} />)}
+          {g.items.map(it => <ItemRow key={it.id} it={it} live={live} exit={exit} role={role} docs={docs} busy={busy} onSet={onSet} />)}
         </div>
       ))}
     </div>
   );
 }
 
-function ItemRow({ it, live, role, docs, busy, onSet }) {
+function ItemRow({ it, live, exit, role, docs, busy, onSet }) {
   const [mode, setMode] = useState(null);   // 'done' | 'na' while the note box is open
   const [note, setNote] = useState(it.note || '');
   const [doc, setDoc] = useState(it.document_id || '');
@@ -252,6 +254,46 @@ function ItemRow({ it, live, role, docs, busy, onSet }) {
           render={p => <>{p.request_no} · {p.purpose || '—'} <span style={muted}>({String(p.status).replace(/_/g, ' ')}{p.amount != null ? ` · ${fmtMoney(p.amount)}` : ''})</span></>} />
         {!live.payment_requests_verifiable && <Warn>Cannot verify automatically — no LOT login is linked to this person, so their Snorkel requests cannot be found. Finance checks by hand.</Warn>}
       </>}
+      {it.auto_source === 'leave_ledger' && <LeaveAtExit it={it} live={live} exit={exit} />}
+    </div>
+  );
+}
+
+// Leave R2 E2 — PL / SL as at the LWD (the ledger + the credits still to land through the LWD month). Negative = unpaid
+// days for the F&F; SL never pays out. Done (HR) is refused while leave is pending or runs past the LWD, and saves
+// these figures onto the exit; re-opening clears them.
+const sgn = (n) => (Number(n) > 0 ? `+${fmtNum(n)}` : fmtNum(n));
+function leaveSnapshotText(x) {
+  return `PL ${fmtNum(x.leave_pl_balance)} · SL ${fmtNum(x.leave_sl_balance)} (not paid out) · unpaid days for F&F ${fmtNum(x.leave_lop_days)} — confirmed ${fmtDate(x.leave_confirmed_at)}`;
+}
+function LeaveAtExit({ it, live, exit }) {
+  const lv = live?.leave;
+  if (it.status === 'done') {
+    return (<>
+      {exit?.leave_confirmed_at && <div style={{ ...muted, marginTop: 2, paddingLeft: 4 }}>Saved: {leaveSnapshotText(exit)}</div>}
+      {lv?.changed && <Warn>Leave changed since the balance was confirmed — re-open this line and confirm it again.</Warn>}
+    </>);
+  }
+  if (!lv) return null;
+  if (!lv.ok) return <Warn>Could not read the leave ledger just now — reload.</Warn>;
+  if (!lv.covered) return <div style={{ ...muted, marginTop: 2, paddingLeft: 4 }}>Leave is not tracked in Podium for this person — HR confirms the balance by hand.</div>;
+  const f = lv.figures || {};
+  const reqs = lv.requests || [];
+  return (
+    <div style={{ marginTop: 4, paddingLeft: 4, fontSize: 12 }}>
+      <div>
+        At the last working day ({fmtDate(f.as_at)}): <b className="num" style={{ color: Number(f.PL) < 0 ? 'var(--bad-fg)' : undefined }}>PL {fmtNum(f.PL)}</b>
+        {' · '}<b className="num" style={{ color: Number(f.SL) < 0 ? 'var(--bad-fg)' : undefined }}>SL {fmtNum(f.SL)}</b> <span style={muted}>(SL is not paid out)</span>
+        {(Number(f.projected_accrual?.PL) > 0 || Number(f.projected_accrual?.SL) > 0) && <span style={muted}> · includes credits still to come: PL {sgn(f.projected_accrual.PL)}, SL {sgn(f.projected_accrual.SL)}</span>}
+      </div>
+      {Number(f.lop_days) > 0
+        ? <div style={{ color: 'var(--bad-fg)' }}>Unpaid days for the F&amp;F: <b className="num">{fmtNum(f.lop_days)}</b> (the negative balance)</div>
+        : Number(f.PL) > 0 && <div style={muted}>PL balance at exit: {fmtNum(f.PL)} — encashment is Finance&apos;s call.</div>}
+      {lv.block && (
+        <Warn>{lv.block === 'leave_after_lwd' ? 'Leave pending or approved after the last working day — cancel it before confirming:' : 'A leave request is still pending — decide or withdraw it before confirming:'}
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>{reqs.map(r => <li key={r.id}>{fmtDate(r.start_date)}{r.end_date !== r.start_date ? ` – ${fmtDate(r.end_date)}` : ''} · {fmtNum(r.days)} day{Number(r.days) === 1 ? '' : 's'} · {r.status}</li>)}</ul>
+        </Warn>
+      )}
     </div>
   );
 }

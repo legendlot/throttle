@@ -3,6 +3,14 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.9.0] - 2026-11-13
+### Added
+- New "Leave" part and chapter: who is covered; PL / SL balances and monthly credits; applying (half days,
+  live day count, free weekends and fixed holidays, period leave, optional holiday); borrowing ahead and unpaid
+  days; withdraw and cancel; approving (manager, skip-level cover, HR); Who's out; work from home;
+  maternity and paternity grants; HR tools (cutover, holidays, opening balances, adjustments, ledger);
+  Payroll unpaid-days report (CSV, Mark exported, changes since export); year end and preview; exits.
+
 ## [1.8.1] - 2026-11-13
 ### Changed
 - Google Directory Sync chapter: phone numbers are no longer pushed to Google (field list is now six);

@@ -8,7 +8,13 @@
 import { encodeHeaderWords, addressOk } from './offerlink.js';
 
 // ── D2: types + policy constants (match the migration CHECKs) ─────────────────
-export const LEAVE_TYPES = ['PL', 'SL', 'PERIOD', 'OPTIONAL_HOLIDAY'];
+// R2 (0020): MATERNITY / PATERNITY are HR grants (E3, grantLeave — never applied); WFH is applied like leave (E4) but has
+// no ledger, no balance and no LOP. Only APPLY_TYPES go through applyLeave / previewLeave.
+export const LEAVE_TYPES = ['PL', 'SL', 'PERIOD', 'OPTIONAL_HOLIDAY', 'MATERNITY', 'PATERNITY', 'WFH'];
+export const APPLY_TYPES = ['PL', 'SL', 'PERIOD', 'OPTIONAL_HOLIDAY', 'WFH'];
+export const GRANT_TYPES = ['MATERNITY', 'PATERNITY'];
+export const MATERNITY_CALENDAR_DAYS = 182;                     // 26 weeks (L9), calendar days from the start
+export const PATERNITY_WORKING_DAYS = 15;                       // ⚠️ plan default: working days (Mon–Fri minus fixed holidays)
 export const LEDGER_TYPES = ['PL', 'SL'];                       // the only types with a ledger / balance
 export const ACCRUAL_RATE = { PL: 1.5, SL: 1 };                 // per earning month (L3, credited on the 1st)
 export const PL_CARRY_MAX = 5;                                  // D5: PL above this lapses at year end; SL lapses fully (L8)
@@ -30,8 +36,10 @@ export const DEFAULT_CUTOVER_MONTH = '2026-12';
 
 // Labels. TYPE_LABELS is for the person / their chain / HR. MAIL_TYPE_LABELS is what an email may say (D12): PERIOD
 // is never named in a mail — "Leave".
-export const TYPE_LABELS = { PL: 'Privilege leave', SL: 'Sick leave', PERIOD: 'Period leave', OPTIONAL_HOLIDAY: 'Optional holiday' };
-export const MAIL_TYPE_LABELS = { PL: 'Privilege leave', SL: 'Sick leave', PERIOD: 'Leave', OPTIONAL_HOLIDAY: 'Optional holiday' };
+export const TYPE_LABELS = { PL: 'Privilege leave', SL: 'Sick leave', PERIOD: 'Period leave', OPTIONAL_HOLIDAY: 'Optional holiday',
+  MATERNITY: 'Maternity leave', PATERNITY: 'Paternity leave', WFH: 'Work from home' };
+export const MAIL_TYPE_LABELS = { PL: 'Privilege leave', SL: 'Sick leave', PERIOD: 'Leave', OPTIONAL_HOLIDAY: 'Optional holiday',
+  MATERNITY: 'Maternity leave', PATERNITY: 'Paternity leave', WFH: 'Work from home' };
 
 // Error copy for errCode(code, LEAVE_COPY[code], status). The codes are the plan's API table (+ the input ones).
 export const LEAVE_COPY = {
@@ -67,6 +75,13 @@ export const LEAVE_COPY = {
   holiday_past: 'Only a future holiday can be added or deleted',
   bad_decision: 'Decision must be approve or reject',
   not_found: 'Not found',
+  // R2
+  grant_only: 'Maternity and paternity leave are granted by HR',
+  gender_unknown: "Fill the person's gender first",
+  maternity_not_eligible: 'Maternity leave can be granted only to a person recorded as female',
+  paternity_not_eligible: 'Paternity leave can be granted only to a person recorded as male',
+  grant_too_long: 'The end date is after the full leave length (maternity 182 calendar days, paternity 15 working days)',
+  report_changed: 'The report changed since you loaded it — reload, download again, then mark exported',
 };
 
 // no_holiday_list names the year (the leave's year has no fixed holiday in podium.holidays — 2027 must be added).
@@ -145,7 +160,8 @@ export function normaliseHalves(start_date, end_date, sh, eh) {
 // → { value: {leave_type, start_date, end_date, start_half, end_half, days, reason} } | { error }
 export function validateLeaveInput(d, { today, gender = null, holidays = [], notice = true } = {}) {
   const t = String(d?.leave_type || '');
-  if (!LEAVE_TYPES.includes(t)) return { error: 'bad_type' };
+  if (GRANT_TYPES.includes(t)) return { error: 'grant_only' };
+  if (!APPLY_TYPES.includes(t)) return { error: 'bad_type' };
   const start = d?.start_date, end = d?.end_date || d?.start_date;
   if (!isIsoDay(start) || !isIsoDay(end) || end < start) return { error: 'bad_dates' };
   if (start.slice(0, 4) !== end.slice(0, 4)) return { error: 'crosses_year' };
@@ -169,7 +185,7 @@ export function validateLeaveInput(d, { today, gender = null, holidays = [], not
   if (c.days <= 0) return { error: 'no_working_days' };
   if (c.days > MAX_REQUEST_DAYS) return { error: 'too_long' };
   if (notice && isIsoDay(today)) {
-    const earliest = t === 'SL' ? addDays(today, -SL_BACKDATE_DAYS) : today;
+    const earliest = t === 'SL' || t === 'WFH' ? addDays(today, -SL_BACKDATE_DAYS) : today;   // E4: WFH as SL
     if (start < earliest) return { error: 'notice' };
   }
   return { value: { leave_type: t, start_date: start, end_date: end, ...hv, days: c.days, reason } };
@@ -367,6 +383,7 @@ export function cancelBlock({ mode, req, meId, hr, approverManagerId = null, tod
     return self || hr ? null : 'forbidden';
   }
   if (req.status !== 'approved') return 'not_approved';
+  if (GRANT_TYPES.includes(req.leave_type)) return hr && !self ? null : 'forbidden';   // E3: HR ends / corrects a grant
   if (self) return req.start_date > today ? null : 'forbidden';
   if (hr) return null;
   if (meId && req.approver_employee_id && (meId === req.approver_employee_id || meId === approverManagerId)) return null;
@@ -392,7 +409,7 @@ export function rangeLabel(r) {
 }
 const dayCount = (n) => `${Number(n)} day${Number(n) === 1 ? '' : 's'}`;
 
-// kind: 'submitted' (to the approver) | 'approved' | 'rejected' | 'cancelled' | 'withdrawn' (to the person).
+// kind: 'submitted' (to the approver) | 'approved' | 'rejected' | 'cancelled' | 'withdrawn' | 'granted' (to the person).
 // Names the person, the MAIL label, dates and day count, links /leave. NEVER the reason, a borrowed / LOP figure or
 // the decision note (D12). → { raw, subject, text } | { error }
 export function buildLeaveMail({ kind, from, fromName = '', to, toFirst = '', personName, request, link, messageId }) {
@@ -400,12 +417,13 @@ export function buildLeaveMail({ kind, from, fromName = '', to, toFirst = '', pe
   if (!addressOk(f)) return { error: 'bad_sender' };
   if (!addressOk(t)) return { error: 'bad_recipient' };
   if (!/^<[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+>$/.test(String(messageId || ''))) return { error: 'bad_message_id' };
-  if (!['submitted', 'approved', 'rejected', 'cancelled', 'withdrawn'].includes(kind)) return { error: 'bad_kind' };
+  if (!['submitted', 'approved', 'rejected', 'cancelled', 'withdrawn', 'granted'].includes(kind)) return { error: 'bad_kind' };
   const clean = (s) => String(s ?? '').replace(/[\r\n]+/g, ' ').trim();
   const label = MAIL_TYPE_LABELS[request.leave_type] || 'Leave';
   const when = rangeLabel(request), count = dayCount(request.days);
   const who = clean(personName);
   const subject = kind === 'submitted' ? `Leave request: ${who} — ${label}, ${when}`
+    : kind === 'granted' ? `Leave granted: ${label}, ${when}`
     : `Your leave request was ${kind}: ${label}, ${when}`;
   const body = kind === 'submitted'
     ? `${who} has requested ${label.toLowerCase()} for ${when} (${count}).`
@@ -454,7 +472,8 @@ export function leaveDbErrorCode(r) {
   const d = r?.data || {};
   const m = String(d.message || '');
   for (const c of ['not_covered', 'overlap', 'period_used', 'optional_used', 'not_optional_holiday', 'balance_changed', 'not_pending',
-    'not_approved', 'no_self_approval', 'note_required', 'not_found', 'bad_decision', 'bad_mode']) {
+    'not_approved', 'no_self_approval', 'note_required', 'not_found', 'bad_decision', 'bad_mode',
+    'bad_type', 'gender_unknown', 'maternity_not_eligible', 'paternity_not_eligible']) {
     if (m === c) return c;
   }
   if (d.code === '23514' && /no_self_approval/.test(m)) return 'no_self_approval';
@@ -462,4 +481,288 @@ export function leaveDbErrorCode(r) {
   if (d.code === '23505') return 'balance_changed';
   if (d.code === '23514') return 'check_failed';
   return null;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Leave R2 — LOP report (E1), exit leave fill (E2), maternity / paternity (E3), WFH (E4), year-end preview (E5).
+// Plan: docs/superpowers/plans/2026-11-13-podium-leave-r2.md · migration 0020.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── E1: which halves of a request are unpaid ─────────────────────────────────
+// A request's working halves in date order (Mon–Fri minus fixed holidays; the start / end half rules of
+// countLeaveDays). → [{ date, half: 'first' | 'second' }]
+export function workingHalves({ start_date, end_date, start_half = 'full', end_half = 'full' }, fixedHolidays = new Set()) {
+  if (!isIsoDay(start_date) || !isIsoDay(end_date) || end_date < start_date) return [];
+  const fixed = fixedHolidays instanceof Set ? fixedHolidays : new Set(fixedHolidays || []);
+  const out = [];
+  const push = (d, which) => { for (const h of which) out.push({ date: d, half: h }); };
+  let guard = 0;
+  for (let d = start_date; d <= end_date && guard++ < 400; d = addDays(d, 1)) {
+    if (isWeekend(d) || fixed.has(d)) continue;
+    if (start_date === end_date) push(d, start_half === 'first' ? ['first'] : start_half === 'second' ? ['second'] : ['first', 'second']);
+    else if (d === start_date) push(d, start_half === 'second' ? ['second'] : ['first', 'second']);
+    else if (d === end_date) push(d, end_half === 'first' ? ['first'] : ['first', 'second']);
+    else push(d, ['first', 'second']);
+  }
+  return out;
+}
+// Halves → [{ date, half: 'full' | 'first' | 'second' }] (both halves of a day = full).
+function halvesToDates(halves) {
+  const by = new Map();
+  for (const h of halves) (by.get(h.date) || by.set(h.date, []).get(h.date)).push(h.half);
+  return [...by.entries()].map(([date, hs]) => ({ date, half: hs.length >= 2 ? 'full' : hs[0] }));
+}
+
+// Balance first, then borrow, then LOP — in date order — so the LOP days are the LAST lop_days × 2 working halves of
+// the request (D7). Today's holiday list may give a different count from the frozen `days` (a holiday added / removed
+// after submit): allocate over the halves that exist and flag recount_mismatch for HR.
+// → { months: { 'YYYY-MM': { days, dates: [{date, half}] } }, lop_days, recount_mismatch }
+export function lopAllocation(req, fixedHolidays = new Set()) {
+  const halves = workingHalves(req, fixedHolidays);
+  const want = Math.max(0, toHalves(req?.lop_days || 0));
+  const lop = want ? halves.slice(Math.max(0, halves.length - want)) : [];
+  const months = {};
+  for (const h of lop) {
+    const m = (months[monthOf(h.date)] ||= { halves: [] });
+    m.halves.push(h);
+  }
+  const out = {};
+  for (const [m, v] of Object.entries(months)) out[m] = { days: fromHalves(v.halves.length), dates: halvesToDates(v.halves) };
+  return { months: out, lop_days: fromHalves(lop.length), recount_mismatch: halves.length !== toHalves(req?.days || 0) };
+}
+
+// The payroll rows for one month: one per employee with any unpaid half in it, from APPROVED PL / SL requests only
+// (exit-time negative balances are E2's F&F figure, not here). requests: approved rows with lop_days > 0 touching the
+// month; employees: { [id]: {employee_code, full_name, razorpayx_employee_id} }; fixedHolidays: a Set of fixed dates.
+// warnings = every request touching the month whose working halves no longer match its frozen `days` (a holiday
+// changed after submit) — listed even when none of its LOP lands in this month, so HR sees it (review F).
+// → { rows: [{ employee_id, employee_code, full_name, razorpayx_employee_id, lop_days, dates, recount_mismatch, request_ids }],
+//     warnings: [{ request_id, employee_id, employee_code, full_name, start_date, end_date, lop_days, placed, placed_in_month }] }
+export function lopReport({ month, requests = [], employees = {}, fixedHolidays = new Set() }) {
+  if (!isMonth(month)) return { rows: [], warnings: [] };
+  const by = {}, warnings = [];
+  for (const r of requests || []) {
+    if (r.status !== 'approved' || !LEDGER_TYPES.includes(r.leave_type) || !(Number(r.lop_days) > 0)) continue;
+    const a = lopAllocation(r, fixedHolidays);
+    const m = a.months[month];
+    const e = employees[r.employee_id] || {};
+    if (a.recount_mismatch) {
+      warnings.push({ request_id: r.id, employee_id: r.employee_id, employee_code: e.employee_code || null, full_name: e.full_name || null,
+        start_date: r.start_date, end_date: r.end_date, lop_days: Number(r.lop_days), placed: a.lop_days, placed_in_month: m ? m.days : 0 });
+    }
+    if (!m) continue;
+    const row = (by[r.employee_id] ||= { employee_id: r.employee_id, employee_code: e.employee_code || null, full_name: e.full_name || null,
+      razorpayx_employee_id: e.razorpayx_employee_id || null, h: 0, dates: [], recount_mismatch: false, request_ids: [] });
+    row.h += toHalves(m.days);
+    row.dates.push(...m.dates);
+    row.recount_mismatch = row.recount_mismatch || a.recount_mismatch;
+    row.request_ids.push(r.id);
+  }
+  const byName = (a, b) => String(a.full_name || '').localeCompare(String(b.full_name || '')) || String(a.employee_id).localeCompare(String(b.employee_id));
+  const rows = Object.values(by).map(({ h, ...r }) => ({ ...r, lop_days: fromHalves(h), dates: r.dates.sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0)) }))
+    .sort(byName);
+  return { rows, warnings: warnings.sort((a, b) => byName(a, b) || String(a.start_date).localeCompare(String(b.start_date))) };
+}
+
+// What is stored on "Mark exported" and hashed for the report (review D): the rows without request ids.
+export const lopExportRows = (rows) => (rows || []).map(({ request_ids, ...r }) => r);
+// Canonical JSON (object keys sorted at every level) — the report_hash input, so the same rows always hash the same.
+export function canonicalJson(v) {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().filter(k => v[k] !== undefined).map(k => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
+  return JSON.stringify(v ?? null);
+}
+
+// What changed since the last export, per person (was X days, now Y; or the same count on other dates).
+// → [{ employee_id, employee_code, full_name, was, now, was_dates, now_dates }]
+const datesKey = (ds) => (ds || []).map(d => `${d.date}:${d.half}`).join(',');
+export function lopDiff(prevRows = [], rows = []) {
+  const prev = Object.fromEntries((prevRows || []).map(r => [r.employee_id, r]));
+  const cur = Object.fromEntries((rows || []).map(r => [r.employee_id, r]));
+  const out = [];
+  for (const id of new Set([...Object.keys(prev), ...Object.keys(cur)])) {
+    const a = prev[id], b = cur[id];
+    const was = a ? Number(a.lop_days) : 0, now = b ? Number(b.lop_days) : 0;
+    if (toHalves(was) === toHalves(now) && datesKey(a?.dates) === datesKey(b?.dates)) continue;
+    const who = b || a;
+    out.push({ employee_id: id, employee_code: who.employee_code || null, full_name: who.full_name || null,
+      was, now, was_dates: a?.dates || [], now_dates: b?.dates || [] });
+  }
+  return out.sort((x, y) => String(x.full_name || '').localeCompare(String(y.full_name || '')));
+}
+
+// ── E2: leave figures at the last working day ────────────────────────────────
+// PL / SL as at the LWD = the ledger (minus any accrual for a month after the LWD month and any year-close of the LWD's
+// year or later — the person is gone by then) + the accruals still to land through the LWD month (earningMonths with
+// date_exited = LWD: the exit month earns, nothing after) + the year-end lapse of every year end between today and the
+// LWD. Approved leave is already a `taken` row. Negative PL / SL = LOP days for the F&F; SL never pays out (lapses).
+// expected = the raw Σ ledger per type, which exit_update_item re-checks under the leave lock.
+// → { as_at, PL, SL, lop_days, projected_accrual: {PL, SL}, expected: {PL, SL} } | null (bad input)
+export function exitLeaveFigures({ employee, ledger = [], cutoverMonth, lwd, today }) {
+  if (!isIsoDay(lwd) || !isIsoDay(today) || !isMonth(cutoverMonth)) return null;
+  const lm = monthOf(lwd), ly = yearOf(lwd), cy = yearOf(today);
+  const rows = (ledger || []).map(r => ({ leave_type: r.leave_type, h: toHalves(r.delta), kind: r.kind,
+    period: r.period == null ? null : String(r.period), d: String(r.effective_date).slice(0, 10) }));
+  const expected = Object.fromEntries(LEDGER_TYPES.map(t => [t, fromHalves(rows.filter(r => r.leave_type === t).reduce((s, r) => s + r.h, 0))]));
+  const kept = rows.filter(r => !(r.kind === 'accrual' && r.period > lm) && !(r.kind === 'lapse' && Number(r.period) >= ly));
+  const have = new Set(kept.filter(r => r.kind === 'accrual').map(r => `${r.leave_type}:${r.period}`));
+  const projected = { PL: 0, SL: 0 };
+  const months = earningMonths({ ...employee, date_exited: lwd }, cutoverMonth, cutoverMonth, lm);
+  for (const m of months) {
+    for (const t of LEDGER_TYPES) {
+      if (have.has(`${t}:${m}`)) continue;
+      const h = toHalves(ACCRUAL_RATE[t]);
+      kept.push({ leave_type: t, h, kind: 'accrual', period: m, d: `${m}-01` });
+      projected[t] += h;
+    }
+  }
+  // Year ends still to come before the LWD (the lazy close has not run for them yet).
+  for (let y = cy; y < ly; y++) {
+    const end = `${y}-12-31`;
+    for (const t of LEDGER_TYPES) {
+      if (kept.some(r => r.leave_type === t && r.kind === 'lapse' && r.period === String(y))) continue;
+      const close = kept.filter(r => r.leave_type === t && r.d <= end).reduce((s, r) => s + r.h, 0);
+      const keep = t === 'PL' ? toHalves(PL_CARRY_MAX) : 0;
+      if (close > keep) kept.push({ leave_type: t, h: -(close - keep), kind: 'lapse', period: String(y), d: end });
+    }
+  }
+  const bal = (t) => kept.filter(r => r.leave_type === t).reduce((s, r) => s + r.h, 0);
+  const pl = bal('PL'), sl = bal('SL');
+  return { as_at: lwd, PL: fromHalves(pl), SL: fromHalves(sl), lop_days: fromHalves(Math.max(0, -pl) + Math.max(0, -sl)),
+    projected_accrual: { PL: fromHalves(projected.PL), SL: fromHalves(projected.SL) }, expected };
+}
+
+// The leave line's Done guard (the RPC re-checks under the lock): a pending / approved request ending after the LWD
+// (cancel it first) → leave_after_lwd; any pending request → leave_pending. → code | null
+export function exitLeaveBlock(requests = [], lwd) {
+  if ((requests || []).some(r => OPEN_STATUSES.includes(r.status) && r.end_date > lwd)) return 'leave_after_lwd';
+  if ((requests || []).some(r => r.status === 'pending')) return 'leave_pending';
+  return null;
+}
+
+// Review A: is a CONFIRMED leave line (status done) still true? Stale when a request is pending or an open one ends
+// after the LWD, when the LWD moved since (leave_as_at ≠ lwd), or when the ledger sums moved since (ledger = the
+// current raw Σ {PL, SL}; null = not covered, skip that part). exit_close re-checks it under the leave lock.
+// Re-verify A': a COVERED person's done line with no snapshot (leave_confirmed_at / leave_as_at null — e.g. a confirm
+// that landed between updateExit's re-open and its clear) is stale too: fail closed. Not covered = no snapshot by design.
+export function exitLeaveStale({ exit, item, requests = [], ledger = null }) {
+  if (!exit || !item || item.auto_source !== 'leave_ledger' || item.status !== 'done') return false;
+  if (exitLeaveBlock(requests, exit.lwd)) return true;
+  if (!exit.leave_confirmed_at || !exit.leave_as_at) return !!ledger;
+  if (String(exit.leave_as_at || '').slice(0, 10) !== String(exit.lwd || '').slice(0, 10)) return true;
+  if (ledger && (toHalves(ledger.PL) !== toHalves(exit.leave_ledger_pl) || toHalves(ledger.SL) !== toHalves(exit.leave_ledger_sl))) return true;
+  return false;
+}
+
+// Review I: while an exit is OPEN, its LWD is the exit date for accrual (date_exited is only written at the close).
+export const withOpenExit = (emp, lwd) => (emp && !emp.date_exited && isIsoDay(lwd) ? { ...emp, date_exited: lwd } : emp);
+// Apply every open exit's LWD to the rows not yet checked (marked `_exit_checked`). readOpenExits(ids) → [{employee_id,
+// lwd}] | null. FAIL CLOSED (re-verify I'): a failed read THROWS — nobody is marked checked, so no caller can go on to
+// write accruals past an LWD it could not see (the handler turns the throw into a 500).
+export async function applyOpenExitsWith(emps, readOpenExits) {
+  const list = (emps || []).filter(e => e && !e._exit_checked);
+  if (!list.length) return emps || [];
+  const rows = await readOpenExits([...new Set(list.map(e => e.id).filter(Boolean))]);
+  if (!Array.isArray(rows)) throw new Error('db_error: open exits read');
+  const lwd = Object.fromEntries(rows.map(x => [x.employee_id, String(x.lwd).slice(0, 10)]));
+  return (emps || []).map(e => (e && !e._exit_checked ? { ...withOpenExit(e, lwd[e.id]), _exit_checked: true } : e));
+}
+
+// ── E3: maternity / paternity grant ──────────────────────────────────────────
+// MATERNITY: 182 calendar days from the start (end = start + 181), gender 'f', a note required (HR records the
+// eligibility check there). PATERNITY: 15 working days from the start (Mon–Fri minus fixed holidays; the end is the
+// 15th working day), gender 'm'. Both may cross 31 Dec. holidays: [{date, kind}] for every year the range may touch;
+// a touched year with no fixed holiday → no_holiday_list (PATERNITY only — maternity counts calendar days).
+// An optional end_date (review C: returning early = cancel + grant again with the actual end) must be ≥ the start and
+// ≤ the full-length end; days = the calendar days (MATERNITY) / working days (PATERNITY) in that range.
+// → { value: { leave_type, start_date, end_date, start_half, end_half, days, note } } | { error, year? }
+export function grantPlan(d, { gender = null, holidays = [], today = null } = {}) {
+  const t = String(d?.leave_type || '');
+  if (!GRANT_TYPES.includes(t)) return { error: 'bad_type' };
+  const start = d?.start_date;
+  if (!isIsoDay(start)) return { error: 'bad_dates' };
+  if (isIsoDay(today) && yearOf(start) > yearOf(today) + 1) return { error: 'too_far' };
+  const n = cleanNote(d?.note, { required: t === 'MATERNITY' });
+  if (n.error) return n;
+  if (gender !== 'f' && gender !== 'm') return { error: 'gender_unknown' };
+  if (t === 'MATERNITY' && gender !== 'f') return { error: 'maternity_not_eligible' };
+  if (t === 'PATERNITY' && gender !== 'm') return { error: 'paternity_not_eligible' };
+  const base = { leave_type: t, start_date: start, start_half: 'full', end_half: 'full', note: n.value };
+  const wantEnd = d?.end_date == null || d.end_date === '' ? null : d.end_date;
+  if (wantEnd !== null && (!isIsoDay(wantEnd) || wantEnd < start)) return { error: 'bad_dates' };
+  if (t === 'MATERNITY') {
+    const full = addDays(start, MATERNITY_CALENDAR_DAYS - 1);
+    if (wantEnd && wantEnd > full) return { error: 'grant_too_long' };
+    const end = wantEnd || full;
+    return { value: { ...base, end_date: end, days: Math.round((Date.parse(end + 'T00:00:00Z') - Date.parse(start + 'T00:00:00Z')) / 86400000) + 1 } };
+  }
+  const fixed = new Set((holidays || []).filter(h => h.kind === 'fixed').map(h => h.date));
+  const working = (x) => !isWeekend(x) && !fixed.has(x);
+  let d0 = start, count = 0, guard = 0;
+  for (; guard++ < 400; d0 = addDays(d0, 1)) {
+    if (working(d0)) count++;
+    if (count === PATERNITY_WORKING_DAYS) break;
+  }
+  if (wantEnd && wantEnd > d0) return { error: 'grant_too_long' };
+  const end = wantEnd || d0;
+  for (let y = yearOf(start); y <= yearOf(end); y++) {
+    if (holidayListMissing((holidays || []).filter(h => yearOf(h.date) === y))) return { error: 'no_holiday_list', year: y };
+  }
+  let days = 0;
+  for (let x = start, g = 0; x <= end && g++ < 400; x = addDays(x, 1)) if (working(x)) days++;
+  if (days <= 0) return { error: 'no_working_days' };
+  return { value: { ...base, end_date: end, days } };
+}
+
+// ── E4: WFH approver at submit ───────────────────────────────────────────────
+// The skip-level manager (the manager's manager); no skip-level → the manager; no manager → null (HR decides).
+// ⚠️ Plan default per the spec ("needs the skip-level manager's approval"). managerOf: (employeeId) → manager_id | null.
+export function wfhApprover(emp, managerOf = () => null) {
+  const m = emp?.manager_id || null;
+  if (!m) return null;
+  const s = managerOf(m) || null;
+  return s && s !== emp.id ? s : m;
+}
+
+// ── E5: year-end preview ─────────────────────────────────────────────────────
+// Shown 1 Nov – 31 Jan: Nov / Dec preview this year's close, January the one just made. → the year | null
+export function yearEndYear(today) {
+  if (!isIsoDay(today)) return null;
+  const m = Number(today.slice(5, 7)), y = yearOf(today);
+  return m >= 11 ? y : m === 1 ? y - 1 : null;
+}
+// Projected 31 Dec of `year` per type = Σ ledger dated ≤ 31 Dec (without that year's own lapse row) + the year's
+// accruals still to come after the current IST month − the pending PL / SL debit (days − lop_days) of that year.
+// PL carries min(PL, 5) (a negative carries as is), the rest lapses; SL lapses fully (a negative carries). Read only.
+// A year before today's (January's view) is already closed: show the ACTUAL close (review H) — closing before the
+// lapse, the lapse row leave_close_years wrote, what carried — and the still-pending days of that year as their own
+// figure, not subtracted. pending is reported in both modes. → { year, actual, PL: {projected, carry, lapse, pending}, SL }
+export function yearEndPreview({ employee, ledger = [], requests = [], cutoverMonth, today, year }) {
+  const cm = monthOf(today);
+  const end = `${year}-12-31`, per = String(year);
+  const pendingOf = (t) => (requests || []).filter(r => r.status === 'pending' && r.leave_type === t && yearOf(r.start_date) === year)
+    .reduce((s, r) => s + toHalves(r.days) - toHalves(r.lop_days || 0), 0);
+  if (year < yearOf(today)) {
+    const out = { year, actual: true };
+    for (const t of LEDGER_TYPES) {
+      const rows = (ledger || []).filter(r => r.leave_type === t && String(r.effective_date).slice(0, 10) <= end);
+      const isLapse = (r) => r.kind === 'lapse' && String(r.period) === per;
+      const closing = rows.filter(r => !isLapse(r)).reduce((s, r) => s + toHalves(r.delta), 0);
+      const lapse = 0 - rows.filter(isLapse).reduce((s, r) => s + toHalves(r.delta), 0);   // 0 −, never −0
+      out[t] = { projected: fromHalves(closing), carry: fromHalves(closing - lapse), lapse: fromHalves(lapse), pending: fromHalves(pendingOf(t)) };
+    }
+    return out;
+  }
+  const out = { year, actual: false };
+  for (const t of LEDGER_TYPES) {
+    const base = (ledger || []).filter(r => r.leave_type === t && String(r.effective_date).slice(0, 10) <= end
+      && !(r.kind === 'lapse' && String(r.period) === per)).reduce((s, r) => s + toHalves(r.delta), 0);
+    const from = addMonths(cm, 1) > `${year}-01` ? addMonths(cm, 1) : `${year}-01`;
+    const remaining = earningMonths(employee, cutoverMonth, from, `${year}-12`).length * toHalves(ACCRUAL_RATE[t]);
+    const pending = pendingOf(t);
+    const p = base + remaining - pending;
+    const keep = t === 'PL' ? toHalves(PL_CARRY_MAX) : 0;
+    out[t] = { projected: fromHalves(p), carry: fromHalves(p > keep ? keep : p), lapse: fromHalves(Math.max(0, p - keep)), pending: fromHalves(pending) };
+  }
+  return out;
 }

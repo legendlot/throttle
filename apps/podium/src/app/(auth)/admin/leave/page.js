@@ -1,16 +1,20 @@
 'use client';
 // Leave R1 — HR settings (D4, D13, D14): the cutover month, the holiday calendar, covered people with their
 // balances + opening balances (PL and SL once each, L5; after that an adjustment with a note), a person's ledger.
+// R2 (plan 2026-11-13-podium-leave-r2): "Payroll — unpaid days" (E1: the month's LOP, CSV, mark exported, what
+// changed since), "Year end" (E5, 1 Nov – 31 Jan, read only) and "Grant maternity / paternity" (E3).
 // The worker gates every action with isHr.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { Spinner, useToast } from '@throttle/ui';
-import { CalendarDays, Plus, Save, Trash2, Users, BookOpen, X } from 'lucide-react';
-import { Card, Note, inp, primaryBtn, ghostBtn, dangerBtn, muted } from '../../../../components/HiringBits.js';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
+import { CalendarDays, Plus, Save, Trash2, Users, BookOpen, X, Download, CheckCheck, Wallet, Baby, Hourglass } from 'lucide-react';
+import { Card, Note, inp, comboInp, primaryBtn, ghostBtn, dangerBtn, muted } from '../../../../components/HiringBits.js';
 import { LedgerTable } from '../../../../components/LeaveBits.js';
+import { fmtDate } from '../../../../lib/format.js';
 import {
-  LEDGER_TYPES, leaveError, arr, personOf, istToday, addDays, fmtDay, fmtNum,
+  LEDGER_TYPES, GRANT_TYPES, leaveError, arr, personOf, istToday, addDays, fmtDay, fmtNum, fmtDays, fmtMonth,
   getLeaveAdmin, getLeaveLedger, setLeaveSettings, saveHoliday, deleteHoliday, setOpeningBalance, adjustLeave,
+  getLeaveLopReport, markLopExported, grantLeave, lopCsv, lopDatesText, lopCheckText, downloadText,
 } from '../../../../lib/leave.js';
 
 const th = { textAlign: 'left', padding: '6px', fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', fontWeight: 700 };
@@ -106,6 +110,10 @@ export default function LeaveSettingsPage() {
 
   return (
     <div style={{ maxWidth: 1100, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <PayrollLop session={session} />
+      {d.year_end_year != null && <YearEnd year={d.year_end_year} people={arr(d, 'people', 'employees')} />}
+      <GrantLeave session={session} people={arr(d, 'people', 'employees')} onGranted={load} />
+
       <Card title="Cutover">
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
           Monthly credits start from
@@ -209,3 +217,195 @@ export default function LeaveSettingsPage() {
   );
 }
 
+
+// ── R2 E1: Payroll — unpaid days ────────────────────────────────────────────
+// The month's LOP from approved PL / SL requests (the worker places it on each request's last working halves). HR
+// enters it in RazorpayX by hand (no API write); "Mark exported" snapshots it so a late change shows up here.
+function PayrollLop({ session }) {
+  const { showToast } = useToast();
+  const [month, setMonth] = useState(istToday().slice(0, 7));   // default: this month (IST)
+  const [r, setR] = useState(null);                             // null = loading, false = failed
+  const [busy, setBusy] = useState(false);
+  const gen = useRef(0);                                         // review E: only the latest request's answer lands
+  const monthRef = useRef(month);                                // re-verify E': the month picked NOW (not at click time)
+  monthRef.current = month;
+  const load = useCallback(() => {
+    if (!session || !/^\d{4}-\d{2}$/.test(month)) return;
+    const my = ++gen.current;
+    setR(null);
+    getLeaveLopReport(month, session)
+      .then(x => { if (my === gen.current) setR(x && x.month === month ? x : false); })
+      .catch(e => { if (my !== gen.current) return; setR(false); showToast(leaveError(e, 'Could not load the unpaid days'), 'error'); });
+  }, [session, month, showToast]);
+  useEffect(() => { load(); }, [load]);
+
+  // Download / Mark exported act on THIS loaded report only (its month = the picked one, and its hash is sent back).
+  const ready = !!r && r.month === month && typeof r.report_hash === 'string';
+  const rows = arr(r, 'rows');
+  const warnings = arr(r, 'warnings');
+  const pending = arr(r, 'pending');
+  const changes = arr(r, 'changes_since_export');
+  const nPending = pending.reduce((n, p) => n + (Number(p.requests) || 0), 0);
+  function download() { if (ready) downloadText(`unpaid-days-${r.month}.csv`, lopCsv(rows, warnings)); }
+  async function markExported() {
+    if (!ready) return;
+    if (!window.confirm(`Mark ${fmtMonth(r.month)} as entered in payroll? Later changes will be listed here against this export.`)) return;
+    const m = r.month;
+    // Reload only if the same month is still picked: a month switched mid-export has its own load in flight, and this
+    // click-time load() would otherwise replace it with the old month.
+    const reload = () => { if (monthRef.current === m) load(); };
+    setBusy(true);
+    try { await markLopExported(m, r.report_hash, session); showToast(`Marked ${fmtMonth(m)} exported`, 'success'); reload(); }
+    catch (e) { showToast(leaveError(e), 'error'); if (String(e?.message || '').startsWith('report_changed')) reload(); }
+    finally { setBusy(false); }
+  }
+  return (
+    <Card title={title(Wallet, 'Payroll — unpaid days')}
+      right={<input type="month" style={{ ...inp, width: 170 }} value={month} onChange={e => setMonth(e.target.value || istToday().slice(0, 7))} />}>
+      {r === null ? <Spinner /> : r === false ? <div style={muted}>Could not load.</div> : (<>
+        {pending.length > 0 && (
+          <Note tone="warn">
+            <span>{nPending} leave request{nPending === 1 ? '' : 's'} touching {fmtMonth(month)} still pending — decide these before running payroll: {pending.map(p => p.full_name || p.employee_code).join(', ')}.</span>
+          </Note>
+        )}
+        {r.last_export && (
+          <div style={{ ...muted, marginBottom: 8 }}>
+            Last marked exported {fmtDate(r.last_export.exported_at)}{r.last_export.exported_by_name ? ` by ${r.last_export.exported_by_name}` : ''} ({r.last_export.people} {r.last_export.people === 1 ? 'person' : 'people'}).
+            {changes.length === 0 ? ' No change since.' : ''}
+          </div>
+        )}
+        {changes.length > 0 && (
+          <Note tone="bad">
+            <span>Changed since the last export — carry the difference into next month&apos;s payroll:
+              {changes.map(c => <span key={c.employee_id} style={{ display: 'block', marginTop: 2 }}>{c.full_name || c.employee_code}: was <b className="num">{fmtNum(c.was)}</b>, now <b className="num">{fmtNum(c.now)}</b>{c.now > 0 ? ` (${lopDatesText(c.now_dates)})` : ''}</span>)}
+            </span>
+          </Note>
+        )}
+        {warnings.length > 0 && (
+          <Note tone="warn">
+            <span>The holiday list changed after {warnings.length === 1 ? 'this leave was' : 'these leaves were'} approved — the unpaid days are placed over today&apos;s working days; check them:
+              {warnings.map(w => <span key={w.request_id} style={{ display: 'block', marginTop: 2 }}>{w.full_name || w.employee_code}: {lopCheckText([w])}{Number(w.placed_in_month) === 0 ? ' — none of it falls in this month' : ''}</span>)}
+            </span>
+          </Note>
+        )}
+        {rows.length === 0 ? <div style={muted}>No unpaid days in {fmtMonth(month)}.</div> : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={th}>Code</th><th style={th}>RazorpayX id</th><th style={th}>Name</th><th style={{ ...th, textAlign: 'right' }}>Unpaid days</th><th style={th}>Dates</th></tr></thead>
+            <tbody>
+              {rows.map(x => (
+                <tr key={x.employee_id}>
+                  <td style={td} className="num">{x.employee_code || '—'}</td>
+                  <td style={td} className="num">{x.razorpayx_employee_id || <span style={{ color: 'var(--warn-fg)' }}>missing</span>}</td>
+                  <td style={td}>{x.full_name || '—'}</td>
+                  <td style={{ ...td, textAlign: 'right', fontWeight: 600 }} className="num">{fmtNum(x.lop_days)}</td>
+                  <td style={{ ...td, fontSize: 12 }}>{lopDatesText(x.dates)}
+                    {x.recount_mismatch && <div style={{ color: 'var(--warn-fg)', fontSize: 11 }}>A holiday changed after this leave was approved — check the dates.</div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
+          <span style={muted}>Total <b className="num">{fmtNum(r.total_lop_days || 0)}</b> · {rows.length} {rows.length === 1 ? 'person' : 'people'}. Exit balances are settled in the F&amp;F, not here.</span>
+          <span style={{ display: 'flex', gap: 6 }}>
+            <button style={smallBtn} onClick={download} disabled={!ready || (!rows.length && !warnings.length)}><Download size={12} /> Download CSV</button>
+            <button style={{ ...primaryBtn, padding: '5px 12px', opacity: busy || !ready ? 0.6 : 1 }} onClick={markExported} disabled={busy || !ready}><CheckCheck size={12} /> Mark exported</button>
+          </span>
+        </div>
+      </>)}
+    </Card>
+  );
+}
+
+// ── R2 E5: Year end (read only; the real close is the lazy one on 1 Jan) ─────
+function YearEnd({ year, people }) {
+  const rows = (people || []).filter(p => p.year_end).map(p => ({ ...p, _p: personOf(p) })).sort((a, b) => a._p.name.localeCompare(b._p.name));
+  const actual = rows.some(p => p.year_end.actual);
+  const neg = (n) => (Number(n) < 0 ? { color: 'var(--bad-fg)' } : {});
+  return (
+    <Card title={title(Hourglass, actual ? `Year end ${year} — the close (31 December)` : `Year end ${year} — projected 31 December`)}>
+      <div style={{ ...muted, marginBottom: 8 }}>
+        {actual
+          ? 'What the year-end close wrote: the balance at 31 December, what carried and what lapsed. Requests from that year still pending are shown separately — deciding one re-closes the year.'
+          : 'Balance + the credits still to come this year − pending requests. PL carries up to 5 (a negative balance carries as it is); the rest lapses. SL lapses fully.'}
+      </div>
+      {rows.length === 0 ? <div style={muted}>Nobody is covered.</div> : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={th}>Person</th><th style={{ ...th, textAlign: 'right' }}>PL at 31 Dec{actual ? ' (before lapse)' : ''}</th><th style={{ ...th, textAlign: 'right' }}>PL carries</th><th style={{ ...th, textAlign: 'right' }}>PL lapses</th><th style={{ ...th, textAlign: 'right' }}>SL at 31 Dec</th><th style={{ ...th, textAlign: 'right' }}>SL lapses</th><th style={{ ...th, textAlign: 'right' }}>Pending PL / SL</th></tr></thead>
+          <tbody>
+            {rows.map(p => {
+              const y = p.year_end;
+              return (
+                <tr key={p._p.id}>
+                  <td style={td}><div style={{ fontWeight: 600 }}>{p._p.name}</div><div style={muted}>{p._p.code}</div></td>
+                  <td style={{ ...td, textAlign: 'right', ...neg(y.PL?.projected) }} className="num">{fmtNum(y.PL?.projected)}</td>
+                  <td style={{ ...td, textAlign: 'right', ...neg(y.PL?.carry) }} className="num">{fmtNum(y.PL?.carry)}</td>
+                  <td style={{ ...td, textAlign: 'right', color: Number(y.PL?.lapse) > 0 ? 'var(--warn-fg)' : undefined }} className="num">{fmtNum(y.PL?.lapse)}</td>
+                  <td style={{ ...td, textAlign: 'right', ...neg(y.SL?.projected) }} className="num">{fmtNum(y.SL?.projected)}</td>
+                  <td style={{ ...td, textAlign: 'right' }} className="num">{fmtNum(y.SL?.lapse)}</td>
+                  <td style={{ ...td, textAlign: 'right', color: Number(y.PL?.pending) + Number(y.SL?.pending) > 0 ? 'var(--warn-fg)' : undefined }} className="num">{fmtNum(y.PL?.pending)} / {fmtNum(y.SL?.pending)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
+// ── R2 E3: grant maternity / paternity (approved on save; never for yourself) ─
+function GrantLeave({ session, people, onGranted }) {
+  const { showToast } = useToast();
+  const [who, setWho] = useState('');
+  const [type, setType] = useState('MATERNITY');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');             // optional: empty = the full length
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const opts = (people || []).map(p => { const x = personOf(p); return { value: x.id, label: x.name, hint: x.code }; }).filter(o => o.value);
+  const person = (people || []).find(p => personOf(p).id === who);
+  const genderMissing = !!person && !person.gender;
+  async function submit() {
+    if (!who || !start) { showToast('Pick the person and the start date', 'error'); return; }
+    if (type === 'MATERNITY' && !note.trim()) { showToast('Record the eligibility check in the note', 'error'); return; }
+    setBusy(true);
+    try {
+      const r = await grantLeave({ employee_id: who, leave_type: type, start_date: start, ...(end ? { end_date: end } : {}), note: note.trim() || null }, session);
+      const q = r?.request || {};
+      const mail = r?.email === 'sent' ? ' They have been emailed.' : r?.email === 'failed' ? ' (The email did not go out; tell them.)' : '';
+      showToast(`Granted: ${fmtDay(q.start_date || start)} – ${fmtDay(q.end_date)} (${fmtDays(q.days)}).${mail}`, 'success');
+      setWho(''); setStart(''); setEnd(''); setNote('');
+      onGranted && onGranted();
+    } catch (e) { showToast(leaveError(e), 'error'); }
+    finally { setBusy(false); }
+  }
+  return (
+    <Card title={title(Baby, 'Grant maternity / paternity leave')}>
+      <div style={{ ...muted, marginBottom: 8 }}>
+        Maternity: 182 calendar days (26 weeks) from the start. Paternity: 15 working days from the start (weekends and fixed holidays are free).
+        Both may cross 31 December, use no leave balance and are approved on save. Returning early? Cancel it and grant again with the actual end date.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ flex: '1 1 220px' }}>
+          <Combobox value={who} onChange={v => setWho(v || '')} inputStyle={comboInp} placeholder="Person" options={opts} />
+        </div>
+        <select style={{ ...inp, width: 170 }} value={type} onChange={e => setType(e.target.value)}>
+          {GRANT_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
+        <input type="date" style={{ ...inp, width: 170 }} value={start} onChange={e => { setStart(e.target.value); if (end && e.target.value > end) setEnd(''); }} aria-label="Starts on" />
+        <label style={{ ...muted, display: 'inline-flex', alignItems: 'center', gap: 6 }}>Ends on
+          <input type="date" style={{ ...inp, width: 170 }} value={end} min={start || undefined} onChange={e => setEnd(e.target.value)} />
+        </label>
+      </div>
+      <div style={{ ...muted, marginTop: 4 }}>Leave “Ends on” empty for the full length.</div>
+      {genderMissing && <div style={{ fontSize: 12, color: 'var(--warn-fg)', marginTop: 6 }}>This person&apos;s gender is not recorded — fill it in their profile first.</div>}
+      <input style={{ ...inp, fontFamily: 'var(--font-ui)', marginTop: 8, width: '100%' }} maxLength={500} value={note} onChange={e => setNote(e.target.value)}
+        placeholder={type === 'MATERNITY' ? 'Eligibility check (required): e.g. 80+ days worked in the last 12 months' : 'Note (optional)'} />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+        <button style={{ ...primaryBtn, opacity: busy ? 0.6 : 1 }} onClick={submit} disabled={busy || genderMissing}><Save size={12} /> Grant</button>
+      </div>
+    </Card>
+  );
+}

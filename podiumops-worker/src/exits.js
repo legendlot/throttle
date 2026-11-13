@@ -8,7 +8,9 @@ export const EXIT_REASON_CODES = ['resignation', 'termination', 'absconding', 'e
 export const EXIT_STATUSES = ['open', 'closed', 'cancelled'];
 export const ITEM_STATUSES = ['open', 'done', 'na'];
 export const CHECKLIST_OWNERS = ['hr', 'manager', 'it', 'admin', 'finance', 'store'];
-export const AUTO_SOURCES = ['snorkel_assets', 'open_work', 'payment_requests', 'lot_access'];
+// leave_ledger (Leave R2 E2, 0020): the leave line's live PL / SL at the LWD; Done is refused while leave is pending or
+// runs past the LWD, and writes the snapshot onto employee_exits.
+export const AUTO_SOURCES = ['snorkel_assets', 'open_work', 'payment_requests', 'lot_access', 'leave_ledger'];
 export const GOOGLE_ACTIONS = ['transfer_and_suspend', 'suspend', 'keep', 'check_transfer'];
 // transfer_pending = the Drive transfer started and the account is suspended; it stays in the queue until a
 // "Check transfer" (transfers.get) sees it completed. gone = Google has no such account any more (terminal).
@@ -115,7 +117,8 @@ export function itemResolved(item) {
   return item.status === 'done' || (item.status === 'na' && !!item.allow_na);
 }
 
-// A requested item change → null when allowed, else an error code. `live` = { assets, tasks, assets_verifiable }.
+// A requested item change → null when allowed, else an error code. `live` = { assets, tasks, assets_verifiable,
+// leave_block } (leave_block = leave.js exitLeaveBlock: 'leave_after_lwd' | 'leave_pending' | null).
 // (exit_update_item re-applies every rule under the exit lock; this is the pre-check + the testable copy.)
 // Assets that cannot be verified automatically (no auth link, or unlinked assets in the person's name) → only
 // HR can mark the line Done, and only with a note saying how it was checked.
@@ -131,6 +134,7 @@ export function checkItemUpdate(item, { status, note }, live = {}, role = null) 
     if (item.auto_source === 'snorkel_assets' && Number(live.assets) > 0) return 'assets_outstanding';
     if (item.auto_source === 'snorkel_assets' && live.assets_verifiable === false && (role !== 'hr' || !hasNote)) return 'assets_unverifiable';
     if (item.auto_source === 'open_work' && Number(live.tasks) > 0) return 'open_work';
+    if (item.auto_source === 'leave_ledger' && live.leave_block) return live.leave_block;
   }
   return null;
 }
@@ -173,7 +177,7 @@ export function buildExitPatch(x, d, noticeDays, today) {
   return { patch, openOnly };
 }
 
-// Everything between this exit and Close, in the order HR should clear it. `live` = { assets, tasks }.
+// Everything between this exit and Close, in the order HR should clear it. `live` = { assets, tasks, leave_changed }.
 export function closeBlockers(exit, items, live = {}, today) {
   const out = [];
   if (!exit || exit.status !== 'open') return [{ code: 'exit_not_open' }];
@@ -183,6 +187,8 @@ export function closeBlockers(exit, items, live = {}, today) {
   }
   if (Number(live.assets) > 0) out.push({ code: 'assets_outstanding', count: Number(live.assets) });
   if (Number(live.tasks) > 0) out.push({ code: 'open_work', count: Number(live.tasks) });
+  // Leave R2 review A: the confirmed leave line no longer holds (leave.js exitLeaveStale; exit_close re-checks).
+  if (live.leave_changed) out.push({ code: 'leave_changed' });
   return out;
 }
 

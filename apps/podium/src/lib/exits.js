@@ -22,6 +22,7 @@ export const AUTO_SOURCE_LABELS = {
   open_work: 'Live from Docket',
   payment_requests: 'Live from Snorkel payment requests',
   lot_access: 'Done by the close',
+  leave_ledger: 'Live from the leave ledger',
 };
 export const GOOGLE_ITEM_STATUSES = [
   { id: 'open', label: 'Open', tone: 'bad' },
@@ -37,7 +38,8 @@ export const BLOCKER_LABEL = {
   item_open: (b) => `Open: ${b.title}`,
   assets_outstanding: (b) => `${b.count} asset${b.count === 1 ? '' : 's'} still assigned in Snorkel`,
   open_work: (b) => `${b.count} open Docket task${b.count === 1 ? '' : 's'}`,
-  live_check_failed: () => 'Could not check Snorkel / Docket — reload',
+  live_check_failed: () => 'Could not check Snorkel / Docket / leave — reload',
+  leave_changed: () => 'Leave changed since the balance was confirmed — re-open the leave line and confirm it again',
   exit_not_open: () => 'This exit is not open',
 };
 export function blockerText(b) { return (BLOCKER_LABEL[b?.code] || (() => b?.code || ''))(b || {}); }
@@ -94,6 +96,10 @@ const COPY = {
   forbidden_google_admin: 'Only a Google admin (Afshaan, Vinay, Mohit) can do this',
   bad_line: 'Key (lowercase_with_underscores), title and owner are required',
   bad_tool: 'A tool needs a name',
+  // Leave R2 E2 (the leave line)
+  leave_after_lwd: 'This person has leave pending or approved after the last working day — cancel it first',
+  leave_pending: 'This person has a leave request still pending — decide or withdraw it first',
+  leave_changed: 'Leave changed since the balance was confirmed — confirm it again',
 };
 export function exitError(e, fallback = 'Something went wrong') {
   const msg = (e && e.message) || '';

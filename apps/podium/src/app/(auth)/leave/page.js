@@ -1,5 +1,6 @@
 'use client';
 // Leave R1 (plan 2026-11-13-podium-leave-r1, D7–D11): my balances, apply with a live preview, my requests;
+// R2: work from home on the same form (E4), maternity / paternity grants listed under my requests (E3);
 // for a manager / HR, the requests waiting for them and "Who's out". Nav gate: podium_leave_access
 // (covered OR has reports OR HR) — so a manager who is not covered sees only the team half.
 import { useCallback, useEffect, useState } from 'react';
@@ -71,7 +72,7 @@ export default function LeavePage() {
       {covered ? (<>
         <BalanceTiles balances={my.balances} canPeriod={!!my.can_period} />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 14, alignItems: 'start' }}>
-          <ApplyForm session={session} canPeriod={!!my.can_period} holidays={holidays} people={people} onApplied={refresh} />
+          <ApplyForm session={session} canPeriod={!!my.can_period} holidays={holidays} people={people} onApplied={refresh} wfhApprover={my.wfh_approver || null} />
           <HolidayList holidays={holidays} />
         </div>
         <MyRequests requests={arr(my, 'requests')} session={session} onChanged={refresh} />

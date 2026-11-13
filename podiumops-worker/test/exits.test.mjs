@@ -10,6 +10,7 @@ import {
   checkGoogleAction, googleUserMatches, driveTransferBody, projectExit, projectPaymentRequest, employeeWriteTouchesExit,
   exitDbErrorCode, TOOL_KEY_PREFIX, monthStart, assetsVerifiable, buildExitPatch, istDateOf, googleClaimFilter, googleClaimGuard,
   canClaimGoogleItem, GOOGLE_LEASE_MS, transferOutcome, accessLeft, GOOGLE_LIVE_STATUSES, GOOGLE_ITEM_STATUSES,
+  AUTO_SOURCES,
 } from '../src/exits.js';
 
 const SQL = readFileSync(new URL('../migrations/0010_exits.sql', import.meta.url), 'utf8');
@@ -557,4 +558,28 @@ test('actGoogleExitItem reads the Google op from `op` — body.action is always 
   const g = fnBody('actGoogleExitItem');
   assert.ok(g.includes('const op = d.op'), 'op read from d.op');
   assert.ok(!g.includes('d.action'), 'never d.action');
+});
+
+test('Leave R2 E2: leave_ledger is an auto source; Done refused while leave is pending / after the LWD', () => {
+  assert.ok(AUTO_SOURCES.includes('leave_ledger'));
+  const lv = { auto_source: 'leave_ledger', allow_na: false, owner: 'hr' };
+  assert.equal(checkItemUpdate(lv, { status: 'done', note: '' }, { leave_block: 'leave_after_lwd' }, 'hr'), 'leave_after_lwd');
+  assert.equal(checkItemUpdate(lv, { status: 'done', note: '' }, { leave_block: 'leave_pending' }, 'hr'), 'leave_pending');
+  assert.equal(checkItemUpdate(lv, { status: 'done', note: '' }, { leave_block: null }, 'hr'), null);
+  assert.equal(checkItemUpdate(lv, { status: 'open', note: '' }, { leave_block: 'leave_pending' }, 'hr'), null);   // re-open always
+  const sql = readFileSync(new URL('../migrations/0020_leave_r2.sql', import.meta.url), 'utf8');
+  for (const s of ['podium_leave_after_lwd', 'podium_leave_pending', 'podium_leave_changed', "'leave_ledger'"]) assert.ok(sql.includes(s), s);
+});
+
+test('Leave R2 review A: a stale leave confirmation blocks the close; 0020 redefines exit_close with the lock first', () => {
+  const x = { status: 'open', lwd: '2026-12-01' };
+  assert.deepEqual(closeBlockers(x, [], { leave_changed: true }, '2026-12-02'), [{ code: 'leave_changed' }]);
+  assert.deepEqual(closeBlockers(x, [], { leave_changed: false }, '2026-12-02'), []);
+  const sql = readFileSync(new URL('../migrations/0020_leave_r2.sql', import.meta.url), 'utf8');
+  const close = sql.slice(sql.indexOf('create or replace function podium.exit_close'));
+  assert.ok(close.indexOf('perform podium.leave_lock(v_emp_id)') < close.indexOf('from podium.employees where id = v_emp_id for update'));
+  const upd = sql.slice(sql.indexOf('create or replace function podium.exit_update_item'), sql.indexOf('create or replace function podium.exit_close'));
+  assert.ok(upd.indexOf('perform podium.leave_lock(v_emp_id)') < upd.indexOf('from podium.employees where id = v_emp_id for update'));
+  assert.ok(!/perform podium\.leave_lock\(v_e\.id\)/.test(upd));   // never after the row lock
+  assert.ok(/v_e\.leave_policy is not null and \(v_x\.leave_confirmed_at is null or v_x\.leave_as_at is null\)/.test(close));   // A' fail closed
 });

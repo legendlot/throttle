@@ -102,7 +102,9 @@ import {
   periodUsed, optionalUsed, limitBlock, overlaps, decideBlock, cancelBlock, resolveLeaveApprover, buildLeaveMail,
   leaveMessageId, cleanAmount, cleanNote, cleanHoliday, leaveDbErrorCode, reclosePlan, splitBase, coveredFromOnChange,
   holidayListMissing, noHolidayListMessage,
-} from './leave.js';   // Leave R1 (test/leave.test.mjs)
+  lopReport, lopDiff, exitLeaveFigures, exitLeaveBlock, grantPlan, wfhApprover, yearEndYear, yearEndPreview,
+  exitLeaveStale, withOpenExit, applyOpenExitsWith, lopExportRows, canonicalJson,
+} from './leave.js';   // Leave R1 + R2 (test/leave.test.mjs)
 import {
   CAL_SCOPE, CAL_COPY, calendarEventIds, syncedHash, buildInternalEvent, buildCandidateEvent, conferenceOf, meetUrlOf,
   eventTimes, calendarSyncAction,
@@ -7211,6 +7213,9 @@ const X1_COPY = {
   assets_outstanding: 'Assets are still assigned to this person in Snorkel',
   assets_unverifiable: 'Snorkel cannot verify this person’s assets automatically — HR marks this line with a note',
   open_work: 'This person still owns or is assigned open Docket tasks',
+  leave_after_lwd: 'This person has leave pending or approved after the last working day — cancel it first',
+  leave_pending: 'This person has a leave request still pending — decide or withdraw it first',
+  leave_changed: 'Leave changed since the balance was confirmed — confirm it again',
   exit_blocked: 'The exit cannot close yet — clear the blockers listed',
   live_check_failed: 'Could not check Snorkel / Docket right now — try again',
   org_check_failed: 'Could not check the reporting line right now — try again',
@@ -7359,10 +7364,12 @@ async function getExit(url, auth, env) {
   if (!items) return err('db_error', 500);
   let live = null, blockers = [];
   if (exit.status === 'open') {
-    const l = await exitLive(env, c.emp);
-    live = { ...l, payment_requests: l.payment_requests.map(p => projectPaymentRequest(p, c.role)) };
-    blockers = closeBlockers(exit, items, { assets: l.assets.length, tasks: l.tasks.length }, today);
-    if (!l.ok) blockers.push({ code: 'live_check_failed' });
+    const leaveItem = items.find(i => i.auto_source === 'leave_ledger') || null;
+    const [l, lv] = await Promise.all([exitLive(env, c.emp), leaveItem ? exitLeaveLive(env, c.emp.id, exit.lwd) : Promise.resolve(null)]);
+    const leaveChanged = !!lv?.ok && exitLeaveStale({ exit, item: leaveItem, requests: lv.requests, ledger: lv.covered ? lv.figures?.expected : null });
+    live = { ...l, payment_requests: l.payment_requests.map(p => projectPaymentRequest(p, c.role)), leave: lv ? { ...lv, changed: leaveChanged } : null };
+    blockers = closeBlockers(exit, items, { assets: l.assets.length, tasks: l.tasks.length, leave_changed: leaveChanged }, today);
+    if (!l.ok || (lv && !lv.ok)) blockers.push({ code: 'live_check_failed' });
   }
   return ok({ ...base, exit: projectExit(exit, c.role), items, live, blockers, progress: itemProgress(items),
     days_left: exit.status === 'open' ? daysLeft(exit.lwd, today) : null });
@@ -7391,7 +7398,7 @@ async function getExits(url, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   const today = istToday();
   const [xr, gr, er, ar, gAdmin] = await Promise.all([
-    sb(`/rest/v1/employee_exits?status=eq.open&select=id,employee_id,reason_code,initiated_by,notice_date,lwd,created_at,employee:employee_id(id,employee_code,full_name,job_title,auth_user_id,department:department_id(name))&order=lwd.asc`, env),
+    sb(`/rest/v1/employee_exits?status=eq.open&select=id,employee_id,reason_code,initiated_by,notice_date,lwd,created_at,leave_confirmed_at,leave_as_at,leave_ledger_pl,leave_ledger_sl,employee:employee_id(id,employee_code,full_name,job_title,auth_user_id,leave_policy,department:department_id(name))&order=lwd.asc`, env),
     sb(`/rest/v1/google_exit_items?status=in.(${GOOGLE_LIVE_STATUSES.join(',')})&select=*,employee:employee_id(id,employee_code,full_name,manager_id)&order=created_at.asc`, env),
     sb(`/rest/v1/employees?status=eq.exited&select=id,employee_code,full_name,exit_reason,date_exited,date_joined,work_email,auth_user_id&order=date_exited.desc.nullslast&limit=1000`, env),
     sb(`/rest/v1/employee_exits?select=employee_id&limit=5000`, env),
@@ -7418,14 +7425,28 @@ async function getExits(url, auth, env) {
     sb(`/rest/v1/google_exit_items?select=employee_id&limit=5000`, env),
   ]);
   if (!ir.ok) return err('db_error', 500);
-  const liveOk = asr.ok && tkr.ok;
+  // Leave R2 review A: exits whose leave line is done — is the confirmation still true? (read only: no lazy accrual
+  // here; closeExit / exit_close are the authority). Batched: one request read + one ledger read.
+  const leaveDone = exits.filter(x => (ir.data || []).some(i => i.exit_id === x.id && i.auto_source === 'leave_ledger' && i.status === 'done'));
+  const lids = leaveDone.map(x => x.employee_id).filter(isUuid);
+  const [lrq, lled] = lids.length ? await Promise.all([
+    sbPaged(env, `/rest/v1/leave_requests?employee_id=in.(${inA(lids)})&status=in.(pending,approved)&select=employee_id,status,end_date&order=id.asc`),
+    sbPaged(env, `/rest/v1/leave_ledger?employee_id=in.(${inA(lids)})&select=employee_id,leave_type,delta&order=id.asc`),
+  ]) : [[], []];
+  const leaveOk = !!lrq && !!lled;
+  const sums = {};
+  for (const r of lled || []) { const o = (sums[r.employee_id] ||= { PL: 0, SL: 0 }); o[r.leave_type] = halfRound(o[r.leave_type] + Number(r.delta)); }
+  const liveOk = asr.ok && tkr.ok && leaveOk;
   const board = exits.map(x => {
     const items = (ir.data || []).filter(i => i.exit_id === x.id);
     const assets = (asr.data || []).filter(a => a.custodian_user_id && a.custodian_user_id === x.employee?.auth_user_id).length;
     const tasks = (tkr.data || []).filter(t => t.assignee_employee_id === x.employee_id || t.owner_employee_id === x.employee_id).length;
-    const blockers = closeBlockers({ ...x, status: 'open' }, items, { assets, tasks }, today);
+    const leaveItem = items.find(i => i.auto_source === 'leave_ledger') || null;
+    const leave_changed = leaveOk && exitLeaveStale({ exit: x, item: leaveItem, requests: (lrq || []).filter(r => r.employee_id === x.employee_id),
+      ledger: x.employee?.leave_policy ? (sums[x.employee_id] || { PL: 0, SL: 0 }) : null });
+    const blockers = closeBlockers({ ...x, status: 'open' }, items, { assets, tasks, leave_changed }, today);
     if (!liveOk) blockers.push({ code: 'live_check_failed' });
-    const { auth_user_id, ...employee } = x.employee || {};
+    const { auth_user_id, leave_policy, ...employee } = x.employee || {};
     return { exit_id: x.id, employee, reason_code: x.reason_code, initiated_by: x.initiated_by, notice_date: x.notice_date,
       lwd: x.lwd, days_left: daysLeft(x.lwd, today), progress: itemProgress(items), blockers };
   });
@@ -7506,11 +7527,24 @@ async function updateExitItem(body, auth, env) {
     if (!l.ok) return x1Err('live_check_failed', 502);
     live = { assets: l.assets.length, tasks: l.tasks.length, assets_verifiable: l.assets_verifiable };
   }
+  // Leave R2 E2: the leave line's Done carries the PL / SL figures at the LWD (exit_update_item re-checks the guard and
+  // the ledger under the person's leave lock, then writes the snapshot onto employee_exits).
+  let leave = null;
+  if (d.status === 'done' && item.auto_source === 'leave_ledger') {
+    const lv = await exitLeaveLive(env, c.emp.id, c.exit.lwd);
+    if (!lv.ok) return x1Err('live_check_failed', 502);
+    live.leave_block = lv.block;
+    if (lv.covered && lv.figures) {
+      leave = { pl_balance: lv.figures.PL, sl_balance: lv.figures.SL, lop_days: lv.figures.lop_days,
+        expected_pl: lv.figures.expected.PL, expected_sl: lv.figures.expected.SL, as_at: c.exit.lwd };
+    }
+  }
   const ce = checkItemUpdate(item, { status: d.status, note }, live, c.role);
   if (ce) return x1Err(ce, ce === 'bad_item_status' ? 400 : 409);
   if ('document_id' in d && d.document_id && !isUuid(d.document_id)) return x1Err('bad_document', 400);
   const p = { item_id: item.id, status: d.status, note, actor_user_id: auth.userId, role: c.role };
   if ('document_id' in d) p.document_id = d.document_id || null;
+  if (leave) p.leave = leave;
   const r = await hiringRpc(env, 'exit_update_item', p);
   return r.ok ? ok(r.data) : x1DbError(r);
 }
@@ -7526,6 +7560,15 @@ async function updateExit(body, auth, env) {
   const b = buildExitPatch(c.exit, d, await exitNoticeDays(env), istToday());
   if (b.error) return x1Err(b.error, b.error === 'exit_not_open' ? 409 : 400);
   if (!Object.keys(b.patch).length) return ok(projectExit(c.exit, 'hr'));
+  // Leave R2 review A: a new LWD invalidates a confirmed leave balance — re-open the leave line first, then clear the
+  // snapshot columns in the same exit PATCH (exit_close refuses a stale one anyway).
+  if ('lwd' in b.patch && b.patch.lwd !== c.exit.lwd) {
+    const ri = await sb(`/rest/v1/exit_checklist_items?exit_id=eq.${c.exit.id}&auto_source=eq.leave_ledger&status=neq.open`, env, { method: 'PATCH',
+      body: JSON.stringify({ status: 'open', done_by: null, done_at: null }) });
+    if (!ri.ok) return x1DbError(ri);
+    Object.assign(b.patch, { leave_pl_balance: null, leave_sl_balance: null, leave_lop_days: null, leave_confirmed_at: null,
+      leave_confirmed_by: null, leave_as_at: null, leave_ledger_pl: null, leave_ledger_sl: null });
+  }
   const guard = b.openOnly ? '&status=eq.open' : '';
   const r = await sb(`/rest/v1/employee_exits?id=eq.${c.exit.id}${guard}`, env, { method: 'PATCH', body: JSON.stringify(b.patch) });
   if (!r.ok) return x1DbError(r);
@@ -7559,7 +7602,15 @@ async function closeExit(body, auth, env, ctx) {
   const [items, l] = await Promise.all([exitItems(env, c.exit.id), exitLive(env, c.emp)]);
   if (!items) return err('db_error', 500);
   if (!l.ok) return x1Err('live_check_failed', 502);
-  const blockers = closeBlockers(c.exit, items, { assets: l.assets.length, tasks: l.tasks.length }, istToday());
+  // Leave R2 review A: a confirmed leave line must still hold (exit_close re-checks under the leave lock).
+  const leaveItem = items.find(i => i.auto_source === 'leave_ledger') || null;
+  let leaveChanged = false;
+  if (leaveItem && leaveItem.status === 'done') {
+    const lv = await exitLeaveLive(env, c.emp.id, c.exit.lwd);
+    if (!lv.ok) return x1Err('live_check_failed', 502);
+    leaveChanged = exitLeaveStale({ exit: c.exit, item: leaveItem, requests: lv.requests, ledger: lv.covered ? lv.figures?.expected : null });
+  }
+  const blockers = closeBlockers(c.exit, items, { assets: l.assets.length, tasks: l.tasks.length, leave_changed: leaveChanged }, istToday());
   if (blockers.length) return x1Err('exit_blocked', 409, { blockers });
   const r = await hiringRpc(env, 'exit_close', { exit_id: c.exit.id, actor_user_id: auth.userId }, { headers: actorHeaders(auth) });
   if (!r.ok) return x1DbError(r);
@@ -10143,7 +10194,7 @@ async function submitInterviewFeedback(body, auth, env) {
 const LEAVE_EMP_SELECT = 'id,employee_code,full_name,preferred_name,job_title,manager_id,status,gender,date_joined,date_exited,leave_policy,leave_covered_from,work_email';
 const LEAVE_REQ_SELECT = 'id,employee_id,leave_type,start_date,end_date,start_half,end_half,days,borrowed_days,lop_days,status,reason,'
   + 'approver_employee_id,decided_by_employee_id,decided_at,decision_note,cancelled_at,cancel_note,created_at,updated_at';
-const LEAVE_STATUS = { not_covered: 403, forbidden: 403, no_self_approval: 403, not_found: 404, overlap: 409, period_used: 409,
+const LEAVE_STATUS = { report_changed: 409, not_covered: 403, forbidden: 403, no_self_approval: 403, not_found: 404, overlap: 409, period_used: 409,
   optional_used: 409, balance_changed: 409, not_pending: 409, not_approved: 409, opening_exists: 409, cutover_locked: 409 };
 const leaveErr = (code, extra = null) => (extra
   ? json({ ok: false, error: code, message: LEAVE_COPY[code] || code.replace(/_/g, ' '), ...extra }, LEAVE_STATUS[code] || 400)
@@ -10175,7 +10226,22 @@ async function loadHolidays(env, y1, y2) {
 async function loadLeaveEmployees(env, ids) {
   const list = [...new Set((ids || []).filter(isUuid))];
   if (!list.length) return [];
-  return sbInChunks(env, list, (c) => `/rest/v1/employees?id=in.(${c.join(',')})&select=${LEAVE_EMP_SELECT}`);
+  return applyOpenExits(env, await sbInChunks(env, list, (c) => `/rest/v1/employees?id=in.(${c.join(',')})&select=${LEAVE_EMP_SELECT}`));
+}
+// Review I: an OPEN exit's LWD is the person's exit date for accrual and the borrow cap (date_exited is written only
+// at the close). Marks each row `_exit_checked` so ensureLeaveCurrent does not re-read. Re-verify I': the read is
+// STRICT — any failed chunk throws (leave.js applyOpenExitsWith), so no accrual is written for people whose exit could
+// not be read; the GET/POST handler turns it into a 500.
+async function applyOpenExits(env, emps) {
+  return applyOpenExitsWith(emps, async (ids) => {
+    const out = [];
+    for (let i = 0; i < ids.length; i += IN_CHUNK) {
+      const r = await sb(`/rest/v1/employee_exits?status=eq.open&employee_id=in.(${ids.slice(i, i + IN_CHUNK).join(',')})&select=employee_id,lwd`, env);
+      if (!r.ok || !Array.isArray(r.data)) return null;
+      out.push(...r.data);
+    }
+    return out;
+  });
 }
 const leaveCovered = (e) => !!(e && e.leave_policy && e.status !== 'exited');
 
@@ -10189,7 +10255,7 @@ async function ensureLeaveCurrent(env, employeeIds, pre = {}) {
   if (!ids.length) return { ok: true };
   const settings = pre.settings || await loadLeaveSettings(env);
   if (!settings) return { ok: false, error: 'settings' };
-  const emps = (pre.emps || await loadLeaveEmployees(env, ids)).filter(e => ids.includes(e.id) && e.leave_policy);
+  const emps = (await applyOpenExits(env, pre.emps || await loadLeaveEmployees(env, ids))).filter(e => ids.includes(e.id) && e.leave_policy);
   if (!emps.length) return { ok: true };
   const today = istToday(), cur = monthOf(today), cy = yearOf(today), cutover = settings.cutover_month;
   const idf = emps.map(e => e.id).join(',');
@@ -10293,6 +10359,8 @@ function leaveSplitFor({ emp, ledger, reqs, leaveType, startDate, days, exceptId
 
 // The approver's own manager (D9 cover) from the org edges.
 const approverManagerOf = (edges, approverId) => (approverId ? edges.find(e => e.id === approverId)?.manager_id || null : null);
+// (employeeId) → manager_id | null over the org edges (wfhApprover's lookup).
+const managerOfIn = (edges) => (id) => (id ? edges.find(e => e.id === id)?.manager_id || null : null);
 
 // Who the request is for: the caller, or (HR only) employee_id. → { emp, other } | { res }
 async function leaveTarget(auth, me, employeeId) {
@@ -10376,7 +10444,8 @@ async function getMyLeave(url, auth, env) {
   if (!books || !holidays) return err('db_error: leave read', 500);
   const reqs = books.reqs[emp.id] || [];
   const approverId = resolveLeaveApprover(emp, founders);
-  const names = await empNames(env, [approverId, ...reqs.map(r => r.decided_by_employee_id)]);
+  const wfhId = wfhApprover(emp, managerOfIn(edges));   // E4: skip-level → manager → HR
+  const names = await empNames(env, [approverId, wfhId, ...reqs.map(r => r.decided_by_employee_id)]);
   return ok({
     employee: { id: emp.id, full_name: emp.full_name, employee_code: emp.employee_code, leave_policy: emp.leave_policy },
     today, cutover_month: settings.cutover_month,
@@ -10386,6 +10455,7 @@ async function getMyLeave(url, auth, env) {
     holidays,
     can_period: emp.gender === 'f',
     approver: approverId ? { id: approverId, full_name: names[approverId] || null } : null,
+    wfh_approver: wfhId ? { id: wfhId, full_name: names[wfhId] || null } : null,
     type_labels: TYPE_LABELS,
   });
 }
@@ -10426,7 +10496,9 @@ async function applyLeave(body, auth, env) {
   const q = await leaveQuote(env, emp, d, { notice: !t.other, settings });
   if (q.error === 'db') return err('db_error: leave read', 500);
   if (q.error) return leaveErr(q.error, q.message ? { message: q.message } : null);
-  const approverId = resolveLeaveApprover(emp, emp.manager_id ? [] : await loadFounders(env));
+  // E4: WFH goes to the skip-level manager (else the manager, else HR); leave as D9.
+  const approverId = q.v.leave_type === 'WFH' ? wfhApprover(emp, managerOfIn(edges))
+    : resolveLeaveApprover(emp, emp.manager_id ? [] : await loadFounders(env));
   const r = await hiringRpc(env, 'leave_apply', {
     employee_id: emp.id, ...q.v, borrowed_days: q.split.borrowed_days, lop_days: q.split.lop_days,
     approver_employee_id: approverId, ...(q.snapshot || {}), actor_user_id: auth.userId, actor_employee_id: me?.id || null,
@@ -10459,7 +10531,7 @@ async function getTeamLeave(url, auth, env) {
   if (hr) {
     const r = await sb(`/rest/v1/employees?leave_policy=not.is.null&status=neq.exited&select=${LEAVE_EMP_SELECT}&order=full_name.asc&limit=${LEAVE_PAGE}`, env);
     if (!r.ok) return err('db_error: leave team', 500);
-    team = (r.data || []).filter(e => e.id !== me?.id);
+    team = (await applyOpenExits(env, r.data || [])).filter(e => e.id !== me?.id);
   } else {
     team = (await loadLeaveEmployees(env, [...descendantsOf(edges, me.id)])).filter(leaveCovered);
   }
@@ -10610,20 +10682,22 @@ async function getLeaveAdmin(url, auth, env) {
     sb(`/rest/v1/employees?status=neq.exited&select=${LEAVE_EMP_SELECT}&order=full_name.asc&limit=${LEAVE_PAGE}`, env),
   ]);
   if (!settings || !hr.ok || !er.ok) return err('db_error: leave admin', 500);
-  const covered = (er.data || []).filter(leaveCovered);
+  const covered = await applyOpenExits(env, (er.data || []).filter(leaveCovered));
   const ens = await ensureLeaveCurrent(env, covered.map(e => e.id), { settings, emps: covered });
   if (!ens.ok) return err(`db_error: leave ${ens.error}`, 500);
   const today = istToday();
   const books = await leaveBooks(env, covered.map(e => e.id), yearOf(today));
   if (!books) return err('db_error: leave read', 500);
+  const ye = yearEndYear(today);   // E5: shown 1 Nov – 31 Jan
   return ok({
-    settings, today, holidays: hr.data || [],
+    settings, today, holidays: hr.data || [], year_end_year: ye,
     people: covered.map(e => {
       const ledger = books.ledger[e.id] || [];
       return { id: e.id, employee_code: e.employee_code, full_name: e.full_name, job_title: e.job_title, date_joined: e.date_joined,
-        leave_policy: e.leave_policy,
+        leave_policy: e.leave_policy, gender: e.gender,
         opening_set: Object.fromEntries(LEDGER_TYPES.map(t => [t, ledger.some(r => r.kind === 'opening' && r.leave_type === t)])),
-        balances: leaveBalances(e, ledger, books.reqs[e.id] || [], settings.cutover_month, today) };
+        balances: leaveBalances(e, ledger, books.reqs[e.id] || [], settings.cutover_month, today),
+        year_end: ye == null ? null : yearEndPreview({ employee: e, ledger, requests: books.reqs[e.id] || [], cutoverMonth: settings.cutover_month, today, year: ye }) };
     }),
     not_covered: (er.data || []).filter(e => !e.leave_policy).map(e => ({ id: e.id, employee_code: e.employee_code, full_name: e.full_name })),
   });
@@ -10736,6 +10810,148 @@ async function adjustLeave(body, auth, env) {
 }
 // ── end Leave R1
 
+// ────────────────────────────────────────────────────────────────────────────
+// Leave R2 — LOP report (E1), exit leave fill (E2), maternity / paternity grants (E3), WFH (E4, inside applyLeave /
+// getMyLeave above), year-end preview (E5, inside getLeaveAdmin above).
+// Plan: docs/superpowers/plans/2026-11-13-podium-leave-r2.md · pure rules in src/leave.js · migration 0020.
+// RazorpayX has no leave / LOP write (reference/integrations.md), so payroll gets a report + CSV HR enters by hand.
+// ────────────────────────────────────────────────────────────────────────────
+
+const monthLastDay = (ym) => new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0)).toISOString().slice(0, 10);
+
+// E1 — the month's unpaid days (approved PL / SL lop_days, placed on the request's last working halves) + the pending
+// PL / SL requests touching the month (they may still add LOP). → { rows, pending } | null
+async function lopReportData(env, month) {
+  const from = `${month}-01`, to = monthLastDay(month), y = Number(month.slice(0, 4));
+  const touch = `leave_type=in.(${LEDGER_TYPES.join(',')})&start_date=lte.${to}&end_date=gte.${from}&select=${LEAVE_REQ_SELECT}&order=id.asc`;
+  const [ar, pr, hol] = await Promise.all([
+    sbPaged(env, `/rest/v1/leave_requests?status=eq.approved&lop_days=gt.0&${touch}`),
+    sbPaged(env, `/rest/v1/leave_requests?status=eq.pending&${touch}`),
+    loadHolidays(env, y, y),   // PL / SL never cross 31 Dec, so the month's year is the request's year
+  ]);
+  if (!ar || !pr || !hol) return null;
+  const ids = [...new Set([...ar, ...pr].map(r => r.employee_id))].filter(isUuid);
+  // Strict (review G): any failed chunk → null (500), never a row with null codes in a report or an export.
+  const employees = {};
+  for (let i = 0; i < ids.length; i += IN_CHUNK) {
+    const er = await sb(`/rest/v1/employees?id=in.(${ids.slice(i, i + IN_CHUNK).join(',')})&select=id,employee_code,full_name,razorpayx_employee_id`, env);
+    if (!er.ok || !Array.isArray(er.data)) return null;
+    for (const e of er.data) employees[e.id] = e;
+  }
+  if (ids.some(id => !employees[id])) return null;
+  const { rows, warnings } = lopReport({ month, requests: ar.map(numRow), employees,
+    fixedHolidays: new Set(hol.filter(h => h.kind === 'fixed').map(h => h.date)) });
+  const pend = {};
+  for (const r of pr) {
+    const e = employees[r.employee_id] || {};
+    (pend[r.employee_id] ||= { employee_id: r.employee_id, employee_code: e.employee_code || null, full_name: e.full_name || null, requests: 0 }).requests++;
+  }
+  const exportRows = lopExportRows(rows);
+  // report_hash (review D) binds "Mark exported" to what HR downloaded: the rows (as stored) + the warnings (they
+  // shape the CSV's check column).
+  const report_hash = await sha256Hex(new TextEncoder().encode(canonicalJson({ rows: exportRows, warnings })));
+  return { rows, exportRows, warnings, report_hash,
+    pending: Object.values(pend).sort((a, b) => String(a.full_name || '').localeCompare(String(b.full_name || ''))) };
+}
+
+// GET getLeaveLopReport?month=YYYY-MM (HR; default this IST month) — rows, the pending warning, the last export and
+// what changed since it (per person: was X, now Y — HR carries it into next month's payroll).
+async function getLeaveLopReport(url, auth, env) {
+  if (!isHr(auth)) return leaveErr('forbidden');
+  const month = url.searchParams.get('month') || monthOf(istToday());
+  if (!isMonth(month)) return leaveErr('bad_month');
+  const [data, xr] = await Promise.all([
+    lopReportData(env, month),
+    sb(`/rest/v1/leave_lop_exports?month=eq.${month}&select=id,rows,exported_by_employee_id,exported_at&order=exported_at.desc&limit=1`, env),
+  ]);
+  if (!data || !xr.ok) return err('db_error: leave lop report', 500);
+  const last = xr.data?.[0] || null;
+  const names = last?.exported_by_employee_id ? await empNames(env, [last.exported_by_employee_id]) : {};
+  return ok({
+    month, today: istToday(), rows: data.rows, warnings: data.warnings, report_hash: data.report_hash, pending: data.pending,
+    total_lop_days: halfRound(data.rows.reduce((s, r) => s + Number(r.lop_days), 0)),
+    last_export: last ? { id: last.id, exported_at: last.exported_at, exported_by_name: names[last.exported_by_employee_id] || null,
+      people: Array.isArray(last.rows) ? last.rows.length : 0 } : null,
+    changes_since_export: last ? lopDiff(Array.isArray(last.rows) ? last.rows : [], data.rows) : [],
+  });
+}
+
+// POST markLopExported {month, report_hash} (HR) — recomputes the report; a hash other than the one HR loaded (and
+// downloaded) → 409 report_changed. Stores exactly the recomputed rows in podium.leave_lop_exports (a new row each time).
+async function markLopExported(body, auth, env) {
+  if (!isHr(auth)) return leaveErr('forbidden');
+  const d = body.data || body;
+  if (!isMonth(d.month)) return leaveErr('bad_month');
+  const data = await lopReportData(env, d.month);
+  if (!data) return err('db_error: leave lop report', 500);
+  if (typeof d.report_hash !== 'string' || d.report_hash !== data.report_hash) return leaveErr('report_changed');
+  const me = await meOf(auth, env);
+  const rows = data.exportRows;
+  const r = await sb(`/rest/v1/leave_lop_exports`, env, { method: 'POST', body: JSON.stringify([{ month: d.month, rows,
+    exported_by: auth.userId, exported_by_employee_id: me?.id || null }]) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await leaveEvent(env, auth, me, { event_type: 'lop_exported', detail: { month: d.month, people: rows.length,
+    lop_days: halfRound(rows.reduce((s, x) => s + Number(x.lop_days), 0)), pending: data.pending.length } });
+  return ok({ export: { id: r.data?.[0]?.id || null, month: d.month, exported_at: r.data?.[0]?.exported_at || null, people: rows.length } });
+}
+
+// POST grantLeave {employee_id, leave_type: MATERNITY|PATERNITY, start_date, end_date?, note} (HR, never for yourself;
+// end_date ≤ the full length — returning early = cancel + grant again with the actual end) — the
+// request is written APPROVED by RPC podium.leave_grant (lock, covered, gender, overlap). Mail the person. → { request, email }
+async function grantLeave(body, auth, env) {
+  if (!isHr(auth)) return leaveErr('forbidden');
+  const d = body.data || body;
+  const edges = await loadOrgEdgesStrict(env);
+  if (!edges) return err('db_error: org read', 500);
+  const me = callerEmployee(edges, auth.userId);
+  if (!isUuid(d.employee_id)) return leaveErr('not_found');
+  if (me && me.id === d.employee_id) return leaveErr('no_self_approval');
+  const emp = (await loadLeaveEmployees(env, [d.employee_id]))[0];
+  if (!emp) return leaveErr('not_found');
+  if (!leaveCovered(emp)) return leaveErr('not_covered');
+  const y = isIsoDay(d.start_date) ? yearOf(d.start_date) : yearOf(istToday());
+  const holidays = await loadHolidays(env, y, y + 1);
+  if (!holidays) return err('db_error: holidays', 500);
+  const g = grantPlan(d, { gender: emp.gender, holidays, today: istToday() });
+  if (g.error === 'no_holiday_list') return leaveErr('no_holiday_list', { message: noHolidayListMessage(g.year) });
+  if (g.error) return leaveErr(g.error);
+  const r = await hiringRpc(env, 'leave_grant', { employee_id: emp.id, ...g.value, actor_user_id: auth.userId, actor_employee_id: me?.id || null });
+  const code = leaveDbErrorCode(r);
+  if (code) return leaveErr(code);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  const request = numRow(r.data);
+  const email = await leaveMail(env, { kind: 'granted', senderId: me?.id, toId: emp.id, personId: emp.id, request });
+  return ok({ request, email });
+}
+
+// E2 — the exit's leave line: PL / SL at the LWD (exitLeaveFigures, after the lazy accrual) + the Done guard
+// (exitLeaveBlock) + the requests behind it. Not covered → no figures, the line ticks by hand.
+// → { ok, covered, figures, block, requests }
+async function exitLeaveLive(env, employeeId, lwd) {
+  try { return await exitLeaveLiveInner(env, employeeId, lwd); }
+  catch (e) { console.error('[exit-leave]', e?.message || e); return { ok: false }; }   // fail closed (re-verify I')
+}
+async function exitLeaveLiveInner(env, employeeId, lwd) {
+  if (!isUuid(employeeId) || !isIsoDay(lwd)) return { ok: false };
+  const [settings, emps, rq] = await Promise.all([
+    loadLeaveSettings(env), loadLeaveEmployees(env, [employeeId]),
+    sb(`/rest/v1/leave_requests?employee_id=eq.${employeeId}&status=in.(pending,approved)&or=(status.eq.pending,end_date.gt.${lwd})`
+      + `&select=id,leave_type,start_date,end_date,start_half,end_half,days,status&order=start_date.asc&limit=200`, env),
+  ]);
+  const emp = emps[0];
+  if (!settings || !emp || !rq.ok || !Array.isArray(rq.data)) return { ok: false };
+  const requests = rq.data.map(r => ({ ...r, days: Number(r.days) }));
+  const block = exitLeaveBlock(requests, lwd);
+  if (!emp.leave_policy) return { ok: true, covered: false, figures: null, block, requests };
+  const ens = await ensureLeaveCurrent(env, [emp.id], { settings, emps: [emp] });
+  if (!ens.ok) return { ok: false };
+  const led = await sbPaged(env, `/rest/v1/leave_ledger?employee_id=eq.${emp.id}&select=leave_type,delta,kind,period,effective_date&order=id.asc`);
+  if (!led) return { ok: false };
+  const figures = exitLeaveFigures({ employee: emp, ledger: led, cutoverMonth: settings.cutover_month, lwd, today: istToday() });
+  return { ok: !!figures, covered: true, figures, block, requests };
+}
+// ── end Leave R2
+
 const GET_ACTIONS = {
   getMe, getSettings,
   getEmployees, getEmployee,
@@ -10788,6 +11004,7 @@ const GET_ACTIONS = {
   getOpeningRounds, getApplicationInterviews, getMyInterviews, getPanelInterview, getPanelDocUrl,
   // Leave R1 — the person / the chain / HR (each self-scopes; all in SELF_SERVE_GET)
   getMyLeave, getTeamLeave, getLeaveLedger, getLeaveAdmin,
+  getLeaveLopReport,   // Leave R2 E1 (isHr inside)
 };
 
 const POST_ACTIONS = {
@@ -10852,6 +11069,7 @@ const POST_ACTIONS = {
   // Leave R1 — the person / the chain / HR (each self-scopes; all in SELF_SERVE_POST)
   previewLeave, applyLeave, decideLeave, withdrawLeave, cancelLeave,
   setLeaveSettings, saveHoliday, deleteHoliday, setOpeningBalance, adjustLeave,
+  markLopExported, grantLeave,   // Leave R2 E1 / E3 (isHr inside)
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.
@@ -10901,6 +11119,8 @@ const SELF_SERVE_GET = new Set([
   // Leave R1 — a covered employee may hold no Podium role. getMyLeave = the caller's own row; getTeamLeave = descendantsOf
   // the caller (+ the requests they may decide) or HR; getLeaveLedger = self / chain / HR; getLeaveAdmin = isHr inside.
   'getMyLeave', 'getTeamLeave', 'getLeaveLedger', 'getLeaveAdmin',
+  // Leave R2 — the payroll LOP report is isHr inside (like getLeaveAdmin).
+  'getLeaveLopReport',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
@@ -10947,6 +11167,8 @@ const SELF_SERVE_POST = new Set([
   // withdraw / cancel = cancelBlock; the HR writes are isHr inside (see SELF_SERVE_GET).
   'previewLeave', 'applyLeave', 'decideLeave', 'withdrawLeave', 'cancelLeave',
   'setLeaveSettings', 'saveHoliday', 'deleteHoliday', 'setOpeningBalance', 'adjustLeave',
+  // Leave R2 — mark the LOP report exported / grant maternity or paternity: isHr inside (grant: never yourself).
+  'markLopExported', 'grantLeave',
 ]);
 
 async function handleGet(url, request, env, ctx) {
