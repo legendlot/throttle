@@ -531,6 +531,24 @@ async function loadSpace(id, env) {
   const r = await sbDocket(`/rest/v1/spaces?id=eq.${enc(id)}&select=*&limit=1`, env);
   return (r.ok && r.data?.[0]) || null;
 }
+// Create / owner defaults (Afshaan 2026-11-13). Both are best-effort: a failed read leaves the field blank
+// (as it was before the default existed) and never fails the write.
+// A task's team defaults to its owner's team.
+async function employeeDept(empId, env) {
+  if (!empId || !isUuid(String(empId))) return null;
+  const r = await sbPodium(`/rest/v1/employees?id=eq.${enc(empId)}&select=department_id&limit=1`, env);
+  return (r.ok && r.data?.[0]?.department_id) || null;
+}
+// A personal space: private, not the Founders' space, live, and nobody in it but the caller (as owner and/or
+// the only member). A new top-level task there defaults to the caller as owner. A shared private space doesn't.
+async function isPersonalSpace(space, auth, env) {
+  if (!space?.is_private || space.is_founders || space.archived_at || !auth.employeeId) return false;
+  if (space.owner_user_id && space.owner_user_id !== auth.userId) return false;
+  const r = await sbDocket(`/rest/v1/space_members?space_id=eq.${enc(space.id)}&select=user_id`, env);
+  if (!r.ok) return false;
+  const ids = (r.data || []).map(m => m.user_id);
+  return (space.owner_user_id === auth.userId || ids.includes(auth.userId)) && ids.every(u => u === auth.userId);
+}
 async function defaultSpaceId(env) {
   const r = await sbDocket(`/rest/v1/spaces?is_default=eq.true&select=id&limit=1`, env);
   return (r.ok && r.data?.[0]?.id) || null;
@@ -1805,6 +1823,11 @@ async function createTaskCore(d, auth, env) {
   const space = await loadSpace(spaceId, env);
   if (!space) return err('space_not_found', 404);
   if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
+  // Defaults — explicit values always win: a top-level task in your personal space is yours; a task with an
+  // owner and no team takes the owner's team (a sub-task takes its parent's first, above). On create, null / ''
+  // mean "not chosen" (forms send '' for an untouched field); there is nothing to clear yet.
+  if (!parentId && !d.owner_employee_id && await isPersonalSpace(space, auth, env)) d.owner_employee_id = auth.employeeId;
+  if (!d.department_id && d.owner_employee_id) d.department_id = await employeeDept(d.owner_employee_id, env);
   if (planItemId) { const c = await checkLinkTarget(auth, planItemId, space, env); if (c.error) return c.error; }
   // R8: an optional hand-off (validated; never an acceptance — that is acceptHandoff's alone).
   const ho = await resolveHandoff(d, {}, { own: d.department_id || null, owner: d.owner_employee_id || null }, !!parentId, env);
@@ -1846,7 +1869,7 @@ async function createTaskCore(d, auth, env) {
   // The link's history row stores the item id only (rendered through the projection at read time).
   if (planItemId) await logHistory(env, task.id, auth, 'plan_item_id_changed', { field: 'plan_item_id', new: planItemId });
   if (hoFields) await logHistory(env, task.id, auth, ...handoffHistory({}, hoFields));
-  return ok({ id: task.id, task_no: task.task_no });
+  return ok({ id: task.id, task_no: task.task_no, owner_employee_id: task.owner_employee_id || null, department_id: task.department_id || null });
 }
 async function createTask(body, auth, env)    { return createTaskCore(body.data || body, auth, env); }
 async function createSubtask(body, auth, env) {
@@ -2200,6 +2223,11 @@ async function updateTask(body, auth, env) {
       updates[f] = d[f]; changes.push([f, task[f], d[f]]);
     }
   }
+  // A new owner on a task with no team gives it the owner's team (unless this request sets the team itself).
+  if (updates.owner_employee_id && d.department_id === undefined && !task.department_id) {
+    const dep = await employeeDept(updates.owner_employee_id, env);
+    if (dep) { updates.department_id = dep; changes.push(['department_id', null, dep]); }
+  }
   // First-time deadline set (task was quick-captured to The Grid with no deadline).
   // This becomes the immutable original — afterwards only reviseDeadline changes it. Validated first, then
   // written through the RPC (setDeadline) BEFORE the other fields, so a bad date fails the whole request.
@@ -2434,11 +2462,23 @@ async function bulkUpdateTasks(body, auth, env) {
   }
   const out = (n) => ok({ updated: n, skipped: skipped + sameTeam, field, ...(sameTeam ? { handoff_same_team: sameTeam } : {}) });
   if (!targets.length) return out(0);
-  const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(targets.map(t => t.id))}`, env, {
-    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ...stamp, [field]: value }) });
-  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
-  await logHistoryBatch(env, auth, targets.map(t => ({ task_id: t.id, event_type: `${field}_changed`, field, old: t[field], new: value })));
-  return out(targets.length);
+  // A new owner gives the tasks that have no team the owner's team (same default as a single edit).
+  const noTeam = field === 'owner_employee_id' && value ? targets.filter(t => !t.department_id) : [];
+  const teamDept = noTeam.length ? await employeeDept(value, env) : null;
+  const filled = teamDept ? noTeam : [];
+  const batches = [[filled, { ...stamp, [field]: value, department_id: teamDept }], [targets.filter(t => !filled.includes(t)), { ...stamp, [field]: value }]];
+  // Each batch's history is written as soon as that batch lands, so a later failure never leaves written rows
+  // without their history; the error then says how many were already updated.
+  let done = 0;
+  for (const [rows, patch] of batches) {
+    if (!rows.length) continue;
+    const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(rows.map(t => t.id))}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(patch) });
+    if (!r.ok) return json({ ok: false, error: 'update_failed: ' + JSON.stringify(r.data), updated: done }, 400);
+    await logHistoryBatch(env, auth, [...rows.map(t => ({ task_id: t.id, event_type: `${field}_changed`, field, old: t[field], new: value })),
+      ...(patch.department_id ? rows.map(t => ({ task_id: t.id, event_type: 'department_id_changed', field: 'department_id', old: null, new: teamDept })) : [])]);
+    done += rows.length;
+  }
+  return out(done);
 }
 
 // ── S153 bulk follow-ups ──────────────────────────────────────────────────────

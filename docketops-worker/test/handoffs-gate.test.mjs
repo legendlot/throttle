@@ -31,6 +31,8 @@ const SPACES = {
   [U(24)]: { id: U(24), name: 'ZZ archived', is_default: false, is_private: false, owner_user_id: ME, is_founders: false, archived_at: '2026-11-01T00:00:00Z' },
 };
 const ARCH = U(24);
+const MYSP = U(25);   // a personal space: private, owned by ME
+SPACES[MYSP] = { id: MYSP, name: 'ZZ mine', is_default: false, is_private: true, owner_user_id: ME, is_founders: false };
 const DEPTS = [{ id: D1, name: 'ZZ team 1' }, { id: D2, name: 'ZZ team 2' }, { id: D3, name: 'ZZ team 3' }];
 // podium.employees.status is 'active' | 'exited' (live, 2026-11-12).
 const EX = U(5);
@@ -44,7 +46,7 @@ const T = (n, o) => ({ id: U(100 + n), task_no: `DKT-${n}`, title: `ZZ t${n}`, s
 const inIds = (v) => (v || '').replace(/^in\.\(|\)$/g, '').split(',');
 const OPEN = ['not_started', 'in_progress', 'blocked'];
 
-function stub({ tasks = [], superAdmin = false, dept = D2, members = [], archivedSpaces = [], scoreRows = [] } = {}) {
+function stub({ tasks = [], superAdmin = false, dept = D2, members = [], archivedSpaces = [], scoreRows = [], others = {} } = {}) {
   const db = tasks.map(t => ({ ...t }));
   const calls = [], history = [], posted = [], patches = [];
   const fn = async (input, init = {}) => {
@@ -83,7 +85,7 @@ function stub({ tasks = [], superAdmin = false, dept = D2, members = [], archive
     if (p.startsWith('/rest/v1/spaces?id=in.')) return body(inIds(q.get('id')).map(id => SPACES[id]).filter(Boolean));
     if (p.startsWith('/rest/v1/spaces?archived_at=not.is.null')) return body(archivedSpaces.map(id => ({ id })));
     if (p.startsWith('/rest/v1/spaces?or=')) return body([{ id: FND, archived_at: null, is_founders: true }, ...archivedSpaces.map(id => ({ id, archived_at: 'x', is_founders: false }))]);
-    if (p.startsWith('/rest/v1/space_members?space_id=eq.')) return body(members.includes(eq('space_id')) ? [{ user_id: ME }] : []);
+    if (p.startsWith('/rest/v1/space_members?space_id=eq.')) return body([...(members.includes(eq('space_id')) ? [{ user_id: ME }] : []), ...(others[eq('space_id')] || []).map(user_id => ({ user_id }))]);
     if (p.startsWith('/rest/v1/space_members?')) return body(members.filter(s => inIds(q.get('space_id')).includes(s)).map(space_id => ({ space_id })));
     if (p.startsWith('/rest/v1/task_history') && method === 'POST') { history.push(...[].concat(reqBody)); return body([]); }
     if (u.pathname === '/rest/v1/tasks' && method === 'POST') {
@@ -602,4 +604,54 @@ test('0033: link / unblocked RPCs carry the request source; getProposals passes 
   assert.equal(rpc('add_task_link')?.p_source, 'connector');
   assert.equal(rpc('log_unblocked')?.p_source, 'app');
   assert.equal(rpc('plan_proposals_for')?.p_is_review, false);
+});
+
+
+test('create defaults: team = owner\'s team; owner = me in a personal space only; explicit values win', async () => {
+  let s = stub({ dept: D2 });
+  let r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ a', owner_employee_id: OE } } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].department_id, D1);   // OE is in D1
+  s = stub({ dept: D2 });
+  await run(s, { post: { action: 'createTask', data: { title: 'ZZ b', owner_employee_id: OE, department_id: D3 } } });
+  assert.equal(s.posted[0].department_id, D3);                                                       // explicit team wins
+  s = stub({ dept: D2 });
+  await run(s, { post: { action: 'createTask', data: { title: 'ZZ c' } } });
+  assert.equal(s.posted[0].owner_employee_id, null); assert.equal(s.posted[0].department_id, null);  // General: stays blank (The Grid)
+  s = stub({ dept: D2, members: [MYSP] });
+  await run(s, { post: { action: 'createTask', data: { title: 'ZZ d', space_id: MYSP } } });
+  assert.equal(s.posted[0].owner_employee_id, MEE); assert.equal(s.posted[0].department_id, D2);     // personal space → me, my team
+  s = stub({ dept: D2, members: [MYSP] });
+  await run(s, { post: { action: 'createTask', data: { title: 'ZZ e', space_id: MYSP, owner_employee_id: OE } } });
+  assert.equal(s.posted[0].owner_employee_id, OE);                                                   // explicit owner wins
+  s = stub({ dept: D2, members: [PRIV] });
+  await run(s, { post: { action: 'createTask', data: { title: 'ZZ f', space_id: PRIV } } });
+  assert.equal(s.posted[0].owner_employee_id, null);                                                 // someone else's private space: not personal
+  s = stub({ dept: D2, members: [MYSP], others: { [MYSP]: [U(8)] } });
+  r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ g', space_id: MYSP } } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].owner_employee_id, null);   // mine, but shared: not personal
+  s = stub({ dept: D2, members: [MYSP] });
+  r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ h', space_id: MYSP } } });
+  assert.equal(r.j.data.owner_employee_id, MEE); assert.equal(r.j.data.department_id, D2);           // the reply names the final owner + team
+});
+
+test('owner change fills a blank team: single edit (history row) and bulk; a task with a team keeps it', async () => {
+  const mk = (n, o) => T(n, { owner_employee_id: MEE, created_by_user_id: ME, ...o });
+  let s = stub({ dept: D2, tasks: [mk(1, { department_id: null })] });
+  let r = await run(s, { post: { action: 'updateTask', data: { id: U(101), owner_employee_id: OE } } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  assert.equal(s.patches.at(-1).body.department_id, D1);
+  assert.ok(s.history.some(h => h.event_type === 'department_id_changed' && h.new_value === D1));
+  s = stub({ dept: D2, tasks: [mk(1, { department_id: null })] });
+  await run(s, { post: { action: 'updateTask', data: { id: U(101), owner_employee_id: OE, department_id: D3 } } });
+  assert.equal(s.patches.at(-1).body.department_id, D3);                                             // the request's own team wins
+  s = stub({ dept: D2, tasks: [mk(2, { department_id: D3 })] });
+  await run(s, { post: { action: 'updateTask', data: { id: U(102), owner_employee_id: OE } } });
+  assert.ok(!('department_id' in s.patches.at(-1).body));                                            // has a team: untouched
+  s = stub({ dept: D2, tasks: [mk(1, { department_id: null }), mk(2, { department_id: D3 })] });
+  r = await run(s, { post: { action: 'bulkUpdateTasks', ids: [U(101), U(102)], field: 'owner_employee_id', value: OE } });
+  assert.equal(r.j.data.updated, 2);
+  const withDept = s.patches.filter(x => 'department_id' in x.body);
+  assert.equal(withDept.length, 1); assert.equal(withDept[0].body.department_id, D1);
+  assert.ok(decodeURIComponent(withDept[0].p).includes(U(101)) && !decodeURIComponent(withDept[0].p).includes(U(102)));
+  assert.deepEqual(s.history.filter(h => h.event_type === 'department_id_changed').map(h => h.task_id), [U(101)]);
 });

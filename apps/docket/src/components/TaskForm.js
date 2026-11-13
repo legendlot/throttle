@@ -13,7 +13,9 @@ export function TaskForm({ departments, employees, programs = [], planItems = []
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [departmentId, setDepartmentId] = useState(parentTask?.department_id || '');
-  const [ownerId, setOwnerId] = useState('');
+  // A sub-task starts on its parent's owner (as quick-add does) — only an active one (the list holds active people;
+  // an exited owner would show blank yet pass the required check).
+  const [ownerId, setOwnerId] = useState((employees || []).some(e => e.id === parentTask?.owner_employee_id) ? parentTask.owner_employee_id : '');
   // A sub-task starts on its parent's program (as the team above); picking "No program" sends an explicit null,
   // which the worker keeps — it inherits only when program_id is omitted (speed-create).
   const [programId, setProgramId] = useState(parentTask?.program_id || '');
@@ -101,7 +103,7 @@ export function TaskForm({ departments, employees, programs = [], planItems = []
       <div className="tk-form-grid">
         <div>
           <label className="tk-lbl">Owner *</label>
-          <Combobox value={ownerId} options={empOpts} onChange={(v) => setOwnerId(v)} placeholder="Select owner…" disabled={saving} style={comboStyle} />
+          <Combobox value={ownerId} options={empOpts} onChange={(v) => { setOwnerId(v); if (v && !departmentId) { const e = (employees || []).find(x => x.id === v); if (e?.department_id) setDepartmentId(e.department_id); } }} placeholder="Select owner…" disabled={saving} style={comboStyle} />
         </div>
         <div>
           <label className="tk-lbl">Program</label>

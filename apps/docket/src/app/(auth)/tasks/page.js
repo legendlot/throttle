@@ -35,7 +35,7 @@ import { Button, EmptyState } from '../../../components/ui/index.js';
 import { sendDone, doneConfirmText, bulkDoneConfirmText, DECLINED } from '../../../lib/deps.js';
 import { usePlanItems, usePlanById, usePlanWeek } from '../../../components/plan/PlanPicker.js';
 import { groupByWeek } from '../../../lib/weeks.js';
-import { matchesPlanFilter, planFilterOptions, planErrorText } from '../../../lib/plan.js';
+import { matchesPlanFilter, planFilterOptions, planPickerOptions, planErrorText } from '../../../lib/plan.js';
 
 const GROUP_OPTS = [
   { value: 'none', label: 'No grouping' }, { value: 'person', label: 'Owner' },
@@ -270,8 +270,10 @@ function TasksBoard() {
         await docketopsPost('updateTask', { id: task.id, title: value }, session);
         patchRow(task.id, { title: value });
       } else {
-        await docketopsPost('updateTask', { id: task.id, [field]: value || null }, session);
+        const res = await docketopsPost('updateTask', { id: task.id, [field]: value || null }, session);
         const patch = { [field]: value || null };
+        // A new owner on a task with no team also sets the team (the worker's default) — show it.
+        if (field === 'owner_employee_id' && Array.isArray(res?.updated) && res.updated.includes('department_id')) load();
         if (field === 'owner_employee_id') patch.owner_name = empMap[value] || null;
         if (field === 'department_id') patch.department_name = deptMap[value] || null;
         if (field === 'program_id') patch.program = programs.find(p => p.id === value) || null;
@@ -340,6 +342,17 @@ function TasksBoard() {
     const body = mineMode ? { title, assign_self: true }
       : inProgramMode ? { title, space_id: (programSpace || programDefaultSpace) || undefined, program_id: viewProgramId }
       : { title, space_id: spaceId || undefined };
+    // The active single-value filters carry into the new task, so it lands in the view you're looking at
+    // (Afshaan 2026-11-13). The group's value is narrower and goes over them; quick-add tokens go over both.
+    if (!mineMode) {
+      if (mine && !employeeId) body.assign_self = true;
+      if (employeeId) { body.owner_employee_id = employeeId; delete body.assign_self; }
+      if (departmentId) body.department_id = departmentId;
+      if (priority) body.priority = priority;
+      if (programId && !inProgramMode) body.program_id = programId;
+    }
+    // Only a plan item the caller may LINK to (the picker's set) — the filter also lists items they only read.
+    if (planFilter && planFilter !== 'unplanned' && planPickerOptions(planItems).some(o => o.value === planFilter)) body.plan_item_id = planFilter;
     // A status group's value goes in the create itself (worker F1): one write, one history row.
     if (field && value && !(field === 'status' && value === 'abandoned')) body[field] = value;
     const x = extras || {};
@@ -348,13 +361,14 @@ function TasksBoard() {
     if (x.priority) body.priority = x.priority;
     if (x.plan_item_id) body.plan_item_id = x.plan_item_id;   // F9 R2 Plan chip
     try {
-      await docketopsPost('createTask', body, session);
+      const res = await docketopsPost('createTask', body, session);
       await load();
       if (inProgramMode && typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed')); // sidebar count
       // The toast reads the FINAL owner. Without an owner AND a deadline a new task lands in The
       // Grid (RULE-DOCKET-001) — say so only when one is still missing. assign_self with no
       // employee record (getMe.employee_id null) means no owner.
-      const owner = body.owner_employee_id || (body.assign_self ? myEmployeeId : null) || null;
+      // The worker's final owner (it may fill one: a personal space → you); older replies fall back to the body.
+      const owner = (res && 'owner_employee_id' in res ? res.owner_employee_id : body.owner_employee_id || (body.assign_self ? myEmployeeId : null)) || null;
       const mine = !!owner && owner === myEmployeeId;
       const ownerName = owner && !mine ? (employees.find(e => e.id === owner)?.full_name || '').split(/\s+/)[0] : '';
       const where = mineMode ? (mine ? 'Added to your list' : ownerName ? `Added — owned by ${ownerName}` : 'Added')
