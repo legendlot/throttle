@@ -156,7 +156,7 @@ export const TaskRow = memo(function TaskRow({
                   onClick={(e) => { stop(e); toggleExpand(task.id); }}><ChevronRight size={14} /></button>
               : <span className="tl-expand-sp" />)}
           <StatusCircle task={task} editable={ed} onToggle={() => saveField(task, 'status', done ? 'not_started' : 'done')} />
-          <span className="tl-ttl" title={task.title}>{task.title}</span>
+          <span className="tl-ttl" title={`${task.task_no} · ${task.title}`}>{task.title}</span>
           {separate && isChild && parent && (
             <span className="tl-parent" title={`Sub-task of ${parent.task_no} · ${parent.title}`}><CornerDownRight size={11} />{parent.task_no}</span>
           )}

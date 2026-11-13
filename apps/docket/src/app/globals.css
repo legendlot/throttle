@@ -436,7 +436,10 @@ body.tl-resizing { cursor: col-resize; user-select: none; }
 .tl-row.tl-subadd { cursor: default; }
 .tl-row.tl-subadd .tl-title { padding-left: 50px; gap: 6px; }
 .tl-cell { display: flex; align-items: center; min-width: 0; height: 100%; padding: 0 8px; gap: 6px; }
-.tl-title { padding-left: 4px; gap: 6px; }
+.tl-title { position: relative; overflow: hidden; container-type: inline-size; padding-left: 4px; gap: 6px; }
+/* Readability: the title keeps room for its first words; when the column is tight the DKT id goes
+   (it's in the tooltip and the task view) and the hand-off chip shortens, never the title first. */
+@container (max-width: 340px) { .tl-title .tl-id { display: none; } .tl-title .ho-chip { max-width: 76px; } }
 .tl-row.sub .tl-title { padding-left: 26px; }
 
 .tl-expand, .tl-expand-sp { width: 18px; height: 18px; flex-shrink: 0; }
@@ -452,15 +455,18 @@ body.tl-resizing { cursor: col-resize; user-select: none; }
 .tl-circle:disabled { cursor: default; opacity: .7; }
 .tl-circle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
-.tl-ttl { flex: 0 1 auto; min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; color: var(--text-1); }
+.tl-ttl { flex: 0 1 auto; min-width: min(118px, 60%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; color: var(--text-1); }
 .tl-row.sub .tl-ttl { font-weight: 400; font-size: 13px; color: var(--text-2); }
 .tl-row.done .tl-ttl { color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--text-4); }
 /* The DKT id never wraps or shrinks — the title takes the ellipsis instead. */
 .tl-id { flex-shrink: 0; white-space: nowrap; font-family: var(--f-mono); font-size: 11px; color: var(--text-4); }
 .tl-kids { flex-shrink: 0; font-size: 11px; color: var(--text-3); background: rgba(255,255,255,.07); border-radius: 4px; padding: 1px 5px; }
 .tl-parent { flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 5px; border-radius: 4px; background: rgba(255,255,255,.07); font-family: var(--f-mono); font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
-.tl-row-acts { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; padding-left: 4px; flex-shrink: 0; opacity: 0; transition: opacity var(--fast); }
-.tl-row:hover .tl-row-acts, .tl-row:focus-within .tl-row-acts, .tl-row:focus-visible .tl-row-acts { opacity: 1; }
+/* Hover-only actions float over the title's end instead of reserving ~48px of it on every row. */
+.tl-row-acts { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 2px; padding-left: 4px;
+  background: var(--surface); box-shadow: -14px 0 10px -6px var(--surface); border-radius: var(--r-ctl); opacity: 0; pointer-events: none; transition: opacity var(--fast); }
+.tl-row.selected .tl-row-acts { background: var(--surface-2); box-shadow: -14px 0 10px -6px var(--surface-2); }
+.tl-row:hover .tl-row-acts, .tl-row:focus-within .tl-row-acts, .tl-row:focus-visible .tl-row-acts { opacity: 1; pointer-events: auto; }
 .tl-act { width: 22px; height: 22px; display: grid; place-items: center; border-radius: var(--r-ctl); color: var(--text-3); }
 .tl-act:hover, .tl-act[aria-expanded="true"] { background: var(--hover); color: var(--text-1); }
 .tl-act[aria-expanded="true"] { opacity: 1; }
@@ -1909,7 +1915,10 @@ a.pl-kid { text-decoration: none; color: inherit; }
 .pw-task:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .pw-task.pw-done .pw-t { color: var(--text-3); text-decoration: line-through; }
 .pw-st { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; }
-.pw-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Readability: a ~180px week cell put code + title + date on one line (titles showed 10–37px); the title
+   now takes at least 120px and up to two lines, and the date wraps under it. */
+.pw-item, .pw-task { flex-wrap: wrap; row-gap: 1px; }
+.pw-t { flex: 1 1 120px; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; line-height: 1.35; }
 .pw-due, .pw-meta { flex-shrink: 0; font-size: 11px; color: var(--text-3); }
 .pw-meta { flex-basis: 100%; padding-left: 13px; }
 

@@ -11,15 +11,15 @@ import { useCallback, useEffect, useState } from 'react';
 // Optional list columns, in default order. Title (first) and Status are always shown;
 // Status is still reorderable. `space` only exists on cross-space views.
 export const COLUMNS = {
-  status:   { label: 'Status',        width: 124, min: 96,  fixed: true, sort: 'status' },
+  status:   { label: 'Status',        width: 118, min: 96,  fixed: true, sort: 'status' },
   team:     { label: 'Team',          width: 130, min: 72 },
   program:  { label: 'Program',       width: 130, min: 72 },
-  plan:     { label: 'Plan',          width: 120, min: 64 },   // F9 R2: the task's plan link (chip + picker)
+  plan:     { label: 'Plan',          width: 100, min: 64 },   // F9 R2: the task's plan link (chip + picker)
   space:    { label: 'Space',         width: 130, min: 72, crossSpaceOnly: true },
   owner:    { label: 'Owner',         width: 72,  min: 56,  sort: 'owner_name' },
-  collabs:  { label: 'Collaborators', width: 104, min: 64 },
+  collabs:  { label: 'Collaborators', width: 92,  min: 64 },
   priority: { label: 'Priority',      width: 84,  min: 64,  sort: 'priority' },
-  deadline: { label: 'Deadline',      width: 144, min: 88,  sort: 'deadline' },
+  deadline: { label: 'Deadline',      width: 124, min: 88,  sort: 'deadline' },
   meta:     { label: 'Activity',      width: 64,  min: 48 },
 };
 const DEFAULT_ORDER = ['status', 'team', 'program', 'plan', 'space', 'owner', 'collabs', 'priority', 'deadline', 'meta'];
@@ -27,6 +27,9 @@ const DEFAULT_ORDER = ['status', 'team', 'program', 'plan', 'space', 'owner', 'c
 // the title its 240px floor.
 const DEFAULT_COLS = { order: DEFAULT_ORDER, hidden: { program: true }, widths: {} };
 const MAX_W = 400;
+// The title column's floor (was 240 — titles showed 40–70px once the id / chips / row actions took their share).
+// Raised by 60 while Status / Plan / Collaborators / Deadline gave back 58, so the list is no wider overall.
+export const TITLE_MIN = 300;
 
 function read(key, fallback) {
   try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); } catch { return fallback; }
@@ -164,11 +167,11 @@ export function visibleColumns(cols, { crossSpace }) {
   return cols.order.filter(k => COLUMNS[k] && (COLUMNS[k].fixed || !cols.hidden[k]) && (!COLUMNS[k].crossSpaceOnly || crossSpace));
 }
 export function gridTemplate(keys, cols) {
-  return ['minmax(240px, 1fr)', ...keys.map(k => `${cols.widths[k] || COLUMNS[k].width}px`)].join(' ');
+  return [`minmax(${TITLE_MIN}px, 1fr)`, ...keys.map(k => `${cols.widths[k] || COLUMNS[k].width}px`)].join(' ');
 }
-// The list's minimum width: the title's 240px floor + every fixed column. The list is
+// The list's minimum width: the title's TITLE_MIN floor + every fixed column. The list is
 // otherwise 100% wide, so the 1fr title column fills the leftover space and never grows
 // to its longest title (a max-content list did that and pushed Owner/Deadline off-screen).
 export function gridMinWidth(keys, cols) {
-  return 240 + keys.reduce((n, k) => n + (cols.widths[k] || COLUMNS[k].width), 0);
+  return TITLE_MIN + keys.reduce((n, k) => n + (cols.widths[k] || COLUMNS[k].width), 0);
 }
