@@ -3,6 +3,20 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [2.3.0] - 2026-11-14
+The General-space rethink: General is gone.
+### Added
+- **Announcements** (new part and chapter, `/announcements`): reading, Mark seen, pins and expiry; who posts (founders
+  to everyone or any teams, a team head to the teams they head and their sub-teams); who reads a team post; the
+  seen-by list; the Slack mirror; and the admin setup (Off / Test / Live, channel IDs, test recipients, invite @Docket).
+### Changed
+- **Spaces** (rewritten): no General; team spaces, Personal spaces, the Founders' space and private spaces; where new
+  work lands; Share with a team; who sees what (people on a task, plan admins, Reviewers and Admins read-only).
+- **The Dashboard**: the org view covers every team space; a team opens its space; the card and person drill-downs
+  work on a single space's Dashboard.
+- **Introduction, Signing In & Getting Around, Roles, Tasks List, Hand-offs, Record Checklists, Inside a Task, Admin
+  Spaces**: every mention of General replaced by the new model (default space, Announcements row in the sidebar).
+
 ## [2.2.0] - 2026-11-13
 ### Added
 - **Record Checklists** (new chapter in the Checklists part, `/checklist`): record templates and the kind switch,

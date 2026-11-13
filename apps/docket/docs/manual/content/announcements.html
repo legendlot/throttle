@@ -1,0 +1,67 @@
+<p class="lead">Announcements is the company noticeboard inside Docket: news from the founders to everyone, or from a team head to a team. You read it from the first row of the sidebar, and a number beside the row tells you how many live posts you have not yet marked seen.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">News for everyone, or for a team.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Everyone reads; founders and heads post.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mem">Member</span> reads, <span class="role fnd">Founder</span> and team heads post</div></div>
+  <div class="g-cell"><div class="g-lbl">Also goes to</div><div class="g-val">Slack, when an admin turns that on.</div></div>
+</div>
+
+<h2 class="sec">Reading announcements</h2>
+<p>Click <strong>Announcements</strong> at the top of the sidebar. Each post is a card with its title, text, author, how long ago it was posted, and who it is for (an <strong>Everyone</strong> tag, or one tag per team).</p>
+<ul>
+  <li><strong>Mark seen.</strong> Press <strong>Mark seen</strong> once you have read a post. The button turns into <em>Seen</em> and the sidebar number drops by one.</li>
+  <li><strong>Pinned posts</strong> carry a pin and stay at the top of the list.</li>
+  <li><strong>Expiry.</strong> A post can have an end date. It stays live until the end of that day (India time), then leaves your list. Switch on <strong>Show past</strong> to see expired and older posts.</li>
+</ul>
+
+<h2 class="sec">Who sees a post</h2>
+<p>A post for <strong>Everyone</strong> reaches every Docket user. A post for a team reaches that team <strong>and every sub-team under it</strong>. You read a team&rsquo;s posts if you are in that team, in a team above it, or if you head that team.</p>
+
+<h2 class="sec">Posting</h2>
+<p>If you can post, a <strong>New announcement</strong> button appears at the top of the page.</p>
+<table class="tbl">
+  <thead><tr><th>You are&hellip;</th><th>You can post to</th></tr></thead>
+  <tbody>
+    <tr><td><span class="role fnd">Founder</span></td><td>Everyone, or any teams.</td></tr>
+    <tr><td>A team head</td><td>The teams you head, and their sub-teams.</td></tr>
+    <tr><td>Anyone else</td><td>Nothing. You read only, and the page says &ldquo;Founders and team heads post news here.&rdquo;</td></tr>
+  </tbody>
+</table>
+<ol class="steps">
+  <li><span class="s-title">Write it.</span> Give it a <strong>Title</strong> and the <strong>Announcement</strong> text (plain text; line breaks are kept; a counter shows the limit).</li>
+  <li><span class="s-title">Choose who sees it.</span> Pick <strong>Everyone</strong> (founders only) or one or more team chips, for example <em>ZZ Ops</em> or <em>Design team</em>. A head with a single team has it chosen already.</li>
+  <li><span class="s-title">Optional: pin and expiry.</span> Turn on <strong>Pin to the top</strong>, and set an <strong>Expires</strong> date if the news goes stale. The cross beside the date clears it.</li>
+  <li><span class="s-title">Press Post.</span></li>
+</ol>
+<p>Whoever manages a post (its author, and the founders) can <strong>Edit</strong> (title, text, pin, expiry), <strong>Unpin</strong> or pin, and <strong>Archive</strong> it. The audience cannot be changed once posted; archive it and post again instead. Archiving takes the post out of everyone&rsquo;s list, but Slack messages already sent stay in Slack. Edits are not sent to Slack again.</p>
+
+<h2 class="sec">Who has seen it</h2>
+<p>On a post you manage, a <strong>Seen by 12 of 20</strong> button opens a list: <em>Not seen yet</em> first (with each person&rsquo;s team), then <em>Seen</em> with when. The author and the founders can open it. A line under the post also shows how the Slack mirror went for it.</p>
+
+<h2 class="sec">The Slack mirror</h2>
+<p>When an admin has switched the mirror on, a post for Everyone goes to the company&rsquo;s Slack channel, and a team post goes to that team&rsquo;s own channel. A team with no channel set simply gets no Slack message; the post is still in Docket. The text is sent as plain text, so a post can never ping the whole channel.</p>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; Use Mark seen as your inbox</div>
+  <p>The sidebar number only counts live posts you have not marked seen. Clear it each morning and anything new stands out.</p>
+</div>
+
+<h2 class="sec">Setting up Slack (admins)</h2>
+<p><span class="role adm">Admin</span> Open <strong>Admin</strong> then <strong>Announcements</strong> (you need the admin permission). Press <strong>Save</strong> after changes.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Mode</div><div class="a-val"><p><strong>Off</strong>: nothing goes to Slack. <strong>Test</strong>: no channel gets anything; each test recipient gets a direct message showing the post and which channel it would go to (or that live mode would skip it because no channel is set). <strong>Live</strong>: every new post goes to the real channels. Docket asks you to confirm before Live is saved.</p></div></div>
+  <div class="a-row"><div class="a-key">Org channel</div><div class="a-val"><p>The channel for posts to Everyone. Enter the Slack channel ID (it looks like <em>C0123ABCD</em>, not the channel name).</p></div></div>
+  <div class="a-row"><div class="a-key">Team channels</div><div class="a-val"><p>One channel ID per team. Leave it empty for a team that should get no Slack post.</p></div></div>
+  <div class="a-row"><div class="a-key">Test recipients</div><div class="a-val"><p>The people who get the test-mode messages. With nobody here, test mode sends nothing.</p></div></div>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Invite @Docket to each channel</div>
+  <p>The Docket bot can only post in a channel it belongs to. In Slack, type <em>/invite @Docket</em> in the org channel and in each team channel. If it was not invited, the post is saved in Docket, the Slack message is not sent, and the post records that the bot was not in the channel.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Start in Test</div>
+  <p>The mirror starts in Test mode. Add yourself as a test recipient, post once, and check the direct message before switching to Live.</p>
+</div>

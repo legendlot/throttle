@@ -2,9 +2,9 @@
 
 <h2 class="sec">The three task-manager roles</h2>
 <div class="anatomy">
-  <div class="a-row"><div class="a-key"><span class="role mem">Member</span></div><div class="a-val"><p><strong>Everyone, by default.</strong> Any signed-in LOT person is a Member without an admin doing anything. A Member creates tasks, and sees their <strong>own</strong> tasks, anything they are a <strong>collaborator</strong> on, and every task in their <strong>own department</strong>. They can fully edit the tasks they own or created (and add comments, documents and sub-tasks to any task they can see).</p></div></div>
-  <div class="a-row"><div class="a-key"><span class="role view">Reviewer</span></div><div class="a-val"><p><strong>The watcher.</strong> A Reviewer sees <em>every</em> task across the whole company, plus the review Dashboard, but read-only. They can look at anything but do not change other people's tasks. Useful for managers and leads who need the full picture.</p></div></div>
-  <div class="a-row"><div class="a-key"><span class="role adm">Admin</span></div><div class="a-val"><p><strong>Full control.</strong> An Admin can see and edit any task, decide who has which role, share the Dashboard, and use the admin screens. Admin includes everything a Reviewer can do.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role mem">Member</span></div><div class="a-val"><p><strong>Everyone, by default.</strong> Any signed-in LOT person is a Member without an admin doing anything. A Member creates tasks, and sees their <strong>own</strong> tasks, anything they are a <strong>collaborator</strong> on, and everything in the spaces they belong to: <strong>their team&rsquo;s space</strong>, their own <strong>Personal</strong> space, and any space shared with them. They can fully edit the tasks they own or created (and add comments, documents and sub-tasks to any task they can see).</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role view">Reviewer</span></div><div class="a-val"><p><strong>The watcher.</strong> A Reviewer reads <em>every team space</em>, plus the review Dashboard, but read-only. They can look at anything but do not change other people's tasks. Useful for managers and leads who need the full picture.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role adm">Admin</span></div><div class="a-val"><p><strong>Runs Docket.</strong> An Admin decides who has which role, shares the Dashboard, and uses the admin screens. Like a Reviewer, an Admin reads every team space but does not change other people&rsquo;s tasks there; they edit the same tasks anyone could (their own, ones they created or are assigned, and any in a space they own). Admin includes everything a Reviewer can do.</p></div></div>
 </div>
 
 <h2 class="sec">Two more roles, for the Plan</h2>
@@ -36,10 +36,11 @@
 <table class="tbl">
   <thead><tr><th>Area</th><th style="text-align:center">Member</th><th style="text-align:center">Reviewer</th><th style="text-align:center">Admin</th></tr></thead>
   <tbody>
+    <tr><td>Read announcements and mark them seen</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
     <tr><td>Create tasks; use the Scratchpad</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
-    <tr><td>See own + collaborator + own-team tasks</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>See own + collaborator + own-team-space tasks</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
     <tr><td>Edit the tasks you own or created</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
-    <tr><td>See <em>every</em> task in the company (read-only)</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Read <em>every</em> team space (read-only)</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
     <tr><td>The review Dashboard</td><td style="text-align:center">if shared</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
     <tr><td>Edit / abandon <em>any</em> task</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
     <tr><td>Link your tasks to the Plan, propose, hand a task to another team</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
@@ -56,5 +57,5 @@
 <p>Two parts of Docket are governed separately from the three roles above, and both get their own chapters:</p>
 <ul>
   <li><strong>The Dashboard</strong> can be handed to anyone, even a plain Member, without making them a Reviewer. See <em>The Dashboard</em>.</li>
-  <li><strong>Private Spaces</strong> are gated by membership, not role. Being an Admin does <em>not</em> let you into someone's private space; you have to be added (or break in through the audited admin recovery). See <em>Spaces</em>.</li>
+  <li><strong>Spaces</strong> are gated by membership, not role. Reviewers and Admins can read every team space but never write there, and being an Admin does <em>not</em> let you into someone&rsquo;s Personal or private space; you have to be added (or break in through the audited admin recovery of an orphaned private space). See <em>Spaces</em>.</li>
 </ul>

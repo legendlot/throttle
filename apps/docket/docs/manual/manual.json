@@ -2,25 +2,25 @@
   "title": "Docket",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to Legend of Toys' org-wide task manager: capturing, owning and tracking work across every department.",
-  "version": "2.2.0",
-  "date": "2026-11-13",
+  "version": "2.3.0",
+  "date": "2026-11-14",
   "app_url": "docket.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
     "mem": {
       "label": "Member",
       "name": "Member (everyone)",
-      "desc": "Any signed-in LOT person. Creates tasks, and sees their own work, anything they collaborate on, and their own department's tasks. Edits the tasks they own or created."
+      "desc": "Any signed-in LOT person. Creates tasks, and sees their own work, anything they collaborate on, and everything in their team's space, their Personal space and spaces shared with them. Edits the tasks they own or created."
     },
     "view": {
       "label": "Reviewer",
       "name": "Reviewer",
-      "desc": "Sees every task across the whole organisation, read-only, plus the review Dashboard. A reviewer watches but does not change other people's tasks."
+      "desc": "Reads every team space across the organisation, read-only, plus the review Dashboard. A reviewer watches but does not change other people's tasks."
     },
     "adm": {
       "label": "Admin",
       "name": "Admin",
-      "desc": "Full control: sees and edits any task, manages who has which role, and runs the admin screens (roles, users, spaces, dashboard sharing)."
+      "desc": "Full control: sees and edits any task, manages who has which role, and runs the admin screens (roles, users, spaces, dashboard sharing, the Slack setup for announcements)."
     },
     "fnd": {
       "label": "Founder",
@@ -210,7 +210,7 @@
     },
     {
       "part": "Organising Work",
-      "subtitle": "The two ways to group tasks: Programs (a soft label) and Spaces (a private, walled-off area).",
+      "subtitle": "The two ways to group tasks: Programs (a soft label) and Spaces (a walled-off area: your team's space, your Personal space, or a private one).",
       "chapters": [
         {
           "id": "programs",
@@ -264,6 +264,24 @@
       ]
     },
     {
+      "part": "Announcements",
+      "subtitle": "News from the founders and team heads: reading, posting, and the Slack mirror.",
+      "chapters": [
+        {
+          "id": "announcements",
+          "title": "Announcements",
+          "route": "/announcements",
+          "roles": [
+            "mem",
+            "view",
+            "adm",
+            "fnd"
+          ],
+          "file": "announcements.html"
+        }
+      ]
+    },
+    {
       "part": "Scratchpad",
       "subtitle": "Your own private notebook with a built-in calculator.",
       "chapters": [
@@ -298,7 +316,7 @@
     },
     {
       "part": "Administration",
-      "subtitle": "Roles, who has which role, dashboard sharing, and the space registry. Admins only.",
+      "subtitle": "Roles, who has which role, dashboard sharing, and the space registry. Admins only. (The Slack setup for announcements is in the Announcements chapter.)",
       "chapters": [
         {
           "id": "admin-roles",
