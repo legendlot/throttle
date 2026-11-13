@@ -451,11 +451,24 @@ export default function DamageLedgerPage() {
   }
 
   async function markRepaired(row) {
-    if (!confirm(`Mark ${row.ledger_no} as repaired and restock ${row.qty} ${row.part_code}?`)) return;
+    // Partial returns (Piyush, 2026-11-13): restock only what came back; the rest stays at
+    // repair as a new DMG entry — the same split Damage Out by quantity makes.
+    const total = Number(row.qty) || 0;
+    const raw = prompt(`${row.ledger_no} · ${row.part_code}: how many of ${total} came back repaired?\nThat many go back into stock; the rest stays at repair.`, String(total));
+    if (raw == null) return;
+    const qty = Number(String(raw).trim());
+    if (!Number.isInteger(qty) || qty <= 0 || qty > total) {
+      toast(`Enter a whole number from 1 to ${total}`, 'error'); return;
+    }
     try {
-      const r = await workerFetch('damageMarkRepaired', { data: { ledger_id: row.id } }, session);
+      const r = await workerFetch('damageMarkRepaired', { data: { ledger_id: row.id, qty } }, session);
       if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
-      toast(`${row.ledger_no} restocked +${r.data.restocked_qty}`, 'success');
+      if (Number(r.data?.restocked_qty) !== qty) {
+        toast(`${row.ledger_no}: ${r.data?.restocked_qty} went into stock, not ${qty} — tell Afshaan before doing anything else`, 'error');
+        loadLedger(); return;
+      }
+      toast(`${row.ledger_no} restocked +${r.data.restocked_qty}`
+        + (r.data.remainder_ledger_no ? ` · ${r.data.remainder_qty} still at repair as ${r.data.remainder_ledger_no}` : ''), 'success');
       loadLedger();
     } catch (e) { toast(e.message || 'Failed', 'error'); }
   }
