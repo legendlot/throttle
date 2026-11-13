@@ -25,7 +25,9 @@ export function RedlineTopbar({ refreshing = false, lastRefreshed = null, right 
   const hit = resolveNav(pathname);
   const crumb = hit?.crumb || 'Redline';
   const title = hit?.item?.label || '';
-  const updated = fmtTime(lastRefreshed);
+  // The exec Overview carries its own freshness line (instant-load pattern), so the topbar
+  // stamp is hidden there — two "Updated" stamps side by side read as two different times.
+  const updated = /^\/exec\/?$/.test(pathname || '') ? null : fmtTime(lastRefreshed);
 
   return (
     <header className="rl-topbar" style={{ height: 56, borderBottom: '1px solid var(--border)', display: 'flex',
