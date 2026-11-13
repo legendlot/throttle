@@ -20,7 +20,7 @@ const ME = U(1), MEE = U(2), VIN = U(5), OE = U(3), D1 = U(10), D2 = U(11), G = 
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const SPACES = {
   [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false },
-  [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false },
+  [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: true },   // P3a: a plan admin opens every team space, so the space they can't open is someone's PERSONAL one
 };
 const addD = (d, n) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 const TODAY = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);

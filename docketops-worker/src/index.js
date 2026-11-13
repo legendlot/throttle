@@ -256,12 +256,29 @@ function isHandoffReceiver(auth, task) {
     (!!auth.employeeId && task.handoff_to_employee_id === auth.employeeId) ||
     (!!auth.departmentId && task.handoff_to_department_id === auth.departmentId));
 }
-// …which widens VISIBILITY only in the General (default) space: in a private space the receiver still needs
-// membership (the space gate is never overridden — RULE-DOCKET-003). The task's space row must be known
+// …which widens VISIBILITY in every space except the Founders' space (P3a, Afshaan 2026-11-13: involvement opens
+// the TASK — not its space — and the Founders' space stays sealed). The task's space row must be known
 // (loadTaskFor / keepAccessible / knowSpaces); an unknown space widens nothing. Used by canSeeTask and the two
-// batched baselines (visibleTaskRows, the stale sweep's parent crumbs) ONLY — the SQL list / search / card
-// functions are deliberately unchanged (a receiver reaches a hand-off through Incoming, a link, the pack).
-function receiverSees(auth, task) { return !!spaceOf(auth, task)?.is_default && isHandoffReceiver(auth, task); }
+// batched baselines (visibleTaskRows, the stale sweep's parent crumbs). Every private-space row reaches those
+// through keepAccessible / loadTaskFor first, which is where involvement opens a space you can't access (the stale
+// sweep itself reads your own tasks in any space and gates them there); the SQL list / search / card functions
+// carry the same clause since 0037.
+function receiverSees(auth, task) { const sp = spaceOf(auth, task); return !!sp && !sp.is_founders && isHandoffReceiver(auth, task); }
+// P3a: "involved" in a task = its owner, its assignee, a hand-off receiver (isHandoffReceiver) or a collaborator.
+// In any space but the Founders' space that opens THAT task by id and in lists, without space access; edit rights
+// stay canEditTask's. The direct part reads the row's own fields — a row read without them is simply not involved
+// (fail closed); the collaborator part is one read (isInvolved) or one batched read (keepAccessible).
+function involvedDirect(auth, task) {
+  return (!!auth.employeeId && (task.owner_employee_id === auth.employeeId || task.assignee_employee_id === auth.employeeId))
+    || isHandoffReceiver(auth, task);
+}
+async function isInvolved(auth, task, env) {
+  if (involvedDirect(auth, task)) return true;
+  if (!auth.employeeId) return false;
+  const c = await sbDocket(
+    `/rest/v1/task_collaborators?task_id=eq.${enc(task.id)}&employee_id=eq.${enc(auth.employeeId)}&select=task_id&limit=1`, env);
+  return !!(c.ok && c.data?.length);
+}
 // See a task: view-all, the above, own department, a hand-off's receiving side (General), or a collaborator.
 async function canSeeTask(auth, task, env) {
   if (canViewAll(auth) || canEditTask(auth, task)) return true;
@@ -334,25 +351,37 @@ async function loadTask(id, env) {
 // 2026-11-11 every write handler took any id, so an admin (or anyone) holding a private task's id (it is
 // in every Docket link pasted to Slack) could edit, move, comment on or re-parent it. General-space
 // rules (canSeeTask / canEditTask) still apply on top, in each handler.
+// P3a: a task the caller is involved in (isInvolved) but whose space they can't access still loads — except in the
+// Founders' space — and is marked INVOLVED_ONLY: it opens that task only (never its space, its siblings, a move
+// into or out of it). getTask's hydration and moveTask / bulkMoveTasks read the mark.
 const TASK_SPACE = new WeakMap();   // task row (from loadTaskFor) → its space row
+const INVOLVED_ONLY = new WeakSet(); // task rows (loadTaskFor / keepAccessible) open through involvement alone
 async function loadTaskFor(id, auth, env) {
   const task = await loadTask(id, env);
   if (!task) return null;
   const space = await loadSpace(task.space_id, env);
-  if (!space || !(await canAccessSpace(auth, space, env))) return null;
+  if (!space) return null;
+  if (!(await canAccessSpace(auth, space, env))) {
+    if (space.is_founders || !(await isInvolved(auth, task, env))) return null;
+    INVOLVED_ONLY.add(task);
+  }
   TASK_SPACE.set(task, space);
   noteSpaces(auth, [space]);
   return task;
 }
 // "Can see" for a task that came through loadTaskFor: General = the V1 baseline (canSeeTask); a private
-// space is FLAT — every member sees every task (RULE-DOCKET-003), and loadTaskFor already proved access.
+// space is FLAT — every member sees every task (RULE-DOCKET-003), and loadTaskFor already proved access
+// (space access, or involvement — P3a).
 async function seesTask(auth, task, env) {
+  if (INVOLVED_ONLY.has(task)) return true;
   const space = TASK_SPACE.get(task);
   return space && !space.is_default ? true : canSeeTask(auth, task, env);
 }
-// Bulk equivalent: drop rows in private spaces the caller doesn't own or belong to (counted "skipped").
-// Archived spaces included, matching loadTaskFor (canAccessSpace ignores archived_at).
-async function keepAccessible(auth, tasks, env) {
+// Bulk equivalent: drop rows in private spaces the caller doesn't own or belong to (counted "skipped"), but keep
+// (P3a) a TASK row the caller is involved in outside the Founders' space, marked INVOLVED_ONLY. Archived spaces
+// included, matching loadTaskFor (canAccessSpace ignores archived_at). `involvement: false` for rows that are not
+// tasks (checklist records carry owner_employee_id too, and a record never opens through it).
+async function keepAccessible(auth, tasks, env, { involvement = true } = {}) {
   if (!tasks.length) return tasks;
   const spaceIds = uniq(tasks.map(t => t.space_id));
   const [sr, mr, team] = await Promise.all([
@@ -363,12 +392,30 @@ async function keepAccessible(auth, tasks, env) {
   if (!sr.ok || !mr.ok) return [];   // fail closed
   noteSpaces(auth, sr.data || []);
   const member = new Set((mr.data || []).map(m => m.space_id));
-  const ok = new Set((sr.data || []).filter(sp => sp.is_default || sp.owner_user_id === auth.userId || member.has(sp.id) || (team.has(sp.id) && !sp.is_founders)).map(sp => sp.id));
-  return tasks.filter(t => ok.has(t.space_id));
+  const ok = new Set((sr.data || []).filter(sp => sp.is_default || sp.owner_user_id === auth.userId || member.has(sp.id) || (team.has(sp.id) && !sp.is_founders)
+    || planAdminSpace(auth, sp)).map(sp => sp.id));
+  if (!involvement) return tasks.filter(t => ok.has(t.space_id));
+  // Involvement: only rows read WITH the involvement fields, in a known space that isn't the Founders' space.
+  const sealed = new Set((sr.data || []).filter(sp => sp.is_founders).map(sp => sp.id));
+  const known = new Set((sr.data || []).map(sp => sp.id));
+  const cand = tasks.filter(t => !ok.has(t.space_id) && known.has(t.space_id) && !sealed.has(t.space_id) && 'owner_employee_id' in t);
+  const candRows = new Set(cand);
+  const involved = new Set(cand.filter(t => involvedDirect(auth, t)).map(t => t.id));
+  const needCollab = cand.filter(t => !involved.has(t.id)).map(t => t.id);
+  if (needCollab.length && auth.employeeId) {
+    const c = await sbIn(sbDocket, needCollab, l => `/rest/v1/task_collaborators?task_id=in.${l}&employee_id=eq.${enc(auth.employeeId)}&select=task_id`, env);
+    if (c.ok) (c.data || []).forEach(x => involved.add(x.task_id));   // a failed read adds no one (fail closed)
+  }
+  return tasks.filter(t => {
+    if (ok.has(t.space_id)) return true;
+    if (!candRows.has(t) || !involved.has(t.id)) return false;
+    INVOLVED_ONLY.add(t);
+    return true;
+  });
 }
 // The space rows this request has already read, by id (canEditTask needs a task's space — spec §5.1
 // P0-a). Fed by loadTaskFor, keepAccessible and knowSpaces; one Map per request, on the auth object.
-const SPACE_COLS = 'id,name,is_default,is_private,owner_user_id,is_founders,is_personal';
+const SPACE_COLS = 'id,name,is_default,is_private,owner_user_id,is_founders,is_personal,archived_at';   // archived_at: planAdminSpace
 function noteSpaces(auth, rows) {
   const m = auth._spaceRows || (auth._spaceRows = new Map());
   for (const s of rows || []) if (s && s.id) m.set(s.id, s);
@@ -431,6 +478,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 // A real calendar date ('2026-00-01' / '2026-02-30' pass the regex but are not dates — review #8).
 function isValidDate(s) { if (!DATE_RE.test(s || '')) return false; const d = new Date(`${s}T12:00:00Z`); return !isNaN(d) && d.toISOString().slice(0, 10) === s; }
 // Recurring tasks in a private space the caller can't open stay hidden (review #1) — your own always show.
+// P3a involvement beyond ownership deliberately not applied: a recurring checklist is its owner's (RULE-DOCKET-008).
 async function visibleRecurring(tasks, auth, env) {
   if (!tasks.some(t => t.space_id && t.owner_employee_id !== auth.employeeId)) return tasks;
   auth._scopeP = auth._scopeP || programScopeArgs(auth, env);
@@ -610,9 +658,23 @@ function teamSpaceSet(auth, env) {
   }
   return auth._teamSpacesP;
 }
+// P3a (Afshaan 2026-11-13): the founders — plan admins — see every live TEAM space: any private, non-archived space
+// that is not someone's personal space (spaces.is_personal), the Founders' space included. Never a personal or an
+// archived space; a row read without is_personal / archived_at opens nothing (fail closed). SEE, not edit: the
+// docket_admin overrides (comments, records) need real rights in the space — adminActsIn.
+function planAdminSpace(auth, space) {
+  return isPlanAdmin(auth) && !!space && !!space.is_private && !space.is_default && space.is_personal === false
+    && 'archived_at' in space && !space.archived_at;
+}
 // Can the caller READ a space at all? General = everyone; private = owner, member, or a member of a team
-// it is shared with. (docket_admin is NOT special here — strict separation — unless they've broken-glass in.)
+// it is shared with; a plan admin, any team space (planAdminSpace). (docket_admin is NOT special here — strict
+// separation — unless they've broken-glass in.)
 async function canAccessSpace(auth, space, env) {
+  return planAdminSpace(auth, space) || canAccessSpaceDirect(auth, space, env);
+}
+// The same rule WITHOUT planAdminSpace: real rights in the space (owner, member, team share), for what a plan admin's
+// "see every team space" must not widen.
+async function canAccessSpaceDirect(auth, space, env) {
   if (!space) return false;
   if (space.is_default) return true;
   if (space.owner_user_id === auth.userId) return true;
@@ -621,12 +683,31 @@ async function canAccessSpace(auth, space, env) {
   // read-side belt for a stray row).
   return !space.is_founders && (await teamSpaceSet(auth, env)).has(space.id);
 }
+// P3a: does a docket_admin's override (edit someone's comment / record) apply in this space? Only in General, in the
+// Founders' space for a plan admin, or where the admin has real rights (canAccessSpaceDirect) — never through
+// planAdminSpace alone (founders SEE every team space; they don't edit others' work in it).
+async function adminActsIn(auth, space, env) {
+  if (!isAdmin(auth) || !space) return false;
+  if (space.is_default || (space.is_founders && isPlanAdmin(auth))) return true;
+  return canAccessSpaceDirect(auth, space, env);
+}
+// Batched for a list: the ids of these space rows (accessibleSpaces' shape or SPACE_COLS) where adminActsIn holds.
+async function adminSpaceIds(auth, spaces, env) {
+  if (!isAdmin(auth) || !spaces.length) return new Set();
+  const [mr, team] = await Promise.all([
+    sbDocket(`/rest/v1/space_members?user_id=eq.${enc(auth.userId)}&select=space_id`, env), teamSpaceSet(auth, env)]);
+  const member = new Set(mr.ok ? (mr.data || []).map(m => m.space_id) : []);   // a failed read grants nothing
+  return new Set(spaces.filter(s => s.is_default || s.is_private === false || (s.is_founders && isPlanAdmin(auth))
+    || s.is_owner === true || s.owner_user_id === auth.userId || member.has(s.id) || (team.has(s.id) && !s.is_founders)).map(s => s.id));
+}
 function isSpaceOwner(auth, space) { return !!space && space.owner_user_id === auth.userId; }
 async function logSpace(env, spaceId, actor, action, note = null) {
   await sbDocket(`/rest/v1/space_history`, env, { method: 'POST', prefer: 'return=minimal',
     body: JSON.stringify({ space_id: spaceId, actor_user_id: actor, action, note }) });
 }
-// Accessible spaces for the sidebar: General + owned / member / team-shared private spaces (non-archived).
+// Accessible spaces for the sidebar: General + owned / member / team-shared private spaces (non-archived); a plan
+// admin also every live team space (planAdminSpace — never a personal one). A task open through involvement alone
+// (P3a) never puts its space here.
 async function accessibleSpaces(auth, env) {
   const [defRes, memberRes, team] = await Promise.all([
     sbDocket(`/rest/v1/spaces?is_default=eq.true&archived_at=is.null&select=id,name,is_private,owner_user_id,is_founders&limit=1`, env),
@@ -638,11 +719,12 @@ async function accessibleSpaces(auth, env) {
   const direct = new Set(directIds);
   const orParts = [`owner_user_id.eq.${auth.userId}`];
   if (memberIds.length) orParts.push(`id.in.${inList(memberIds)}`);
+  if (isPlanAdmin(auth)) orParts.push('is_personal.is.false');   // every team space (is_private=eq.true below)
   const ownedRes = await sbDocket(
-    `/rest/v1/spaces?is_private=eq.true&archived_at=is.null&or=(${orParts.join(',')})&select=id,name,is_private,owner_user_id,is_founders,is_personal&order=name.asc`, env);
+    `/rest/v1/spaces?is_private=eq.true&archived_at=is.null&or=(${orParts.join(',')})&select=id,name,is_private,owner_user_id,is_founders,is_personal,archived_at&order=name.asc`, env);
   const general = (defRes.ok && defRes.data) || [];
   // A Founders' space reached only through a team share is dropped (see canAccessSpace).
-  const privates = ((ownedRes.ok && ownedRes.data) || []).filter(s => !s.is_founders || s.owner_user_id === auth.userId || direct.has(s.id));
+  const privates = ((ownedRes.ok && ownedRes.data) || []).filter(s => !s.is_founders || s.owner_user_id === auth.userId || direct.has(s.id) || planAdminSpace(auth, s));
   return [...general, ...privates].map(s => ({ id: s.id, name: s.name, is_private: s.is_private, is_owner: s.owner_user_id === auth.userId,
     ...(s.is_founders ? { is_founders: true } : {}), ...(s.is_personal ? { is_personal: true } : {}) }));
 }
@@ -841,6 +923,32 @@ async function logUnblocked(ids, auth, env) {
   await sbDocket(`/rest/v1/rpc/log_unblocked`, env, { method: 'POST', body: JSON.stringify({ p_closed_ids: ids, p_actor: auth.userId, p_source: auth.source || 'app' }) });
 }
 
+// P3a: the involvement fields a sub-task read carries, so an involvement-only viewer's counts can be narrowed.
+const KID_COLS = 'id,parent_task_id,status,owner_employee_id,assignee_employee_id,handoff_to_department_id,handoff_to_employee_id';
+// Of these sub-task rows (read with KID_COLS or wider), the ids this viewer is involved in (one batched collaborator
+// read; a failed read adds no one).
+async function involvedIds(auth, kids, env) {
+  const seen = new Set(kids.filter(c => involvedDirect(auth, c)).map(c => c.id));
+  const rest = kids.filter(c => !seen.has(c.id)).map(c => c.id);
+  if (rest.length && auth.employeeId) {
+    const cr = await sbIn(sbDocket, rest, l => `/rest/v1/task_collaborators?task_id=in.${l}&employee_id=eq.${enc(auth.employeeId)}&select=task_id`, env);
+    if (cr.ok) (cr.data || []).forEach(x => seen.add(x.task_id));
+  }
+  return seen;
+}
+// The ids of these task rows the viewer sees through involvement alone: marked by loadTaskFor / keepAccessible, or
+// (rows from the 0037 SQL lists) in a private space outside the caller's accessible spaces. Space rows must be known
+// (knowSpaces); an accessible ARCHIVED space reads as outside here, which only narrows a count (fail closed).
+async function involvementOnlyIds(auth, rows, env) {
+  const out = new Set(rows.filter(t => INVOLVED_ONLY.has(t)).map(t => t.id));
+  const maybe = rows.filter(t => !out.has(t.id) && spaceOf(auth, t) && !spaceOf(auth, t).is_default);
+  if (!maybe.length) return out;
+  auth._scopeP = auth._scopeP || programScopeArgs(auth, env);
+  const { memberSpaceIds } = await auth._scopeP;
+  const open = new Set(memberSpaceIds || []);
+  maybe.forEach(t => { if (!open.has(t.space_id)) out.add(t.id); });
+  return out;
+}
 async function hydrateTasks(rows, auth, env) {
   if (!rows.length) return rows;
   const deptIds = uniq(rows.flatMap(t => [t.department_id, t.handoff_to_department_id]));
@@ -850,7 +958,7 @@ async function hydrateTasks(rows, auth, env) {
   // F9 R2: the plan link (one batched projection call) and the rows' spaces (canEditTask) ride along.
   const [deptRes, childRes, collabRes, docRes, commRes, creatorRes, linkRaw, planCtx] = await Promise.all([
     sbIn(sbPodium, deptIds, l => `/rest/v1/departments?id=in.${l}&select=id,name`, env),
-    sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?parent_task_id=in.${l}&select=parent_task_id,status`, env),
+    sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?parent_task_id=in.${l}&select=${KID_COLS}`, env),
     sbIn(sbDocket, taskIds, l => `/rest/v1/task_collaborators?task_id=in.${l}&select=task_id,employee_id`, env),
     sbIn(sbDocket, taskIds, l => `/rest/v1/task_documents?task_id=in.${l}&select=task_id`, env),
     sbIn(sbDocket, taskIds, l => `/rest/v1/task_comments?task_id=in.${l}&deleted_at=is.null&select=task_id`, env),
@@ -870,7 +978,11 @@ async function hydrateTasks(rows, auth, env) {
   const empName  = {}; (empRes.data  || []).forEach(e => { empName[e.id] = e.full_name; });
   const creatorName = {}; (creatorRes.data || []).forEach(u => { creatorName[u.id] = u.full_name; });
   const childCount = {}, childDone = {};
-  (childRes.data || []).forEach(c => {
+  // P3a: under a row this viewer opens through involvement alone, only the sub-tasks they are involved in count
+  const kids = Array.isArray(childRes.data) ? childRes.data : [];
+  const narrow = await involvementOnlyIds(auth, rows, env);
+  const kidOk = narrow.size ? await involvedIds(auth, kids.filter(c => narrow.has(c.parent_task_id)), env) : new Set();
+  kids.filter(c => !narrow.has(c.parent_task_id) || kidOk.has(c.id)).forEach(c => {
     childCount[c.parent_task_id] = (childCount[c.parent_task_id] || 0) + 1;
     if (c.status === 'done') childDone[c.parent_task_id] = (childDone[c.parent_task_id] || 0) + 1;
   });
@@ -1035,7 +1147,9 @@ async function getMyTasks(url, auth, env) {
 //   · space: ALWAYS the caller's accessible spaces (General + owned/member private, non-
 //     archived) — view_all included, exactly RULE-DOCKET-003 (a private space needs
 //     membership, admins too). Narrower than list_my_tasks, whose p_view_all skips it.
-//   · default scope: owner_employee_id = the caller (own tasks → canSeeTask in General).
+//   · default scope: owner_employee_id = the caller (own tasks → canSeeTask in General). P3a: an owner is involved,
+//     so their own stale tasks in ANY live space count — read by owner with no space filter, then gated through
+//     keepAccessible (never a Founders' space they're not in, never an archived space).
 //   · scope=all: docket_view_all / admin only (else 403) — every owner, optional owner=<id>.
 // ?count_only=1 → { total } (select=id + count=exact, no hydration) for My tasks' "Clean up N".
 // "Last touched" = updated_at, or created_at for a task never edited since creation
@@ -1057,16 +1171,17 @@ async function getStaleTasks(url, auth, env) {
   const now = Date.now();
   const cutOverdue = new Date(now - STALE_OVERDUE_DAYS * 864e5).toISOString();
   const cutUntouched = new Date(now - STALE_UNTOUCHED_DAYS * 864e5).toISOString();
+  const ownScope = !scopeAll;   // P3a: by owner, any space, gated after the read
   const filters = [
     'status=not.in.(done,abandoned)', 'is_recurring=eq.false', 'archived_at=is.null',
-    `space_id=in.${inList(spaces.map(s => s.id))}`,
+    ...(ownScope ? [] : [`space_id=in.${inList(spaces.map(s => s.id))}`]),
     `or=(revised_deadline.lt.${cutOverdue},and(revised_deadline.is.null,deadline.lt.${cutOverdue}),` +
       `updated_at.lt.${cutUntouched},and(updated_at.is.null,created_at.lt.${cutUntouched}))`,
   ];
   if (owner) filters.push(`owner_employee_id=eq.${enc(owner)}`);
   const base = `/rest/v1/tasks?${filters.join('&')}`;
 
-  if (countOnly) {
+  if (countOnly && !ownScope) {
     const c = await sbDocket(`${base}&select=id&limit=1`, env, { prefer: 'count=exact' });
     if (!c.ok) return err('db_error: ' + JSON.stringify(c.data), 500);
     const total = Number(String(c.contentRange || '').split('/')[1]);
@@ -1074,12 +1189,13 @@ async function getStaleTasks(url, auth, env) {
   }
   // Read every match, a page at a time (PostgREST's max-rows would silently clip one big
   // read), then sort here — PostgREST can't order by coalesce(revised_deadline, deadline).
-  const all = [];
+  let all = [];
   // Advance by what actually came back (PostgREST's max-rows may be below STALE_PAGE) and
   // stop only on an empty page; order=id keeps offset paging stable. 50 pages = runaway guard.
   let exactTotal = null;
+  const cols = countOnly ? 'id,space_id,owner_employee_id,assignee_employee_id,handoff_to_department_id,handoff_to_employee_id' : '*';
   for (let off = 0, n = 0; n < 50; n++) {
-    const r = await sbDocket(`${base}&select=*&order=id.asc&limit=${STALE_PAGE}&offset=${off}`, env,
+    const r = await sbDocket(`${base}&select=${cols}&order=id.asc&limit=${STALE_PAGE}&offset=${off}`, env,
       off === 0 ? { prefer: 'count=exact' } : undefined);
     if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
     if (off === 0) { const t = Number(String(r.contentRange || '').split('/')[1]); if (Number.isFinite(t)) exactTotal = t; }
@@ -1088,6 +1204,11 @@ async function getStaleTasks(url, auth, env) {
     all.push(...page);
     off += page.length;
     if (exactTotal != null && all.length >= exactTotal) break;
+  }
+  if (ownScope) {   // P3a: the space gate after the read — involvement (they own these) or access; live spaces only
+    all = (await keepAccessible(auth, all, env)).filter(t => !spaceOf(auth, t)?.archived_at);
+    exactTotal = null;   // the header counted the ungated rows
+    if (countOnly) return ok({ total: all.length });
   }
 
   // Times as numbers: PostgREST's '+00:00' / microsecond strings don't string-compare with toISOString's 'Z'.
@@ -1103,13 +1224,16 @@ async function getStaleTasks(url, auth, env) {
   const truncated = all.length > STALE_CAP;
   let rows = await hydrateTasks(all.slice(0, STALE_CAP), auth, env);
   const sName = {}; spaces.forEach(s => { sName[s.id] = s.name; });
+  (auth._spaceRows || new Map()).forEach((sp, id) => { if (!sName[id]) sName[id] = sp.name; });   // P3a: involvement-only spaces
   const parentIds = uniq(rows.map(t => t.parent_task_id));
   // Parent crumb only where the caller could open the parent itself (canSeeTask's gate,
   // batched: the collaborator check is one in.() read, not one per parent). Otherwise null.
+  // P3a: first the space gate (keepAccessible); a parent open through involvement alone shows (it is theirs), one
+  // in a space they can't access and aren't involved in never does — not even on a team match.
   const pr = await sbIn(sbDocket, parentIds, l => `/rest/v1/tasks?id=in.${l}&select=*`, env);
-  const parents = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
+  const parents = await keepAccessible(auth, (pr.ok && Array.isArray(pr.data)) ? pr.data : [], env);
   await knowSpaces(auth, parents, env);   // canEditTask reads the parent's space (no-op: same spaces as the rows)
-  const quick = (p) => canViewAll(auth) || canEditTask(auth, p) || (auth.departmentId && p.department_id === auth.departmentId) || receiverSees(auth, p);
+  const quick = (p) => INVOLVED_ONLY.has(p) || canViewAll(auth) || canEditTask(auth, p) || (auth.departmentId && p.department_id === auth.departmentId) || receiverSees(auth, p);
   const needCollab = parents.filter(p => !quick(p)).map(p => p.id);
   const collabOk = new Set();
   if (needCollab.length && auth.employeeId) {
@@ -1130,7 +1254,7 @@ async function getStaleTasks(url, auth, env) {
 
 // F5 — cross-space search for ⌘K. One RPC (migration 0012 search_tasks) over every space the
 // caller can open: General through canSeeTask, private spaces through ownership/membership
-// (accessibleSpaces — RULE-DOCKET-003, view_all doesn't widen it). Title + DKT number; terms in
+// (accessibleSpaces — RULE-DOCKET-003, view_all doesn't widen it) or, since 0037 (P3a), involvement in the task. Title + DKT number; terms in
 // any order; a typo fallback only when nothing matched exactly. ≤20 rows, + owner_name.
 // Queries under 2 characters return [] unless they are a DKT number ("7", "dkt-7").
 const SEARCH_MAX_Q = 100;
@@ -1161,8 +1285,11 @@ async function searchTasks(url, auth, env) {
   return ok(planned.map(t => ({ ...t, owner_name: name[t.owner_employee_id] || null })));
 }
 
-async function parentCrumb(p, space, auth, env) {
-  if (!p || (space.is_default && !(await canSeeTask(auth, p, env)))) return null;
+// `involvedOnly` (P3a): the viewer opened the task through involvement alone, so the parent shows only when they
+// are involved in it too (the space isn't theirs, and it is never the Founders' space here).
+async function parentCrumb(p, space, auth, env, involvedOnly = false) {
+  if (!p) return null;
+  if (involvedOnly ? !(await isInvolved(auth, p, env)) : (space.is_default && !(await canSeeTask(auth, p, env)))) return null;
   return { id: p.id, task_no: p.task_no, title: p.title, status: p.status };
 }
 async function getTask(url, auth, env) {
@@ -1171,20 +1298,26 @@ async function getTask(url, auth, env) {
   const task = await loadTaskFor(id, auth, env);
   if (!task) return err('not_found', 404);
   // Space gate: General falls back to the V1 baseline (own/collab/dept/view-all);
-  // a private space requires membership (admins included — RULE-DOCKET-003).
+  // a private space requires membership (admins included — RULE-DOCKET-003) or, P3a, involvement in this task
+  // (loadTaskFor proved it and marked the row INVOLVED_ONLY).
   const space = await loadSpace(task.space_id, env);
   if (!space) return err('space_not_found', 404);
+  const involvedOnly = INVOLVED_ONLY.has(task);
   if (space.is_default) { if (!(await canSeeTask(auth, task, env))) return err('forbidden', 403); }
-  else { if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403); }
+  else if (!involvedOnly) { if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403); }
 
   // The parent crumb {task_no, title} only when the caller could open the parent itself: same space
   // always (setParent / moveTask keep it so); private = flat, General = canSeeTask on the parent — the
   // stale sweep's crumb gate. A sub-task can be visible (own / dept / collaborator) under a parent that isn't.
+  // Involvement-only (P3a): the parent and the sub-tasks show only where the viewer is involved in them too —
+  // the rest of that space is not theirs (the child read then carries the involvement fields).
+  const childCols = 'id,task_no,title,status,priority,owner_employee_id,deadline,revised_deadline'
+    + (involvedOnly ? ',assignee_employee_id,handoff_to_department_id,handoff_to_employee_id' : '');   // involvedIds reads these
   const [parentRes, childRes, collabRes, docRes, commRes, histRes] = await Promise.all([
     task.parent_task_id
       ? sbDocket(`/rest/v1/tasks?id=eq.${enc(task.parent_task_id)}&space_id=eq.${enc(task.space_id)}&select=*&limit=1`, env)
       : { data: [] },
-    sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(id)}&space_id=eq.${enc(task.space_id)}&select=id,task_no,title,status,priority,owner_employee_id,deadline,revised_deadline&order=created_at.asc`, env),
+    sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(id)}&space_id=eq.${enc(task.space_id)}&select=${childCols}&order=created_at.asc`, env),
     sbDocket(`/rest/v1/task_collaborators?task_id=eq.${enc(id)}&select=employee_id,added_at`, env),
     sbDocket(`/rest/v1/task_documents?task_id=eq.${enc(id)}&select=*&order=added_at.asc`, env),
     sbDocket(`/rest/v1/task_comments?task_id=eq.${enc(id)}&deleted_at=is.null&select=*&order=created_at.asc`, env),
@@ -1193,6 +1326,11 @@ async function getTask(url, auth, env) {
 
   // Resolve all employee names referenced (owner/assignee/collaborators/children-assignees) in one read.
   // R8: hand-off history rows carry ids (new/old_value = department, note = receiver) — named here.
+  if (involvedOnly) {   // P3a: only the sub-tasks this viewer is involved in (a failed collaborator read adds none)
+    const kids = Array.isArray(childRes.data) ? childRes.data : [];
+    const seen = await involvedIds(auth, kids, env);
+    childRes.data = kids.filter(c => seen.has(c.id));
+  }
   const hoHist = (histRes.data || []).filter(h => h.field === 'handoff');
   const empIds = uniq([
     task.owner_employee_id, task.handoff_to_employee_id,
@@ -1252,7 +1390,7 @@ async function getTask(url, auth, env) {
     can_accept_handoff: isHandoffReceiver(auth, task) && handoffOpen(task) && !task.handoff_accepted_at && !space.archived_at,
     space: { id: space.id, name: space.name, is_private: space.is_private, is_founders: !!space.is_founders },
     program: prog || null,
-    parent: await parentCrumb(parentRes.data?.[0], space, auth, env),
+    parent: await parentCrumb(parentRes.data?.[0], space, auth, env, involvedOnly),
     children: children.map(c => ({ ...c, plan: childPlan })),
     child_count: children.length,
     child_done: children.filter(c => c.status === 'done').length,
@@ -1287,7 +1425,7 @@ async function getTaskLinks(url, auth, env) {
   const space = await loadSpace(task.space_id, env);
   if (!space) return err('space_not_found', 404);
   if (space.is_default) { if (!(await canSeeTask(auth, task, env))) return err('forbidden', 403); }
-  else { if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403); }
+  else if (!INVOLVED_ONLY.has(task)) { if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403); }
   return ok(await buildLinks(task.id, auth, env));   // the links object only (spec §7)
 }
 
@@ -2351,7 +2489,7 @@ async function updateTask(body, auth, env) {
 
 // ── F9 R8: accepting a hand-off (spec §4.6) ──────────────────────────────────
 // POST { action: 'acceptHandoff', id } — the named receiver, or anyone in the receiving department. Loaded
-// through loadTaskFor (the space gate: a private-space hand-off needs membership, like any by-id action), and
+// through loadTaskFor (the space gate — which a receiver passes in any space but the Founders' space, P3a), and
 // nothing but `id` is read from the body. Not a hand-off → 400; caller not a receiver (the owner never is) → 403;
 // done / abandoned / archived, or in an archived space → 409; already accepted → 200 no-op. With no named receiver the acceptor becomes it (the receiving
 // side now has an owner), in the SAME write as the acceptance, so the 0027 reset trigger keeps it.
@@ -2385,8 +2523,8 @@ async function acceptHandoff(body, auth, env) {
 }
 
 // GET ?action=getIncoming&scope=me|team|all (default all = me ∪ my team) — open hand-offs whose receiving side
-// is the caller (named) or the caller's department, through the space gate (keepAccessible; archived spaces
-// out, as every list). Not-accepted first, then by effective deadline (no date last). Counts cover `all`.
+// is the caller (named) or the caller's department, through the space gate (keepAccessible: a receiver is involved,
+// so any space but the Founders' one, P3a; archived spaces out, as every list). Not-accepted first, then by effective deadline (no date last). Counts cover `all`.
 const INCOMING_SCOPES = ['me', 'team', 'all'];
 async function getIncoming(url, auth, env) {
   const scope = url.searchParams.get('scope') || 'all';
@@ -2476,7 +2614,7 @@ async function bulkUpdateTasks(body, auth, env) {
 
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
   if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
-  const all = await keepAccessible(auth, tr.data || [], env);   // private spaces: members only
+  const all = await keepAccessible(auth, tr.data || [], env);   // private spaces: members, or involved (P3a)
   const editable = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
   const skipped = ids.length - editable.length;
   if (!editable.length) return ok({ updated: 0, skipped, field });
@@ -2583,7 +2721,7 @@ async function bulkSetCollaborator(body, auth, env) {
 
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
   if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
-  const all = await keepAccessible(auth, tr.data || [], env);   // private spaces: members only
+  const all = await keepAccessible(auth, tr.data || [], env);   // private spaces: members, or involved (P3a)
   const editable = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
   const skipped = ids.length - editable.length;
   if (!editable.length) return ok({ updated: 0, skipped, mode });
@@ -2637,7 +2775,8 @@ async function bulkMoveTasks(body, auth, env) {
 
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
   if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
-  const all = await keepAccessible(auth, tr.data || [], env);   // private spaces: members only
+  // Private spaces: members only — an involvement-only row (P3a) is skipped: it never leaves a space you can't access.
+  const all = (await keepAccessible(auth, tr.data || [], env)).filter(t => !INVOLVED_ONLY.has(t));
   const editable = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
   // Sub-tasks never move alone (they follow their parent): one whose parent isn't in this batch is skipped.
   const movable = editable.filter(t => !t.parent_task_id);
@@ -2698,7 +2837,7 @@ async function bulkAbandonTasks(body, auth, env) {
 
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
   if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
-  const all = await keepAccessible(auth, tr.data || [], env);   // private spaces: members only
+  const all = await keepAccessible(auth, tr.data || [], env);   // private spaces: members, or involved (P3a)
   const targets = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
   const skipped = ids.length - targets.length;
   if (!targets.length) return ok({ updated: 0, skipped });
@@ -2778,6 +2917,8 @@ async function moveTask(body, auth, env) {
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
   if (task.status === 'abandoned') return abandonedRO();
+  // P3a: a task open through involvement alone never leaves (or re-enters) a space the mover can't access.
+  if (INVOLVED_ONLY.has(task)) return err('forbidden_space', 403);
   const target = await loadSpace(d.space_id, env);
   if (!target) return err('space_not_found', 404);
   if (!(await canAccessSpace(auth, target, env))) return err('forbidden_space', 403);
@@ -2891,6 +3032,8 @@ async function editComment(body, auth, env) {
   if (c.author_user_id !== auth.userId && !isAdmin(auth)) return err('forbidden', 403);
   const ct = await loadTaskFor(c.task_id, auth, env);
   if (!ct) return err('not_found', 404);   // a task in a private space the caller isn't in
+  // P3a: the admin override needs real rights in the task's space, not a plan admin's see-only team-space access
+  if (c.author_user_id !== auth.userId && !(await adminActsIn(auth, TASK_SPACE.get(ct), env))) return err('forbidden', 403);
   if (ct.status === 'abandoned') return abandonedRO();
   const r = await sbDocket(`/rest/v1/task_comments?id=eq.${enc(d.comment_id)}`, env, {
     method: 'PATCH', body: JSON.stringify({ body: String(d.body).trim(), edited_at: nowIso() }),
@@ -2908,7 +3051,10 @@ async function deleteComment(body, auth, env) {
   // Admins may still remove a comment on an abandoned task (no reactivate/re-abandon dance).
   const ct = await loadTaskFor(c.task_id, auth, env);
   if (!ct) return err('not_found', 404);   // a task in a private space the caller isn't in
-  if (ct.status === 'abandoned' && !isAdmin(auth)) return abandonedRO();
+  // P3a: the admin override needs real rights in the task's space, not a plan admin's see-only team-space access
+  const adminHere = await adminActsIn(auth, TASK_SPACE.get(ct), env);
+  if (c.author_user_id !== auth.userId && !adminHere) return err('forbidden', 403);
+  if (ct.status === 'abandoned' && !adminHere) return abandonedRO();
   await sbDocket(`/rest/v1/task_comments?id=eq.${enc(d.comment_id)}`, env, {
     method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ deleted_at: nowIso() }),
   });
@@ -3672,7 +3818,8 @@ async function getWeekScore(url, auth, env) {
     return ok({ ...s, totals: scoreBlock(shown, final), teams: groupBy('department_id').map(team), people: groupBy('owner_employee_id').map(owner),
       tasks: shown.map(({ space_id, ...t }) => owner(team(t))), hidden_tasks: 0 });
   }
-  const open = new Set((await keepAccessible(auth, tasks.map(t => ({ id: t.task_id, space_id: t.space_id })), env)).map(t => t.id));
+  // The score rows carry owner_employee_id (P3a involvement: owner + collaborator); no assignee / hand-off fields.
+  const open = new Set((await keepAccessible(auth, tasks.map(t => ({ id: t.task_id, space_id: t.space_id, owner_employee_id: t.owner_employee_id ?? null })), env)).map(t => t.id));
   const shown = tasks.filter(t => open.has(t.task_id));
   const names = await nameMap(sbPodium, 'employees', [...people, ...shown].map(x => x.owner_employee_id).filter(Boolean), env);
   const owner = (x) => ({ ...x, owner_name: x.owner_employee_id ? (names[x.owner_employee_id] || null) : null });
@@ -3924,7 +4071,7 @@ async function getReviewSnapshots(url, auth, env) {
     const p = snap.payload || {};
     const ids = Array.isArray(p.tasks) ? uniq(p.tasks.map(t => t.task_id)) : packTaskIds(p);
     const [tr, fsr] = await Promise.all([
-      sbIn(sbDocket, ids, l => `/rest/v1/tasks?id=in.${l}&select=id,space_id`, env),
+      sbIn(sbDocket, ids, l => `/rest/v1/tasks?id=in.${l}&select=id,space_id,owner_employee_id,assignee_employee_id,handoff_to_department_id,handoff_to_employee_id`, env),   // + P3a involvement fields
       sbDocket(`/rest/v1/spaces?is_founders=is.true&select=id`, env),
     ]);
     if (!tr.ok || !fsr.ok) return err('db_error', 500);
@@ -3994,7 +4141,7 @@ async function focusEntries(weekEnd, auth, env, onlyMe = false) {
   const [names, pr, tr] = await Promise.all([
     nameMap(sbStore, 'users_profile', founders, env),
     planIds.length ? planRows(auth, env) : Promise.resolve({ ok: true, data: [] }),
-    sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?id=in.${l}&select=id,task_no,title,status,deadline,revised_deadline,space_id`, env),
+    sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?id=in.${l}&select=id,task_no,title,status,deadline,revised_deadline,space_id,owner_employee_id,assignee_employee_id,handoff_to_department_id,handoff_to_employee_id`, env),   // + P3a involvement
   ]);
   if (!pr.ok || !tr.ok) return null;
   const items = new Map((Array.isArray(pr.data) ? pr.data : []).map(i => [i.id, i]));
@@ -4074,7 +4221,7 @@ async function setFounderFocus(body, auth, env) {
   const planIds = uniq(v.items.map(i => i.plan_item_id)), taskIds = uniq(v.items.map(i => i.task_id));
   const [pr, tr] = await Promise.all([
     planIds.length ? planRows(auth, env) : Promise.resolve({ ok: true, data: [] }),
-    sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?id=in.${l}&archived_at=is.null&select=id,space_id`, env),
+    sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?id=in.${l}&archived_at=is.null&select=id,space_id,owner_employee_id,assignee_employee_id,handoff_to_department_id,handoff_to_employee_id`, env),   // + P3a involvement
   ]);
   if (!pr.ok || !tr.ok) return err('db_error', 500);
   const seenItems = new Set((Array.isArray(pr.data) ? pr.data : []).map(i => i.id));
@@ -4433,8 +4580,9 @@ async function loadRecordFor(id, auth, env) {
   if (!space || !(await canAccessSpace(auth, space, env))) return null;
   return { rec, space };
 }
-function canEditRecord(auth, rec) {
-  return isAdmin(auth) || rec.created_by_user_id === auth.userId || (!!auth.employeeId && rec.owner_employee_id === auth.employeeId);
+// `adminHere` = adminActsIn for the record's space (P3a: a plan admin's team-space access is see-only).
+function canEditRecord(auth, rec, adminHere) {
+  return !!adminHere || rec.created_by_user_id === auth.userId || (!!auth.employeeId && rec.owner_employee_id === auth.employeeId);
 }
 // A write the 0032 trigger refused because the record is archived → 409; anything else → 400.
 function recordWriteErr(prefix, r) {
@@ -4463,7 +4611,7 @@ const progressOf = (items) => { const p = recordProgress(items); return { ...p, 
 async function checklistLabels(ids, auth, env) {
   if (!ids.length) return {};
   const rr = await sbIn(sbDocket, ids, l => `/rest/v1/checklist_records?id=in.${l}&select=id,title,space_id`, env);
-  const vis = await keepAccessible(auth, (rr.ok && rr.data) || [], env);   // fails closed → "a checklist you can't see"
+  const vis = await keepAccessible(auth, (rr.ok && rr.data) || [], env, { involvement: false });   // fails closed → "a checklist you can't see"
   const out = {}; vis.forEach(r => { out[r.id] = r.title; });
   return out;
 }
@@ -4531,8 +4679,9 @@ async function getChecklistRecords(url, auth, env) {
   if (!states) return err('db_error: item states', 500);
   const tmpl = {}; ((tRes.ok && tRes.data) || []).forEach(t => { tmpl[t.id] = t; });
   const emp = {}; ((eRes.ok && eRes.data) || []).forEach(e => { emp[e.id] = e.full_name; });
+  const adminIn = await adminSpaceIds(auth, spaces, env);
   return ok(rows.map(x => ({ ...x, space_name: spaceName[x.space_id] || null, template_name: tmpl[x.template_id]?.name || null,
-    owner_name: emp[x.owner_employee_id] || null, progress: progressOf(states[x.id] || []), _can_edit: canEditRecord(auth, x) })));
+    owner_name: emp[x.owner_employee_id] || null, progress: progressOf(states[x.id] || []), _can_edit: canEditRecord(auth, x, adminIn.has(x.space_id)) })));
 }
 
 // GET ?action=getChecklistProducts — the product_master family names for the optional product picker (C5).
@@ -4604,7 +4753,7 @@ async function getChecklistRecord(url, auth, env) {
       can_edit: canEditTask(auth, visible.find(t => t.id === l.task_id)) })),
     linked_hidden: [...linkedIds].filter(id => !card[id]).length,
     history: histOut,
-    _can_edit: canEditRecord(auth, rec),
+    _can_edit: canEditRecord(auth, rec, await adminActsIn(auth, space, env)),
     _can_tick: rec.status !== 'archived',
   });
 }
@@ -4618,7 +4767,7 @@ async function taskChecklists(taskId, auth, env) {
   if (!ids.length) return { list: [], hidden: 0 };
   const rr = await sbIn(sbDocket, ids, l => `/rest/v1/checklist_records?id=in.${l}&select=${RECORD_COLS}`, env);
   if (!rr.ok) return { error: dbErr(rr) };
-  const vis = await keepAccessible(auth, rr.data || [], env);   // fails closed → all hidden
+  const vis = await keepAccessible(auth, rr.data || [], env, { involvement: false });   // records, not tasks; fails closed → all hidden
   const states = await recordItemStates(vis.map(r => r.id), env);
   if (!states) return { error: err('db_error: item states', 500) };
   const list = vis.map(r => {
@@ -4673,8 +4822,8 @@ async function updateChecklistRecord(body, auth, env) {
   const d = body.data || body;
   const got = await loadRecordFor(d.id, auth, env);
   if (!got) return err('not_found', 404);
-  const { rec } = got;
-  if (!canEditRecord(auth, rec)) return err('forbidden', 403);
+  const { rec, space } = got;
+  if (!canEditRecord(auth, rec, await adminActsIn(auth, space, env))) return err('forbidden', 403);
   const patch = {};
   if (d.title !== undefined) {
     const t = String(d.title || '').trim();
@@ -5380,7 +5529,7 @@ async function renderReviewTomorrow(auth, env) {
   const [fsp, tr] = await Promise.all([founderSpaceIds(env),
     sbInAll(sbDocket, mine.map(r => r.task_id), l => `/rest/v1/tasks?id=in.${l}&select=id,space_id,department_id,owner_employee_id,created_by_user_id,assignee_employee_id,handoff_to_department_id,handoff_to_employee_id&order=id.asc`, env)]);
   if (!tr.ok) throw new Error('tasks_read');
-  // EVERYONE through the space gate (keepAccessible = canAccessSpace's rule, batched; plan admins included — a task
+  // EVERYONE through the space gate (keepAccessible = canAccessSpace's rule + P3a involvement, batched; plan admins included — a task
   // that moved into a space you can't open is not yours to see in Slack either), and below plan admin also the review
   // pack's own gate (reviewVisibleIds). A Founders'-space row never goes into Slack (counted, if you can open it).
   const inSpace = new Set((await keepAccessible(auth, tr.data || [], env)).map(t => t.id));

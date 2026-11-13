@@ -273,7 +273,9 @@ test('Programs (restored): a sub-task inherits only when program_id is OMITTED â
 
 test('Programs (restored): a private-space task the caller is not a member of â€” updateTask 404, bulk skips it; no write', async () => {
   const PRG = [{ id: U(40), name: 'ZZ Prog', color: null }];
-  const hidden = TT(1, { status: 'in_progress', space_id: PRIV, created_by_user_id: ME });   // even their own creation: not a member
+  // even their own creation: not a member. P3a: the OWNER now opens it (involvement), so it is someone else's here â€”
+  // creating a task is not involvement.
+  const hidden = TT(1, { status: 'in_progress', space_id: PRIV, created_by_user_id: ME, owner_employee_id: U(77) });
   let s = stub({ programs: PRG, tasks: [hidden] });
   let r = await run(s, { post: { action: 'updateTask', id: U(901), program_id: U(40) } });
   assert.equal(r.status, 404, JSON.stringify(r.j)); assert.equal(r.j.error, 'not_found');
@@ -287,6 +289,11 @@ test('Programs (restored): a private-space task the caller is not a member of â€
   s = stub({ programs: PRG, tasks: [hidden], members: [PRIV] });
   r = await run(s, { post: { action: 'updateTask', id: U(901), program_id: U(40) } });
   assert.equal(r.status, 200, JSON.stringify(r.j));
+  // P3a: so does the owner who isn't a member (involvement opens the task; the owner edits it)
+  s = stub({ programs: PRG, tasks: [{ ...hidden, owner_employee_id: MEE }] });
+  r = await run(s, { post: { action: 'updateTask', id: U(901), program_id: U(40) } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  assert.ok(s.calls.some(x => x.method === 'PATCH' && x.p.startsWith('/rest/v1/tasks')));
 });
 
 test('Programs (restored): an unknown program_id is refused (the tasks_program_id_fkey, as before R9b) â€” create, update and bulk', async () => {

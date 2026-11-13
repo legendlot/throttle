@@ -20,7 +20,7 @@ const ME = U(1), MEE = U(2), OTHER = U(8), D1 = U(10), G = U(20), PRIV = U(21), 
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const SPACES = {
   [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false },
-  [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false },
+  [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: true },   // P3a: a plan admin opens every team space, so the space they can't open is someone's PERSONAL one
   [FND]: { id: FND, name: 'Founders', is_default: false, is_private: true, owner_user_id: U(9), is_founders: true },
 };
 const TPL = (n, o) => ({ id: U(500 + n), name: `ZZ tpl ${n}`, description: null, audience: 'leads', created_by: OTHER, archived_at: null,

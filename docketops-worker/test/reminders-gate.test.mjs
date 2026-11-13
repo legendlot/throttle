@@ -233,15 +233,19 @@ test('Thursday 17:00 review tomorrow: the owner\'s committed rows not done; a Fo
   assert.ok(logOf(s).includes('review_tomorrow:Founder:skipped_empty'), JSON.stringify(logOf(s)));
 });
 
-test('C1: review tomorrow gates a plan admin by space too — a committed task now in a space they can\'t open never leaks', async () => {
+// P3a (2026-11-13) changed C1's truth: the gate still runs for a plan admin, but the task is in the cohort BECAUSE they
+// own it, and an owner now opens their task in any space but the Founders' one (involvement) — and a plan admin opens
+// every team space anyway. So the "space they can't open" row now lists; only the Founders'-space rule (above) holds
+// one back.
+test('C1: review tomorrow gates a plan admin by space too — their own committed task in a team space they are not in now lists (P3a)', async () => {
   const tasks = [T(7, { owner_employee_id: P.FOU.id, department_id: U(90) }), T(8, { owner_employee_id: P.FOU.id, department_id: U(90), space_id: PRIV, title: 'ZZ secret' })];
   const s = stub({ mode: 'live', tasks, identities: MAPPED, score: tasks.map(t => row(t, { owner_employee_id: P.FOU.id })) });
   await fire(s, THU17);
   const f = s.dms.find(d => d.to === P.FOU.id);
   const j = JSON.stringify(f.blocks);
   assert.ok(j.includes(U(107)), j);
-  assert.ok(!j.includes(U(108)) && !j.includes('ZZ secret'), j);
-  assert.match(f.text, /1 committed task not done/);
+  assert.ok(j.includes(U(108)) && j.includes('ZZ secret'), j);
+  assert.match(f.text, /2 committed tasks not done/);
 });
 
 test('C2: review tomorrow goes to the owner AT COMMIT TIME, even after they handed their last open task on', async () => {
