@@ -20,7 +20,7 @@ import { useRefreshState } from '../layout.js';
 import { useDispatchChannels } from '../../../hooks/useDispatchChannels.js';
 import {
   Icon, Panel, FilterChip, ToneBadge, Drawer,
-  btnPrimary, btnGhost, inputStyle,
+  btnPrimary, btnGhost, inputStyle, istTodayISO,
 } from '../../../components/kit/index.js';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -169,6 +169,13 @@ export default function DispatchShipmentsPage() {
 
   // Confirm modal
   const [confirmModal, setConfirmModal] = useState(null);
+
+  // Shipped by vendor, per shipment (Padmajit 2026-11-13) — same action as Fulfilment Requests,
+  // scoped to this one shipment; the worker refuses if the order has other open shipments.
+  const [vendorShip,  setVendorShip]  = useState(null);
+  const [vendorName,  setVendorName]  = useState('');
+  const [vendorDate,  setVendorDate]  = useState('');
+  const [vendorBusy,  setVendorBusy]  = useState(false);
 
   // Create form
   const [createOpen,      setCreateOpen]      = useState(false);
@@ -367,6 +374,24 @@ export default function DispatchShipmentsPage() {
         }
       },
     });
+  }
+
+  const canVendorShip = (s) => !!s.fulfilment_request_id && !['shipped', 'cancelled'].includes(s.status)
+    && !(Number(s.packed_count) > 0) && !(Number(s.pool_count) > 0);   // allocated units → ship the normal way
+  function openVendorShip(s) { setVendorName(''); setVendorDate(istTodayISO()); setVendorShip(s); }
+  async function submitVendorShip() {
+    const s = vendorShip;
+    if (!s || !vendorName.trim()) { showToast('Enter the vendor who shipped it', 'error'); return; }
+    setVendorBusy(true);
+    try {
+      const r = await workerFetch('markShippedByVendor', { request_id: s.fulfilment_request_id, shipment_id: s.id,
+        vendor: vendorName.trim(), shipped_date: vendorDate || undefined }, session);
+      showToast(`${s.shipment_no} marked shipped by ${vendorName.trim()} — ${fmt((r?.data || r)?.units || 0)} units. No stock moved.`, 'success');
+      setVendorShip(null);
+      setDetailShipment(null);
+      loadShipments();
+    } catch (e) { showToast(e.message || 'Failed', 'error'); }
+    finally { setVendorBusy(false); }
   }
 
   function confirmCancel(s) {
@@ -720,6 +745,21 @@ export default function DispatchShipmentsPage() {
 
   return (
     <div style={{ maxWidth: 1280, margin: '0 auto', fontFamily: 'var(--font-ui)' }}>
+      {/* Shipped by vendor (one shipment) */}
+      <Modal open={!!vendorShip} onClose={() => setVendorShip(null)}
+        title={`Shipped by vendor — ${vendorShip?.shipment_no || ''}`}
+        confirmLabel="Mark shipped" loading={vendorBusy} onConfirm={submitVendorShip}>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 13.5, color: 'var(--t2)', marginTop: 0 }}>
+          Use this when the vendor sent this shipment straight to the customer and it never came into our stock.
+          It closes as shipped in full. No units are allocated and no stock is moved. This cannot be undone.
+        </p>
+        <input value={vendorName} onChange={e => setVendorName(e.target.value)} placeholder="Vendor who shipped it (e.g. ESRDNS)"
+          style={{ ...inputStyle, width: '100%', marginBottom: 10 }} />
+        <label style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Shipped on</label>
+        <input type="date" value={vendorDate} max={istTodayISO()} onChange={e => setVendorDate(e.target.value)}
+          style={{ ...inputStyle, width: '100%', marginTop: 4 }} />
+      </Modal>
+
       {/* Confirm Modal */}
       <ConfirmModal
         open={!!confirmModal}
@@ -1105,6 +1145,9 @@ export default function DispatchShipmentsPage() {
                         <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                           {!['shipped', 'cancelled'].includes(s.status) && (
                             <button onClick={(e) => { e.stopPropagation(); confirmMarkShipped(s); }} style={actionBtn('var(--ok-fg)')}>Shipped</button>
+                          )}
+                          {canVendorShip(s) && (
+                            <button onClick={(e) => { e.stopPropagation(); openVendorShip(s); }} style={actionBtn('var(--ok-fg)')}>By vendor</button>
                           )}
                           {['draft', 'packing'].includes(s.status) && (
                             <button onClick={(e) => { e.stopPropagation(); openEdit(s); }} style={actionBtn('var(--yellow)')}>Edit</button>
