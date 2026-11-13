@@ -7,7 +7,7 @@
 // appear comes from lib/plan.js, the same matrix the database enforces.
 // R3: ⚠ No data source on live milestones/results, split items greyed with "Split → M47, M48", and
 // proposals — a Propose button for everyone, "My proposals", and the founders' Proposed queue.
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, Lock, ChevronUp, ChevronDown, Target, Flag, Lightbulb, CalendarRange, Check, CheckCircle2 } from 'lucide-react';
@@ -47,12 +47,18 @@ export default function PlanPage() {
   }, [session, showToast, loadProposals]);
   useEffect(() => { load(); }, [load]);
   const canAdmin = !!data?.can_admin;
+  // The reached-targets queue: read once canAdmin is known, and again after a plan write from the panel
+  // (a reading, Mark done, a re-date can change it) — not on every `data` change (each reorder re-read the
+  // plan and fired this too). Newest answer only.
+  const reachedTicket = useRef(0);
   const loadReached = useCallback(async () => {
+    const mine = ++reachedTicket.current;
     if (!session || !canAdmin) { setReached([]); return; }
-    try { const r = await docketopsGet('getReachedTargets', {}, session); setReached(Array.isArray(r?.items) ? r.items : []); }
-    catch { setReached([]); }   // the register still works without the queue
+    try { const r = await docketopsGet('getReachedTargets', {}, session); if (mine === reachedTicket.current) setReached(Array.isArray(r?.items) ? r.items : []); }
+    catch { if (mine === reachedTicket.current) setReached([]); }   // the register still works without the queue
   }, [session, canAdmin]);
-  useEffect(() => { loadReached(); }, [loadReached, data]);
+  useEffect(() => { loadReached(); }, [loadReached]);
+  const onPlanChanged = useCallback(() => { load(); loadReached(); }, [load, loadReached]);
   useEffect(() => {
     if (!session) return;
     docketopsGet('getEmployees', {}, session).then(e => setEmployees(Array.isArray(e) ? e : [])).catch(() => {});
@@ -167,7 +173,7 @@ export default function PlanPage() {
 
       {target && (
         <PlanPanel target={target} isSuper={isSuper} employeeId={me} byId={tree.byId} employees={employees}
-          metrics={metrics} themes={themes} session={session} onClose={close} onChanged={load} onOpen={open} />
+          metrics={metrics} themes={themes} session={session} onClose={close} onChanged={onPlanChanged} onOpen={open} />
       )}
     </div>
   );

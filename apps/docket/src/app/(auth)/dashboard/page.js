@@ -1,44 +1,52 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, useToast } from '@throttle/ui';
+import { useCachedQuery, writeCache } from '@throttle/db';
+import { Skeleton } from '@throttle/ui';
 import { AlertTriangle, Clock, List, Check, RefreshCw, Lock } from 'lucide-react';
 import { EmptyState } from '../../../components/ui/index.js';
-import { docketopsGet } from '../../../lib/docketopsFetch.js';
+import { LoadError } from '../../../components/LoadError.js';
+import { docketopsGet, isForbidden } from '../../../lib/docketopsFetch.js';
+import { dashboardKey, freshness } from '../../../lib/load.js';
 import { STATUSES } from '../../../lib/tasks.js';
 import { Avatar, personColor } from '../../../components/primitives.js';
 
 export default function DashboardPage() {
-  const { session } = useAuth();
-  const { showToast } = useToast();
+  const { session, userId } = useAuth();
   const router = useRouter();
   const search = useSearchParams();
   const spaceId = search.get('space') || '';
-  const [stats, setStats] = useState(null);
   const [spaceName, setSpaceName] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [denied, setDenied] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!session) return;
-    setLoading(true); setDenied(false);
-    try { setStats(await docketopsGet('getDashboard', { space_id: spaceId }, session)); }
-    catch (e) {
-      if (/forbidden/i.test(e.message || '')) setDenied(true);
-      else showToast(e.message || 'Failed to load dashboard', 'error');
-    }
-    finally { setLoading(false); }
-  }, [session, spaceId, showToast]);
-  useEffect(() => { load(); }, [load]);
+  // Read-only overview → cached per user and per space (the key carries the space; the cache's identity is
+  // the user), painted at once and refreshed behind. The hook keeps only the newest answer for the current
+  // key, so another space's numbers never land under this one. A denied (403) answer is never cached: the
+  // fetcher throws, and a cached copy for a space you have lost is removed below.
+  const key = dashboardKey(spaceId);
+  const q = useCachedQuery({ key, userId, enabled: !!session,
+    fetcher: () => docketopsGet('getDashboard', { space_id: spaceId }, session) });
+  const live = !!session;
+  useEffect(() => { if (live) q.refresh(); }, [live, key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const denied = isForbidden(q.error) || /forbidden/i.test(q.error?.message || '');
+  useEffect(() => { if (denied && userId) writeCache(userId, key, undefined); }, [denied, userId, key]);
   useEffect(() => {
-    if (!session || !spaceId) { setSpaceName(''); return; }
-    docketopsGet('getSpaces', {}, session).then(s => setSpaceName((s || []).find(x => x.id === spaceId)?.name || '')).catch(() => {});
+    if (!session || !spaceId) { setSpaceName(''); return undefined; }
+    let current = true;   // a fast space switch must not leave the last space's name
+    setSpaceName('');
+    docketopsGet('getSpaces', {}, session).then(s => { if (current) setSpaceName((s || []).find(x => x.id === spaceId)?.name || ''); }).catch(() => {});
+    return () => { current = false; };
   }, [session, spaceId]);
 
   if (denied) return <div className="screen"><EmptyState icon={Lock} title="No access" body="You don’t have access to this dashboard." /></div>;
-  if (loading) return <Spinner />;
+  const stats = q.data;
+  if (stats === undefined) {
+    return q.error
+      ? <div className="screen"><LoadError message="Couldn't load the dashboard." onRetry={q.refresh} /></div>
+      : <DashboardSkeleton />;
+  }
   if (!stats) return null;
+  const fresh = freshness([q]);
   const linkSuffix = spaceId ? `&space=${spaceId}` : '';
   const go = (href) => () => router.push(href);
   // The org dashboard (no space) spans every team space, but a task list opens ONE space: a team row opens that team's
@@ -55,7 +63,12 @@ export default function DashboardPage() {
 
   return (
     <div className="screen dash">
-      <p className="dash-lede">{spaceName ? `${spaceName} · space task review.` : 'Org-wide task review — every team space.'}</p>
+      <p className="dash-lede">
+        {spaceName ? `${spaceName} · space task review.` : spaceId ? 'Space task review.' : 'Org-wide task review — every team space.'}
+        {fresh.text && <span aria-live="polite" style={{ marginLeft: 10, color: fresh.warn ? 'var(--st-blocked)' : 'var(--text-4)' }}>
+          {fresh.text}{fresh.warn && <button type="button" onClick={q.refresh} style={{ marginLeft: 6, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'inherit', textDecoration: 'underline', fontSize: 'inherit' }}>Retry</button>}
+        </span>}
+      </p>
 
       <div className="kpi-row">
         <Kpi icon={AlertTriangle} label="Overdue" value={stats.overdue} accent="var(--overdue)" onClick={kpiGo(`/tasks?overdue=1${linkSuffix}`)} />
@@ -133,6 +146,26 @@ export default function DashboardPage() {
           </table>
         </div>
       </section>
+    </div>
+  );
+}
+
+// Laid out like the page (lede, five KPI tiles, three cards) — instead of a full-page spinner.
+function DashboardSkeleton() {
+  return (
+    <div className="screen dash" aria-busy="true">
+      <Skeleton width={260} height={13} style={{ marginBottom: 14 }} />
+      <div className="kpi-row">
+        {Array.from({ length: 5 }, (_, i) => (
+          <div key={i} className="kpi"><Skeleton width="60%" height={12} /><Skeleton width="40%" height={30} /></div>
+        ))}
+      </div>
+      {[64, 160, 220].map((h, i) => (
+        <section key={i} className="dash-card" style={{ padding: 14 }}>
+          <Skeleton width={140} height={13} style={{ marginBottom: 12 }} />
+          <Skeleton height={h} />
+        </section>
+      ))}
     </div>
   );
 }

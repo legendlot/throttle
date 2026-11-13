@@ -20,10 +20,34 @@ export async function docketopsGet(action, params = {}, session) {
     method: 'GET',
     headers: { Authorization: `Bearer ${token(session)}` },
   });
-  const data = await res.json();
-  if (!res.ok || data.ok === false) throw new Error(data.error || `docketopsGet ${action} failed (${res.status})`);
+  const data = await readJson(res);
+  if (!res.ok || !data || data.ok === false) throw replyError(`docketopsGet ${action}`, res, data);
   return data.data;
 }
+
+// The body, parsed defensively: a 502 / 504 from the edge is an HTML page, and res.json() would surface
+// it as a SyntaxError ("Unexpected token <") instead of "the read failed (502)". null = no JSON body.
+export async function readJson(res) {
+  let text = '';
+  try { text = await res.text(); } catch { return null; }
+  if (!text) return null;
+  try { const v = JSON.parse(text); return v && typeof v === 'object' ? v : null; } catch { return null; }
+}
+
+// One error shape for reads and writes: the message stays the worker's code (callers match on it),
+// `status` tells "not allowed" (403) from "didn't load", `detail` is the whole refusal body (null when
+// the reply was not JSON). A 200 with no readable body is a failure too, never an empty result.
+export function replyError(what, res, data) {
+  const status = res?.status ?? 0;
+  const why = !res?.ok ? `failed (${status})` : data ? 'refused' : 'unreadable reply';
+  const e = new Error((data && data.error) || `${what} ${why}`);
+  e.status = status;
+  e.detail = data;
+  return e;
+}
+
+// The worker refused this caller (403) — an access answer, not a failed load. Never cached.
+export function isForbidden(e) { return Number(e?.status) === 403; }
 
 // Writes that provably cannot change a sidebar task count (S309). Everything else
 // fires `docket:counts-changed`, so this is a SKIP-list on purpose and not an
@@ -51,12 +75,11 @@ export async function docketopsPost(action, body = {}, session) {
     },
     body: JSON.stringify({ action, ...body }),
   });
-  const data = await res.json();
-  if (!res.ok || data.ok === false) {
-    const e = new Error(data.error || `docketopsPost ${action} failed (${res.status})`);
-    e.status = res.status;   // callers may tell a 4xx (changed / forbidden) from a 5xx (F3 triage)
-    e.detail = data;         // the full refusal body, as workerFetch does — F7's 409 waiting_on lists its blockers
-    throw e;
+  const data = await readJson(res);
+  if (!res.ok || !data || data.ok === false) {
+    // status: callers may tell a 4xx (changed / forbidden) from a 5xx (F3 triage). detail: the full refusal
+    // body, as workerFetch does — F7's 409 waiting_on lists its blockers.
+    throw replyError(`docketopsPost ${action}`, res, data);
   }
   // Only after a CONFIRMED success — a failed write must not move a badge.
   if (typeof window !== 'undefined' && !NO_COUNT_CHANGE.test(action)) {

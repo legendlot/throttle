@@ -36,12 +36,19 @@ export default function PlanWeeksPage() {
   const [data, setData] = useState(null);
   const [linking, setLinking] = useState(null);  // task id being re-linked
 
+  // Only the newest request may land: switching Rows / Team fast must never leave an older grouping on
+  // screen under the newer control (or its error over a good answer). A stale ticket is dropped.
+  const ticket = useRef(0);
   const load = useCallback(async () => {
     if (!session) return;
-    try { setData(await docketopsGet('getPlanWeeks', { rows: rowsBy, team }, session)); }
-    catch (e) { setData({ error: planErrorText(e) }); }
+    const mine = ++ticket.current;
+    try {
+      const d = await docketopsGet('getPlanWeeks', { rows: rowsBy, team }, session);
+      if (mine === ticket.current) setData(d);
+    } catch (e) { if (mine === ticket.current) setData({ error: planErrorText(e) }); }
   }, [session, rowsBy, team]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => () => { ticket.current++; }, []);   // unmount: drop whatever is in flight
 
   const openTask = (id) => router.push('/tasks?task=' + id);
   async function linkTo(taskId, milestoneId) {

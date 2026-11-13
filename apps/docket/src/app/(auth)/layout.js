@@ -2,11 +2,13 @@
 // Docket app shell (ClickUp redesign P1): a full-width 40px top bar; below it the
 // 64px icon rail | the 240px context sidebar (collapsible) | the page.
 // ≤767px: no rail — a bottom tab bar instead, and the sidebar becomes a slide-over.
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import { useMemo, useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
+import { readCache, writeCache } from '@throttle/db';
 import { docketopsGet } from '../../lib/docketopsFetch.js';
+import { ME_SIDEBAR_KEY, sidebarFromMe, validSidebar, createTicket } from '../../lib/load.js';
 import { showTemplatesNav } from '../../lib/templates.js';
 import { ChromeContext } from '../../lib/chrome.js';
 import { routeModel, focusWhenReady, atRoute } from '../../lib/nav.js';
@@ -19,6 +21,10 @@ import { SpaceSettings } from '../../components/SpaceSettings.js';
 import { NewProgramModal } from '../../components/NewProgramModal.js';
 import { CommandBar } from '../../components/CommandBar.js';
 import { modPressed } from '../../lib/platform.js';
+
+// Seed the cached sidebar before first paint on the client; a plain effect on the server (static export).
+const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
+const NO_SPACES = [];
 
 export default function AuthLayout({ children }) {
   return (
@@ -45,6 +51,8 @@ function AuthLayoutInner({ children }) {
   const [announcementsUnread, setAnnouncementsUnread] = useState(0); // getMe.announcements_unread (P4 sidebar badge)
   const [canAnnounce, setCanAnnounce] = useState(null);       // getMe.can_announce (P4 composer): { everyone, department_ids }
   const [meLoaded, setMeLoaded] = useState(false);   // getMe has answered (or failed) once — the board waits for it
+  const [meFresh, setMeFresh] = useState(false);     // a getMe has SUCCEEDED this visit (not just the cached sidebar)
+  const [meError, setMeError] = useState(false);     // the latest getMe failed → the sidebar says so, with Retry
   const [showTemplates, setShowTemplates] = useState(false); // F9 R9a: the Templates nav entry (getTemplates)
   const [helpOpen, setHelpOpen] = useState(false);
   const [count, setCount] = useState(null);   // board task count, published by the tasks page
@@ -73,21 +81,57 @@ function AuthLayoutInner({ children }) {
 
   // getMe drives the sidebar: accessible spaces, programs (cross-space, with counts), and
   // can_view_dashboard (RULE-DOCKET-006).
+  //
+  // Instant paint: the sidebar's own part of the last getMe (spaces, programs, counts, unread —
+  // lib/load.js sidebarFromMe) is kept in this tab's sessionStorage and painted before getMe answers.
+  // Nothing that enables an action comes from that copy: default_space_id (the /tasks redirect),
+  // can_announce, can_view_dashboard, employee / department ids and the context's `spaces` are only ever
+  // set from a fresh getMe, and a space's ⋯ settings button waits for it too (meFresh).
+  const seededFor = useRef(null);
+  const meFreshRef = useRef(false);
+  useIsoLayoutEffect(() => {
+    const uid = user?.id;
+    if (!uid || seededFor.current === uid || meFreshRef.current) return;
+    seededFor.current = uid;
+    const hit = readCache(uid, ME_SIDEBAR_KEY);
+    if (!hit || !validSidebar(hit.data)) return;
+    setSpaces(hit.data.spaces);
+    setPrograms(hit.data.programs);
+    setAnnouncementsUnread(Number(hit.data.announcements_unread) || 0);
+  }, [user?.id]);
+  // The newest SUCCESSFUL getMe wins: an older answer never overwrites a newer one, but an answer is not thrown
+  // away merely because a later request has started (that later one may fail, and this one had the data).
+  const meSeq = useRef(0), meApplied = useRef(0);
   const loadMe = useCallback(() => {
     if (!session) return;
+    const ticket = ++meSeq.current;
+    const uid = user?.id;
     docketopsGet('getMe', {}, session).then(me => {
-      setSpaces(me?.spaces || []);
-      setPrograms(me?.programs || []);
+      if (ticket < meApplied.current) return;
+      meApplied.current = ticket;
+      const side = sidebarFromMe(me);   // a reply that isn't an object is a failure, not an empty sidebar
+      setSpaces(side.spaces);
+      setPrograms(side.programs);
       setMyEmployeeId(me?.employee_id || null);
       setMyDepartmentId(me?.department_id || null);
       setDefaultSpaceId(me?.default_space_id || null);
-      setAnnouncementsUnread(Number(me?.announcements_unread) || 0);
+      setAnnouncementsUnread(side.announcements_unread);
       setCanAnnounce(me?.can_announce || { everyone: false, department_ids: [] });
       const can = !!me?.can_view_dashboard;
       setCanViewDashboard(can);
       // Remembered so the next load's mobile tab bar / rail don't flip Scratchpad → Dashboard.
       try { if (user?.id) localStorage.setItem(`docket.canViewDashboard.${user.id}`, can ? '1' : '0'); } catch { /* ignore */ }
-    }).catch(() => {}).finally(() => setMeLoaded(true));
+      meFreshRef.current = true;
+      setMeFresh(true);
+      setMeError(false);
+      writeCache(uid, ME_SIDEBAR_KEY, side);   // a refresh (counts-changed included) updates the cached copy
+      setMeLoaded(true);
+    }).catch(() => {
+      // Was swallowed (an empty sidebar forever). The permission defaults stay exactly as they were.
+      // Only the LAST request to be sent may report failure or end the wait — an older failure with a newer
+      // request still in flight says nothing yet (meLoaded true with no default space sends /tasks on a wasted read).
+      if (ticket === meSeq.current) { if (ticket > meApplied.current) setMeError(true); setMeLoaded(true); }
+    });
   }, [session, user?.id]);
   // Last-known value per user, read before getMe answers (getMe still decides).
   useEffect(() => {
@@ -148,10 +192,13 @@ function AuthLayoutInner({ children }) {
   // F9 R9a: "Templates" in the nav only for someone who may create one or can see any. One read per user;
   // a save / archive fires docket:templates-changed.
   const userId = user?.id || '';
+  // The session is read at call time: this effect is keyed on the user, so an hourly token refresh must
+  // not leave a templates-changed re-read holding the old token.
+  const sessionRef = useRef(session); sessionRef.current = session;
   useEffect(() => {
-    if (!session || !userId) return undefined;
+    if (!sessionRef.current || !userId) return undefined;
     let live = true;
-    const read = () => docketopsGet('getTemplates', {}, session).then(d => { if (live) setShowTemplates(showTemplatesNav(d)); }).catch(() => {});
+    const read = () => docketopsGet('getTemplates', {}, sessionRef.current).then(d => { if (live) setShowTemplates(showTemplatesNav(d)); }).catch(() => {});
     read();
     window.addEventListener('docket:templates-changed', read);
     return () => { live = false; window.removeEventListener('docket:templates-changed', read); };
@@ -207,7 +254,8 @@ function AuthLayoutInner({ children }) {
   const isAdmin = !!perms?.docket_admin;
   const isPlanAdmin = !!perms?.docket_plan_admin;   // F9 R6b: the founders' catch-up nav entry
   // shellModalOpen: a layout-owned modal is up; pages fold it into their hotkey guards.
-  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, myDepartmentId, defaultSpaceId, meLoaded, spaces, canAnnounce, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
+  // `spaces` in the context feeds pickers that write (templates) — fresh getMe only, never the cached sidebar.
+  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, myDepartmentId, defaultSpaceId, meLoaded, spaces: meFresh ? spaces : NO_SPACES, canAnnounce, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
 
   return (
     <ChromeContext.Provider value={ctxValue}>
@@ -250,7 +298,9 @@ function AuthLayoutInner({ children }) {
             onSelect={go}
             onNewSpace={newSpace}
             onNewProgram={newProgram}
-            onSpaceSettings={openSpaceSettings}
+            onSpaceSettings={meFresh ? openSpaceSettings : undefined}
+            meError={meError ? ((spaces.length || programs.length) ? "Couldn't refresh your spaces." : "Couldn't load your spaces.") : ''}
+            onRetryMe={loadMe}
           />
           {mobileNavOpen && <div className="dks-backdrop" onMouseDown={() => setMobileNavOpen(false)} />}
           <main className="dk-main">

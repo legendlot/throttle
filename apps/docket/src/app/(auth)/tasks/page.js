@@ -32,6 +32,8 @@ import { BulkBar } from '../../../components/tasks/BulkBar.js';
 import { ROW_SELECTOR } from '../../../components/tasks/TaskRow.js';
 import { useTaskViewState, visibleColumns, COLUMNS } from '../../../components/tasks/useTaskViewState.js';
 import { Button, EmptyState } from '../../../components/ui/index.js';
+import { LoadError } from '../../../components/LoadError.js';
+import { createTicket, withRetry } from '../../../lib/load.js';
 import { sendDone, doneConfirmText, bulkDoneConfirmText, DECLINED } from '../../../lib/deps.js';
 import { usePlanItems, usePlanById, usePlanWeek } from '../../../components/plan/PlanPicker.js';
 import { groupByWeek } from '../../../lib/weeks.js';
@@ -101,7 +103,13 @@ function TasksBoard() {
   const [employees, setEmployees] = useState([]);
   const [programs, setPrograms] = useState([]);
   const [spaces, setSpaces] = useState([]);
+  // Which of the reference lists have answered at least once — TaskView fetches its own programs / spaces
+  // only while the page's have not (an empty list that FAILED is not "no programs").
+  const [listsReady, setListsReady] = useState({ programs: false, spaces: false });
   const [loading, setLoading] = useState(true);
+  // The current view's load failed with nothing true to show (a changed space / lens): an error + Retry
+  // instead of the previous view's rows or "All clear".
+  const [loadError, setLoadError] = useState(null);
   const [expanded, setExpanded] = useState({});
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
@@ -155,15 +163,31 @@ function TasksBoard() {
 
   const currentSpace = useMemo(() => spaces.find(s => s.id === spaceId) || null, [spaces, spaceId]);
 
+  // The four reference lists behind the pickers. Each lands on its own (no waiting on the slowest); a
+  // failure is retried once after ~2 s, and if it still fails ONE notice per page explains the empty
+  // pickers — never a silent [] that reads as "no teams / no people".
+  const sessionRef = useRef(session); sessionRef.current = session;
+  const listsNotified = useRef(false);
   useEffect(() => {
-    if (!session) return;
-    Promise.all([
-      docketopsGet('getDepartments', {}, session).catch(() => []),
-      docketopsGet('getEmployees', {}, session).catch(() => []),
-      docketopsGet('getPrograms', {}, session).catch(() => []),
-      docketopsGet('getSpaces', {}, session).catch(() => []),
-    ]).then(([d, e, p, s]) => { setDepartments(d || []); setEmployees(e || []); setPrograms(p || []); setSpaces(s || []); });
-  }, [session]);
+    if (!session) return undefined;
+    let live = true;
+    const lists = [
+      ['getDepartments', d => setDepartments(d || [])],
+      ['getEmployees', e => setEmployees(e || [])],
+      ['getPrograms', p => { setPrograms(p || []); setListsReady(r => (r.programs ? r : { ...r, programs: true })); }],
+      ['getSpaces', x => { setSpaces(x || []); setListsReady(r => (r.spaces ? r : { ...r, spaces: true })); }],
+    ];
+    for (const [action, apply] of lists) {
+      withRetry(() => docketopsGet(action, {}, sessionRef.current), { retries: 1, delayMs: 2000 })
+        .then(v => { if (live) apply(v); })
+        .catch(() => {
+          if (!live || listsNotified.current) return;
+          listsNotified.current = true;
+          showToast("Couldn't load some lists (teams, people, programs or spaces) — pickers may be incomplete. Reload to try again.", 'error');
+        });
+    }
+    return () => { live = false; };
+  }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { setNewSpaceOpen(spaceParam === 'new'); }, [spaceParam]);
 
@@ -185,12 +209,38 @@ function TasksBoard() {
     try { el.focus(); el.select?.(); } catch { /* ignore */ }
   }, { enabled: !drawerId && !newSpaceOpen && !spaceSettingsOpen && !shellModalOpen && !triage });
 
+  // F4: My tasks' "Clean up N" — my stale count (count_only: no hydration). Read once per view load, in
+  // parallel with the list (load() fires it), and after an inline write that can change it (status /
+  // abandon / revise patch the row without a reload). view_all keeps the button at 0: Everyone lives there.
+  const canViewAll = !!(perms?.docket_view_all || perms?.docket_admin);
+  const [staleCount, setStaleCount] = useState(0);
+  const staleTicket = useRef(null); if (!staleTicket.current) staleTicket.current = createTicket();
+  const loadStale = useCallback(() => {
+    const s = sessionRef.current;
+    if (!s || !mineMode) return;
+    const mine = staleTicket.current.next();
+    docketopsGet('getStaleTasks', { count_only: '1' }, s)
+      .then(r => { if (staleTicket.current.isCurrent(mine)) setStaleCount(r?.total || 0); }).catch(() => {});
+  }, [mineMode]);
+
+  // Only the newest load may land: an older view's answer arriving late must never overwrite the current
+  // rows or turn `loading` off while the current read is still out. `loadedView` = the view the rows on
+  // screen belong to; a failed reload of THAT view keeps them (a toast says so), a failed load of a
+  // different view clears them and shows an error with Retry.
+  const loadTicket = useRef(null); if (!loadTicket.current) loadTicket.current = createTicket();
+  const loadedView = useRef(null);
+  useEffect(() => () => loadTicket.current.drop(), []);
   const load = useCallback(async () => {
     if (!session) return;
     // No space yet: wait for getMe — then either move to ?space=<default> (that load reads it) or, with no default
     // (getMe failed), let the worker resolve it. Never a throwaway read first (hostile review P3c #4).
-    if (needsSpace && (!meLoaded || defaultSpaceId)) return;
+    // Anything still in flight belongs to the view being left.
+    if (needsSpace && (!meLoaded || defaultSpaceId)) { loadTicket.current.drop(); return; }
+    const ticket = loadTicket.current.next();
+    const viewKey = JSON.stringify([mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, week]);
     setLoading(true);
+    setLoadError(null);
+    if (mineMode) loadStale();
     try {
       const common = {
         status, department_id: departmentId, employee_id: employeeId, priority,
@@ -206,33 +256,32 @@ function TasksBoard() {
         : inProgramMode
           ? await docketopsGet('getProgramTasks', { program_id: viewProgramId, ...common }, session)
           : await docketopsGet('getTasks', { space_id: spaceId, program_id: programId, ...common }, session);
+      if (!loadTicket.current.isCurrent(ticket)) return;
       setTasks(Array.isArray(r) ? r : []);
       setTasksFor(inProgramMode ? viewProgramId : '');
-    } catch (e) { showToast(e.message || 'Failed to load tasks', 'error'); }
-    finally { setLoading(false); }
-  }, [session, needsSpace, defaultSpaceId, meLoaded, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, week, showToast]);
+      loadedView.current = viewKey;
+    } catch (e) {
+      if (!loadTicket.current.isCurrent(ticket)) return;
+      if (loadedView.current === viewKey) showToast(e.message || 'Failed to load tasks', 'error');
+      else {
+        loadedView.current = null;
+        setTasks([]);
+        setTasksFor(null);
+        setLoadError("Couldn't load the tasks.");
+        setSelected(new Set()); setSelectMode(false);   // the rows are gone — no bulk bar over tasks nobody can see
+      }
+    } finally { if (loadTicket.current.isCurrent(ticket)) setLoading(false); }
+  }, [session, needsSpace, defaultSpaceId, meLoaded, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, week, showToast, loadStale]);
   useEffect(() => { load(); }, [load]);
   // The task view's onMutated: the list re-reads, and so does Incoming (an accept there changes it).
   const onDrawerMutated = useCallback(() => { setIncomingKey(k => k + 1); return load(); }, [load]);
-
-  // F4: My tasks' "Clean up N" — my stale count (count_only: no hydration). Re-read after
-  // each load so it follows the list. view_all keeps the button at 0: Everyone lives there.
-  const canViewAll = !!(perms?.docket_view_all || perms?.docket_admin);
-  const [staleCount, setStaleCount] = useState(0);
-  useEffect(() => {
-    if (!session || !mineMode) return undefined;
-    let live = true;
-    docketopsGet('getStaleTasks', { count_only: '1' }, session)
-      .then(r => { if (live) setStaleCount(r?.total || 0); }).catch(() => {});
-    return () => { live = false; };
-  }, [session, mineMode, tasks]);
 
   // fetchSpaces only re-reads; refreshSpaces also tells the shell (sidebar) to re-read.
   // The listener below calls fetchSpaces, never refreshSpaces, so a page-side change
   // (dispatch → listener → fetch) can't re-dispatch and loop.
   const fetchSpaces = useCallback(() => {
     if (!session) return;
-    docketopsGet('getSpaces', {}, session).then(s => setSpaces(s || [])).catch(() => {});
+    docketopsGet('getSpaces', {}, session).then(s => { setSpaces(s || []); setListsReady(r => (r.spaces ? r : { ...r, spaces: true })); }).catch(() => {});
   }, [session]);
   function refreshSpaces() {
     fetchSpaces();
@@ -243,7 +292,7 @@ function TasksBoard() {
   // from here, so the group-foot capture's own dispatch can't loop.
   const fetchPrograms = useCallback(() => {
     if (!session) return;
-    docketopsGet('getPrograms', {}, session).then(p => setPrograms(p || [])).catch(() => {});
+    docketopsGet('getPrograms', {}, session).then(p => { setPrograms(p || []); setListsReady(r => (r.programs ? r : { ...r, programs: true })); }).catch(() => {});
   }, [session]);
   useEffect(() => {
     window.addEventListener('docket:programs-changed', fetchPrograms);
@@ -278,9 +327,11 @@ function TasksBoard() {
           if (await sendDone(send, (m) => window.confirm(m), (d) => doneConfirmText(d, task.task_no)) === DECLINED) return;
         } else await send(false);
         patchRow(task.id, { status: value });
+        loadStale();
       } else if (field === 'title') {
         await docketopsPost('updateTask', { id: task.id, title: value }, session);
         patchRow(task.id, { title: value });
+        loadStale();   // any saved edit moves updated_at, so the task may have left "Clean up N"
       } else {
         const res = await docketopsPost('updateTask', { id: task.id, [field]: value || null }, session);
         const patch = { [field]: value || null };
@@ -290,6 +341,7 @@ function TasksBoard() {
         if (field === 'department_id') patch.department_name = deptMap[value] || null;
         if (field === 'program_id') patch.program = programs.find(p => p.id === value) || null;
         patchRow(task.id, patch);
+        loadStale();
         // The plan chip is the worker's projection — re-read rather than guess it here.
         if (field === 'plan_item_id') load();
       }
@@ -297,13 +349,14 @@ function TasksBoard() {
   }
   async function abandonInline(task, reason) {
     if (!reason || !reason.trim()) return;
-    try { await docketopsPost('abandonTask', { id: task.id, reason: reason.trim() }, session); patchRow(task.id, { status: 'abandoned' }); showToast('Task abandoned', 'success'); }
+    try { await docketopsPost('abandonTask', { id: task.id, reason: reason.trim() }, session); patchRow(task.id, { status: 'abandoned' }); loadStale(); showToast('Task abandoned', 'success'); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
   async function reviseInline(task, newDeadlineIso, reason) {
     try {
       await docketopsPost('reviseDeadline', { id: task.id, new_deadline: newDeadlineIso, reason }, session);
       patchRow(task.id, { revised_deadline: newDeadlineIso });
+      loadStale();
       showToast('Deadline revised', 'success');
     } catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
@@ -778,14 +831,16 @@ function TasksBoard() {
       {/* The one un-prefilled capture ([data-create-primary]): hidden until + Task / + New / `c`
           reveal it, always open on an empty page. Same create body as the P2 quick capture. */}
       {programReady && (
-        <NewTaskCapture create={(t, x) => live.current.createInGroup(t, undefined, undefined, x)} alwaysOpen={isEmpty && !boardMode && !(loading && tasks.length === 0)}
+        <NewTaskCapture create={(t, x) => live.current.createInGroup(t, undefined, undefined, x)} alwaysOpen={isEmpty && !boardMode && !loadError && !(loading && tasks.length === 0)}
           placeholder={inProgramMode ? "New task — it's tagged to this program" : 'New task'}>{programSpacePicker}</NewTaskCapture>
       )}
 
       {/* F9 R8: hand-offs to me / my team, above My tasks (hidden when there are none). */}
       {mineMode && <IncomingSection session={session} myEmployeeId={myEmployeeId} onOpen={actions.openDrawer} refreshKey={incomingKey} />}
 
-      {loading && tasks.length === 0 ? <Spinner /> : boardMode ? (
+      {loading && tasks.length === 0 ? <Spinner /> : loadError ? (
+        <div className="tl-emptywrap"><LoadError message={loadError} onRetry={load} /></div>
+      ) : boardMode ? (
         <div style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity var(--base) var(--ease)' }}>
           <KanbanBoard rows={kanbanRows} axis={kanbanAxis} ctx={boardCtx} />
         </div>
@@ -826,6 +881,7 @@ function TasksBoard() {
         // Opened from triage: pinned to the modal so the "full page" preference can't navigate
         // away and drop the triage session underneath.
         <TaskView id={drawerId} mode={triage ? 'modal' : undefined} session={session} departments={departments} employees={employees}
+          programs={listsReady.programs ? programs : undefined} spaces={listsReady.spaces ? spaces : undefined}
           onClose={closeTask} onOpen={setDrawerId} getOrder={domTaskOrder} onMutated={onDrawerMutated}
           fromLink={drawerId === linkTaskId} refreshKey={tasks} />
       )}

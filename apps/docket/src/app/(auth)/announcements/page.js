@@ -6,6 +6,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
+import { useCachedQuery } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Megaphone, Pin, PinOff, Archive, Pencil, Check, Eye, X, Users, Globe, Clock, Plus } from 'lucide-react';
 import { Button, IconButton, Pill, EmptyState } from '../../../components/ui/index.js';
@@ -13,6 +14,8 @@ import { Avatar } from '../../../components/primitives.js';
 import { Switch } from '../../../components/AdminParts.js';
 import { useChrome } from '../../../lib/chrome.js';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
+import { announcementsKey, freshness } from '../../../lib/load.js';
+import { LoadError } from '../../../components/LoadError.js';
 import { TITLE_MAX, BODY_MAX, relTime, expiryNote, expiryDateInput, todayIst, allowedTeams, canPost, composerError,
   mirrorToast, mirrorStatus, announcementErrorText } from '../../../lib/announcements.js';
 import { fmtDateTime } from '../../../lib/format.js';
@@ -22,12 +25,12 @@ export default function AnnouncementsPage() {
 }
 
 function AnnouncementsInner() {
-  const { session } = useAuth();
+  const { session, userId } = useAuth();
   const { showToast } = useToast();
   const { canAnnounce } = useChrome();
   const focusId = useSearchParams().get('id') || '';
-  const [rows, setRows] = useState(null);          // null = loading
   const [past, setPast] = useState(false);
+  const [seenLocal, setSeenLocal] = useState(() => new Set());   // Mark seen, applied before the next read
   const [departments, setDepartments] = useState([]);
   const [composing, setComposing] = useState(false);
   const [editingId, setEditingId] = useState('');
@@ -35,12 +38,32 @@ function AnnouncementsInner() {
   const [busy, setBusy] = useState('');             // the id (or 'new') being written
   const focused = useRef('');
 
-  const load = useCallback(async () => {
-    if (!session) return;
-    try { setRows(await docketopsGet('getAnnouncements', past ? { include_past: '1' } : {}, session) || []); }
-    catch (e) { setRows(r => r || []); showToast(announcementErrorText(e) || 'Could not load announcements', 'error'); }
-  }, [session, past, showToast]);
-  useEffect(() => { load(); }, [load]);
+  // The list is cached per user and per Past toggle (read-only: painted at once, refreshed behind). The hook
+  // keeps only the newest answer for the current toggle, so a slow Live read can't land under Past. A copy
+  // from the cache never enables a write: each card's Edit / Pin / Archive / Mark seen waits for a list
+  // fetched in this visit (`fetched`), and the composer is gated by getMe's can_announce (fresh only).
+  const key = announcementsKey(past);
+  const fetched = useRef(new WeakSet());
+  const inFlight = useRef(0);
+  const q = useCachedQuery({ key, userId, enabled: !!session,
+    fetcher: async () => {
+      inFlight.current += 1;
+      try {
+        const r = await docketopsGet('getAnnouncements', past ? { include_past: '1' } : {}, session);
+        const list = Array.isArray(r) ? r : [];
+        fetched.current.add(list);
+        return list;
+      } finally { inFlight.current -= 1; }
+    } });
+  const live = !!session;
+  useEffect(() => { if (live) q.refresh(); }, [live, key]); // eslint-disable-line react-hooks/exhaustive-deps
+  // After a write: the hook JOINS a read already in flight, and that read began before the write — so wait
+  // for it, then read again.
+  const load = useCallback(() => (inFlight.current ? q.refresh().then(() => q.refresh()) : q.refresh()), [q.refresh]); // eslint-disable-line react-hooks/exhaustive-deps
+  const fresh = q.data !== undefined && fetched.current.has(q.data);
+  const rows = useMemo(() => (q.data === undefined ? null
+    : seenLocal.size ? q.data.map(x => (seenLocal.has(x.id) && !x.seen_by_me ? { ...x, seen_by_me: true } : x)) : q.data), [q.data, seenLocal]);
+  const stale = freshness([q]);
 
   const poster = canPost(canAnnounce);
   useEffect(() => {
@@ -78,7 +101,7 @@ function AnnouncementsInner() {
   }
   async function markSeen(a) {
     if (await write(a.id, 'markAnnouncementSeen', { id: a.id })) {
-      setRows(rs => rs.map(x => (x.id === a.id ? { ...x, seen_by_me: true } : x)));
+      setSeenLocal(s => new Set(s).add(a.id));
     }
   }
   async function togglePin(a) {
@@ -103,7 +126,15 @@ function AnnouncementsInner() {
         <Composer canAnnounce={canAnnounce} teams={teams} busy={busy === 'new'} onCancel={() => setComposing(false)} onSubmit={create} />
       )}
 
-      {rows === null ? <Spinner /> : rows.length === 0 ? (
+      {rows !== null && (!fresh || stale.warn) && stale.text && (
+        <div aria-live="polite" style={{ fontSize: 12, margin: '0 0 10px', color: stale.warn ? 'var(--st-blocked)' : 'var(--text-4)' }}>
+          {stale.text}{stale.warn && <button type="button" onClick={q.refresh} style={{ marginLeft: 6, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'inherit', textDecoration: 'underline', fontSize: 'inherit' }}>Retry</button>}
+        </div>
+      )}
+
+      {rows === null ? (q.error
+        ? <LoadError message={announcementErrorText(q.error) || "Couldn't load announcements."} onRetry={q.refresh} />
+        : <Spinner />) : rows.length === 0 ? (
         <EmptyState icon={Megaphone} title={past ? 'No announcements' : 'No live announcements'}
           body={poster ? 'Post one for everyone you can reach. It also goes to Slack when the mirror is on.' : 'Founders and team heads post news here.'} />
       ) : (
@@ -111,7 +142,7 @@ function AnnouncementsInner() {
           {rows.map(a => (editingId === a.id
             ? <Composer key={a.id} edit initial={a} canAnnounce={canAnnounce} teams={teams} busy={busy === a.id}
                 onCancel={() => setEditingId('')} onSubmit={(d) => saveEdit(a, d)} />
-            : <Card key={a.id} a={a} focus={a.id === focusId} busy={busy === a.id}
+            : <Card key={a.id} a={a} focus={a.id === focusId} busy={busy === a.id} locked={!fresh}
                 onSeen={() => markSeen(a)} onPin={() => togglePin(a)} onArchive={() => archive(a)}
                 onEdit={() => setEditingId(a.id)} onSeenList={() => setSeenFor(a)} />))}
         </div>
@@ -122,7 +153,8 @@ function AnnouncementsInner() {
   );
 }
 
-function Card({ a, focus, busy, onSeen, onPin, onArchive, onEdit, onSeenList }) {
+// locked: the card is the cached copy — its writes wait for this visit's read.
+function Card({ a, focus, busy, locked = false, onSeen, onPin, onArchive, onEdit, onSeenList }) {
   const exp = expiryNote(a.expires_at);
   return (
     <article id={'ann-' + a.id} className={'ann-card' + (focus ? ' focus' : '') + (a.pinned ? ' pinned' : '') + (a.is_live === false ? ' past' : '')}>
@@ -130,9 +162,9 @@ function Card({ a, focus, busy, onSeen, onPin, onArchive, onEdit, onSeenList }) 
         <h2 className="ann-title">{a.pinned && <Pin size={13} className="ann-pin" aria-label="Pinned" />}{a.title}</h2>
         {a.can_manage && (
           <div className="ann-acts">
-            <IconButton icon={Pencil} size="sm" label="Edit" onClick={onEdit} disabled={busy} />
-            <IconButton icon={a.pinned ? PinOff : Pin} size="sm" label={a.pinned ? 'Unpin' : 'Pin to the top'} onClick={onPin} disabled={busy} />
-            <IconButton icon={Archive} size="sm" label="Archive" onClick={onArchive} disabled={busy} />
+            <IconButton icon={Pencil} size="sm" label="Edit" onClick={onEdit} disabled={busy || locked} />
+            <IconButton icon={a.pinned ? PinOff : Pin} size="sm" label={a.pinned ? 'Unpin' : 'Pin to the top'} onClick={onPin} disabled={busy || locked} />
+            <IconButton icon={Archive} size="sm" label="Archive" onClick={onArchive} disabled={busy || locked} />
           </div>
         )}
       </header>
@@ -158,7 +190,7 @@ function Card({ a, focus, busy, onSeen, onPin, onArchive, onEdit, onSeenList }) 
           )}
           {a.seen_by_me
             ? <span className="ann-seen-me"><Check size={13} aria-hidden /> Seen</span>
-            : <Button size="sm" icon={Check} onClick={onSeen} loading={busy}>Mark seen</Button>}
+            : <Button size="sm" icon={Check} onClick={onSeen} loading={busy} disabled={locked}>Mark seen</Button>}
         </span>
       </footer>
       {a.can_manage && <div className="ann-mirror">{mirrorStatus(a.slack, Object.fromEntries((a.teams || []).map(t => [t.id, t.name])))}</div>}

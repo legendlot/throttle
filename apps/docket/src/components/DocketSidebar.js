@@ -15,6 +15,7 @@ import { ChevronDown, Plus, Lock, MoreHorizontal, SlidersHorizontal, Check, Targ
 import { IconButton, Button, Menu, MenuItem, MenuLabel } from './ui/index.js';
 import { personColor } from './primitives.js';
 import { ADMIN_ITEMS } from '../lib/nav.js';
+import { LoadError } from './LoadError.js';
 
 const DEFAULT_COLLAPSED = { programs: false, spaces: false, mySpaces: true, otherSpaces: true };
 const HIDEABLE = [
@@ -67,7 +68,7 @@ const dot = (color) => <span className="dks-dot" style={{ background: color }} /
 
 export function DocketSidebar({
   activeKey = '', path = '', spaces = [], programs = [], isAdmin = false, isPlanAdmin = false, showTemplates = false, announcementsUnread = 0,
-  collapsed = false, mobileOpen = false, onSelect, onNewSpace, onNewProgram, onSpaceSettings,
+  collapsed = false, mobileOpen = false, onSelect, onNewSpace, onNewProgram, onSpaceSettings, meError = '', onRetryMe,
 }) {
   const privates = (spaces || []).filter(s => s.is_private);
   // Your personal space (P2) leads My spaces.
@@ -122,6 +123,8 @@ export function DocketSidebar({
     <aside className={cls} inert={inert} aria-label="Tasks">
       <div className="dks-title">Tasks</div>
       <div className="dks-scroll">
+        {/* getMe failed: say so (the spaces below are the last copy, or none) — never a silently empty sidebar. */}
+        {meError && <LoadError compact message={meError} onRetry={onRetryMe} style={{ padding: '4px 8px 8px' }} />}
         {/* P4: Announcements — General's broadcast role, at the top where General was; the badge = live posts not yet Seen. */}
         <Row label="Announcements" lead={<Megaphone size={13} strokeWidth={2} aria-hidden />} active={path === '/announcements'}
           count={announcementsUnread || 0} unread countLabel={`${announcementsUnread} unread`} onClick={go('/announcements')} />

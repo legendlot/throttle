@@ -63,6 +63,22 @@ function ReviewInner() {
   useEffect(() => { setData(null); setSnap(null); setSnaps(null); }, [week, team]);
   useEffect(() => () => { ticket.current++; }, []);   // unmount: drop whatever is in flight
 
+  // R9b score trend, started WITH the pack instead of after it. It is sent the URL's team ('' = the
+  // default scope): the worker scopes getScoreTrend exactly as getReviewPack (plan admin / Founders'
+  // Associate → all or the named team; a lead → their own team), so it is the same scope as the pack's
+  // resolved team_id that the card used to be given. Independent of the week; newest answer only.
+  const trendTicket = useRef(0);
+  const [trend, setTrend] = useState(null);
+  useEffect(() => {
+    if (!session) return undefined;
+    const mine = ++trendTicket.current;
+    setTrend(null);
+    docketopsGet('getScoreTrend', { weeks: 8, team }, session)
+      .then(d => { if (mine === trendTicket.current) setTrend(d || { weeks: [], teams: [], overall: [] }); })
+      .catch(() => { if (mine === trendTicket.current) setTrend({ error: true }); });   // the pack still works without the trend
+    return () => { trendTicket.current++; };
+  }, [session, team]);
+
   if (!data) return <div className="pl"><Spinner /></div>;
   if (data.error) return <div className="pl"><EmptyState icon={ClipboardCheck}
     title={data.code === 'no_team' ? 'No team on your profile' : 'Couldn’t load the review'} body={data.error}
@@ -171,7 +187,7 @@ function ReviewInner() {
             action={isThis ? null : <Button variant="neutral" size="sm" onClick={() => go({ week: 'this' })}>This week</Button>} />
         ) : <>
           {/* R9b: the score trend (getScoreTrend, same team scope as the pack). */}
-          <TrendCard session={session} team={data.team_id || 'all'} />
+          <TrendCard trend={trend} team={data.team_id || 'all'} />
           <ReviewPack pack={data} />
         </>}
     </div>

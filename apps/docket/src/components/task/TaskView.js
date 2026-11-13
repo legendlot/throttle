@@ -64,7 +64,7 @@ function useIsMobile() {
 
 function grow(el) { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }
 
-export function TaskView({ id, mode: fixedMode, session, departments = [], employees = [], onClose, onOpen, getOrder, onMutated, refreshKey, fromLink = false }) {
+export function TaskView({ id, mode: fixedMode, session, departments = [], employees = [], programs: programsProp, spaces: spacesProp, onClose, onOpen, getOrder, onMutated, refreshKey, fromLink = false }) {
   const router = useRouter();
   const { showToast } = useToast();
   const { shellModalOpen } = useChrome();
@@ -81,8 +81,17 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   const [busy, setBusy] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [descDraft, setDescDraft] = useState('');
-  const [programs, setPrograms] = useState([]);
-  const [spaces, setSpaces] = useState([]);
+  // Programs / spaces: the opening page's lists when it passes them (it already holds them); fetched here
+  // only when it does not. A program created inline is merged in until the page's list catches up.
+  const [fetchedPrograms, setFetchedPrograms] = useState([]);
+  const [fetchedSpaces, setSpaces] = useState([]);
+  const [addedPrograms, setAddedPrograms] = useState([]);
+  const programs = useMemo(() => {
+    const base = programsProp || fetchedPrograms;
+    const extra = addedPrograms.filter(a => !base.some(p => p.id === a.id));
+    return extra.length ? [...base, ...extra].sort((a, b) => a.name.localeCompare(b.name)) : base;
+  }, [programsProp, fetchedPrograms, addedPrograms]);
+  const spaces = spacesProp || fetchedSpaces;
   const [edit, setEdit] = useState(null);             // which property picker is open
   const [abandonMode, setAbandonMode] = useState(false);
   const [tab, setTab] = useState('comments');         // right pane
@@ -109,11 +118,13 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
   // Full page reached any other way than goFull (permalink, reload): no stale return / order.
   useEffect(() => { if (fixedMode === 'full') claimFull(id); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const needPrograms = !programsProp, needSpaces = !spacesProp;
   useEffect(() => {
-    if (!session) return;
-    docketopsGet('getPrograms', {}, session).then(p => setPrograms(p || [])).catch(() => {});
-    docketopsGet('getSpaces', {}, session).then(s => setSpaces(s || [])).catch(() => {});
-  }, [session]);
+    if (session && needPrograms) docketopsGet('getPrograms', {}, session).then(p => setFetchedPrograms(p || [])).catch(() => {});
+  }, [session, needPrograms]);
+  useEffect(() => {
+    if (session && needSpaces) docketopsGet('getSpaces', {}, session).then(s => setSpaces(s || [])).catch(() => {});
+  }, [session, needSpaces]);
   useEffect(() => { try { const s = JSON.parse(localStorage.getItem(SECTIONS_KEY) || '{}'); if (s && typeof s === 'object') setSections(s); } catch { /* ignore */ } }, []);
 
   // Loads are keyed on the task id + the signed-in user, NOT the session object (a token
@@ -235,7 +246,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
     setBusy(true);
     try {
       const prog = await docketopsPost('createProgram', { name }, session);
-      setPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog].sort((a, b) => a.name.localeCompare(b.name)));
+      setAddedPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog]);
       await docketopsPost('updateTask', { id: task.id, program_id: prog.id }, session); await mutated();
       if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed'));
     } catch (e) { showToast(e.message || 'Failed to add program', 'error'); }

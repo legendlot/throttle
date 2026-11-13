@@ -10,7 +10,7 @@
 //     milestone"; inherited (a sub-task) muted; nothing for no link.
 //   usePlanWeek(session) — R4: the org's week settings (getPlan `week`: week_end_dow, working_days,
 //     holidays) off the same cached read; the defaults (Sunday) only until it lands.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Target } from 'lucide-react';
 import { docketopsGet } from '../../lib/docketopsFetch.js';
 import { OptionList } from '../primitives.js';
@@ -24,7 +24,11 @@ function loadPlan(session) {
   if (cache.key === key && cache.p && Date.now() - cache.at < TTL) return cache.p;
   const p = docketopsGet('getPlan', {}, session)
     .then(d => ({ items: Array.isArray(d?.items) ? d.items : [], week: normalizeWeekSettings(d?.week), metrics: Array.isArray(d?.metrics) ? d.metrics : [] }))
-    .catch(() => ({ items: [], week: normalizeWeekSettings(null), metrics: [] }));
+    .catch(() => {
+      // A failure is never cached: the next reader asks again instead of getting an empty plan for 60 s.
+      if (cache.p === p) cache = { key: null, at: 0, p: null };
+      return { items: [], week: normalizeWeekSettings(null), metrics: [], failed: true };
+    });
   cache = { key, at: Date.now(), p };
   return p;
 }
@@ -35,10 +39,14 @@ if (typeof window !== 'undefined') window.addEventListener('docket:plan-changed'
 function usePlanRead(session, pick, initial) {
   const [val, setVal] = useState(initial);
   const userKey = session?.user?.id || (session ? 'session' : '');
+  // Read at call time: the effect is keyed on the user, so an hourly token refresh must not leave a
+  // plan-changed re-read holding the old token.
+  const sessionRef = useRef(session); sessionRef.current = session;
   useEffect(() => {
-    if (!session) return undefined;
+    if (!sessionRef.current) return undefined;
     let live = true;
-    const read = () => loadPlan(session).then(x => { if (live) setVal(pick(x)); });
+    // A failed read keeps what is showing (the defaults until a read has landed).
+    const read = () => loadPlan(sessionRef.current).then(x => { if (live && !x.failed) setVal(pick(x)); });
     read();
     window.addEventListener('docket:plan-changed', read);
     return () => { live = false; window.removeEventListener('docket:plan-changed', read); };

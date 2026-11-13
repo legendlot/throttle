@@ -2,26 +2,16 @@
 // F9 R9b — the score trend (spec §8.1 #2, §8.5): on-time % per team over the last closed weeks, from
 // getScoreTrend (the worker reads docket.week_score — the official score; nothing is recomputed here).
 // Inline SVG, no chart library; the chart scrolls inside its card at 375px, never the page.
-import { useEffect, useState } from 'react';
-import { docketopsGet } from '../../../lib/docketopsFetch.js';
 import { linePath, dots, hasTrend, seriesColor } from '../../../lib/trend.js';
 import { fmtPct } from '../../../lib/review.js';
 import { shortDay } from '../../../lib/weeks.js';
 
 const W = 560, H = 160, PAD = 14;
 
-export function TrendCard({ session, team }) {
-  const [t, setT] = useState(null);
-  useEffect(() => {
-    if (!session) return undefined;
-    let live = true;
-    setT(null);
-    docketopsGet('getScoreTrend', { weeks: 8, team: team || 'all' }, session)
-      .then(d => { if (live) setT(d || { weeks: [], teams: [], overall: [] }); })
-      .catch(() => { if (live) setT({ error: true }); });   // the pack still works without the trend
-    return () => { live = false; };
-  }, [session, team]);
-
+// `trend` is read by the page (review/page.js) IN PARALLEL with the pack — it used to start only once the
+// pack had landed and this card mounted. null = not yet; { error } = failed (the pack still works without it).
+// `team` is the pack's resolved team (display only: the "All teams" line).
+export function TrendCard({ trend: t, team }) {
   if (!t || t.error) return null;
   const weeks = t.weeks || [];
   const series = [
