@@ -63,6 +63,6 @@ an L2 supervisor can run a line, an L4 can have no reports.
 ## Open questions for Afshaan
 
 - Q1. Floor supervisors at L2 (Senior Associate), or L1?
-- Q2. The Business Head & EIR: L7 Director or L8 VP?
+- Q2. The Business Head & EIR: L7 Director, L8 Senior Director or L9 VP?
 - Q3. Keep "Level" as the name, or call it "Band" and rename the salary one "pay range"?
 - Q4. ~~Anything missing from the ladder?~~ Senior Director added 2026-11-13.
