@@ -3692,11 +3692,18 @@ const OPENING_EMBED =
 
 // Founders = active, no manager, users_profile.role = 'super_admin' (EMP-001 / EMP-002 today).
 async function loadFounders(env) {
+  return (await loadFoundersStrict(env)) || [];
+}
+
+// Same, but null when either read fails — leave routing fails closed instead of silently sending a request to HR.
+async function loadFoundersStrict(env) {
   const er = await sb(`/rest/v1/employees?manager_id=is.null&status=eq.active&auth_user_id=not.is.null&select=id,auth_user_id,employee_code&order=employee_code.asc`, env);
-  const rows = er.data || [];
+  if (!er.ok || !Array.isArray(er.data)) return null;
+  const rows = er.data;
   if (!rows.length) return [];
   const pr = await sbStore(`/rest/v1/users_profile?id=in.(${rows.map(r => r.auth_user_id).join(',')})&role=eq.super_admin&select=id`, env);
-  const sa = new Set((pr.data || []).map(p => p.id));
+  if (!pr.ok || !Array.isArray(pr.data)) return null;
+  const sa = new Set(pr.data.map(p => p.id));
   return rows.filter(r => sa.has(r.auth_user_id)).map(r => r.id);
 }
 
@@ -4440,7 +4447,7 @@ function cleanApplication(d, salaryOk) {
   const p = pickFields(d, salaryOk ? [...APP_FIELDS, ...CTC_FIELDS] : APP_FIELDS);
   if ('source' in p && !APP_SOURCES.includes(p.source)) return { error: 'bad source' };
   if ('referrer_employee_id' in p) { if (!p.referrer_employee_id) p.referrer_employee_id = null; else if (!isUuid(p.referrer_employee_id)) return { error: 'bad referrer_employee_id' }; }
-  if ('source_detail' in p) p.source_detail = String(p.source_detail ?? '').trim() || null;
+  if ('source_detail' in p) p.source_detail = String(p.source_detail ?? '').trim().slice(0, 200) || null;
   if ('notice_period_days' in p) {
     const n = numOrNull(p.notice_period_days);
     if (n != null && !(n >= 0 && n <= 365)) return { error: 'notice_period_days must be 0-365' };
@@ -9534,7 +9541,9 @@ async function cvImportAccept(body, auth, env) {
     return code ? errCode(code, msg, status) : err(msg, status);
   };
   try {
-    const draft = pickCvDraft(d.draft || item.final || item.extracted?.fields || {});
+    let draft = pickCvDraft(d.draft || item.final || item.extracted?.fields || {});
+    // A caller who can't see salary never sets CTC (cvImportSaveItem's rule): keep what the item already holds.
+    if (!c.salary) draft = { ...draft, current_ctc: item.final?.current_ctc ?? null, expected_ctc: item.final?.expected_ctc ?? null };
     const appData = { opening_id: c.imp.opening_id, source: c.imp.source, source_detail: c.imp.source_detail,
       referrer_employee_id: c.imp.referrer_employee_id || null, notice_period_days: draft.notice_period_days, current_ctc: draft.current_ctc, expected_ctc: draft.expected_ctc };
     let candidateId = item.candidate_id, applicationId = item.application_id;
@@ -10976,10 +10985,10 @@ async function getMyLeave(url, auth, env) {
   if (!ens.ok) return err(`db_error: leave ${ens.error}`, 500);
   const today = istToday(), cy = yearOf(today);
   const [books, holidays, founders, teams] = await Promise.all([
-    leaveBooks(env, [emp.id], cy), loadHolidays(env, cy, cy + 1), emp.manager_id ? Promise.resolve([]) : loadFounders(env),
+    leaveBooks(env, [emp.id], cy), loadHolidays(env, cy, cy + 1), emp.manager_id ? Promise.resolve([]) : loadFoundersStrict(env),
     emp.manager_id ? Promise.resolve([]) : loadTeamOwners(env),
   ]);
-  if (!books || !holidays || !teams) return err('db_error: leave read', 500);
+  if (!books || !holidays || !teams || !founders) return err('db_error: leave read', 500);
   const reqs = books.reqs[emp.id] || [];
   const approverId = resolveLeaveApprover(emp, founders, teams);
   const wfhId = wfhApprover(emp, teams);   // E4: the manager → the team's founder owner (vacant seat) → HR
@@ -11038,8 +11047,9 @@ async function applyLeave(body, auth, env) {
   // No manager (a vacant seat): the team's founder owner is the skip-level approver (teamFounderOwner, leave.js).
   const teams = emp.manager_id ? [] : await loadTeamOwners(env);
   if (!teams) return err('db_error: team owners', 500);
-  const approverId = q.v.leave_type === 'WFH' ? wfhApprover(emp, teams)
-    : resolveLeaveApprover(emp, emp.manager_id ? [] : await loadFounders(env), teams);
+  const founders = q.v.leave_type === 'WFH' || emp.manager_id ? [] : await loadFoundersStrict(env);
+  if (!founders) return err('db_error: founders', 500);
+  const approverId = q.v.leave_type === 'WFH' ? wfhApprover(emp, teams) : resolveLeaveApprover(emp, founders, teams);
   const r = await hiringRpc(env, 'leave_apply', {
     employee_id: emp.id, ...q.v, borrowed_days: q.split.borrowed_days, lop_days: q.split.lop_days,
     approver_employee_id: approverId, ...(q.snapshot || {}), actor_user_id: auth.userId, actor_employee_id: me?.id || null,
