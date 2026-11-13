@@ -30,7 +30,7 @@ join; nothing is re-keyed.
 | C4 | Bulk CV upload → candidates (OpenAI extraction, review-and-confirm) — ✅ LIVE 2026-11-12 | Core | C2 + `OPENAI_API_KEY` | 1 session |
 | O1 | Offer email + acceptance link (accept / decline / question → confirmation email → joining documents) | Optional, **build right after C3** | C3 + Workspace scope | 2 sessions |
 | O2 | Interview rounds + feedback — ✅ LIVE 2026-11-12 (plan `plans/2026-11-12-podium-o2-interviews.md`; reminders manual, no cron) | Optional | C1, C2 | 1–2 sessions |
-| O3 | One-click Calendar scheduling (Podium link) — ✅ BUILT 2026-11-13, off until the `calendar.events` DWD scope is added (plan `plans/2026-11-13-podium-o3-calendar.md`) | Optional | O2 + Workspace scope | 1 session |
+| O3 | One-click Calendar scheduling (Podium link) — ✅ LIVE 2026-11-13 (plan `plans/2026-11-13-podium-o3-calendar.md`; prod-smoked link / edit / Calendar move / Calendar delete / cancel) | Optional | O2 + Workspace scope | 1 session |
 
 Scope: **Fraternitas (white-collar) hires, including interns.** Blue-collar contract labour via Silverton is
 out of scope (hired and paid through the agency).

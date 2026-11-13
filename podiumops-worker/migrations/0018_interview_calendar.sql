@@ -17,8 +17,9 @@ create table if not exists podium.interview_calendar (
   interview_id uuid primary key references podium.interviews(id) on delete cascade,
   calendar_id text not null check (length(calendar_id) between 3 and 320),       -- the organiser's mailbox (primary calendar)
   organiser_employee_id uuid not null references podium.employees(id),
-  event_id text not null check (event_id ~ '^[a-v0-9]{5,1024}$'),
-  candidate_event_id text check (candidate_event_id is null or candidate_event_id ~ '^[a-v0-9]{5,1024}$'),
+  -- Postgres caps regex repetition at 255 → length + class (v2 applied as `podium_interview_calendar_v2`).
+  event_id text not null check (length(event_id) between 5 and 1024 and event_id ~ '^[a-v0-9]+$'),
+  candidate_event_id text check (candidate_event_id is null or (length(candidate_event_id) between 5 and 1024 and candidate_event_id ~ '^[a-v0-9]+$')),
   candidate_email text check (candidate_email is null or length(candidate_email) <= 320),
   invite_candidate boolean not null default false,
   meet_url text check (meet_url is null or length(meet_url) <= 500),
