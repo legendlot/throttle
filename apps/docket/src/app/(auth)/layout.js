@@ -42,6 +42,8 @@ function AuthLayoutInner({ children }) {
   const [myEmployeeId, setMyEmployeeId] = useState(null);   // getMe.employee_id (F2 capture toast)
   const [myDepartmentId, setMyDepartmentId] = useState(null); // getMe.department_id (P3b: template space default)
   const [defaultSpaceId, setDefaultSpaceId] = useState(null); // getMe.default_space_id (P3c: where /tasks with no space opens)
+  const [announcementsUnread, setAnnouncementsUnread] = useState(0); // getMe.announcements_unread (P4 sidebar badge)
+  const [canAnnounce, setCanAnnounce] = useState(null);       // getMe.can_announce (P4 composer): { everyone, department_ids }
   const [meLoaded, setMeLoaded] = useState(false);   // getMe has answered (or failed) once — the board waits for it
   const [showTemplates, setShowTemplates] = useState(false); // F9 R9a: the Templates nav entry (getTemplates)
   const [helpOpen, setHelpOpen] = useState(false);
@@ -79,6 +81,8 @@ function AuthLayoutInner({ children }) {
       setMyEmployeeId(me?.employee_id || null);
       setMyDepartmentId(me?.department_id || null);
       setDefaultSpaceId(me?.default_space_id || null);
+      setAnnouncementsUnread(Number(me?.announcements_unread) || 0);
+      setCanAnnounce(me?.can_announce || { everyone: false, department_ids: [] });
       const can = !!me?.can_view_dashboard;
       setCanViewDashboard(can);
       // Remembered so the next load's mobile tab bar / rail don't flip Scratchpad → Dashboard.
@@ -94,7 +98,8 @@ function AuthLayoutInner({ children }) {
   // `counts-changed` fires from docketopsPost on EVERY successful task write, so it
   // arrives in bursts (a bulk update, or the drawer saving several fields). Debounced
   // to one trailing getMe per burst — without it a 40-task bulk action would fire 40.
-  // spaces/programs-changed share the debounce: they also just re-run getMe.
+  // spaces/programs-changed share the debounce: they also just re-run getMe. (P4: an announcement post / Seen is a
+  // docketopsPost too, so counts-changed re-reads the unread badge.)
   useEffect(() => {
     let t = null;
     const h = () => { if (t) clearTimeout(t); t = setTimeout(loadMe, 400); };
@@ -202,7 +207,7 @@ function AuthLayoutInner({ children }) {
   const isAdmin = !!perms?.docket_admin;
   const isPlanAdmin = !!perms?.docket_plan_admin;   // F9 R6b: the founders' catch-up nav entry
   // shellModalOpen: a layout-owned modal is up; pages fold it into their hotkey guards.
-  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, myDepartmentId, defaultSpaceId, meLoaded, spaces, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
+  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, myDepartmentId, defaultSpaceId, meLoaded, spaces, canAnnounce, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
 
   return (
     <ChromeContext.Provider value={ctxValue}>
@@ -239,6 +244,7 @@ function AuthLayoutInner({ children }) {
             isAdmin={isAdmin}
             isPlanAdmin={isPlanAdmin}
             showTemplates={showTemplates}
+            announcementsUnread={announcementsUnread}
             collapsed={collapsed}
             mobileOpen={mobileNavOpen}
             onSelect={go}

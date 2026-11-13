@@ -16,6 +16,7 @@ export const ADMIN_ITEMS = [
   { key: '/admin/roles',  label: 'Roles & permissions' },
   { key: '/admin/users',  label: 'Users' },
   { key: '/admin/spaces', label: 'Spaces' },
+  { key: '/admin/announcements', label: 'Announcements' },   // P4: the Slack mirror's mode + channels
 ];
 
 // `search` is a URLSearchParams-like (.get). Returns:
@@ -57,6 +58,7 @@ export function routeModel(pathname, search, { spaces = [], programs = [] } = {}
   const base = { path, spaceId, activeKey: path, showCount: false };
   if (path.startsWith('/tasks/detail')) return { ...base, railKey: 'tasks', crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: 'Task' }] };
   if (path.startsWith('/tasks/new'))    return { ...base, railKey: 'tasks', crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: 'New task' }] };
+  if (path === '/announcements') return { ...base, railKey: 'tasks', crumbs: [{ label: 'Announcements' }] };
   if (path === '/plan')       return { ...base, railKey: 'plan',       crumbs: [{ label: 'Plan' }] };
   if (path === '/plan/tree')  return { ...base, railKey: 'plan',       crumbs: [{ label: 'Plan', href: '/plan' }, { label: 'Tree' }] };
   if (path === '/plan/replan') return { ...base, railKey: 'plan', crumbs: [{ label: 'Plan', href: '/plan' }, { label: 'Re-plan' }] };

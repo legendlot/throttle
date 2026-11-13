@@ -841,6 +841,66 @@ body.tl-resizing { cursor: col-resize; user-select: none; }
   .adm-select, .adm-input, .adm-search input { font-size: 16px; }
 }
 
+/* announcements (General-space rethink P4): /announcements cards + composer + the Seen list;
+   /admin/announcements reuses the .adm-* pieces. The sidebar's unread badge is .dks-count.unread. */
+.dks-count.unread { min-width: 18px; height: 18px; padding: 0 5px; display: inline-grid; place-items: center; border-radius: var(--r-full); background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 600; }
+.screen.ann { max-width: 760px; }
+.ann-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.ann-lede { margin: 0; font-size: 13px; color: var(--text-3); }
+.ann-head-act { display: flex; align-items: center; gap: 12px; }
+.ann-past, .ann-inline { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
+.ann-list { display: flex; flex-direction: column; gap: 12px; }
+.ann-card { background: var(--surface); border-radius: var(--r-card); box-shadow: var(--ring); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; scroll-margin: 80px; }
+.ann-card.pinned { box-shadow: var(--ring), inset 3px 0 0 var(--accent); }
+.ann-card.focus { box-shadow: 0 0 0 1px var(--accent-line), 0 0 0 4px var(--accent-soft); }
+.ann-card.past { opacity: .7; }
+.ann-card-h { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ann-title { margin: 0; display: flex; align-items: center; gap: 6px; font-family: var(--f-display); font-size: 16px; font-weight: 700; color: var(--text-1); overflow-wrap: anywhere; }
+.ann-pin { color: var(--accent); flex-shrink: 0; }
+.ann-acts { display: flex; gap: 2px; flex-shrink: 0; }
+.ann-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.6; color: var(--text-2); }
+.ann-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; font-size: 12px; color: var(--text-3); }
+.ann-who { display: inline-flex; align-items: center; gap: 6px; }
+.ann-author { color: var(--text-2); font-weight: 500; }
+.ann-dot { color: var(--text-4); }
+.ann-aud { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ann-exp { display: inline-flex; align-items: center; gap: 4px; }
+.ann-exp.over { color: var(--text-4); }
+.ann-seen { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; }
+.ann-seen-count { display: inline-flex; align-items: center; gap: 5px; padding: 2px 6px; border-radius: var(--r-ctl); font-size: 12px; color: var(--text-2); }
+.ann-seen-count:hover { background: var(--hover); color: var(--text-1); }
+.ann-seen-me { display: inline-flex; align-items: center; gap: 4px; color: var(--st-done, var(--text-2)); font-weight: 500; }
+.ann-mirror { font-size: 11.5px; color: var(--text-4); font-family: var(--f-mono); overflow-wrap: anywhere; }
+.ann-compose { gap: 12px; margin-bottom: 12px; }
+.ann-textarea { width: 100%; min-height: 110px; padding: 8px 10px; resize: vertical; background: var(--surface-2); border: none; box-shadow: var(--ring); border-radius: var(--r-ctl); font: inherit; font-size: 13.5px; line-height: 1.6; color: var(--text-1); outline: none; }
+.ann-textarea:focus { box-shadow: var(--focus-ring); }
+.ann-len { float: right; font-weight: 400; color: var(--text-4); }
+.ann-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: var(--r-full); background: var(--surface-2); box-shadow: var(--ring); font-size: 12px; color: var(--text-2); }
+.ann-chip:hover { color: var(--text-1); }
+.ann-chip.on { background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent-line); color: var(--text-1); }
+.ann-compose-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 24px; }
+.ann-date { width: auto; color-scheme: dark; }
+.ann-problem { font-size: 12.5px; color: var(--state-error-fg); }
+.ann-compose-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.ann-modal-bd { position: fixed; inset: 0; z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; background: rgba(0,0,0,0.5); }
+.ann-modal { width: 420px; max-width: 92vw; max-height: 76vh; overflow-y: auto; background: var(--surface); border-radius: var(--r-card); box-shadow: var(--ring), 0 18px 50px rgba(0,0,0,.5); padding: 14px 16px; }
+.ann-modal-h { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 600; color: var(--text-1); }
+.ann-modal-sub { margin: 2px 0 6px; font-size: 12px; color: var(--text-3); }
+.ann-modal-lbl { display: block; margin: 12px 0 6px; }
+.ann-person { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; color: var(--text-1); }
+.ann-person-team { margin-left: auto; font-size: 11.5px; color: var(--text-4); }
+.ann-none { font-size: 12.5px; color: var(--text-3); }
+.ann-radio { cursor: pointer; }
+.ann-radio input { accent-color: var(--accent); }
+.ann-warn { background: var(--st-blocked-bg); }
+.ann-chan { display: inline-flex; flex-direction: column; gap: 4px; width: 220px; }
+.ann-field-err { font-size: 11.5px; color: var(--state-error-fg); }
+@media (max-width: 767px) {
+  .ann-seen { margin-left: 0; width: 100%; justify-content: space-between; }
+  .ann-chan { width: 150px; }
+  .ann-textarea, .ann-date { font-size: 16px; }
+}
+
 /* scratchpad (P7): 240px notes column · full-width editor · calculator docked right.
    ≤767px drills down: the list, then the note (.drill) with a back button. */
 .screen.scratch-screen { max-width: none; }

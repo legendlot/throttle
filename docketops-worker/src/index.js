@@ -51,6 +51,10 @@ import { SLOT_KEYS, parseReminderSettings, dueSlots, gateRecipients, workingDayA
 import { buildReviewTeams, lastWorkingDay, packToSlack, reprojectPack, packTaskIds, finalSnapshotPack, scoreBlock,
   handoffBucket, foundersHandoffs, isHandoff,
   validateFocusItems, buildAsks, foundersToSlack, noDataSource } from './review-core.mjs';
+import { deptTree, headedTeams, readerTeams, postableTeams,
+  parseAnnouncementSettings, validateAnnouncementSettings, validateCreate, validateUpdate, teamIdsOf, isLive,
+  canSeeAnnouncement, canManageAnnouncement, sortAnnouncements, audienceOf, unreadCount, mirrorTargets,
+  announcementMessage, testDmMessage, mirrorSummary } from './announcements-core.mjs';
 
 
 // ── CORS ──────────────────────────────────────────────────────────────────
@@ -780,10 +784,12 @@ async function getMe(url, auth, env) {
   // Space badges (S309) run alongside the programs call, not after it — both are
   // independent reads and getMe is on the app-load path.
   // default_space_id (P3c): where /tasks with no space opens — the caller's team home space, else Personal.
-  const [programs, spaceCounts, default_space_id] = await Promise.all([
+  // P4: announcements_unread (the sidebar badge) + can_announce (the composer) — two reads, alongside.
+  const [programs, spaceCounts, default_space_id, ann] = await Promise.all([
     programsForUser(auth, memberSpaceIds, defaultId, env),
     spaceCountsForUser(auth, spaces.map(s => s.id), env),
     defaultTargetSpace(auth, auth.departmentId, env),
+    announceForMe(auth, env),
   ]);
   // A space with no open work is ABSENT from the RPC result and is left without a
   // task_count entirely, so the sidebar renders no badge rather than a "0" — a zero
@@ -795,6 +801,7 @@ async function getMe(url, auth, env) {
     permissions: auth.permissions || {}, employee_id: auth.employeeId, department_id: auth.departmentId,
     spaces: spaces.map(s => (countBySpace[s.id] ? { ...s, task_count: countBySpace[s.id] } : s)),
     programs, can_view_dashboard, default_space_id: default_space_id || null,
+    announcements_unread: ann.announcements_unread, can_announce: ann.can_announce,
   });
 }
 // Cross-space program scope: the caller's accessible private spaces (owned+member) + General id.
@@ -826,7 +833,7 @@ async function spaceCountsForUser(auth, spaceIds, env) {
   return (r.ok && r.data) || [];
 }
 async function getDepartments(url, auth, env) {
-  const r = await sbPodium(`/rest/v1/departments?select=id,name,active&order=name.asc`, env);
+  const r = await sbPodium(`/rest/v1/departments?select=id,name,active,parent_department_id&order=name.asc`, env);
   if (!r.ok) return err('db_error', 500);
   return ok(r.data || []);
 }
@@ -5121,6 +5128,302 @@ async function unlinkTaskChecklist(body, auth, env) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// General-space rethink P4 — Announcements (migration 0040; the pure rules in announcements-core.mjs). They take over
+// General's broadcast role. Teams are a hierarchy: a team post reaches the team's whole subtree. Post: a founder
+// (docket_plan_admin) to everyone or any active teams; a team head (podium.departments.head_employee_id) to the teams
+// they head and every team below; nobody else. See: everyone-posts, your own, and posts naming a team in your reader
+// set (your team + its ancestors + the teams you head + below them); founders all. An exited employee: everyone-posts
+// only, no posting. Edit / archive: the author or a founder. The Slack mirror runs once, on
+// create, after the response (ctx.waitUntil), by docket.settings.announcements.mode (off / test / live).
+// ════════════════════════════════════════════════════════════════════════════
+const ANN_COLS = 'id,title,body,author_user_id,author_employee_id,audience,pinned,expires_at,archived_at,slack,created_at,updated_at';
+const ANN_LIMIT = 200;   // the badge (getMe) and the list (getAnnouncements) read the same capped set
+
+// The caller's announcement context, once per request: the ACTIVE team tree from ONE podium read (teams are a
+// hierarchy — a team post reaches its whole subtree), what they may post to, and who they are as a reader. An exited
+// employee (callerTeam's rule) has no team, heads nothing and is no founder here: everyone-posts only, no posting.
+// A failed read: no team visibility, no posting rights (`failed`), never a thrown request.
+function annCtx(auth, env) {
+  if (!auth._annP) {
+    const active = auth.employeeActive !== false;
+    const founder = isPlanAdmin(auth) && active;
+    const empty = { failed: true, tree: deptTree([]), names: {}, rights: { everyone: false, department_ids: [] },
+      who: { userId: auth.userId, founder, teams: new Set() } };
+    auth._annP = sbPodium(`/rest/v1/departments?active=eq.true&select=id,name,parent_department_id,head_employee_id&order=name.asc`, env).then(r => {
+      if (!r.ok || !Array.isArray(r.data)) return empty;
+      const tree = deptTree(r.data);
+      const headOf = active ? headedTeams(tree, r.data, auth.employeeId) : [];
+      const names = Object.fromEntries(r.data.map(d => [lcId(d.id), d.name]));
+      return { failed: false, tree, names,
+        rights: { everyone: founder, department_ids: founder ? [...tree.ids] : postableTeams(tree, headOf) },
+        who: { userId: auth.userId, founder, teams: readerTeams(tree, { departmentId: callerTeam(auth), headOf }) } };
+    }, () => empty);
+  }
+  return auth._annP;
+}
+// The posts a reader can see — filtered IN SQL, so getMe's badge and getAnnouncements' list always read the same set,
+// order and limit: everyone-posts, your own, and posts naming a team in your reader set (their ids from
+// announcement_teams first); a founder gets no audience filter. Live (not archived, not expired) unless `past`
+// (then not archived). → { ok, rows }
+async function visibleAnnouncements(who, env, { past = false, select }) {
+  const conds = [];
+  if (!past) conds.push(`or(expires_at.is.null,expires_at.gt.${new Date().toISOString()})`);
+  if (!who.founder) {
+    let ids = [];
+    if (who.teams.size) {
+      const tr = await sbInAll(sbDocket, [...who.teams], l => `/rest/v1/announcement_teams?department_id=in.${l}&select=announcement_id&order=announcement_id.asc`, env);
+      if (!tr.ok) return { ok: false, rows: [] };
+      ids = uniq((tr.data || []).map(t => t.announcement_id));
+    }
+    conds.push(`or(audience.eq.everyone,author_user_id.eq.${who.userId}${ids.length ? `,id.in.(${ids.join(',')})` : ''})`);
+  }
+  const r = await sbDocket(`/rest/v1/announcements?archived_at=is.null${conds.length ? `&and=(${enc(conds.join(','))})` : ''}&select=${select}&order=pinned.desc,created_at.desc&limit=${ANN_LIMIT}`, env);
+  if (!r.ok || !Array.isArray(r.data)) return { ok: false, rows: [] };
+  const now = Date.now();   // the same rules again in JS (a belt: a stray row is dropped, never shown)
+  return { ok: true, rows: sortAnnouncements(r.data.filter(a => !a.archived_at && canSeeAnnouncement(a, who) && (past || isLive(a, now)))) };
+}
+async function annSettings(env) {
+  const r = await sbDocket(`/rest/v1/settings?key=eq.announcements&select=value&limit=1`, env);
+  return parseAnnouncementSettings(r.ok && r.data?.[0] ? r.data[0].value : null);   // unreadable → mode off
+}
+// One post with its teams → row | null (none) | undefined (the read failed)
+async function loadAnnouncement(id, env) {
+  const r = await sbDocket(`/rest/v1/announcements?id=eq.${enc(id)}&select=${ANN_COLS},announcement_teams(department_id)&limit=1`, env);
+  if (!r.ok) return undefined;
+  return (Array.isArray(r.data) && r.data[0]) || null;
+}
+// The audience pool: active employees with a login.
+function annPeople(env) {
+  return sbAll(sbPodium, `/rest/v1/employees?status=eq.active&auth_user_id=not.is.null&select=id,full_name,department_id,auth_user_id&order=id.asc`, env);
+}
+// getMe's extra reads: the departments (rights + the reader's teams), then — for anyone but a founder with a team —
+// announcement_teams, then the visible live posts with only the caller's own Seen row embedded. A failed read reads as
+// nothing (no badge, no composer) — never a failed getMe.
+async function announceForMe(auth, env) {
+  const c = await annCtx(auth, env);
+  const v = await visibleAnnouncements(c.who, env, {
+    select: `id,audience,author_user_id,expires_at,archived_at,announcement_teams(department_id),announcement_seen(user_id)&announcement_seen.user_id=eq.${enc(auth.userId)}` });
+  return {
+    announcements_unread: v.ok ? unreadCount(v.rows, c.who) : 0,
+    can_announce: { everyone: c.rights.everyone, department_ids: c.rights.department_ids },
+  };
+}
+
+// GET ?action=getAnnouncements[&include_past=1] — what the caller can see, pinned first then newest. Live only by
+// default; include_past adds expired posts (never archived ones). Each row: seen_by_me, can_manage; for the author
+// or a founder also seen_count / audience_count (audience = active employees with a login anywhere in the subtree
+// of the post's teams) and the Slack mirror results.
+async function getAnnouncements(url, auth, env) {
+  const past = url.searchParams.get('include_past') === '1';
+  const now = Date.now();
+  const c = await annCtx(auth, env);
+  const v = await visibleAnnouncements(c.who, env, { past, select: `${ANN_COLS},announcement_teams(department_id)` });
+  if (!v.ok) return err('db_error', 500);
+  const rows = v.rows, who = c.who;
+  if (!rows.length) return ok([]);
+  const managed = rows.filter(a => canManageAnnouncement(a, who)).map(a => a.id);
+  const unnamed = uniq(rows.flatMap(teamIdsOf)).filter(id => !c.names[id]);   // an inactive team still gets its name
+  const [mine, sr, dr, ur, pr] = await Promise.all([
+    sbIn(sbDocket, rows.map(a => a.id), l => `/rest/v1/announcement_seen?user_id=eq.${enc(auth.userId)}&announcement_id=in.${l}&select=announcement_id`, env),
+    sbInAll(sbDocket, managed, l => `/rest/v1/announcement_seen?announcement_id=in.${l}&select=announcement_id,user_id&order=announcement_id.asc,user_id.asc`, env),
+    sbIn(sbPodium, unnamed, l => `/rest/v1/departments?id=in.${l}&select=id,name`, env),
+    sbIn(sbStore, uniq(rows.map(a => a.author_user_id)), l => `/rest/v1/users_profile?id=in.${l}&select=id,full_name`, env),
+    managed.length ? annPeople(env) : Promise.resolve({ ok: true, data: [] }),
+  ]);
+  if (!mine.ok || !sr.ok || !pr.ok) return err('db_error', 500);
+  const seenMine = new Set((mine.data || []).map(s => s.announcement_id));
+  const seenBy = {};
+  for (const s of sr.data || []) (seenBy[s.announcement_id] = seenBy[s.announcement_id] || new Set()).add(s.user_id);
+  const dName = { ...Object.fromEntries(((dr.ok && dr.data) || []).map(d => [lcId(d.id), d.name])), ...c.names };
+  const uName = Object.fromEntries(((ur.ok && ur.data) || []).map(u => [u.id, u.full_name]));
+  return ok(rows.map(a => {
+    const team_ids = teamIdsOf(a);
+    const out = { id: a.id, title: a.title, body: a.body, audience: a.audience, team_ids,
+      teams: team_ids.map(id => ({ id, name: dName[id] || null })),
+      author_user_id: a.author_user_id, author_employee_id: a.author_employee_id, author_name: uName[a.author_user_id] || null,
+      pinned: !!a.pinned, expires_at: a.expires_at, created_at: a.created_at, updated_at: a.updated_at,
+      is_live: isLive(a, now), seen_by_me: seenMine.has(a.id), can_manage: canManageAnnouncement(a, who) };
+    if (out.can_manage) {
+      const aud = audienceOf(a, pr.data || [], c.tree), s = seenBy[a.id] || new Set();
+      out.audience_count = aud.length;
+      out.seen_count = aud.filter(p => s.has(p.auth_user_id)).length;
+      out.slack = Array.isArray(a.slack) ? a.slack : [];
+    }
+    return out;
+  }));
+}
+// GET ?action=getAnnouncementSeen&id= — the author or a founder: who in the audience (the subtree) has and hasn't
+// seen it.
+async function getAnnouncementSeen(url, auth, env) {
+  const id = url.searchParams.get('id');
+  if (!isUuid(id)) return err('id_required', 400);
+  const [a, c] = await Promise.all([loadAnnouncement(id, env), annCtx(auth, env)]);
+  if (a === undefined) return err('db_error', 500);
+  if (!a || !canSeeAnnouncement(a, c.who)) return err('not_found', 404);
+  if (!canManageAnnouncement(a, c.who)) return err('forbidden', 403);
+  const [pr, sr] = await Promise.all([
+    annPeople(env),
+    sbAll(sbDocket, `/rest/v1/announcement_seen?announcement_id=eq.${enc(a.id)}&select=user_id,seen_at&order=user_id.asc`, env),
+  ]);
+  if (!pr.ok || !sr.ok) return err('db_error', 500);
+  const at = Object.fromEntries((sr.data || []).map(s => [s.user_id, s.seen_at]));
+  const person = (p) => ({ employee_id: p.id, name: p.full_name, team: c.names[lcId(p.department_id)] || null });
+  const aud = audienceOf(a, pr.data || [], c.tree).slice().sort((x, y) => String(x.full_name).localeCompare(String(y.full_name)));
+  const seen = aud.filter(p => at[p.auth_user_id]).map(p => ({ ...person(p), seen_at: at[p.auth_user_id] }));
+  const not_seen = aud.filter(p => !at[p.auth_user_id]).map(person);
+  return ok({ id: a.id, audience_count: aud.length, seen_count: seen.length, seen, not_seen });
+}
+
+// POST { action: 'createAnnouncement', title, body, audience: 'everyone'|'teams', team_ids?, pinned?, expires_at? }
+async function createAnnouncement(body, auth, env, ctx) {
+  const d = body.data || body;
+  const c = await annCtx(auth, env);
+  if (c.failed) return err('db_error', 500);
+  const rights = c.rights;
+  if (!rights.everyone && !rights.department_ids.length) return err('forbidden_announce', 403);
+  const v = validateCreate(d, rights);
+  if (v.error) return err(v.error, v.status);
+  const x = v.value;
+  const ins = await sbDocket(`/rest/v1/announcements`, env, { method: 'POST', body: JSON.stringify({
+    title: x.title, body: x.body, author_user_id: auth.userId, author_employee_id: auth.employeeId || null,
+    audience: x.audience, pinned: x.pinned, expires_at: x.expires_at }) });
+  const row = ins.ok && Array.isArray(ins.data) ? ins.data[0] : null;
+  if (!row) return err('create_failed', 500);
+  if (x.team_ids.length) {
+    const tr = await sbDocket(`/rest/v1/announcement_teams`, env, { method: 'POST', prefer: 'return=minimal',
+      body: JSON.stringify(x.team_ids.map(department_id => ({ announcement_id: row.id, department_id }))) });
+    if (!tr.ok) {   // a teams post with no teams would reach nobody — take it back
+      await sbDocket(`/rest/v1/announcements?id=eq.${enc(row.id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+      return err('create_failed', 500);
+    }
+  }
+  // The author has seen their own post (best-effort; it only keeps it off their own unread badge).
+  await sbDocket(`/rest/v1/announcement_seen?on_conflict=announcement_id,user_id`, env, { method: 'POST',
+    prefer: 'return=minimal,resolution=ignore-duplicates', body: JSON.stringify([{ announcement_id: row.id, user_id: auth.userId }]) });
+  const settings = await annSettings(env);
+  const targets = mirrorTargets(row, x.team_ids, settings);
+  const names = { authorName: auth.fullName, teamNames: x.team_ids.map(t => c.names[t]), teamNameById: c.names };
+  await later(ctx, () => mirrorAnnouncement(row, targets, settings, names, env));
+  return ok({ ...row, team_ids: x.team_ids, mirror: mirrorSummary(settings, targets) });
+}
+// The mirror (after the response). Every outcome is recorded per target in announcements.slack — a Slack error
+// (not_in_channel: the bot isn't in that channel) is a 'failed' entry, never thrown.
+//   live → chat.postMessage per channel (one post per channel, even if two teams share it); a target with no
+//          channel is 'skipped'.
+//   test → no channel post; each test recipient (active, resolved like the reminders) gets ONE DM: the message plus a
+//          line per target (the channel it would post to, or "no channel set, live would skip this") — whenever at
+//          least one recipient is set, channels or not. No recipients = nothing sent.
+//   off  → nothing sent; each target recorded 'off'.
+async function mirrorAnnouncement(a, targets, settings, { authorName, teamNames, teamNameById }, env) {
+  const at = nowIso(), mode = settings.mode;
+  const msg = announcementMessage(a, { authorName, teamNames });
+  const results = [];
+  if (mode === 'live') {
+    const byChannel = new Map();
+    for (const t of targets) {
+      if (!t.channel) { results.push({ ...t, mode, status: 'skipped', error: 'no_channel', at }); continue; }
+      if (!byChannel.has(t.channel)) {
+        const r = await slackApi('chat.postMessage', { channel: t.channel, ...msg, unfurl_links: false, unfurl_media: false }, env);
+        byChannel.set(t.channel, r.ok ? { status: 'sent', ts: r.ts || null } : { status: 'failed', error: safeCode(r.error) });
+      }
+      results.push({ ...t, mode, ...byChannel.get(t.channel), at });
+    }
+  } else if (mode === 'test') {
+    for (const t of targets) results.push({ ...t, mode, status: t.channel ? 'test' : 'skipped', ...(t.channel ? {} : { error: 'no_channel' }), at });
+    if (settings.test_employee_ids.length) {
+      const er = await sbIn(sbPodium, settings.test_employee_ids, l => `/rest/v1/employees?id=in.${l}&status=eq.active&select=id,auth_user_id,work_email,full_name`, env);
+      const people = er.ok && Array.isArray(er.data) ? er.data : [];
+      const sids = await reminderSlackIds(people, env);
+      const dm = testDmMessage(msg, targets, teamNameById);
+      for (const p of people) {
+        const who = sids.get(p.id);
+        if (!who || !who.sid) { results.push({ target: 'test_dm', employee_id: p.id, mode, status: (who && who.status) || 'failed', error: (who && who.code) || 'lookup_failed', at }); continue; }
+        const r = await slackDm(who.sid, dm, env);
+        results.push({ target: 'test_dm', employee_id: p.id, mode, status: r.ok ? 'sent' : 'failed', ...(r.ok ? {} : { error: safeCode(r.error) }), at });
+      }
+    }
+  } else {
+    for (const t of targets) results.push({ ...t, mode: 'off', status: 'off', at });
+  }
+  const w = await sbDocket(`/rest/v1/announcements?id=eq.${enc(a.id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ slack: results }) });
+  if (!w.ok) console.error('docketops announcement mirror: results not saved', a.id, w.status);
+  return results;
+}
+// Load + gate for the author-or-founder writes → { a } | { res }
+async function annForManage(d, auth, env) {
+  if (!isUuid(d.id)) return { res: err('id_required', 400) };
+  const [a, c] = await Promise.all([loadAnnouncement(d.id, env), annCtx(auth, env)]);
+  if (a === undefined) return { res: err('db_error', 500) };
+  if (!a || !canSeeAnnouncement(a, c.who)) return { res: err('not_found', 404) };
+  if (!canManageAnnouncement(a, c.who)) return { res: err('forbidden', 403) };
+  return { a };
+}
+// POST { action: 'updateAnnouncement', id, title?, body?, pinned?, expires_at? } — never re-mirrors.
+async function updateAnnouncement(body, auth, env) {
+  const d = body.data || body;
+  const g = await annForManage(d, auth, env); if (g.res) return g.res;
+  if (g.a.archived_at) return err('archived', 409);
+  const v = validateUpdate(d);
+  if (v.error) return err(v.error, v.status);
+  const r = await sbDocket(`/rest/v1/announcements?id=eq.${enc(g.a.id)}`, env, { method: 'PATCH', body: JSON.stringify({ ...v.patch, updated_at: nowIso() }) });
+  if (!r.ok) return err('update_failed', 500);
+  return ok({ ...((Array.isArray(r.data) && r.data[0]) || { id: g.a.id, ...v.patch }), team_ids: teamIdsOf(g.a) });
+}
+// POST { action: 'archiveAnnouncement', id } — idempotent.
+async function archiveAnnouncement(body, auth, env) {
+  const d = body.data || body;
+  const g = await annForManage(d, auth, env); if (g.res) return g.res;
+  if (g.a.archived_at) return ok({ id: g.a.id, archived_at: g.a.archived_at });
+  const archived_at = nowIso();
+  const r = await sbDocket(`/rest/v1/announcements?id=eq.${enc(g.a.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ archived_at, updated_at: archived_at }) });
+  if (!r.ok) return err('update_failed', 500);
+  return ok({ id: g.a.id, archived_at });
+}
+// POST { action: 'markAnnouncementSeen', id } — idempotent; only a post the caller can see (else 404, no hint).
+async function markAnnouncementSeen(body, auth, env) {
+  const d = body.data || body;
+  if (!isUuid(d.id)) return err('id_required', 400);
+  const [a, c] = await Promise.all([loadAnnouncement(d.id, env), annCtx(auth, env)]);
+  if (a === undefined) return err('db_error', 500);
+  if (!a || a.archived_at || !canSeeAnnouncement(a, c.who)) return err('not_found', 404);
+  const r = await sbDocket(`/rest/v1/announcement_seen?on_conflict=announcement_id,user_id`, env, { method: 'POST',
+    prefer: 'return=minimal,resolution=ignore-duplicates', body: JSON.stringify([{ announcement_id: a.id, user_id: auth.userId }]) });
+  if (!r.ok) return err('db_error', 500);
+  return ok({ id: a.id, seen: true });
+}
+// GET ?action=getAnnouncementSettings / POST saveAnnouncementSettings — docket_admin only.
+async function getAnnouncementSettings(url, auth, env) {
+  const gate = requireAdmin(auth); if (gate) return gate;
+  const r = await sbDocket(`/rest/v1/settings?key=eq.announcements&select=value&limit=1`, env);
+  if (!r.ok) return err('db_error', 500);
+  return ok(parseAnnouncementSettings(r.data?.[0]?.value || null));
+}
+// POST { action: 'saveAnnouncementSettings', mode?, org_channel?, team_channels?, test_employee_ids? } — a field
+// left out keeps its value. Channel ids must match ^[CG][A-Z0-9]{6,}$; teams must be active departments and test
+// recipients active employees.
+async function saveAnnouncementSettings(body, auth, env) {
+  const gate = requireAdmin(auth); if (gate) return gate;
+  const d = body.data || body;
+  const cur = await sbDocket(`/rest/v1/settings?key=eq.announcements&select=value&limit=1`, env);
+  if (!cur.ok) return err('db_error', 500);
+  const v = validateAnnouncementSettings(d, cur.data?.[0]?.value || null);
+  if (v.error) return json({ ok: false, error: v.error, field: v.field }, 422);
+  const s = v.value, teamIds = Object.keys(s.team_channels);
+  const [dr, er] = await Promise.all([
+    d.team_channels !== undefined ? sbIn(sbPodium, teamIds, l => `/rest/v1/departments?id=in.${l}&active=eq.true&select=id`, env) : null,
+    d.test_employee_ids !== undefined ? sbIn(sbPodium, s.test_employee_ids, l => `/rest/v1/employees?id=in.${l}&status=eq.active&select=id`, env) : null,
+  ]);
+  if ((dr && !dr.ok) || (er && !er.ok)) return err('db_error', 500);
+  if (dr && (dr.data || []).length !== teamIds.length) return json({ ok: false, error: 'unknown_team', field: 'team_channels' }, 422);
+  if (er && (er.data || []).length !== s.test_employee_ids.length) return json({ ok: false, error: 'unknown_employee', field: 'test_employee_ids' }, 422);
+  const w = await sbDocket(`/rest/v1/settings?on_conflict=key`, env, { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates',
+    body: JSON.stringify({ key: 'announcements', value: s, updated_at: nowIso(), updated_by_user_id: auth.userId }) });
+  if (!w.ok) return err('update_failed', 500);
+  return ok(s);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Dispatch
 // ════════════════════════════════════════════════════════════════════════════
 const GET_ACTIONS = {
@@ -5136,6 +5439,7 @@ const GET_ACTIONS = {
   getIncoming,
   getPlanTree, getTemplates, getTemplate,
   getReachedTargets, getScoreTrend, getReplan,
+  getAnnouncements, getAnnouncementSeen, getAnnouncementSettings,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,
@@ -5161,6 +5465,7 @@ const POST_ACTIONS = {
   acceptHandoff,
   saveTemplate, archiveTemplate, applyTemplate,
   slackReminderPreview,
+  createAnnouncement, updateAnnouncement, archiveAnnouncement, markAnnouncementSeen, saveAnnouncementSettings,
 };
 
 // task_history.source (F9 R6a, §8.3): the MCP gateway marks every call it makes; anything else is the app.
@@ -5178,7 +5483,9 @@ async function handleGet(url, request, env) {
   try { return await handler(url, auth, env); }
   catch (e) { return err(`server_error: ${e?.message || String(e)}`, 500); }
 }
-async function handlePost(request, env) {
+// ctx (the platform's) reaches the handler as a 4th argument — createAnnouncement runs its Slack mirror in
+// ctx.waitUntil; every other handler ignores it.
+async function handlePost(request, env, ctx) {
   const auth = await verifyJWT(request.headers.get('Authorization'), env);
   if (!auth) return err('unauthorized', 401);
   auth.source = requestSource(request);
@@ -5188,7 +5495,7 @@ async function handlePost(request, env) {
   await touchActivity(auth, env);   // mutation presence ping (best-effort, swallows its own errors)
   const handler = POST_ACTIONS[action];
   if (!handler) return err(`unknown_action: ${action}`, 400);
-  try { return await handler(body, auth, env); }
+  try { return await handler(body, auth, env, ctx); }
   catch (e) { return err(`server_error: ${e?.message || String(e)}`, 500); }
 }
 
@@ -5668,7 +5975,7 @@ export default {
     if (url.pathname === '/slack/commands' && request.method === 'POST') return slackCommands(request, env, ctx);
     if (url.pathname === '/slack/interactive' && request.method === 'POST') return slackInteractive(request, env, ctx);
     if (request.method === 'GET')  return handleGet(url, request, env);
-    if (request.method === 'POST') return handlePost(request, env);
+    if (request.method === 'POST') return handlePost(request, env, ctx);
     return err('method_not_allowed', 405);
   },
   // F9 R7b: crons = ["0,30 * * * *"] (wrangler.toml). event.scheduledTime = the slot's own time, not the start lag.

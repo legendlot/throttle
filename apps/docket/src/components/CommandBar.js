@@ -21,7 +21,7 @@
 // spaces only) → a "Checklists" group that opens the Record page.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Target, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Lock, Flag,
-  SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info, Loader2, OctagonMinus, ClipboardCheck } from 'lucide-react';
+  SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info, Loader2, OctagonMinus, ClipboardCheck, Megaphone } from 'lucide-react';
 import { fuzzyMatch, dktQuery, rankGroups, scoreTask, serverFloor } from '../lib/fuzzy.js';
 import { docketopsGet } from '../lib/docketopsFetch.js';
 import { getCommandSource } from '../lib/commandSources.js';
@@ -148,6 +148,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
     const items = [];
     const add = (it) => items.push({ ...it, lc: it.label.toLowerCase(), lcSub: (it.sub || '').toLowerCase() });
     const navItems = [
+      { key: 'nav:announcements', label: 'Announcements', icon: Megaphone, route: '/announcements' },
       { key: 'nav:plan', label: 'Plan', icon: Target, route: '/plan' },
       { key: 'nav:plan-weeks', label: 'Three weeks', icon: Target, route: '/plan/weeks' },
       { key: 'nav:plan-tree', label: 'Plan tree', icon: Target, route: '/plan/tree' },

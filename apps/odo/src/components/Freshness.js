@@ -33,9 +33,21 @@ export function FreshnessProvider({ children }) {
         setState({ feeds, manual: d?.manual || {}, loading: false, oldestOkAt: oks[0] || null });
       })
       .catch(() => { if (alive) setState(s => ({ ...s, loading: false })); });   // never break the shell
+    // Ticks are skipped while the tab is hidden (nobody is reading it, and a background tab kept
+    // polling on an expiring token); if one was skipped, one load fires on return.
+    let missed = false;
     load();
-    const t = setInterval(load, POLL_MS);
-    return () => { alive = false; clearInterval(t); };
+    const t = setInterval(() => {
+      if (document.hidden) { missed = true; return; }
+      load();
+    }, POLL_MS);
+    const onVisible = () => {
+      if (document.hidden || !missed) return;
+      missed = false;
+      load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { alive = false; clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
   }, [session]);
 
   return <Ctx.Provider value={state}>{children}</Ctx.Provider>;

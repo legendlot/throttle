@@ -1,6 +1,6 @@
 'use client';
 // Docket context sidebar (ClickUp redesign P1). Sits between the icon rail and the
-// page; holds the hierarchy only — Plan, then Programs (a free cross-space label, kept alongside the
+// page; holds the hierarchy only — Announcements (P4, where General was; unread badge from getMe), Plan, then Programs (a free cross-space label, kept alongside the
 // plan link), then Spaces (My spaces · By others) — or, on an Admin route, the three admin pages.
 //
 // Collapsible sections (S138): per-section open state is persisted per person in
@@ -11,7 +11,7 @@
 //
 // ≤767px the same element becomes a slide-over (CSS: `.dks.mobile-open`).
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { ChevronDown, Plus, Lock, MoreHorizontal, SlidersHorizontal, Check, Target, User } from 'lucide-react';
+import { ChevronDown, Plus, Lock, MoreHorizontal, SlidersHorizontal, Check, Target, User, Megaphone } from 'lucide-react';
 import { IconButton, Button, Menu, MenuItem, MenuLabel } from './ui/index.js';
 import { personColor } from './primitives.js';
 import { ADMIN_ITEMS } from '../lib/nav.js';
@@ -38,7 +38,7 @@ function useStoredObject(key) {
   return [val, update];
 }
 
-function Row({ label, active, onClick, depth = 0, lead, count, actions }) {
+function Row({ label, active, onClick, depth = 0, lead, count, countLabel, unread = false, actions }) {
   return (
     <div className={'dks-row' + (active ? ' active' : '')} style={{ paddingLeft: 8 + depth * 12 }}
       role="link" tabIndex={0} aria-current={active ? 'page' : undefined} onClick={onClick}
@@ -46,7 +46,7 @@ function Row({ label, active, onClick, depth = 0, lead, count, actions }) {
       {lead && <span className="dks-lead">{lead}</span>}
       <span className="dks-label">{label}</span>
       {actions && <span className="dks-actions" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>{actions}</span>}
-      {count ? <span className="dks-count">{count}</span> : null}
+      {count ? <span className={'dks-count' + (unread ? ' unread' : '')} aria-label={countLabel}>{count}</span> : null}
     </div>
   );
 }
@@ -66,7 +66,7 @@ function SectionHead({ label, open, onToggle, depth = 0, onAdd, addLabel }) {
 const dot = (color) => <span className="dks-dot" style={{ background: color }} />;
 
 export function DocketSidebar({
-  activeKey = '', path = '', spaces = [], programs = [], isAdmin = false, isPlanAdmin = false, showTemplates = false,
+  activeKey = '', path = '', spaces = [], programs = [], isAdmin = false, isPlanAdmin = false, showTemplates = false, announcementsUnread = 0,
   collapsed = false, mobileOpen = false, onSelect, onNewSpace, onNewProgram, onSpaceSettings,
 }) {
   const privates = (spaces || []).filter(s => s.is_private);
@@ -122,7 +122,10 @@ export function DocketSidebar({
     <aside className={cls} inert={inert} aria-label="Tasks">
       <div className="dks-title">Tasks</div>
       <div className="dks-scroll">
-        {/* Plan (F9): the plan register / My milestones — top of the sidebar, for everyone. */}
+        {/* P4: Announcements — General's broadcast role, at the top where General was; the badge = live posts not yet Seen. */}
+        <Row label="Announcements" lead={<Megaphone size={13} strokeWidth={2} aria-hidden />} active={path === '/announcements'}
+          count={announcementsUnread || 0} unread countLabel={`${announcementsUnread} unread`} onClick={go('/announcements')} />
+        {/* Plan (F9): the plan register / My milestones. */}
         <Row label="Plan" lead={<Target size={13} strokeWidth={2} aria-hidden />} active={path === '/plan'} onClick={go('/plan')} />
         {/* F9 R4: the rolling three-week view (Overdue · this · next · the week after). */}
         <Row depth={1} label="Three weeks" active={path === '/plan/weeks'} onClick={go('/plan/weeks')} />
