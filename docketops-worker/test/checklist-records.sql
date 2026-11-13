@@ -10,7 +10,7 @@
 -- One DO block that always rolls back (ends by raising RESULT …). Before 0032 is applied it runs the migration
 -- inside the block (execute $mig$ … $mig$, generated verbatim from migrations/0032_checklist_records.sql); after,
 -- it only checks. Run via execute_sql.
--- EXPECT: 1:routine,1,kind_checked  2:5,uniq,na_checked,state_checked,origin_checked,status_checked,archive_shape,h=created,item_added,item_added,items_copied/3
+-- EXPECT: 1:kinds_ok,versions_ok,kind_checked  2:5,uniq,na_checked,state_checked,origin_checked,status_checked,archive_shape,h=created,item_added,item_added,items_copied/3
 --   3:complete/true,completed=1,open/true,reopened=1,complete,open,archived_raises,attach_raises,nokey,seq_ok,clock,ev=archived:1 created:1
 --   item_added:3 item_done:5 item_na:1 item_reopened:1 item_task_created:1 items_copied:1 record_completed:2 record_reopened:2 title_changed:1,actors_ok
 --   4:link_uniq,th=checklist_linked/app checklist_linked/app checklist_unlinked/connector,unl_actor_ok,0,setnull,unl=2,tmpl_restrict,0,0,0
@@ -317,8 +317,9 @@ notify pgrst, 'reload schema';
 $mig$;
   end if;
   -- 1. kind / version defaults on what exists; the kind CHECK
-  out := '1:' || coalesce((select string_agg(distinct kind, ',') from docket.checklist_templates), 'none')
-    || ',' || coalesce((select string_agg(distinct version::text, ',') from docket.checklist_templates), 'none');
+  -- live-data independent (record templates exist live since F8 P2): every kind is routine|record, every version >= 1
+  out := '1:' || case when (select bool_and(kind in ('routine', 'record')) from docket.checklist_templates) is not false then 'kinds_ok' else 'KIND_BAD' end
+    || ',' || case when (select bool_and(version >= 1) from docket.checklist_templates) is not false then 'versions_ok' else 'VERSION_BAD' end;
   begin insert into docket.checklist_templates (name, recurrence, created_by_user_id, kind) values ('zz', '{"freq":"none"}', A, 'launch'); out := out || ',KIND_OPEN';
   exception when check_violation then out := out || ',kind_checked'; end;
 
@@ -329,7 +330,9 @@ $mig$;
   insert into docket.checklist_template_items (section_id, title, sort_order) values (S, 'zz i2', 1) returning id into I2;
   insert into docket.checklist_template_items (section_id, title, sort_order) values (S, 'zz i3', 2) returning id into I3;
   insert into docket.checklist_template_history (template_id, event, actor_user_id) values (T, 'created', A);
-  select id into G from docket.spaces where is_default limit 1;
+  -- a ZZ team space for the record + task (General is retired, 0039 — its trigger refuses both)
+  insert into docket.spaces (name, is_private, is_default, is_personal, owner_user_id, created_by_user_id)
+    values ('ZZ clrec team', true, false, false, A, A) returning id into G;
   insert into docket.checklist_records (template_id, title, space_id, created_by_user_id, updated_by_user_id) values (T, 'zz Launch: Badger', G, A, A) returning id into R;
   insert into docket.checklist_record_items (record_id, source_item_id, title, sort_order, updated_by_user_id, origin)
     values (R, I1, 'zz i1', 0, A, 'snapshot'), (R, I2, 'zz i2', 10, A, 'snapshot'), (R, I3, 'zz i3', 20, A, 'snapshot'), (R, null, 'zz c1', 30, A, null);

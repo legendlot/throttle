@@ -17,23 +17,25 @@ const worker = (await import('data:text/javascript,' + encodeURIComponent(code))
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const VIEWER = U(1), VE = U(2), OTHER = U(3), OE = U(4);
 const D1 = U(10), D2 = U(11);                       // the viewer is in D1
-const G = U(20), PRIV = U(21), ARCH = U(22);        // General · a private space they're not in · an archived one they ARE in
+const G = U(20), PRIV = U(21), ARCH = U(22), G2 = U(23);   // their team's space · a private space they're not in · an archived one they ARE in · D2's team space
 const SPACES = {
-  [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false },
+  // G / G2: D1's and D2's team spaces (was General; retired P3c). G is shared with the viewer's team (D1), G2 isn't.
+  [G]: { id: G, name: 'ZZ team 1', is_default: false, is_private: true, owner_user_id: OTHER, is_founders: false, is_personal: false, archived_at: null },
+  [G2]: { id: G2, name: 'ZZ team 2', is_default: false, is_private: true, owner_user_id: OTHER, is_founders: false, is_personal: false, archived_at: null },
   [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: OTHER, is_founders: false },
   [ARCH]: { id: ARCH, name: 'ZZ archived', is_default: false, is_private: true, owner_user_id: OTHER, is_founders: false },
 };
 const soon = new Date(Date.now() + 3600000).toISOString();
 const T = (n, o) => ({ id: U(100 + n), task_no: `DKT-${n}`, title: `ZZ t${n}`, status: 'in_progress', priority: 'P2',
   owner_employee_id: OE, assignee_employee_id: null, created_by_user_id: OTHER, department_id: D2, deadline: soon,
-  revised_deadline: null, space_id: G, plan_item_id: null, parent_task_id: null, created_at: '2026-01-01T00:00:00Z', ...o });
+  revised_deadline: null, space_id: G2, plan_item_id: null, parent_task_id: null, created_at: '2026-01-01T00:00:00Z', ...o });
 const TASKS = [
-  T(1, {}),                                   // General, other team, not theirs → hidden
-  T(2, { department_id: D1 }),                // General, their team → visible (team=all / own team)
+  T(1, {}),                                   // other team's space, not theirs → hidden
+  T(2, { department_id: D1, space_id: G }),   // their team's space → visible (team=all / own team)
   T(3, { space_id: PRIV }),                   // private, not a member → hidden
-  T(4, {}),                                   // General, other team, they collaborate → visible
+  T(4, {}),                                   // other team's space, they collaborate → visible (involvement, P3a)
   T(5, { space_id: ARCH }),                   // archived space they're a member of → excluded
-  T(6, { owner_employee_id: VE }),            // General, other team, they own it → visible
+  T(6, { owner_employee_id: VE }),            // other team's space, they own it → visible (involvement, P3a)
 ];
 
 function stub() {
@@ -57,6 +59,7 @@ function stub() {
       return body(ids.map(id => SPACES[id]).filter(Boolean));
     }
     if (p.includes('/space_members?')) return body([{ space_id: ARCH }]);
+    if (p.includes('/space_teams?')) return body(q.get('department_id') === `eq.${D1}` ? [{ space_id: G }] : []);
     if (p.includes('/task_collaborators?')) return body([{ task_id: U(104) }]);
     if (p.includes('/task_history?') || p.includes('/task_comments?')) return body([]);
     if (u.pathname === '/rest/v1/tasks') {

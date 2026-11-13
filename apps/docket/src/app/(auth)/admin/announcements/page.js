@@ -6,7 +6,7 @@ import { Lock, AlertTriangle, X } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../../lib/docketopsFetch.js';
 import { Button, IconButton, EmptyState } from '../../../../components/ui/index.js';
 import { AdminHead } from '../../../../components/AdminParts.js';
-import { channelError, announcementErrorText } from '../../../../lib/announcements.js';
+import { channelError, announcementErrorText, teamLabels } from '../../../../lib/announcements.js';
 
 const MODES = [
   { value: 'off',  label: 'Off',  hint: 'Nothing goes to Slack.' },
@@ -37,7 +37,10 @@ export default function AdminAnnouncementsPage() {
         docketopsGet('getEmployees', {}, session),
       ]);
       setS({ mode: cfg.mode, org_channel: cfg.org_channel || '', team_channels: { ...(cfg.team_channels || {}) }, test_employee_ids: cfg.test_employee_ids || [] });
-      setDepartments((deps || []).filter(d => d.active !== false));
+      // A sub-team reads "Parent › Child" (Podium has same-named sub-teams); the parent may be inactive, so label from all.
+      const label = teamLabels(deps || []);
+      setDepartments((deps || []).filter(d => d.active !== false).map(d => ({ ...d, label: label[d.id] }))
+        .sort((a, b) => a.label.localeCompare(b.label)));
       setEmployees(emps || []);
     } catch (e) { showToast(announcementErrorText(e) || e.message || 'Failed to load', 'error'); }
   }, [session, showToast]);
@@ -107,9 +110,9 @@ export default function AdminAnnouncementsPage() {
             <span className="adm-lbl">Team channels <span className="adm-row-hint">· a team with none set gets no Slack post</span></span>
             {departments.map(d => (
               <div key={d.id} className="adm-row">
-                <span className="adm-row-l">{d.name}</span>
+                <span className="adm-row-l">{d.label}</span>
                 <span className="ann-chan">
-                  <input className="adm-input mono" value={s.team_channels[d.id] || ''} onChange={setChan(d.id)} placeholder="No channel" aria-label={`${d.name} channel ID`} disabled={saving} />
+                  <input className="adm-input mono" value={s.team_channels[d.id] || ''} onChange={setChan(d.id)} placeholder="No channel" aria-label={`${d.label} channel ID`} disabled={saving} />
                   {errs[d.id] && <span className="ann-field-err">{errs[d.id]}</span>}
                 </span>
               </div>

@@ -8,7 +8,7 @@
 do $iv$
 declare
   A uuid := '107ea993-f5ed-4221-ba97-b08e38dcd00c';     -- owns the private space (not the caller)
-  G uuid := (select id from docket.spaces where is_default limit 1);
+  G uuid := null;   -- p_default_space_id: General is retired (0039); the worker passes null
   FS uuid := (select id from docket.spaces where is_founders and archived_at is null limit 1);
   E uuid; L uuid; D uuid; E2 uuid; V uuid := gen_random_uuid();
   P uuid; PS uuid; AR uuid; PR uuid; x uuid; out text := ''; ids uuid[];

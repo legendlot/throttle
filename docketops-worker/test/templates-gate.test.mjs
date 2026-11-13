@@ -19,7 +19,7 @@ const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ME = U(1), MEE = U(2), OTHER = U(8), D1 = U(10), G = U(20), PRIV = U(21), FND = U(22), PERS = U(27), HOME = U(29), ARCHS = U(24);
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const SPACES = {
-  [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false },
+  [G]: { id: G, name: 'ZZ team', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: false, archived_at: null },   // a team space ME is a member of where a test says so (was General; retired P3c)
   [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: true },   // P3a: a plan admin opens every team space, so the space they can't open is someone's PERSONAL one
   [FND]: { id: FND, name: 'Founders', is_default: false, is_private: true, owner_user_id: U(9), is_founders: true },
   [PERS]: { id: PERS, name: 'Personal', is_default: false, is_private: true, owner_user_id: ME, is_founders: false, is_personal: true },   // P3b: ME's personal space — what ensure_personal_space returns
@@ -241,7 +241,7 @@ test('getPlanTree (F): one items read, one batched task read, private-space task
 
 test('getPlanTree (below F): the Founders\'-space and private tasks are in no count, hidden 0, no hidden_total; unknown theme → 404', async () => {
   const rows = TREE_ITEMS.map(i => ({ ...i, level: i.kind === 'theme' ? 'T' : 'O', target_text: null }));
-  const r = await run(stub({ planRows: rows, tasks: TREE_TASKS, members: [FND] }), { get: { action: 'getPlanTree', mine: '1' } });
+  const r = await run(stub({ planRows: rows, tasks: TREE_TASKS, members: [FND, G] }), { get: { action: 'getPlanTree', mine: '1' } });
   assert.equal(r.status, 200, JSON.stringify(r.j));
   const m = r.j.data.items.find(i => i.id === U(301));
   assert.deepEqual(m.counts, { open: 1, done: 0, overdue: 0, hidden: 0 });
@@ -265,7 +265,7 @@ test('getPlanTree: a result under a milestone the caller can\'t see hangs under 
     { id: U(302), parent_id: U(310), kind: 'result' }, { id: U(320), parent_id: null, kind: 'theme' }];
   const tasks = [TK(5, { plan_item_id: U(302) }), TK(6, { plan_item_id: U(310), title: 'ZZ task on hidden ms' }), TK(7, { plan_item_id: U(302), space_id: PRIV })];
   for (const theme of [null, U(300)]) {
-    const s = stub({ planRows: rows, structure, tasks });
+    const s = stub({ planRows: rows, structure, tasks, members: [G] });
     const r = await run(s, { get: { action: 'getPlanTree', ...(theme ? { theme } : {}) } });
     assert.equal(r.status, 200, JSON.stringify(r.j));
     assert.deepEqual(r.j.data.items.map(i => [i.id, i.parent_id]), [[U(300), null], [U(302), U(300)]], String(theme));

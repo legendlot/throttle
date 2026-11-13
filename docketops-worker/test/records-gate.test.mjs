@@ -19,7 +19,7 @@ const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ME = U(1), MEE = U(2), OE = U(3), OWNER = U(9), D1 = U(10), D2 = U(11), G = U(20), PRIV = U(21), P2 = U(23), TPL = U(30), SEC = U(31), PERS = U(27), HOME = U(32);   // PERS: ME's personal space (ensure_personal_space); HOME: D2's home space
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const SPACES = {
-  [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false, archived_at: null },
+  [G]: { id: G, name: 'ZZ my team', is_default: false, is_private: true, owner_user_id: OWNER, is_founders: false, is_personal: false, archived_at: null },   // shared with ME's team (D2) — was General (retired P3c)
   [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: OWNER, is_founders: true, archived_at: null },
   [PERS]: { id: PERS, name: 'Personal', is_default: false, is_private: true, owner_user_id: ME, is_founders: false, is_personal: true, archived_at: null },
   [HOME]: { id: HOME, name: 'ZZ home', is_default: false, is_private: true, owner_user_id: OWNER, is_founders: false, is_personal: false, archived_at: null, home_department_id: D2 },
@@ -60,15 +60,15 @@ function stub({ records = [], items = [], links = [], tasks = [], members = [], 
     if (p.includes('/rpc/ensure_personal_space')) return body(PERS);
     if (p.includes('/rpc/next_task_seq')) return body('DKT-900');
     if (p.includes('/rpc/')) return body([]);
-    // spaces: accessibleSpaces (General + private where owner/member), loadSpace, keepAccessible
+    // spaces: accessibleSpaces (private where owner/member/team-shared), loadSpace, keepAccessible
     if (p.startsWith('/rest/v1/spaces?home_department_id=eq.')) return body(home && eq('home_department_id') === D2 ? [SPACES[HOME]] : []);
-    if (p.startsWith('/rest/v1/spaces?is_default=eq.true')) return body([SPACES[G]]);
-    if (p.startsWith('/rest/v1/spaces?is_private=eq.true')) return body(Object.values(SPACES).filter(s => s.is_private && !s.is_personal /* PERS opens by id only; the list tests predate it */ && (s.owner_user_id === ME || members.includes(s.id))));
+    if (p.startsWith('/rest/v1/spaces?is_private=eq.true')) return body(Object.values(SPACES).filter(s => s.is_private && !s.is_personal /* PERS opens by id only; the list tests predate it */ && (s.owner_user_id === ME || members.includes(s.id) || s.id === G)));
     if (p.startsWith('/rest/v1/spaces?id=eq.') && method === 'GET') return body(SPACES[eq('id')] ? [SPACES[eq('id')]] : []);
     if (p.startsWith('/rest/v1/spaces?id=in.')) return body(inIds(q.get('id')).map(id => SPACES[id]).filter(Boolean));
     if (p.startsWith('/rest/v1/space_members?space_id=eq.')) return body(members.includes(eq('space_id')) ? [{ user_id: ME }] : []);
     if (p.startsWith('/rest/v1/space_members?space_id=in.')) return body(members.filter(m => inIds(q.get('space_id')).includes(m)).map(space_id => ({ space_id })));
     if (p.startsWith('/rest/v1/space_members?user_id=eq.')) return body(members.map(space_id => ({ space_id })));
+    if (p.startsWith('/rest/v1/space_teams?department_id=eq.')) return body(eq('department_id') === D2 ? [{ space_id: G }] : []);
     // records
     if (u.pathname === '/rest/v1/checklist_records') {
       if (method === 'GET') {
@@ -129,7 +129,7 @@ test('a private (Founders\') record: a non-member never sees it — list, by id,
   assert.equal(list.status, 200, JSON.stringify(list.j));
   assert.deepEqual(list.j.data.map(r => r.id), [U(201)]);
   // the list read itself is scoped to the caller's spaces — never fetched, not just filtered
-  assert.ok(s.calls.some(c => c.p.startsWith('/rest/v1/checklist_records?space_id=in.(' + G + ')')), 'list scoped to General only');
+  assert.ok(s.calls.some(c => c.p.startsWith('/rest/v1/checklist_records?space_id=in.(' + G + ')')), 'list scoped to the team space only');
   const one = await run(s, { get: { action: 'getChecklistRecord', id: U(202) } });
   assert.equal(one.status, 404);
   const t = await run(s, { get: { action: 'getTask', id: U(101) } });
@@ -154,6 +154,18 @@ test('…a member of that space sees it everywhere (positive control)', async ()
   const t = await run(s, { get: { action: 'getTask', id: U(101) } });
   assert.deepEqual(t.j.data.checklists.map(c => [c.title, c.done, c.total]), [['ZZ secret launch', 1, 2]]);
   assert.equal(t.j.data.checklists_hidden, 0);
+});
+
+test('getChecklistRecords space_id (+ Link checklist): only that space\'s records, read scoped to it; a space you can\'t open → [] unread', async () => {
+  const s = stub({ records: [REC(1), PRIV_REC], members: [PRIV] });
+  const r = await run(s, { get: { action: 'getChecklistRecords', space_id: PRIV } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  assert.deepEqual(r.j.data.map(x => x.id), [U(202)]);
+  assert.ok(s.calls.some(c => c.p.startsWith('/rest/v1/checklist_records?space_id=in.(' + PRIV + ')')), 'read scoped to the one space');
+  const n = stub({ records: [REC(1), PRIV_REC] });   // not a member of PRIV
+  const r2 = await run(n, { get: { action: 'getChecklistRecords', space_id: PRIV } });
+  assert.deepEqual(r2.j.data, []);
+  assert.ok(!n.calls.some(c => c.p.startsWith('/rest/v1/checklist_records?')), 'no record read');
 });
 
 // ── who may do what ──
@@ -189,7 +201,7 @@ test('edit title / owner / product / archive: a viewer who is not owner, creator
 });
 
 // ── links ──
-test('link: same space only — a private record onto a task elsewhere, and (P3c) a General record, are refused (link_cross_space)', async () => {
+test('link: same space only — a private record onto a task elsewhere, and a team-space record onto a private task, are refused (link_cross_space)', async () => {
   const s = stub({ records: [PRIV_REC], tasks: [T(1)], members: [PRIV] });
   const r = await run(s, { post: { action: 'linkTaskChecklist', task_id: U(101), record_id: U(202) } });
   assert.equal(r.status, 422, JSON.stringify(r.j));
@@ -197,7 +209,7 @@ test('link: same space only — a private record onto a task elsewhere, and (P3c
   assert.equal(writes(s, '/rest/v1/task_checklist_links').length, 0);
   const same = stub({ records: [PRIV_REC], tasks: [T(2, { space_id: PRIV })], members: [PRIV] });
   assert.equal((await run(same, { post: { action: 'linkTaskChecklist', task_id: U(102), record_id: U(202) } })).status, 200);
-  const gen = stub({ records: [REC(1)], tasks: [T(2, { space_id: PRIV })], members: [PRIV] });   // P3c: General no longer links anywhere
+  const gen = stub({ records: [REC(1)], tasks: [T(2, { space_id: PRIV })], members: [PRIV] });   // the team space's record, a task in PRIV
   const g = await run(gen, { post: { action: 'linkTaskChecklist', task_id: U(102), record_id: U(201) } });
   assert.equal(g.status, 422, JSON.stringify(g.j)); assert.equal(g.j.error, 'link_cross_space: a checklist links only to tasks in its own space');
   assert.equal(writes(gen, '/rest/v1/task_checklist_links').length, 0);
@@ -245,7 +257,7 @@ test('saveChecklistTemplate: a record template takes no schedule, bumps its vers
 
 // ── review fixes (K) ──
 test('getChecklistRecord: linked / item / history tasks the caller can\'t open show no title or number', async () => {
-  const hiddenT = T(5, { title: 'ZZ hidden task', task_no: 'DKT-5', owner_employee_id: OE, created_by_user_id: OWNER, department_id: D1 });
+  const hiddenT = T(5, { title: 'ZZ hidden task', task_no: 'DKT-5', owner_employee_id: OE, created_by_user_id: OWNER, department_id: D1, space_id: P2 });   // a space ME can't open
   const mineT = T(6, { title: 'ZZ my task' });
   const s = stub({ records: [REC(1)], tasks: [hiddenT, mineT], items: [ITEM(1, 1, { task_id: U(105) }), ITEM(2, 1, { task_id: U(106) })],
     links: [{ id: U(401), task_id: U(105), record_id: U(201) }, { id: U(402), task_id: U(106), record_id: U(201) }],
@@ -276,7 +288,7 @@ test('pull-updates banner only while the record is open', async () => {
   assert.equal(p.status, 409);
 });
 
-test('moveTask: a task tied to a record in another space is refused (linked, item task, or its sub-task) — a General record too (P3c); into the record\'s space it moves', async () => {
+test('moveTask: a task tied to a record in another space is refused (linked, item task, or its sub-task) — a third space\'s record too; into the record\'s space it moves', async () => {
   const recP2 = REC(3, { space_id: P2 });
   const cases = [
     ['linked', { links: [{ id: U(401), task_id: U(101), record_id: U(203) }] }],
@@ -326,7 +338,7 @@ test('createTaskFromRecordItem: losing the claim race still links the new task a
 });
 
 test('link / unlink need edit rights on the task; unlink works on an abandoned task; an archived-record refusal is a 409', async () => {
-  const viewOnly = T(8, { owner_employee_id: OE, created_by_user_id: OWNER });   // visible via my department, not editable
+  const viewOnly = T(8, { owner_employee_id: OE, created_by_user_id: OWNER });   // visible via my team's space, not editable
   const s = stub({ records: [REC(1)], tasks: [viewOnly] });
   assert.equal((await run(s, { post: { action: 'linkTaskChecklist', task_id: U(108), record_id: U(201) } })).status, 403);
   assert.equal(writes(s, '/rest/v1/task_checklist_links').length, 0);

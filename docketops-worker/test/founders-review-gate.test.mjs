@@ -19,7 +19,7 @@ const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ME = U(1), MEE = U(2), VIN = U(5), OE = U(3), D1 = U(10), D2 = U(11), G = U(20), PRIV = U(21), P1 = U(300);
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const SPACES = {
-  [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false },
+  [G]: { id: G, name: 'ZZ team', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: false, archived_at: null },   // a team space (was General; retired P3c) — the plan admin opens it
   [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: true },   // P3a: a plan admin opens every team space, so the space they can't open is someone's PERSONAL one
 };
 const addD = (d, n) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };

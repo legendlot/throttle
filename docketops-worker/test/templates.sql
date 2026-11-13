@@ -15,7 +15,8 @@ declare
   A uuid := '107ea993-f5ed-4221-ba97-b08e38dcd00c';     -- a super actor
   A1 uuid := '00000000-0000-4000-8000-0000000000a1'; A2 uuid := '00000000-0000-4000-8000-0000000000a2'; A3 uuid := '00000000-0000-4000-8000-0000000000a3';
   A4 uuid := '00000000-0000-4000-8000-0000000000a4';     -- a plan admin outside the Founders' space
-  G uuid := (select id from docket.spaces where is_default limit 1);
+  G uuid;   -- the ZZ team space every apply targets (made below; General is retired, 0039, and plan_template_apply's
+            -- old no-space fallback to it is now refused). The worker always sends p_payload.space_id; so does this test.
   E1 uuid := (select id from podium.employees e where status = 'active' and department_id is not null
                and not exists (select 1 from docket.plan_items i where i.owner_employee_id = e.id) order by id limit 1);
   E2 uuid := (select id from podium.employees e where status = 'active' and department_id is not null
@@ -403,6 +404,10 @@ $mig$;
   update podium.employees set auth_user_id = A3 where id = E3;
   insert into docket.space_members (space_id, user_id)
     select s.id, A from docket.spaces s where s.is_founders and not exists (select 1 from docket.space_members m where m.space_id = s.id and m.user_id = A);
+  -- the target team space: A owns it, the lead A1 is a member (both pass plan_template_apply's space gate)
+  insert into docket.spaces (name, is_private, is_default, is_personal, owner_user_id, created_by_user_id)
+    values ('ZZ tpl team', true, false, false, A, A) returning id into G;
+  insert into docket.space_members (space_id, user_id) values (G, A), (G, A1);
 
   -- 1 lead: E1 owns an agreed milestone, E3 owns nothing
   out := out || '1:' || docket.plan_is_lead(E1)::text || '/' || docket.plan_is_lead(E3)::text || ' ';
@@ -453,29 +458,29 @@ $mig$;
   tf := (docket.plan_template_save(A, null, true, ft)->>'id')::uuid;
   roles := jsonb_build_object('lead', E1, 'DOER', E2);
   -- a lead can't see / apply it; bad inputs refused before anything is written
-  out := out || '4:' || coalesce(docket.plan_template_apply(A1, E1, false, tf, jsonb_build_object('anchor_id', th, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('anchor_id', ms, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('anchor_id', th, 'anchor_date', '2026-02-30', 'roles', roles))->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('anchor_id', th, 'anchor_date', today, 'roles', jsonb_build_object('Lead', E1)))->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('anchor_id', th, 'anchor_date', today, 'roles', roles || jsonb_build_object('Nobody', E1)))->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('anchor_id', th, 'anchor_date', today, 'roles', jsonb_build_object('Lead', E1, 'Doer', EX)))->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('anchor_id', th, 'anchor_date', today, 'roles', roles), 'mcp')->>'code', 'OK') || ','
+  out := out || '4:' || coalesce(docket.plan_template_apply(A1, E1, false, tf, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('space_id', G, 'anchor_id', ms, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', '2026-02-30', 'roles', roles))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', today, 'roles', jsonb_build_object('Lead', E1)))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', today, 'roles', roles || jsonb_build_object('Nobody', E1)))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', today, 'roles', jsonb_build_object('Lead', E1, 'Doer', EX)))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A, null, true, tf, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', today, 'roles', roles), 'mcp')->>'code', 'OK') || ','
     || (select count(*) from docket.plan_items where title like 'zz gen%')::text || ' ';
 
   -- 5 all-or-nothing: a trigger exception on the LAST task rolls back the items + tasks already written
   create function pg_temp.zz_boom() returns trigger language plpgsql as $b$ begin
     if new.title = 'zz gen task2' then raise exception 'zz_boom'; end if; return new; end $b$;
   create trigger zz_boom before insert on docket.tasks for each row execute function pg_temp.zz_boom();
-  j := docket.plan_template_apply(A, null, true, tf, jsonb_build_object('anchor_id', th, 'anchor_date', today, 'roles', roles), 'connector');
+  j := docket.plan_template_apply(A, null, true, tf, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', today, 'roles', roles), 'connector');
   out := out || '5:' || coalesce(j->>'code', 'OK') || ',' || (case when j->>'key' is not null then 'key' else 'NOKEY' end) || ','
     || (select count(*) from docket.plan_items where title like 'zz gen%')::text || ','
     || (select count(*) from docket.tasks where title like 'zz gen%')::text || ','
     || case when coalesce(current_setting('docket.source', true), '') = '' then 'reset' else 'LEFT' end || ' ';
   drop trigger zz_boom on docket.tasks;
 
-  -- 6 apply for real (connector): states, codes, General space, deadlines 18:00 IST, history + source,
+  -- 6 apply for real (connector): states, codes, the picked space (G), deadlines 18:00 IST, history + source,
   --   the week entry for the task dated today
-  j := docket.plan_template_apply(A, null, true, tf, jsonb_build_object('anchor_id', th, 'anchor_date', today, 'roles', roles), 'connector');
+  j := docket.plan_template_apply(A, null, true, tf, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', today, 'roles', roles), 'connector');
   out := out || '6:' || coalesce(j->>'code', 'OK') || ','
     || (select string_agg(i.kind || '/' || i.state, '+' order by i.title) from docket.plan_items i where i.title like 'zz gen%') || ','
     || (select string_agg(case when t.space_id = G then 'G' else 'X' end || to_char(t.deadline at time zone 'Asia/Kolkata', 'HH24:MI'), '+' order by t.title)
@@ -491,7 +496,7 @@ $mig$;
     || case when coalesce(current_setting('docket.source', true), '') = '' then 'reset' else 'LEFT:' || current_setting('docket.source', true) end || ' ';
 
   -- 7 a restricted anchor → the tasks land in the Founders' space
-  j := docket.plan_template_apply(A, null, true, tf, jsonb_build_object('anchor_id', thr, 'anchor_date', today, 'roles', roles));
+  j := docket.plan_template_apply(A, null, true, tf, jsonb_build_object('space_id', G, 'anchor_id', thr, 'anchor_date', today, 'roles', roles));
   out := out || '7:' || coalesce(j->>'code', 'OK') || ','
     || coalesce((select string_agg(distinct case when s.is_founders then 'F' else 'NOTF' end, '') from docket.tasks t join docket.spaces s on s.id = t.space_id
           where t.id in (select (x->>'id')::uuid from jsonb_array_elements(coalesce(j->'tasks', '[]')) x)), 'NONE') || ' ';
@@ -499,12 +504,12 @@ $mig$;
   -- 8 leads apply: the anchor milestone's owner (a lead) yes; another lead on someone else's milestone → anchor_not_found;
   --   a non-lead → not_found; a theme anchor → bad_anchor
   roles := jsonb_build_object('Owner', E1, 'Helper', E2);
-  out := out || '8:' || coalesce(docket.plan_template_apply(A2, E2, false, tl, jsonb_build_object('anchor_id', ms, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A3, E3, false, tl, jsonb_build_object('anchor_id', ms, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A, null, true, tl, jsonb_build_object('anchor_id', th, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A1, E1, false, tl, jsonb_build_object('anchor_id', rs, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A1, E1, false, tl, jsonb_build_object('anchor_id', th, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ',';
-  j := docket.plan_template_apply(A1, E1, false, tl, jsonb_build_object('anchor_id', ms, 'anchor_date', today, 'roles', roles));
+  out := out || '8:' || coalesce(docket.plan_template_apply(A2, E2, false, tl, jsonb_build_object('space_id', G, 'anchor_id', ms, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A3, E3, false, tl, jsonb_build_object('space_id', G, 'anchor_id', ms, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A, null, true, tl, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A1, E1, false, tl, jsonb_build_object('space_id', G, 'anchor_id', rs, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A1, E1, false, tl, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ',';
+  j := docket.plan_template_apply(A1, E1, false, tl, jsonb_build_object('space_id', G, 'anchor_id', ms, 'anchor_date', today, 'roles', roles));
   out := out || coalesce(j->>'code', 'OK') || ','
     || coalesce((select string_agg(coalesce(p.title, 'NONE'), '+' order by t.title) from docket.tasks t left join docket.plan_items p on p.id = t.plan_item_id
           where t.id in (select (x->>'id')::uuid from jsonb_array_elements(coalesce(j->'tasks', '[]')) x)), 'NONE') || ' ';
@@ -513,15 +518,15 @@ $mig$;
   out := out || '9:' || coalesce(docket.plan_template_archive(A2, false, tl, true)->>'code', 'OK') || ','
     || coalesce(docket.plan_template_archive(A3, false, tl, true)->>'code', 'OK') || ','
     || coalesce(docket.plan_template_archive(A1, false, tl, true)->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A1, E1, false, tl, jsonb_build_object('anchor_id', ms, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A1, E1, false, tl, jsonb_build_object('space_id', G, 'anchor_id', ms, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
     || coalesce(docket.plan_template_save(A1, E1, false, lt || jsonb_build_object('id', tl))->>'code', 'OK') || ','
     || coalesce(docket.plan_template_archive(A1, false, tl, false)->>'code', 'OK') || ','
-    || coalesce(docket.plan_template_apply(A1, E1, false, tl, jsonb_build_object('anchor_id', ms, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
+    || coalesce(docket.plan_template_apply(A1, E1, false, tl, jsonb_build_object('space_id', G, 'anchor_id', ms, 'anchor_date', today, 'roles', roles))->>'code', 'OK') || ','
     || coalesce(docket.plan_template_archive(A1, false, tf, true)->>'code', 'OK') || ' ';
 
   -- 10 the space gate beats admin: a plan admin who isn't in the Founders' space can't apply under a restricted
   --    theme (nothing written)
-  j := docket.plan_template_apply(A4, null, true, tf, jsonb_build_object('anchor_id', thr, 'anchor_date', today, 'roles', jsonb_build_object('lead', E1, 'DOER', E2)), 'connector');
+  j := docket.plan_template_apply(A4, null, true, tf, jsonb_build_object('space_id', G, 'anchor_id', thr, 'anchor_date', today, 'roles', jsonb_build_object('lead', E1, 'DOER', E2)), 'connector');
   out := out || '10:' || coalesce(j->>'code', 'OK') || ','
     || (select count(*) from docket.plan_items i where i.title like 'zz gen%' and i.created_by_user_id = A4)::text || ' ';
 
@@ -532,13 +537,13 @@ $mig$;
     {"key":"t","parent_key":"m","kind":"task","title":"zz bad task","role_label":"Lead","offset_days":1},
     {"key":"l","kind":"milestone","title":"zz bad leaf","role_label":"Lead","offset_days":4}]}'::jsonb)->>'id')::uuid;
   update docket.plan_template_nodes set kind = 'result', done_when = 'd' where template_id = tb and title = 'zz bad leaf';
-  j := docket.plan_template_apply(A, null, true, tb, jsonb_build_object('anchor_id', th, 'anchor_date', today, 'roles', jsonb_build_object('Lead', E1)));
+  j := docket.plan_template_apply(A, null, true, tb, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', today, 'roles', jsonb_build_object('Lead', E1)));
   out := out || '11:' || coalesce(j->>'code', 'OK') || ','
     || case when j->>'key' = (select id::text from docket.plan_template_nodes where template_id = tb and title = 'zz bad leaf') then 'leaf' else 'WRONGKEY' end || ',';
   update docket.plan_template_nodes set kind = 'milestone', done_when = null where template_id = tb and title = 'zz bad leaf';
   update docket.plan_template_nodes set parent_node_id = (select id from docket.plan_template_nodes where template_id = tl and kind = 'result')
    where template_id = tb and title = 'zz bad task';
-  j := docket.plan_template_apply(A, null, true, tb, jsonb_build_object('anchor_id', th, 'anchor_date', today, 'roles', jsonb_build_object('Lead', E1)));
+  j := docket.plan_template_apply(A, null, true, tb, jsonb_build_object('space_id', G, 'anchor_id', th, 'anchor_date', today, 'roles', jsonb_build_object('Lead', E1)));
   out := out || coalesce(j->>'code', 'OK') || ','
     || case when j->>'key' = (select id::text from docket.plan_template_nodes where template_id = tb and title = 'zz bad task') then 'task' else 'WRONGKEY' end || ','
     || (select count(*) from docket.plan_items where title like 'zz bad%')::text || '/' || (select count(*) from docket.tasks where title like 'zz bad%')::text;

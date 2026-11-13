@@ -93,9 +93,8 @@ function stub({ cached = [], tasks = [], profileActive = true, hooksDown = false
     if (p.includes('/rpc/plan_links_for')) return body([{ id: PLAN, level: 'T', state: 'agreed' }]);
     if (p.includes('/rpc/list_my_tasks')) return body(db.tasks);
     if (p.includes('/rpc/')) return body([]);
-    if (p.startsWith('/rest/v1/spaces?is_default=eq.true')) return body([{ id: G }]);
     if (p.startsWith('/rest/v1/spaces?id=eq.') || p.startsWith('/rest/v1/spaces?id=in.')) {
-      const SP = { [G]: { id: G, name: 'General', is_default: true, is_private: false, is_founders: false, owner_user_id: null },
+      const SP = { [G]: { id: G, name: 'ZZ team', is_default: false, is_private: true, is_founders: false, is_personal: false, archived_at: null, owner_user_id: U(9) },
         [PERS]: { id: PERS, name: 'Personal', is_default: false, is_private: true, is_founders: false, is_personal: true, owner_user_id: ME } };
       return body(inIds(q.get('id').replace(/^eq\./, '')).map(id => SP[id]).filter(Boolean));
     }

@@ -6,9 +6,11 @@ do $sr$
 declare
   A uuid := gen_random_uuid(); M uuid := gen_random_uuid(); ME uuid := gen_random_uuid();
   SE uuid := (select id from podium.employees where status = 'active' order by id limit 1);   -- an owner must be a real employee
-  G uuid := (select id from docket.spaces where is_default and archived_at is null limit 1);
+  G uuid;   -- a ZZ private team space made below (General is retired, 0039 — nothing goes into it)
   X uuid; Y uuid; Z uuid; L uuid; j jsonb; th uuid; tr uuid; p1 uuid; p2 uuid; rec record; out text := ''; c int;
 begin
+  insert into docket.spaces (name, is_private, is_default, is_personal, owner_user_id, created_by_user_id)
+    values ('ZZ sr team', true, false, false, A, A) returning id into G;
   insert into docket.tasks (task_no, title, created_by_user_id, space_id) values ('ZZ-SR-1', 'zz x', A, G) returning id into X;
   insert into docket.tasks (task_no, title, created_by_user_id, space_id) values ('ZZ-SR-2', 'zz y', A, G) returning id into Y;
   insert into docket.tasks (task_no, title, created_by_user_id, space_id) values ('ZZ-SR-3', 'zz z', A, G) returning id into Z;

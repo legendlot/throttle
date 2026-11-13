@@ -20,13 +20,15 @@ const code = readFileSync(join(SRC, 'index.js'), 'utf8').replace(/from '\.\/([^'
 const worker = (await import('data:text/javascript,' + encodeURIComponent(code))).default;
 
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-const ME = U(1), MEE = U(2), OE = U(3), OTHER = U(4), D1 = U(10), D2 = U(11), G = U(20), PRIV = U(21), FND = U(22);
+const ME = U(1), MEE = U(2), OE = U(3), OTHER = U(4), D1 = U(10), D2 = U(11), G = U(20), PRIV = U(21), FND = U(22), G2 = U(23);
 const TH = U(200), TH2 = U(201), MS = U(202);
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const ROLES = { zz_super: { docket_plan_admin: true }, zz_super_review: { docket_plan_admin: true, docket_review: true },
   zz_admin: { docket_admin: true }, zz_assoc: { docket_review: true }, zz_plain: {} };
 const SPACES = {
-  [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false },
+  // G / G2: D1's and D2's team spaces (was General; retired P3c). G is shared with the viewer's team (D1), G2 isn't.
+  [G]: { id: G, name: 'ZZ team 1', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: false, archived_at: null },
+  [G2]: { id: G2, name: 'ZZ team 2', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: false, archived_at: null },
   [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false },
   [FND]: { id: FND, name: 'Founders', is_default: false, is_private: true, owner_user_id: U(9), is_founders: true },
 };
@@ -35,10 +37,10 @@ const T = (n, o) => ({ id: U(100 + n), task_no: `DKT-${n}`, title: `ZZ t${n}`, s
   assignee_employee_id: null, created_by_user_id: U(9), department_id: D1, deadline: `${TODAY}T06:30:00.000Z`, revised_deadline: null,
   space_id: G, plan_item_id: null, parent_task_id: null, created_at: '2026-01-01T00:00:00Z', is_recurring: false, ...o });
 const TASKS = [
-  T(0, { plan_item_id: MS }),                                       // General, the viewer's team → visible
+  T(0, { plan_item_id: MS }),                                       // the viewer's team space → visible
   T(1, { space_id: PRIV, title: 'ZZ secret', task_no: 'DKT-SECRET' }), // private, not a member → hidden
   T(2, { space_id: FND, title: 'ZZ founders' }),                    // Founders' space (the viewer IS a member) → never below F
-  T(3, { department_id: D2, title: 'ZZ other team' }),              // General, another team, not theirs → hidden
+  T(3, { department_id: D2, title: 'ZZ other team', space_id: G2 }), // another team's space, not shared → hidden
 ];
 const ROW = (t, outcome) => ({ task_id: t.id, task_no: t.task_no, title: t.title, space_id: t.space_id, department_id: t.department_id,
   owner_employee_id: t.owner_employee_id, committed_deadline: t.deadline, effective_deadline: t.deadline, entry_reason: 'week_start',
@@ -99,6 +101,7 @@ function stub({ role = 'zz_assoc', otherRole = 'zz_plain' } = {}) {
       return body(ids.map(id => SPACES[id]).filter(Boolean));
     }
     if (p.startsWith('/rest/v1/space_members?')) return body([{ space_id: FND }]);
+    if (p.startsWith('/rest/v1/space_teams?')) return body(q.get('department_id') === `eq.${D1}` ? [{ space_id: G }] : []);
     if (p.startsWith('/rest/v1/tasks?id=in.') && method === 'GET') {
       const ids = q.get('id').replace(/^in\.\(|\)$/g, '').split(',');
       return body(TASKS.filter(t => ids.includes(t.id)));

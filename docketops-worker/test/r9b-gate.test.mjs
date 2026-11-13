@@ -18,7 +18,7 @@ const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ME = U(1), MEE = U(2), D1 = U(10), D2 = U(11), G = U(20), PRIV = U(21), FND = U(22), PERS = U(27);   // PERS: ME's personal space — what ensure_personal_space returns (P3b: no-space creates land there)
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const SPACES = {
-  [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false },
+  [G]: { id: G, name: 'ZZ team', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: false, archived_at: null },   // a team space (was General; retired P3c)
   [PRIV]: { id: PRIV, name: 'ZZ Private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false },
   [FND]: { id: FND, name: 'Founders', is_default: false, is_private: true, owner_user_id: U(9), is_founders: true },
   [PERS]: { id: PERS, name: 'Personal', is_default: false, is_private: true, owner_user_id: ME, is_founders: false, is_personal: true },
@@ -57,7 +57,6 @@ function stub({ role = null, planRows = [], readings = [], readingsFail = false,
     if (p.startsWith('/rest/v1/plan_proposals?')) return body(proposals);
     if (p.startsWith('/rest/v1/spaces?or=')) return body([{ id: FND, archived_at: null, is_founders: true }]);
     if (p.startsWith('/rest/v1/spaces?archived_at=not.is.null')) return body([]);
-    if (p.startsWith('/rest/v1/spaces?is_default=eq.true')) return body([{ id: G }]);
     if (p.startsWith('/rest/v1/spaces?id=eq.')) return body([SPACES[q.get('id').slice(3)]].filter(Boolean));
     if (p.startsWith('/rest/v1/spaces?id=in.')) return body(inIds(q.get('id')).map(id => SPACES[id]).filter(Boolean));
     if (p.startsWith('/rest/v1/space_members?')) return body(members.map(space_id => ({ space_id })));

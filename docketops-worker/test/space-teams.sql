@@ -1,14 +1,15 @@
 -- 0034 + 0035 (docket_space_teams_v1 / _guard_v1): team shares in the table and in plan_template_apply's gate.
--- Template tasks land in General (open) or the Founders' space, which is NEVER team-shared: the trigger refuses
+-- Under a restricted theme template tasks land in the Founders' space, which is NEVER team-shared: the trigger refuses
 -- the row, and the gate's team clause ignores the Founders' space even if a row got in (the trigger is disabled
--- inside the rollback to prove it). One DO block that always rolls back (ends by raising RESULT …).
+-- inside the rollback to prove it). General (archived since 0039) is still refused a share. One DO block that always
+-- rolls back (ends by raising RESULT …).
 -- EXPECT: 1:forbidden_space 2:trig=founders_space,general_is_system,private_ok 3:stray=forbidden_space 4:rls=t,anon=f,svc=t
 do $st$
 declare
   A uuid := '107ea993-f5ed-4221-ba97-b08e38dcd00c';     -- a super actor (saves the template)
   L uuid; D uuid; E1 uuid;   -- L = a real login outside the Founders' space; E1 = the template's role holder
   FS uuid := (select id from docket.spaces where is_founders and archived_at is null limit 1);
-  G uuid := (select id from docket.spaces where is_default limit 1);
+  G uuid := (select id from docket.spaces where is_default limit 1);   -- General, archived (0039): only to prove it can't be shared
   P uuid; thr uuid; tf uuid; j jsonb; out text := ''; today date := (now() at time zone 'Asia/Kolkata')::date;
 begin
   select e.auth_user_id, e.department_id into L, D from podium.employees e

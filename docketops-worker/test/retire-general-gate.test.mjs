@@ -173,6 +173,9 @@ test('getMe: default_space_id = team home space, else Personal — no ensure_per
   assert.equal(r.j.data.default_space_id, PERS);
   assert.equal(s.calls.filter(c => c.p.includes('ensure_personal_space')).length, 0);
   assert.ok(!r.j.data.spaces.some(x => x.id === G), 'an archived General is not in the sidebar');
+  // getMe re-runs after every write: no General lookup on that path (it always came back empty after 0039)
+  assert.ok(!s.calls.some(c => /\/rest\/v1\/spaces\?[^ ]*is_default=eq\.true/.test(c.p)), 'getMe never looks General up');
+  assert.equal(rpc(s, 'programs_for_user')[0].body.p_default_space_id, null);
   // a view_all holder SEES every team space, but their default is still one they can write to
   s = stub({ perms: { docket_view_all: true } });
   r = await run(s, { get: { action: 'getMe' } });
@@ -214,13 +217,12 @@ test('canWriteSpace: nothing goes into General (live or archived) or an archived
   r = await run(s, { post: { action: 'createChecklistRecord', data: { template_id: TPL, title: 'ZZ r', space_id: ARCHT } } });
   assert.equal(r.status, 403, JSON.stringify(r.j)); assert.equal(r.j.error, 'forbidden_space');
 });
-test('an archived General opens nothing by id (a live one still did)', async () => {
-  let s = stub({ general: ARCH_G });
-  let r = await run(s, { get: { action: 'getTasks', space_id: G } });
-  assert.equal(r.status, 403, JSON.stringify(r.j)); assert.equal(r.j.error, 'forbidden_space');
-  s = stub({ general: LIVE_G });
-  r = await run(s, { get: { action: 'getTasks', space_id: G } });
-  assert.equal(r.status, 200, JSON.stringify(r.j));
+test('General opens nothing by id — archived, or even un-archived by hand (its live-General read path is gone, P3c cleanup)', async () => {
+  for (const general of [ARCH_G, LIVE_G]) {
+    const s = stub({ general });
+    const r = await run(s, { get: { action: 'getTasks', space_id: G } });
+    assert.equal(r.status, 403, JSON.stringify(r.j)); assert.equal(r.j.error, 'forbidden_space');
+  }
 });
 test('recoverSpace never brings General back (general_is_system); other archived spaces keep their rules', async () => {
   for (const general of [ARCH_G, LIVE_G]) {

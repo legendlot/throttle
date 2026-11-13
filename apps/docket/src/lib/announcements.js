@@ -41,16 +41,25 @@ export function expiryDateInput(iso) {
 // Today in IST, for the date input's min.
 export function todayIst(nowMs = Date.now()) { return new Date(nowMs + 330 * 60000).toISOString().slice(0, 10); }
 
+// A team's display name from getDepartments (which carries parent_department_id): a sub-team reads "Parent › Child",
+// because Podium has same-named sub-teams (two "Build", two "Cars"). Used wherever a team list is shown — the
+// composer, /admin/announcements, a space's team shares. → { [department id]: label }
+export function teamLabels(departments) {
+  const byId = Object.fromEntries((departments || []).map(d => [String(d.id), d]));
+  const out = {};
+  for (const d of departments || []) {
+    const p = d.parent_department_id && byId[String(d.parent_department_id)];
+    out[d.id] = p ? `${p.name || 'Team'} › ${d.name || 'Team'}` : (d.name || 'Team');
+  }
+  return out;
+}
+
 // The teams the composer offers: exactly can_announce.department_ids (a head's teams and everything below them),
-// named from getDepartments — a sub-team as "Parent › Child" — sorted by that label.
+// named by teamLabels, sorted by that label.
 export function allowedTeams(canAnnounce, departments) {
   const ids = new Set((canAnnounce?.department_ids || []).map(String));
-  const byId = Object.fromEntries((departments || []).map(d => [String(d.id), d]));
-  const label = (d) => {
-    const p = d.parent_department_id && byId[String(d.parent_department_id)];
-    return p ? `${p.name || 'Team'} › ${d.name || 'Team'}` : (d.name || 'Team');
-  };
-  return (departments || []).filter(d => ids.has(String(d.id))).map(d => ({ id: d.id, name: label(d) }))
+  const label = teamLabels(departments);
+  return (departments || []).filter(d => ids.has(String(d.id))).map(d => ({ id: d.id, name: label[d.id] }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

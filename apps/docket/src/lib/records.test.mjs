@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recordProgress, progressLabel, progressPct, groupSections, hiddenChecklistsText, recordErrorText, createTaskErrorText, tickSuggestion } from './records.js';
+import { recordProgress, progressLabel, progressPct, groupSections, hiddenChecklistsText, recordErrorText, createTaskErrorText, tickSuggestion, recordsInSpace, recordPickerEmptyText } from './records.js';
 
 test('progress label and percent', () => {
   const p = recordProgress([{ state: 'done' }, { state: 'na' }, { state: 'open' }]);
@@ -30,4 +30,13 @@ test('createTask refusals after the task exists name it', () => {
   assert.equal(createTaskErrorText(e({ error: 'item_has_task', task_no: 'DKT-900', other_task_no: null })), 'Created DKT-900 but the item already had a task');
   assert.match(createTaskErrorText(e({ error: 'link_failed: created DKT-900', task_no: 'DKT-900' })), /^Created DKT-900, but/);
   assert.equal(createTaskErrorText(e({ error: 'item_has_task' })), 'This item already has a task.');
+});
+
+test('+ Link checklist offers only records in the task\'s own space (P3c); no space → nothing', () => {
+  const rows = [{ id: 'a', space_id: 'S1' }, { id: 'b', space_id: 'S2' }, null, { id: 'c', space_id: 'S1' }];
+  assert.deepEqual(recordsInSpace(rows, 'S1').map(r => r.id), ['a', 'c']);
+  assert.deepEqual(recordsInSpace(rows, null), []);
+  assert.deepEqual(recordsInSpace(undefined, 'S1'), []);
+  assert.equal(recordPickerEmptyText(''), 'No records in this space');
+  assert.equal(recordPickerEmptyText('  badger '), 'No matching records in this space');
 });

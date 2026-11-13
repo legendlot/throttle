@@ -15,7 +15,7 @@ const code = readFileSync(join(SRC, 'index.js'), 'utf8').replace(/from '\.\/([^'
 const worker = (await import('data:text/javascript,' + encodeURIComponent(code))).default;
 
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-const ME = U(1), MEE = U(2), OE = U(3), D1 = U(10), D2 = U(11), D3 = U(12), G = U(20), PRIV = U(21), FND = U(22);
+const ME = U(1), MEE = U(2), OE = U(3), D1 = U(10), D2 = U(11), D3 = U(12), G = U(20), PRIV = U(21), FND = U(22), G2 = U(23);
 // The current IST week (Sunday-ending, the default), computed so the suite doesn't rot with the calendar.
 const addD = (d, n) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 const TODAY = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
@@ -23,7 +23,9 @@ const WE = addD(TODAY, (7 - (new Date(`${TODAY}T00:00:00Z`).getUTCDay() || 7)) %
 const at = (d, hhmm = '12:00') => new Date(Date.parse(`${d}T${hhmm}:00+05:30`)).toISOString();
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const SPACES = {
-  [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false },
+  // G / G2: D1's and D2's team spaces (was General; retired P3c), each shared with its own team.
+  [G]: { id: G, name: 'ZZ team 1', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: false, archived_at: null },
+  [G2]: { id: G2, name: 'ZZ team 2', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: false, archived_at: null },
   [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: true },   // P3a: a plan admin opens every team space, so the space they can't open is someone's PERSONAL one
   [FND]: { id: FND, name: 'Founders', is_default: false, is_private: true, owner_user_id: U(9), is_founders: true },
 };
@@ -31,11 +33,11 @@ const T = (n, o) => ({ id: U(100 + n), task_no: `DKT-${n}`, title: `ZZ t${n}`, s
   assignee_employee_id: null, created_by_user_id: U(9), department_id: D1, deadline: '2026-11-11T12:30:00.000Z', revised_deadline: null,
   space_id: G, plan_item_id: null, parent_task_id: null, created_at: '2026-01-01T00:00:00Z', is_recurring: false, ...o });
 const TASKS = [
-  T(0, {}),                                                         // General, the viewer's team → visible to all
+  T(0, {}),                                                         // the viewer's team space → visible to the team
   T(1, { space_id: PRIV, title: 'ZZ secret', task_no: 'DKT-SECRET' }), // private, nobody here is a member → hidden
   T(2, { space_id: FND, title: 'ZZ founders' }),                    // Founders' space (the viewer IS a member) → never below F
-  T(3, { department_id: D2 }),                                      // General, now another team, not theirs → hidden from the lead
-  T(4, { department_id: D2 }),                                      // other team, frozen D2 → only in "all"
+  T(3, { department_id: D2, space_id: G2 }),                        // another team's space, not theirs → hidden from the lead
+  T(4, { department_id: D2, space_id: G2 }),                        // other team, frozen D2 → only in "all"
 ];
 const ROW = (t, frozenDept, outcome) => ({ task_id: t.id, task_no: t.task_no, title: t.title, space_id: t.space_id, department_id: frozenDept,
   owner_employee_id: t.owner_employee_id, committed_deadline: t.deadline, effective_deadline: t.deadline, entry_reason: 'week_start',
@@ -49,7 +51,7 @@ const ITEMS = [{ id: U(300), kind: 'milestone', code: 'M09', parent_id: U(299), 
   department_id: D3, due_date: TODAY, revised_due_date: null, state: 'agreed', level: 'F', measure: null }];
 const THIS_ROWS = [ROW(TASKS[0], D1, 'miss'), ROW(TASKS[1], D1, 'miss'), ROW(TASKS[2], D1, 'due'), ROW(TASKS[3], D1, 'on_time'), ROW(TASKS[4], D2, 'on_time')];
 
-function stub({ superAdmin = false, dept = D1, snapshot = null } = {}) {
+function stub({ superAdmin = false, dept = D1, snapshot = null, mine = false } = {}) {
   const calls = [];
   const today = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
   const fn = async (input, init = {}) => {
@@ -87,13 +89,14 @@ function stub({ superAdmin = false, dept = D1, snapshot = null } = {}) {
       return body(ids.map(id => SPACES[id]).filter(Boolean));
     }
     if (p.startsWith('/rest/v1/space_members?')) return body([{ space_id: FND }]);
+    if (p.startsWith('/rest/v1/space_teams?')) return body(({ [`eq.${D1}`]: [{ space_id: G }], [`eq.${D2}`]: [{ space_id: G2 }] })[q.get('department_id')] || []);
     if (p.startsWith('/rest/v1/review_snapshots') && method === 'POST') return body([{ id: U(500), created_at: '2026-11-12T10:00:00Z' }]);
     if (p.startsWith('/rest/v1/review_snapshots?id=eq.')) return body(snapshot ? [snapshot] : []);
     if (p.startsWith('/rest/v1/review_snapshots')) return body([{ id: U(500), kind: 'provisional', department_id: null, created_at: '2026-11-12T10:00:00Z', created_by: ME }]);
     if (p.startsWith('/rest/v1/tasks?id=eq.') && method === 'GET') return body([{ ...TASKS[0], owner_employee_id: MEE }]);   // their own task (writes)
     if (p.startsWith('/rest/v1/tasks?id=in.') && method === 'GET') {
       const ids = q.get('id').replace(/^in\.\(|\)$/g, '').split(',');
-      return body(TASKS.filter(t => ids.includes(t.id)));
+      return body(TASKS.filter(t => ids.includes(t.id)).map(t => mine ? { ...t, owner_employee_id: MEE } : t));   // mine: their own (bulk writes)
     }
     if (u.pathname === '/rest/v1/tasks' && method === 'GET') {
       if (q.get('plan_item_id')) return body([]);                      // linked tasks
@@ -225,7 +228,7 @@ test('X-LOT-Source: connector stamps task_history.source and p_source; absent �
   const s4 = stub();
   await run(s4, { post: { action: 'reviseDeadline', id: U(100), new_deadline: '2026-11-20T12:30:00.000Z', reason: 'zz' }, headers: { 'X-LOT-Source': 'connector' } });
   assert.equal(s4.calls.find(c => c.p.includes('/rpc/task_set_deadline')).body.p_source, 'connector');
-  const s5 = stub({ superAdmin: true });
+  const s5 = stub({ mine: true });   // their own task (an admin's General-only edit right went with General, P3c)
   await run(s5, { post: { action: 'bulkUpdateTasks', ids: [U(100)], field: 'priority', value: 'P1' }, headers: { 'X-LOT-Source': 'connector' } });
   assert.ok(hist(s5.calls).length && hist(s5.calls).every(r => r.source === 'connector'));
 });

@@ -35,6 +35,13 @@ export const RECORD_STATUS = {
   archived: { label: 'Archived', color: 'var(--text-4)' },
 };
 
+// The + Link checklist picker: a record links only to a task in its OWN space (P3c — the worker refuses the rest with
+// link_cross_space), so only those are offered. No space id → nothing (fail closed).
+export function recordsInSpace(rows, spaceId) {
+  return spaceId ? (rows || []).filter(r => r && r.space_id === spaceId) : [];
+}
+export const recordPickerEmptyText = (q) => (String(q || '').trim() ? 'No matching records in this space' : 'No records in this space');
+
 // "1 checklist you can't see" (the F7 wording for a hidden link).
 export function hiddenChecklistsText(n) {
   const k = Number(n) || 0;

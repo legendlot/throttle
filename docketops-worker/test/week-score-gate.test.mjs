@@ -16,7 +16,7 @@ const worker = (await import('data:text/javascript,' + encodeURIComponent(code))
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ME = U(1), MEE = U(2), OE = U(3), D1 = U(10), G = U(20), PRIV = U(21);
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
-const SPACE = { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false };
+const SPACE = { id: G, name: 'ZZ team', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: false, archived_at: null };   // a team space (was General; retired P3c)
 const PSPACE = { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false, is_personal: true };   // P3a: a plan admin opens every team space, so the space they can't open is someone's PERSONAL one
 const TASK = (o) => ({ id: U(100), task_no: 'DKT-1', title: 'ZZ', status: 'in_progress', priority: 'P2', owner_employee_id: MEE,
   assignee_employee_id: null, created_by_user_id: ME, department_id: D1, deadline: null, revised_deadline: null, space_id: G,

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { channelError, relTime, expiryNote, expiryDateInput, todayIst, allowedTeams, canPost, composerError, mirrorToast,
-  announcementErrorText, mirrorStatus } from './announcements.js';
+  announcementErrorText, mirrorStatus, teamLabels } from './announcements.js';
 
 const NOW = Date.parse('2026-11-14T06:30:00.000Z');   // 12:00 IST
 
@@ -55,6 +55,14 @@ test('worker refusals read as words; an unknown code is left to the caller', () 
 test('composer chips: a sub-team reads "Parent › Child"; only the ids the worker allows', () => {
   const deps = [{ id: 'p', name: 'ZZ Parent' }, { id: 'c', name: 'ZZ Child', parent_department_id: 'p' }, { id: 'x', name: 'ZZ Other' }];
   assert.deepEqual(allowedTeams({ everyone: false, department_ids: ['p', 'c'] }, deps).map(t => t.name), ['ZZ Parent', 'ZZ Parent › ZZ Child']);
+});
+test('team labels: same-named sub-teams read apart as "Parent › Child"; a missing parent leaves the bare name', () => {
+  const deps = [{ id: 'a', name: 'ZZ Ops' }, { id: 'b', name: 'ZZ Sales' }, { id: 'a1', name: 'ZZ Build', parent_department_id: 'a' },
+    { id: 'b1', name: 'ZZ Build', parent_department_id: 'b' }, { id: 'o', name: 'ZZ Orphan', parent_department_id: 'gone' }];
+  const l = teamLabels(deps);
+  assert.equal(l.a1, 'ZZ Ops › ZZ Build'); assert.equal(l.b1, 'ZZ Sales › ZZ Build');
+  assert.equal(l.a, 'ZZ Ops'); assert.equal(l.o, 'ZZ Orphan');
+  assert.deepEqual(teamLabels(null), {});
 });
 test('mirror status line (#6) from the post\'s slack results', () => {
   assert.equal(mirrorStatus([]), 'Slack: pending/none');

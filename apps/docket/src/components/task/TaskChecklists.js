@@ -4,16 +4,17 @@
 // the viewer can't open is only a count (getTask.checklists_hidden — the F7 wording). + Link checklist searches
 // records (getChecklistRecords q=, the same scope as the Records tab) → linkTaskChecklist; ✕ unlinks. Both need
 // edit rights on the task (as dependencies); unlinking also works on an abandoned task, linking doesn't. The
-// worker refuses a record outside the task's own space (link_cross_space).
+// worker refuses a record outside the task's own space (link_cross_space), so the picker asks for and lists only
+// records in that space (space_id + recordsInSpace).
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@throttle/ui';
 import { Plus, X, EyeOff, ClipboardCheck, Loader2 } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../lib/docketopsFetch.js';
-import { hiddenChecklistsText, progressLabel, recordErrorText } from '../../lib/records.js';
+import { hiddenChecklistsText, progressLabel, recordErrorText, recordsInSpace, recordPickerEmptyText } from '../../lib/records.js';
 import { Popover } from '../ui/index.js';
 
-export function ChecklistSearch({ exclude = [], session, onPick }) {
+export function ChecklistSearch({ spaceId, exclude = [], session, onPick }) {
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ rows: [], status: 'idle' });
   const [active, setActive] = useState(0);
@@ -25,18 +26,18 @@ export function ChecklistSearch({ exclude = [], session, onPick }) {
     const id = ++reqRef.current;
     setRes(r => ({ ...r, status: 'loading' }));
     const t = setTimeout(() => {
-      docketopsGet('getChecklistRecords', { q: q.trim(), limit: 20 }, session)
-        .then(rows => { if (reqRef.current === id) setRes({ rows: Array.isArray(rows) ? rows : [], status: 'done' }); })
+      docketopsGet('getChecklistRecords', { q: q.trim(), limit: 20, space_id: spaceId }, session)
+        .then(rows => { if (reqRef.current === id) setRes({ rows: recordsInSpace(Array.isArray(rows) ? rows : [], spaceId), status: 'done' }); })
         .catch(() => { if (reqRef.current === id) setRes({ rows: [], status: 'error' }); });
     }, 180);
     return () => clearTimeout(t);
-  }, [q, session]);
+  }, [q, session, spaceId]);
   const skip = new Set(exclude);
   const rows = res.rows.filter(r => !skip.has(r.id));
   useEffect(() => { setActive(0); }, [res.rows]);
   const cur = Math.min(active, Math.max(0, rows.length - 1));
   async function pick(r) { if (!r || saving) return; setSaving(true); try { await onPick(r); } finally { setSaving(false); } }
-  const empty = res.status === 'loading' && !rows.length ? 'Searching…' : res.status === 'error' ? 'Search failed. Try again.' : !rows.length ? 'No matching records' : null;
+  const empty = res.status === 'loading' && !rows.length ? 'Searching…' : res.status === 'error' ? 'Search failed. Try again.' : !rows.length ? recordPickerEmptyText(q) : null;
   return (
     <div className="dp-search">
       <div className="ui-menu-label">Link a record checklist</div>
@@ -54,7 +55,6 @@ export function ChecklistSearch({ exclude = [], session, onPick }) {
             <ClipboardCheck size={13} aria-hidden />
             <span className="dp-ttl">{r.title}</span>
             <span className="dp-own">{r.progress?.label}</span>
-            {r.space_name && <span className="dp-own">{r.space_name}</span>}
           </button>
         ))}
         {empty && <div className="dp-empty">{empty}</div>}
@@ -67,7 +67,7 @@ export function ChecklistLinkFlow({ open, anchorRef, task, session, onClose, onL
   const { showToast } = useToast();
   return (
     <Popover anchorRef={anchorRef} open={open} onClose={onClose} width={360} className="tv-pop dp-pick">
-      {open && <ChecklistSearch session={session} exclude={(task.checklists || []).map(c => c.record_id)}
+      {open && <ChecklistSearch session={session} spaceId={task.space_id} exclude={(task.checklists || []).map(c => c.record_id)}
         onPick={async (r) => {
           try {
             await docketopsPost('linkTaskChecklist', { task_id: task.id, record_id: r.id }, session);

@@ -106,13 +106,14 @@ function stub({ mode = 'live', testIds = [], tasks = [], identities = [], log = 
     if (p.includes('/departments')) return body([{ id: U(90), name: 'ZZ Founders team' }, { id: U(91), name: 'ZZ Ops' }]);
     // spaces
     if (p.startsWith('/rest/v1/spaces?is_founders=eq.true')) return body([{ id: FS }]);
-    if (p.startsWith('/rest/v1/spaces?is_default=eq.true')) return body([{ id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false }]);
     if (p.startsWith('/rest/v1/spaces?or=')) return body([{ id: FS, archived_at: null, is_founders: true }]);
     if (p.startsWith('/rest/v1/spaces?archived_at=not.is.null')) return body([]);
-    if (p.startsWith('/rest/v1/spaces?')) return body([{ id: G, name: 'General', is_default: true, is_private: false, is_founders: false, owner_user_id: null },
+    // G: ZZ Ops' team space (was General; retired P3c), shared with that team; the founder / Associate read it as plan admin / view_all.
+    if (p.startsWith('/rest/v1/spaces?')) return body([{ id: G, name: 'ZZ Ops', is_default: false, is_private: true, is_founders: false, is_personal: false, archived_at: null, owner_user_id: U(99) },
       { id: FS, name: 'Founders', is_default: false, is_private: true, is_founders: true, owner_user_id: P.FOU.auth_user_id },
       { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, is_founders: false, owner_user_id: U(99) }].filter(s => !q.get('id') || inIds(q.get('id')).includes(s.id) || eq('id') === s.id));
     if (p.startsWith('/rest/v1/space_members?')) return body([]);
+    if (p.startsWith('/rest/v1/space_teams?')) return body(eq('department_id') === U(91) ? [{ space_id: G }] : []);
     // tasks
     if (p.includes('/rpc/list_my_tasks')) return body(tasks.filter(t => t.owner_employee_id === reqBody.p_employee));
     if (p.includes('/rpc/week_score')) return body({ week_end: '2026-11-22', week_start: '2026-11-16', opened: true, final: false, tasks: score });

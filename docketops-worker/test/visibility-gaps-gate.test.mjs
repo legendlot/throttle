@@ -18,7 +18,8 @@ const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ME = U(1), MEE = U(2), OE = U(3), OWNER = U(9), D1 = U(10), D2 = U(11), G = U(20), PRIV = U(21);
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const SPACES = {
-  [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false, archived_at: null },
+  // G: D1's team space (was General; retired P3c) — not shared with ME's team (D2), so ME opens a task in it only by involvement.
+  [G]: { id: G, name: 'ZZ team 1', is_default: false, is_private: true, owner_user_id: OWNER, is_founders: false, is_personal: false, archived_at: null },
   [PRIV]: { id: PRIV, name: 'ZZ private', is_default: false, is_private: true, owner_user_id: OWNER, is_founders: false, archived_at: null },
 };
 const T = (n, o) => ({ id: U(100 + n), task_no: `DKT-${n}`, title: `ZZ t${n}`, status: 'in_progress', priority: 'P2', owner_employee_id: OE,
@@ -43,7 +44,6 @@ function stub({ tasks = [], members = [], collab = [], perms = {} } = {}) {
     if (p.startsWith('/rest/v1/docket_roles?')) return body([{ role_key: 'zz_role', permissions: perms }]);
     if (p.includes('/employees?auth_user_id=eq.' + ME)) return body([{ id: MEE, full_name: 'ZZ Me', department_id: D2, status: 'active' }]);
     if (p.includes('/rpc/')) return body([]);
-    if (p.startsWith('/rest/v1/spaces?is_default=eq.true')) return body([{ id: G }]);
     if (p.startsWith('/rest/v1/spaces?id=eq.') && method === 'GET') return body(SPACES[eq('id')] ? [SPACES[eq('id')]] : []);
     if (p.startsWith('/rest/v1/spaces?id=in.')) return body(inIds(q.get('id')).map(id => SPACES[id]).filter(Boolean));
     if (p.startsWith('/rest/v1/space_members?space_id=eq.')) return body(members.includes(eq('space_id')) ? [{ user_id: ME }] : []);
@@ -72,7 +72,7 @@ async function run(s, { get, post }) {
 const getTask = (s, n) => run(s, { get: { action: 'getTask', id: U(100 + n) } });
 
 // ── (1) the parent crumb ──
-test('getTask (General): my sub-task under a parent I can\'t open → parent null; the sub-task itself still opens', async () => {
+test('getTask (team space, involvement only): my sub-task under a parent I can\'t open → parent null; the sub-task itself still opens', async () => {
   const tasks = [T(1, { title: 'ZZ secret parent' }), T(2, { parent_task_id: U(101), owner_employee_id: MEE })];
   const r = await getTask(stub({ tasks }), 2);
   assert.equal(r.status, 200, JSON.stringify(r.j));
@@ -80,9 +80,15 @@ test('getTask (General): my sub-task under a parent I can\'t open → parent nul
   assert.ok(!JSON.stringify(r.j).includes('ZZ secret parent'));
   assert.equal(r.j.data.parent_task_id, U(101));   // the app keys sub-task behaviour on this, not on parent
 });
-test('getTask (General): the parent crumb shows when the caller can open the parent — dept, collaborator, view_all', async () => {
+// P3c: General's baseline (a team match on the parent opened it) is gone — in a space you can't read, the parent shows
+// only if you are involved in it too; view_all reads every team space, so there the space is flat.
+test('getTask (team space): the parent crumb shows when the caller can open the parent — collaborator, view_all; a team match no longer does', async () => {
   const tasks = (o) => [T(1, { title: 'ZZ parent', ...o }), T(2, { parent_task_id: U(101), owner_employee_id: MEE })];
-  for (const [label, s] of [['dept', stub({ tasks: tasks({ department_id: D2 }) })], ['collaborator', stub({ tasks: tasks(), collab: [U(101)] })],
+  const dept = await getTask(stub({ tasks: tasks({ department_id: D2 }) }), 2);
+  assert.equal(dept.status, 200, JSON.stringify(dept.j));
+  assert.equal(dept.j.data.parent, null);
+  assert.ok(!JSON.stringify(dept.j).includes('ZZ parent'));
+  for (const [label, s] of [['collaborator', stub({ tasks: tasks(), collab: [U(101)] })],
     ['view_all', stub({ tasks: tasks(), perms: { docket_view_all: true } })]]) {
     const r = await getTask(s, 2);
     assert.equal(r.status, 200, label + ' ' + JSON.stringify(r.j));

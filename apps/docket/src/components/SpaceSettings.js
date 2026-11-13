@@ -4,6 +4,7 @@ import { Combobox } from '@throttle/ui';
 import { X, Lock, Trash2, UserPlus, Crown, Users } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../lib/docketopsFetch.js';
 import { planErrorText } from '../lib/plan.js';
+import { teamLabels } from '../lib/announcements.js';
 
 /**
  * Owner-only space settings: rename, share with teams, manage members, transfer ownership, archive.
@@ -51,14 +52,17 @@ export function SpaceSettings({ space, session, employees, showToast, onClose, o
   const headcount = useMemo(() => {
     const n = {}; (employees || []).forEach(e => { if (e.department_id) n[e.department_id] = (n[e.department_id] || 0) + 1; }); return n;
   }, [employees]);
+  // A sub-team reads "Parent › Child" — Podium has same-named sub-teams (two "Build").
+  const teamName = useMemo(() => teamLabels(departments), [departments]);
   const addableTeams = useMemo(() => departments.filter(d => d.active !== false && !teamIds.has(d.id))
-    .map(d => ({ value: d.id, label: `${d.name} · ${headcount[d.id] || 0} ${(headcount[d.id] || 0) === 1 ? 'person' : 'people'}` })), [departments, teamIds, headcount]);
+    .sort((a, b) => teamName[a.id].localeCompare(teamName[b.id]))
+    .map(d => ({ value: d.id, label: `${teamName[d.id]} · ${headcount[d.id] || 0} ${(headcount[d.id] || 0) === 1 ? 'person' : 'people'}` })), [departments, teamIds, headcount, teamName]);
   // People who also get in through a shared team: removing them from People doesn't remove their access.
   const viaTeam = useMemo(() => {
-    const name = {}; teamList.forEach(t => { name[t.department_id] = t.name || 'a team'; });
+    const name = {}; teamList.forEach(t => { name[t.department_id] = teamName[t.department_id] || t.name || 'a team'; });
     const m = {}; (employees || []).forEach(e => { if (e.auth_user_id && e.department_id && name[e.department_id]) m[e.auth_user_id] = name[e.department_id]; });
     return m;
-  }, [teamList, employees]);
+  }, [teamList, employees, teamName]);
   // Non-owner members are the candidates for an ownership transfer.
   const transferable = useMemo(() => members.filter(m => !m.is_owner).map(m => ({ value: m.user_id, label: m.full_name || m.user_id })), [members]);
 
@@ -111,7 +115,7 @@ export function SpaceSettings({ space, session, employees, showToast, onClose, o
             <div style={memberList}>
               {teamList.map(t => (
                 <div key={t.department_id} style={memberRow}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Users size={12} style={{ color: 'var(--text-3)' }} />{t.name || 'Unknown team'}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Users size={12} style={{ color: 'var(--text-3)' }} />{teamName[t.department_id] || t.name || 'Unknown team'}</span>
                   <button style={iconBtnSm} title="Stop sharing with this team" onClick={() => unshareTeam(t.department_id)}><Trash2 size={13} /></button>
                 </div>
               ))}
