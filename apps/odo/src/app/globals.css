@@ -92,6 +92,9 @@
   --text-3: var(--t3);
   --text-4: var(--border-strong);
   --surface-2: var(--surface2);
+  /* Shimmer highlight for @throttle/ui Skeleton (reads --surface-2 → --surface-3). Without it the
+     gradient is invalid and the skeleton paints transparent. */
+  --surface-3: #22232b;
   --state-error-fg: var(--red);
 }
 
