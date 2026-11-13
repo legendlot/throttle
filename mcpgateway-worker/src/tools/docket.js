@@ -2,9 +2,9 @@
 // Supabase JWT, service binding DOCKETOPS), so Docket's own rules decide what they may see and edit
 // (owner / creator / collaborator / own department; docket_admin + docket_view_all widen it).
 // Write safety (Afshaan 2026-11-09 asked for read + write so Claude can manage a task list):
-//   - only single-task actions (and applying a plan template, F9 R9a); no bulk actions, no space/role/
-//     template admin (templates are edited in the app only), no deletes. Programs are retired (F9 R9b,
-//     RULE-DOCKET-004 superseded): no program filter or field; a task row still carries its program read-only
+//   - only single-task actions (and applying a plan template, F9 R9a); no bulk actions, no space/role/program/
+//     template admin (templates are edited in the app only), no deletes. Programs (restored 2026-11-13) are a
+//     free label alongside the plan link: filter, report and field as before F9 R9b
 //     (Docket has no task delete; abandon is reversible via set_status and needs a reason);
 //   - every write is a separate tool with readOnlyHint:false, so Claude asks before each one unless
 //     the person has chosen otherwise in their own Claude settings;
@@ -81,6 +81,9 @@ const PLAN_ITEM = { ...T.uuid, nullable: true, schema: { type: ['string', 'null'
 // null clears. Docket validates (receiver in that department, not the task's own team, top-level only) and
 // never lets these set the acceptance — only docket_accept_handoff does.
 const HANDOFF_ID = { ...T.uuid, nullable: true, schema: { type: ['string', 'null'] } };
+// A task's program (a free cross-space label, alongside the plan link; ids from docket_tasks report=programs);
+// null removes it on an update. Docket refuses an id that does not exist.
+const PROGRAM = { ...T.uuid, nullable: true, schema: { type: ['string', 'null'] } };
 // F9 R9a: a template's roles → people: { "<role label>": "<employee id from docket_tasks report=people>" }. Docket
 // checks every role is mapped to an active person and that no label is foreign to the template.
 const TEMPLATE_ROLES = {
@@ -136,7 +139,7 @@ function writeTool({ name, title, description, action, params, required = [], de
       if (!res.ok) {
         if (res.reason === 'worker denied') return { ok: false, reason: 'docket denied' };
         // docketops' `*_failed: {db}`: most often an id that does not exist (FK). Plain words, no DB text.
-        if (res.serverFail) return { ok: false, userError: 'Docket could not save that change. Check that any ids given (owner, space) came from docket_tasks, and check the task before trying again.' };
+        if (res.serverFail) return { ok: false, userError: 'Docket could not save that change. Check that any ids given (owner, program, space) came from docket_tasks, and check the task before trying again.' };
         if (res.reason === 'unreachable') return { ok: false, reason: 'write unconfirmed' };
         return res;
       }
@@ -149,13 +152,15 @@ function writeTool({ name, title, description, action, params, required = [], de
 const docketTools = [
   reportTool({
     system: 'docket', name: 'docket_tasks', title: 'Docket tasks', binding: 'DOCKETOPS', dropKeys: DOCKET_DROP,
-    description: 'Read Docket: your own task list (tasks you own, created or collaborate on), a space\'s tasks, one task in full (comments, history, collaborators, subtasks), and the spaces you can see. Docket\'s own visibility rules apply.',
-    paramAbout: { status: 'Filter by status.', priority: 'Filter by priority.', overdue: 'Only overdue tasks.', week: 'Only tasks due in one week (IST, Docket\'s week end): this, next, overdue, none (no deadline), or any date YYYY-MM-DD for the week holding it.', q: 'Search text in titles.', space_id: 'The space (from report=spaces). Omit for the default space.', id: 'Task id.' },
+    description: 'Read Docket: your own task list (tasks you own, created or collaborate on), a space\'s tasks, one task in full (comments, history, collaborators, subtasks), the spaces you can see, and all programs (names are visible company-wide; their tasks follow space rules). Docket\'s own visibility rules apply.',
+    paramAbout: { status: 'Filter by status.', priority: 'Filter by priority.', overdue: 'Only overdue tasks.', week: 'Only tasks due in one week (IST, Docket\'s week end): this, next, overdue, none (no deadline), or any date YYYY-MM-DD for the week holding it.', q: 'Search text in titles.', program_id: 'Limit to one program.', space_id: 'The space (from report=spaces). Omit for the default space.', id: 'Task id.' },
     reports: {
-      my_tasks: { action: 'getMyTasks', about: 'your own tasks (owner, creator or collaborator), filterable', params: { status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, week: WEEK, q: T.text } },
-      space_tasks: { action: 'getTasks', about: 'tasks in one space you can access, filterable', params: { space_id: T.uuid, status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, week: WEEK, q: T.text } },
+      my_tasks: { action: 'getMyTasks', about: 'your own tasks (owner, creator or collaborator), filterable', params: { status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, week: WEEK, q: T.text, program_id: T.uuid } },
+      space_tasks: { action: 'getTasks', about: 'tasks in one space you can access, filterable', params: { space_id: T.uuid, status: T.oneOf('not_started', 'in_progress', 'done', 'blocked', 'abandoned'), priority: PRIORITY, overdue: T.bool, week: WEEK, q: T.text, program_id: T.uuid } },
       task: { action: 'getTask', about: 'one task in full: comments, history, collaborators, documents, subtasks', params: { id: T.uuid }, required: ['id'] },
+      program_tasks: { action: 'getProgramTasks', about: 'tasks across spaces for one program', params: { program_id: T.uuid }, required: ['program_id'] },
       spaces: { action: 'getSpaces', about: 'the spaces you can see, with ids', params: {} },
+      programs: { action: 'getPrograms', about: 'all programs, with ids (names are visible company-wide; their tasks follow space rules)', params: {} },
       // Names + departments only (Docket's getEmployees is ungated and also carries auth ids): for assigning owners.
       // F9 R8: hand-offs coming TO you (named) or your team — not-accepted first, then by date.
       incoming: { action: 'getIncoming', about: 'open hand-offs to you (named receiver) or your team, with who gives them; not accepted first', params: { scope: T.oneOf('me', 'team', 'all') } },
@@ -234,6 +239,7 @@ const docketTools = [
       deadline: { ...T.date, about: 'Due date, YYYY-MM-DD.' },
       owner_employee_id: { ...T.uuid, about: 'Owner (employee id). Omit to own it yourself.' },
       space_id: { ...T.uuid, about: 'Space id. Omit for the default space.' },
+      program_id: { ...T.uuid, about: 'Program id.' },
       plan_item_id: { ...PLAN_ITEM, about: 'Plan link: a theme, milestone or result id from docket_plan (proposed or agreed). Omit for an unplanned task.' },
       handoff_to_department_id: { ...HANDOFF_ID, about: 'Make it a hand-off to another team: that department\'s id (from docket_tasks report=people). You stay the owner; the deadline is the hand-off date.' },
       handoff_to_employee_id: { ...HANDOFF_ID, about: 'Optional named receiver of the hand-off (an employee id); alone, their team becomes the receiving team.' },
@@ -243,13 +249,14 @@ const docketTools = [
   }),
   writeTool({
     name: 'docket_update_task', title: 'Edit a Docket task', action: 'updateTask',
-    description: 'Change a task\'s title, description, priority, owner or plan link, or set a FIRST deadline on a task that has none (to move an existing deadline use docket_revise_deadline). Status changes use docket_set_status. A sub-task follows its parent\'s plan link.',
+    description: 'Change a task\'s title, description, priority, owner, program or plan link, or set a FIRST deadline on a task that has none (to move an existing deadline use docket_revise_deadline). Status changes use docket_set_status. A sub-task follows its parent\'s plan link.',
     params: {
       id: TASK,
       title: { ...longText(200), about: 'New title.' },
       description: { ...optText(4000), about: 'New description.' },
       priority: { ...PRIORITY, about: 'New priority.' },
       owner_employee_id: { ...T.uuid, about: 'New owner (employee id).' },
+      program_id: { ...PROGRAM, about: 'New program id, or null to remove it.' },
       deadline: { ...T.date, about: 'First deadline, only if the task has none yet.' },
       plan_item_id: { ...PLAN_ITEM, about: 'New plan link (an id from docket_plan), or null to make the task unplanned. Not on a sub-task.' },
       handoff_to_department_id: { ...HANDOFF_ID, about: 'Hand this task off to another team (department id), or null to stop it being a hand-off. Changing it voids an acceptance.' },

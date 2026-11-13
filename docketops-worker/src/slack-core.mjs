@@ -129,7 +129,6 @@ export function friendlyError(code, extra = {}) {
     case 'title required': case 'title_required': return 'Give it a title.';
     case 'why_required': return 'Say why it should be on the plan: `/docket propose <title> | <why>`.';
     case 'text_too_long': return 'That is too long.';
-    case 'programs_retired': return 'Programs are retired — use the plan instead.';
     case 'bad_handoff': case 'handoff_receiver_team': case 'handoff_same_team': return "That hand-off receiver can't be used — pick someone on another team.";
     case 'handoff_receiver_inactive': return 'That person has left — pick someone else to hand it to.';
     case 'restricted_needs_founders_space': case 'plan_link_level': case 'plan_item_closed': return "That plan link can't be used for this task.";

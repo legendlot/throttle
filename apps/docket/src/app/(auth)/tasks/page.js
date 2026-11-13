@@ -6,7 +6,6 @@
 // view state + its localStorage in useTaskViewState. Board view = KanbanBoard.
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { Lock, ListChecks, Sparkles } from 'lucide-react';
@@ -40,12 +39,12 @@ import { matchesPlanFilter, planFilterOptions, planErrorText } from '../../../li
 
 const GROUP_OPTS = [
   { value: 'none', label: 'No grouping' }, { value: 'person', label: 'Owner' },
-  { value: 'department', label: 'Team' }, { value: 'status', label: 'Status' },   // F9 R9b: Group by Program retired with Programs (spec §7.1)
+  { value: 'department', label: 'Team' }, { value: 'status', label: 'Status' }, { value: 'program', label: 'Program' },
   { value: 'week', label: 'Week ending' },   // F9 R4 — read-only axis: a deadline moves by revising it, never by a drop
 ];
 // Group axis → the createTask field a group-foot capture prefills (status included —
 // createTask takes an initial status since functionality F1).
-const GROUP_FIELD = { person: 'owner_employee_id', department: 'department_id', status: 'status' };
+const GROUP_FIELD = { person: 'owner_employee_id', department: 'department_id', program: 'program_id', status: 'status' };
 
 // IST calendar date 'YYYY-MM-DD' (My tasks "Today & overdue" boundary).
 const istDateStr = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -85,9 +84,13 @@ function TasksBoard() {
   const { status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, q, planFilter, week } = f;
 
   const [tasks, setTasks] = useState([]);
+  // Which program the rows in `tasks` were loaded for ('' outside program mode) — set only when that
+  // load COMPLETES, so a program page never derives its capture space from another view's rows.
+  const [tasksFor, setTasksFor] = useState(null);
   const [incomingKey, setIncomingKey] = useState(0);   // F9 R8: My Tasks → Incoming re-reads only after a task-view write
   const [departments, setDepartments] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [programs, setPrograms] = useState([]);
   const [spaces, setSpaces] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState({});
@@ -129,13 +132,15 @@ function TasksBoard() {
   const prioOpts = useMemo(() => PRIORITIES.map(p => ({ value: p.key, label: p.label })), []);
   const teamOpts = useMemo(() => departments.map(d => ({ value: d.id, label: d.name })), [departments]);
   const empOpts = useMemo(() => employees.map(e => ({ value: e.id, label: e.full_name })), [employees]);
+  const programOpts = useMemo(() => programs.map(p => ({ value: p.id, label: p.name })), [programs]);
+  const programCellOpts = useMemo(() => [{ value: '', label: '— No program —' }, ...programOpts], [programOpts]);
   // F9 R2: the caller's plan rows (getPlan) — the Plan column / chip pickers and the Plan filter.
   const planItems = usePlanItems(session);
   const planById = usePlanById(planItems);
   const planOpts = useMemo(() => planFilterOptions(planItems), [planItems]);
   // F9 R4: the org's week end (getPlan `week`, same cached read) — Group by "Week ending" + the Week filter label.
   const weekEndDow = usePlanWeek(session).week_end_dow;
-  const opts = useMemo(() => ({ teamCellOpts, ownerCellOpts, prioOpts, empOpts, planItems }), [teamCellOpts, ownerCellOpts, prioOpts, empOpts, planItems]);
+  const opts = useMemo(() => ({ teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts, planItems }), [teamCellOpts, ownerCellOpts, prioOpts, empOpts, programCellOpts, planItems]);
   // F2 capture chips + @name tokens: the same people / options as the owner and priority cells.
   const captureCtx = useMemo(() => ({ people: employees, ownerOpts: ownerCellOpts, prioOpts, planItems }), [employees, ownerCellOpts, prioOpts, planItems]);
 
@@ -146,8 +151,9 @@ function TasksBoard() {
     Promise.all([
       docketopsGet('getDepartments', {}, session).catch(() => []),
       docketopsGet('getEmployees', {}, session).catch(() => []),
+      docketopsGet('getPrograms', {}, session).catch(() => []),
       docketopsGet('getSpaces', {}, session).catch(() => []),
-    ]).then(([d, e, s]) => { setDepartments(d || []); setEmployees(e || []); setSpaces(s || []); });
+    ]).then(([d, e, p, s]) => { setDepartments(d || []); setEmployees(e || []); setPrograms(p || []); setSpaces(s || []); });
   }, [session]);
 
   useEffect(() => { setNewSpaceOpen(spaceParam === 'new'); }, [spaceParam]);
@@ -189,6 +195,7 @@ function TasksBoard() {
           ? await docketopsGet('getProgramTasks', { program_id: viewProgramId, ...common }, session)
           : await docketopsGet('getTasks', { space_id: spaceId, program_id: programId, ...common }, session);
       setTasks(Array.isArray(r) ? r : []);
+      setTasksFor(inProgramMode ? viewProgramId : '');
     } catch (e) { showToast(e.message || 'Failed to load tasks', 'error'); }
     finally { setLoading(false); }
   }, [session, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, week, showToast]);
@@ -219,8 +226,19 @@ function TasksBoard() {
     fetchSpaces();
     if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:spaces-changed'));
   }
+  // Programs created elsewhere (top-bar / sidebar New program, drawer inline create)
+  // feed the Program filter + cell options. Re-read only — this page never re-dispatches
+  // from here, so the group-foot capture's own dispatch can't loop.
+  const fetchPrograms = useCallback(() => {
+    if (!session) return;
+    docketopsGet('getPrograms', {}, session).then(p => setPrograms(p || [])).catch(() => {});
+  }, [session]);
+  useEffect(() => {
+    window.addEventListener('docket:programs-changed', fetchPrograms);
+    return () => window.removeEventListener('docket:programs-changed', fetchPrograms);
+  }, [fetchPrograms]);
   // The shell's sidebar ⋯ (SpaceSettings in the layout) renames / archives / transfers
-  // spaces too — keep this page's own `spaces` (bulk Move list, is_owner) in step.
+  // spaces too — keep this page's own `spaces` (bulk Move list, program capture, is_owner) in step.
   useEffect(() => {
     window.addEventListener('docket:spaces-changed', fetchSpaces);
     return () => window.removeEventListener('docket:spaces-changed', fetchSpaces);
@@ -256,6 +274,7 @@ function TasksBoard() {
         const patch = { [field]: value || null };
         if (field === 'owner_employee_id') patch.owner_name = empMap[value] || null;
         if (field === 'department_id') patch.department_name = deptMap[value] || null;
+        if (field === 'program_id') patch.program = programs.find(p => p.id === value) || null;
         patchRow(task.id, patch);
         // The plan chip is the worker's projection — re-read rather than guess it here.
         if (field === 'plan_item_id') load();
@@ -291,15 +310,36 @@ function TasksBoard() {
     else showToast('Could not copy the link', 'error');
   }
 
+  // Program mode: smart default space for new tasks = the space this program already lives
+  // in most (programs live in private spaces; General is rarely used). Falls back to General.
+  // Derived only from THIS program's completed load — until it lands, program capture is off
+  // (programReady), so new work can't fall into General while a private program is still loading.
+  const programReady = !inProgramMode || tasksFor === viewProgramId;
+  const programDefaultSpace = useMemo(() => {
+    if (!inProgramMode || !programReady) return '';
+    const counts = {};
+    for (const t of tasks) { if (t.space_id) counts[t.space_id] = (counts[t.space_id] || 0) + 1; }
+    let best = '', n = -1;
+    for (const [sid, c] of Object.entries(counts)) { if (c > n) { n = c; best = sid; } }
+    if (best) return best;
+    const general = spaces.find(s => !s.is_private);
+    return general ? general.id : (spaces[0]?.id || '');
+  }, [inProgramMode, programReady, tasks, spaces]);
+  // Only an explicit pick from the space picker is stored; the default stays derived (never frozen in).
+  const [programSpace, setProgramSpace] = useState('');
+  useEffect(() => { setProgramSpace(''); }, [viewProgramId]);
+
   // Create a task from a group foot (replaces the P2 top capture bar; same create
-  // bodies: space board → space_id, My tasks → assign_self), with the group's value prefilled where the
-  // field maps. F9 R9b: a retired program's list (?program=) offers no capture — nothing calls this there.
+  // bodies: space board → space_id, My tasks → assign_self, program → program_id +
+  // the chosen space), with the group's value prefilled where the field maps.
   // F2: `extras` {owner_employee_id, deadline, priority} come from the capture's quick-add
   // tokens / chips and are merged OVER the group prefill — an explicit choice wins. On My
   // tasks a chosen owner replaces assign_self.
   async function createInGroup(title, field, value, extras) {
-    if (inProgramMode) return false;
-    const body = mineMode ? { title, assign_self: true } : { title, space_id: spaceId || undefined };
+    if (!programReady) return false;   // program page still loading its tasks: no capture yet
+    const body = mineMode ? { title, assign_self: true }
+      : inProgramMode ? { title, space_id: (programSpace || programDefaultSpace) || undefined, program_id: viewProgramId }
+      : { title, space_id: spaceId || undefined };
     // A status group's value goes in the create itself (worker F1): one write, one history row.
     if (field && value && !(field === 'status' && value === 'abandoned')) body[field] = value;
     const x = extras || {};
@@ -310,16 +350,18 @@ function TasksBoard() {
     try {
       await docketopsPost('createTask', body, session);
       await load();
+      if (inProgramMode && typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed')); // sidebar count
       // The toast reads the FINAL owner. Without an owner AND a deadline a new task lands in The
       // Grid (RULE-DOCKET-001) — say so only when one is still missing. assign_self with no
       // employee record (getMe.employee_id null) means no owner.
       const owner = body.owner_employee_id || (body.assign_self ? myEmployeeId : null) || null;
       const mine = !!owner && owner === myEmployeeId;
       const ownerName = owner && !mine ? (employees.find(e => e.id === owner)?.full_name || '').split(/\s+/)[0] : '';
-      const where = mineMode ? (mine ? 'Added to your list' : ownerName ? `Added — owned by ${ownerName}` : 'Added') : 'Added';
+      const where = mineMode ? (mine ? 'Added to your list' : ownerName ? `Added — owned by ${ownerName}` : 'Added')
+        : inProgramMode ? 'Added to program' : 'Added';
       const missing = !owner && !body.deadline ? 'an owner and a deadline' : !owner ? 'an owner' : !body.deadline ? 'a deadline' : '';
       showToast(!missing ? where
-        : !mineMode ? 'Captured to The Grid'
+        : (!mineMode && !inProgramMode) ? 'Captured to The Grid'
         : `${where} — in The Grid until it has ${missing}`, 'success');
       return true;
     } catch (e) { showToast(planErrorText(e) || 'Create failed', 'error'); return false; }
@@ -457,8 +499,9 @@ function TasksBoard() {
   /* ---------------- groups ---------------- */
   const listRows = useMemo(() => (separate ? [...boardRows, ...childRows].sort(sortFn) : boardRows), [separate, boardRows, childRows, sortFn]);
   const groups = useMemo(() => {
-    // Through `live` so a memoised group never holds a stale create. A retired program's list: no captures.
-    const cap = (field, value) => (inProgramMode ? undefined : (title, extras) => live.current.createInGroup(title, field, value, extras));
+    // Through `live` so a memoised group never holds a stale create (program space picker).
+    const cap = (field, value) => (programReady ? (title, extras) => live.current.createInGroup(title, field, value, extras) : undefined);
+    const knownPrograms = new Set(programs.map(p => p.id));
     if (mineMode) {
       return [
         { key: 'mine:today', label: 'Today & overdue', rows: mineToday, color: 'var(--overdue)' },
@@ -470,7 +513,7 @@ function TasksBoard() {
       // assigned to you" survives an empty group. All empty → the page's empty state.
       ].filter(g => g.capture || g.rows.length);
     }
-    const capPlaceholder = 'Add task';
+    const capPlaceholder = inProgramMode ? "Add task — it's tagged to this program" : 'Add task';
     if (groupBy === 'none') return [{ key: 'none', label: null, rows: listRows, capture: cap(), capturePlaceholder: capPlaceholder }];
     // F9 R4: Overdue · each week ending (IST, the org's week end) in date order · No date. No foot capture —
     // a new task's week is its deadline, which the top capture (or its date chip) sets.
@@ -484,7 +527,12 @@ function TasksBoard() {
       let value, label, color;
       if (groupBy === 'status') { value = t.status; label = STATUS_MAP[t.status]?.label || t.status; color = STATUS_MAP[t.status]?.color; }
       else if (groupBy === 'person') { value = t.owner_employee_id || ''; label = t.owner_name || 'Unassigned'; color = value ? personColor(label) : null; }
-      else { value = t.department_id || ''; label = t.department_name || 'No team'; color = value ? personColor(label) : null; }
+      else if (groupBy === 'department') { value = t.department_id || ''; label = t.department_name || 'No team'; color = value ? personColor(label) : null; }
+      else {
+        value = t.program?.id || t.program_id || '';
+        label = value ? (t.program?.name || (knownPrograms.has(value) ? programs.find(p => p.id === value)?.name : null) || 'Unknown program') : 'No program';
+        color = value ? (t.program?.color || personColor(value)) : null;
+      }
       if (!m.has(value)) m.set(value, { key: `${groupBy}:${value || '∅'}`, value, label, color, rows: [], tone: groupBy === 'status' ? 'status' : null });
       m.get(value).rows.push(t);
     }
@@ -493,12 +541,14 @@ function TasksBoard() {
     else out.sort((a, b) => (a.value ? 0 : 1) - (b.value ? 0 : 1) || a.label.localeCompare(b.label));
     for (const g of out) {
       // Abandoning needs a reason — no one-line capture into the Abandoned group.
-      if (!(groupBy === 'status' && g.value === 'abandoned')) { g.capture = cap(field, g.value); g.capturePlaceholder = capPlaceholder; }
+      // A program that no longer resolves (deleted / not visible) is never prefilled.
+      const dead = groupBy === 'program' && g.value && !knownPrograms.has(g.value);
+      if (!(groupBy === 'status' && g.value === 'abandoned')) { g.capture = dead ? cap() : cap(field, g.value); g.capturePlaceholder = capPlaceholder; }
     }
     // Grouped but nothing on the board yet: still offer one capture.
     if (!out.length) out.push({ key: 'none', label: null, rows: [], capture: cap(), capturePlaceholder: capPlaceholder });
     return out;
-  }, [mineMode, mineToday, mineOwner, mineCollab, mineCreated, groupBy, listRows, statusRank, inProgramMode, weekEndDow, istDay]);
+  }, [mineMode, mineToday, mineOwner, mineCollab, mineCreated, groupBy, listRows, statusRank, inProgramMode, programReady, programs, weekEndDow, istDay]);
 
   const visibleCols = useMemo(() => visibleColumns(cols, { crossSpace }), [cols, crossSpace]);
   const columnKeys = useMemo(() => Object.keys(COLUMNS).filter(k => !COLUMNS[k].crossSpaceOnly || crossSpace)
@@ -594,10 +644,14 @@ function TasksBoard() {
     getSession: actions.getSession, depsChanged: actions.depsChanged,
   };
   // Board (P4): a column's "+ Add task" creates through the same createInGroup as a list
-  // group foot — the column's axis value prefilled (status via the follow-up changeStatus).
+  // group foot — the column's axis value prefilled (status via the follow-up changeStatus),
+  // never a program id that no longer resolves.
   const boardCtx = {
     ...gridCtx, showIds, cardSize, activeId: drawerId, drawerOpen: drawerId != null, shellModalOpen, sortKey, weekEndDow,
-    createIn: (kanbanAxis === 'week' || inProgramMode) ? null : (title, value, extras) => live.current.createInGroup(title, GROUP_FIELD[kanbanAxis], value, extras),
+    createIn: (kanbanAxis === 'week' || !programReady) ? null : (title, value, extras) => {
+      const dead = kanbanAxis === 'program' && value && !programs.some(p => p.id === value);
+      return live.current.createInGroup(title, GROUP_FIELD[kanbanAxis], dead ? undefined : value, extras);
+    },
   };
 
   // Toolbar: Subtasks menu (list view, when a visible row has sub-tasks).
@@ -643,6 +697,15 @@ function TasksBoard() {
     else showToast('Could not copy the link', 'error');
   }
 
+  // Program mode: the group-foot captures share one "which space" picker.
+  const programSpacePicker = inProgramMode ? (
+    <select className="tk-capture-space" value={programSpace || programDefaultSpace} onChange={e => setProgramSpace(e.target.value)}
+      title="Space this task lives in" aria-label="Space for new tasks">
+      {spaces.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+    </select>
+  ) : null;
+  if (programSpacePicker) for (const g of groups) if (g.capture) g.captureExtra = programSpacePicker;
+
   const isEmpty = mineMode ? (mineToday.length + mineOwner.length + mineCollab.length + mineCreated.length) === 0 : topLevel.length === 0;
   const anyQuery = !!(q || f.activeFilterCount);
 
@@ -665,9 +728,9 @@ function TasksBoard() {
         onExpandAll={expandAll} onCollapseAll={collapseAll} subtaskMode={subtaskMode} chooseSubtaskMode={chooseSubtaskMode}
         filterOpen={filterOpen} setFilterOpen={setFilterOpen} filterCount={f.panelFilterCount}
         filter={{ status, setStatus: f.setStatus, departmentId, setDepartmentId: f.setDepartmentId, employeeId, setEmployeeId: f.setEmployeeId,
-          priority, setPriority: f.setPriority, overdue, setOverdue: f.setOverdue, revised, setRevised: f.setRevised, deps, setDeps: f.setDeps,
+          priority, setPriority: f.setPriority, programId, setProgramId: f.setProgramId, overdue, setOverdue: f.setOverdue, revised, setRevised: f.setRevised, deps, setDeps: f.setDeps,
           planFilter, setPlanFilter: f.setPlanFilter, planOpts, week, setWeek: f.setWeek, weekEndDow,
-          teamOpts, empOpts, filterCount: f.panelFilterCount, clearFilters: f.clearPanelFilters, hideOwnerFilter: mineMode }}
+          teamOpts, empOpts, programOpts, filterCount: f.panelFilterCount, clearFilters: f.clearPanelFilters, hideProgramFilter: inProgramMode, hideOwnerFilter: mineMode }}
         showMe={!mineMode} mine={mine} setMine={f.setMine}
         showArchive={!mineMode && !boardMode} archiveDone={archiveDone} toggleArchiveDone={toggleArchiveDone}
         showSelect={!boardMode} selectMode={selectMode} toggleSelectMode={() => setSelectMode(m => { if (m) clearSelection(); return !m; })}
@@ -683,12 +746,9 @@ function TasksBoard() {
 
       {/* The one un-prefilled capture ([data-create-primary]): hidden until + Task / + New / `c`
           reveal it, always open on an empty page. Same create body as the P2 quick capture. */}
-      {/* F9 R9b: Programs are retired (spec §7.1) — an old ?program= link still lists its tasks, read-only. */}
-      {inProgramMode ? (
-        <div className="pw-ok tk-retired">Programs are retired — use <Link href="/plan">Plan</Link>. This list stays so old links still work.</div>
-      ) : (
+      {programReady && (
         <NewTaskCapture create={(t, x) => live.current.createInGroup(t, undefined, undefined, x)} alwaysOpen={isEmpty && !boardMode && !(loading && tasks.length === 0)}
-          placeholder="New task" />
+          placeholder={inProgramMode ? "New task — it's tagged to this program" : 'New task'}>{programSpacePicker}</NewTaskCapture>
       )}
 
       {/* F9 R8: hand-offs to me / my team, above My tasks (hidden when there are none). */}
@@ -718,7 +778,7 @@ function TasksBoard() {
 
       {!boardMode && selectMode && selected.size > 0 && (
         <BulkBar count={selected.size} onClear={clearSelection} onApply={applyBulk}
-          ownerOpts={ownerCellOpts} prioOpts={prioOpts}
+          ownerOpts={ownerCellOpts} prioOpts={prioOpts} programOpts={programCellOpts}
           empOpts={empOpts}
           spaceOpts={spaces.filter(s => !s.archived_at).map(s => ({ value: s.id, label: s.name }))}
           onCollaborator={applyBulkCollaborator} onMove={applyBulkMove} onAbandon={applyBulkAbandon} />

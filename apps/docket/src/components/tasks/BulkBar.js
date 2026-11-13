@@ -1,12 +1,12 @@
 'use client';
 // Floating bulk-action pill (ClickUp redesign P3): "N selected ×" · Owner · Status ·
-// Priority · Deadline · Collaborators · Move · Abandon (Program retired, F9 R9b). Same writes as
+// Priority · Deadline · Program · Collaborators · Move · Abandon. Same writes as
 // before: field edits ride bulkUpdateTasks (onApply); collaborators / move /
 // abandon have their own handlers (S153). Same audit prompts: the deadline reason
 // (required by the worker when any selected task already has one) and the abandon
 // reason (always required).
 import { useRef, useState } from 'react';
-import { X, Users, Check, Flag, Calendar, UserPlus, FolderInput, Ban } from 'lucide-react';
+import { X, Users, Check, Flag, Calendar, Tag, UserPlus, FolderInput, Ban } from 'lucide-react';
 import { OptionList } from '../primitives.js';
 import { DatePicker } from '../DatePicker.js';
 import { Popover, Button, SegmentedTabs } from '../ui/index.js';
@@ -21,7 +21,7 @@ function BarButton({ id, icon: Icon, label, menu, toggle, refs, danger }) {
   );
 }
 
-export function BulkBar({ count, onClear, onApply, ownerOpts, prioOpts, empOpts = [], spaceOpts = [], onCollaborator, onMove, onAbandon }) {
+export function BulkBar({ count, onClear, onApply, ownerOpts, prioOpts, programOpts, empOpts = [], spaceOpts = [], onCollaborator, onMove, onAbandon }) {
   const [menu, setMenu] = useState(null);
   const [draft, setDraft] = useState(null);
   const [reason, setReason] = useState('');
@@ -43,6 +43,7 @@ export function BulkBar({ count, onClear, onApply, ownerOpts, prioOpts, empOpts 
       <BarButton id="status" icon={Check} label="Status" {...b} />
       <BarButton id="priority" icon={Flag} label="Priority" {...b} />
       <BarButton id="deadline" icon={Calendar} label="Deadline" {...b} />
+      <BarButton id="program" icon={Tag} label="Program" {...b} />
       <BarButton id="collab" icon={UserPlus} label="Collaborators" {...b} />
       <BarButton id="space" icon={FolderInput} label="Move" {...b} />
       <BarButton id="abandon" icon={Ban} label="Abandon" danger {...b} />
@@ -65,6 +66,7 @@ export function BulkBar({ count, onClear, onApply, ownerOpts, prioOpts, empOpts 
             </div>
           </div>
         )}
+        {menu === 'program' && <OptionList options={programOpts} searchable onPick={(v) => go('program_id', v)} />}
         {/* Collaborators: child table, so not onApply. Add vs remove is chosen explicitly —
             a single tap list would make "remove" unreachable. */}
         {menu === 'collab' && (

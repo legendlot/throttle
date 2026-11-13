@@ -2085,8 +2085,6 @@ a.rv-row:hover, button.rv-row:hover, .rv-row.on { background: var(--hover); }
   color: var(--st-done); background: var(--st-done-bg); border-radius: 4px; padding: 1px 5px; }
 .pl-reading-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .pl-reachq .pl-theme-t svg { color: var(--st-done); }
-.tk-retired a { color: var(--accent); }
-.tv-retired { color: var(--text-3); }
 @media (max-width: 767px) { .pl-reading { white-space: normal; } }
 
 /* F9 R9b — /review score trend + sparklines (inline SVG; scrolls inside its card) */

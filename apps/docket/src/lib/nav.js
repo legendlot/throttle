@@ -38,7 +38,7 @@ export function routeModel(pathname, search, { spaces = [], programs = [] } = {}
     if (programId) {
       const p = (programs || []).find(x => x.id === programId);
       return { path, spaceId, activeKey: `/tasks?program=${programId}`, railKey: 'tasks', showCount: true,
-        crumbs: [{ label: 'Programs (retired)' }, { label: p?.name || 'Program' }] };   // F9 R9b: old links still resolve
+        crumbs: [{ label: 'Programs' }, { label: p?.name || 'Program' }] };
     }
     // ?space=<General's id> is the General board, not a private space.
     if (spaceId && space && !space.is_private) {

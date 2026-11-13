@@ -35,7 +35,7 @@ export function ViewsBar({ viewMode, onView, allowBoard, onCopyLink, space, onSp
 }
 
 /* ---------------- Toolbar ---------------- */
-const GROUP_LABEL = { none: 'None', person: 'Owner', department: 'Team', status: 'Status', week: 'Week ending' };
+const GROUP_LABEL = { none: 'None', person: 'Owner', department: 'Team', status: 'Status', program: 'Program', week: 'Week ending' };
 
 function ToggleBtn({ on, icon, children, tip, label, onClick }) {
   const b = (
@@ -211,9 +211,9 @@ function WeekFilter({ week, setWeek, dow }) {
 
 /* ---------------- Filter panel (inside the Filter popover) ---------------- */
 function FilterPanel({ status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId,
-  priority, setPriority, overdue, setOverdue, revised, setRevised, deps = '', setDeps,
+  priority, setPriority, programId, setProgramId, overdue, setOverdue, revised, setRevised, deps = '', setDeps,
   planFilter = '', setPlanFilter, planOpts = [], week = '', setWeek, weekEndDow = 7,
-  teamOpts, empOpts, filterCount, clearFilters, hideOwnerFilter }) {
+  teamOpts, empOpts, programOpts, filterCount, clearFilters, hideProgramFilter, hideOwnerFilter }) {
   const Sel = ({ label, value, set, any, options }) => (
     <label className="tk-fp-grp">
       <span className="tk-fp-lbl">{label}</span>
@@ -229,6 +229,7 @@ function FilterPanel({ status, setStatus, departmentId, setDepartmentId, employe
       <Sel label="Team" value={departmentId} set={setDepartmentId} any="Any team" options={teamOpts} />
       {!hideOwnerFilter && <Sel label="Owner" value={employeeId} set={setEmployeeId} any="Anyone" options={empOpts} />}
       <Sel label="Priority" value={priority} set={setPriority} any="Any priority" options={PRIORITIES.map(p => ({ value: p.key, label: p.label }))} />
+      {!hideProgramFilter && <Sel label="Program" value={programId} set={setProgramId} any="Any program" options={programOpts} />}
       {/* F9 R2: by theme (incl. its milestones + results), milestone (incl. its results), result, or Unplanned. */}
       {setPlanFilter && <Sel label="Plan" value={planFilter} set={setPlanFilter} any="Any plan" options={planOpts} />}
       {/* F9 R4: by the week the effective deadline falls in (IST, the org's week end). "Week ending…" takes

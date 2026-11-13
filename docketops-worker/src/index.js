@@ -1726,8 +1726,7 @@ async function createTaskCore(d, auth, env) {
   // deadline) is optional and enriched later — the task lands in "The Grid" until it
   // has both an owner and a deadline. (RULE-DOCKET-001, V2.)
   if (!d.title || !String(d.title).trim()) return err('title required', 400);
-  // F9 R9b: Programs are retired (spec §7.1; RULE-DOCKET-004 superseded) — a task can no longer be tagged.
-  if (d.program_id) return err('programs_retired', 400);
+  if (d.program_id === '') d.program_id = null;   // '' = "No program" (an explicit choice, never inherited)
   // Optional initial status (a status-group "+ Add task"), so it is one write + one history row.
   if (d.status != null && d.status !== '' && !d.is_recurring) {
     if (d.status === 'abandoned') return err('use abandonTask to abandon (reason required)', 422);
@@ -1759,9 +1758,11 @@ async function createTaskCore(d, auth, env) {
     if (parent.parent_task_id) return err('one_level_only: parent is already a sub-task', 422);
     if (parent.status === 'abandoned') return abandonedRO();
     spaceId = parent.space_id; // a sub-task always lives in its parent's space
-    // A sub-task inherits owner / team from its parent unless the caller explicitly set them (speed-create
-    // passes title only — these fill in from the parent). Not the program: Programs are retired (R9b).
+    // A sub-task inherits owner / program / team from its parent unless the caller
+    // explicitly set them (speed-create passes title only — these fill in from the parent).
+    // The program inherits only when OMITTED: an explicit null ("No program") stays null.
     if (d.owner_employee_id == null) d.owner_employee_id = parent.owner_employee_id || null;
+    if (d.program_id === undefined)  d.program_id        = parent.program_id || null;
     if (d.department_id == null)     d.department_id     = parent.department_id || null;
   }
   if (!spaceId) spaceId = await defaultSpaceId(env);
@@ -2105,7 +2106,7 @@ const EDITABLE  = ['title','description','department_id','owner_employee_id','pr
 async function updateTask(body, auth, env) {
   const d = body.data || body;
   if (!d.id) return err('id required', 400);
-  if (d.program_id) return err('programs_retired', 400);   // R9b: clearing (null) still works
+  if (d.program_id === '') d.program_id = null;   // '' clears, same as null
   const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!canEditTask(auth, task)) return err('forbidden', 403);
@@ -2285,7 +2286,6 @@ async function bulkUpdateTasks(body, auth, env) {
   const field = d.field;
   if (!ids.length) return err('ids required', 400);
   if (!BULK_FIELDS.has(field)) return err('invalid field', 400);
-  if (field === 'program_id' && d.value) return err('programs_retired', 400);   // R9b: clearing still works
 
   const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
   if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
@@ -2802,10 +2802,23 @@ async function removeDashboardViewer(body, auth, env) {
   return ok({ removed: d.user_id });
 }
 
-// ── Programs (RULE-DOCKET-004 — superseded: retired in F9 R9b, spec §7.1) ───────
-// `docket.programs` stays (archived tasks reference it) and every READ keeps working; nothing creates one.
-async function createProgram() {
-  return err('programs_retired', 410);
+// ── Programs (RULE-DOCKET-004) ──────────────────────────────────────────────
+// A free, optional cross-space label, alongside (never instead of) the plan link — restored 2026-11-13.
+async function createProgram(body, auth, env) {
+  const d = body.data || body;
+  if (!d.name || !String(d.name).trim()) return err('name required', 400);
+  const name = String(d.name).trim();
+  // Idempotent inline create: reuse an existing (case-insensitive) program if present.
+  // ILIKE treats % and _ as wildcards (escaped here) and PostgREST maps * to % (can't be
+  // escaped), so the query may over-match — the exact case-insensitive compare decides.
+  const pattern = name.replace(/[\\%_]/g, (c) => '\\' + c);
+  const existing = await sbDocket(`/rest/v1/programs?archived_at=is.null&name=ilike.${enc(pattern)}&select=id,name,color&limit=50`, env);
+  const same = existing.ok ? (existing.data || []).find(p => String(p.name).toLowerCase() === name.toLowerCase()) : null;
+  if (same) return ok(same);
+  const r = await sbDocket(`/rest/v1/programs`, env, {
+    method: 'POST', body: JSON.stringify([{ name, color: d.color || null, created_by_user_id: auth.userId }]) });
+  if (!r.ok || !r.data?.[0]) return err('create_failed: ' + JSON.stringify(r.data), 400);
+  return ok(r.data[0]);
 }
 
 // ── Spaces (RULE-DOCKET-003) ────────────────────────────────────────────────

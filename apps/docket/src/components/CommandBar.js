@@ -3,9 +3,9 @@
 // client-side only, over what the app already holds:
 //   Tasks              — the rows the tasks page has loaded (useCommandSource('tasks'));
 //                        DKT id ("DKT-123" / "123") ranks first, then the title
-//   Spaces             — the shell's getMe spaces (General · My spaces · By others); Programs retired (F9 R9b)
+//   Spaces & programs  — the shell's getMe spaces (General · My spaces · By others) + programs
 //   Navigation         — the rail destinations (Dashboard perm-gated, Admin for docket_admin)
-//   Commands           — New task / space, My tasks, List ↔ Board + density (on
+//   Commands           — New task / space / program, My tasks, List ↔ Board + density (on
 //                        /tasks, via useCommandSource('tasksView')), sidebar, shortcuts;
 //                        F7 "Add dependency to DKT-n" while an editable TaskView is open ('taskView')
 // Empty query: Recent (last 5 picks, localStorage `docket.cmdk.recent`) + Navigation +
@@ -18,7 +18,7 @@
 // another space) takes it — the best match leads. Once they arrow or hover, it is held by key
 // and a late reply never moves it (if their row drops out of the results, it returns to the top).
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Target, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Hash, Lock,
+import { Search, Target, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Hash, Lock, Flag,
   SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info, Loader2, OctagonMinus } from 'lucide-react';
 import { fuzzyMatch, dktQuery, rankGroups, scoreTask, serverFloor } from '../lib/fuzzy.js';
 import { docketopsGet } from '../lib/docketopsFetch.js';
@@ -36,7 +36,7 @@ const SEARCH_DEBOUNCE = 180;
 const GROUPS = [
   ['recent', 'Recent'],
   ['tasks', 'Tasks'],
-  ['places', 'Spaces'],
+  ['places', 'Spaces & programs'],
   ['nav', 'Navigation'],
   ['commands', 'Commands'],
 ];
@@ -73,7 +73,7 @@ function taskMeta(t) {
   return [t.parent_task_no ? '↳ ' + t.parent_task_no : null, t.space_name || null].filter(Boolean).join(' · ');
 }
 
-export function CommandBar({ open = true, userId, session, onClose, router, spaces = [], canViewDashboard, isAdmin, isPlanAdmin = false, showTemplates = false, onNewTask, onNewSpace, onToggleSidebar, onHelp }) {
+export function CommandBar({ open = true, userId, session, onClose, router, spaces = [], programs = [], canViewDashboard, isAdmin, isPlanAdmin = false, showTemplates = false, onNewTask, onNewSpace, onNewProgram, onToggleSidebar, onHelp }) {
   // The layout mounts the bar on each open, so this state starts fresh and the page
   // sources are read synchronously — no frame of the previous results.
   const [q, setQ] = useState('');
@@ -155,6 +155,10 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
       const route = '/tasks?space=' + s.id;
       add({ key: 'space:' + s.id, group: 'places', kind: 'nav', label: s.name || 'Space', sub: s.is_owner ? 'My space' : 'Space · by others', icon: Lock, route, run: () => go(route) });
     }
+    for (const p of programs) {
+      const route = '/tasks?program=' + p.id;
+      add({ key: 'program:' + p.id, group: 'places', kind: 'nav', label: p.name || 'Program', sub: 'Program', icon: Flag, route, run: () => go(route) });
+    }
 
     const v = snap.view;
     const tv = snap.taskView;   // the open TaskView (F7), when its task is editable
@@ -163,6 +167,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
       ...(tv ? [{ key: 'cmd:add-dep', label: `Add dependency to ${tv.taskNo}`, icon: OctagonMinus, keepView: true, run: tv.addDependency }] : []),
       { key: 'cmd:new-task', label: 'New task', icon: SquarePen, kbd: 'c', run: onNewTask },
       { key: 'cmd:new-space', label: 'New space', icon: FolderPlus, run: onNewSpace },
+      { key: 'cmd:new-program', label: 'New program', icon: Flag, run: onNewProgram },
       { key: 'cmd:mine', label: 'Go to My tasks', icon: UserCheck, run: () => go('/tasks?lens=mine') },
       ...(v && v.canBoard ? [{ key: 'cmd:view', label: v.viewMode === 'board' ? 'Switch to List view' : 'Switch to Board view', icon: v.viewMode === 'board' ? LayoutList : Columns3, run: () => v.chooseView(v.viewMode === 'board' ? 'list' : 'board') }] : []),
       ...(v && v.viewMode !== 'board' ? [['compact', 'Compact'], ['default', 'Default'], ['roomy', 'Roomy']].filter(([d]) => d !== v.density)
@@ -174,7 +179,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
 
     for (const t of (snap.tasks?.rows || [])) add(taskItem(t));
     return items;
-  }, [open, spaces, canViewDashboard, isAdmin, isPlanAdmin, showTemplates, snap]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, spaces, programs, canViewDashboard, isAdmin, isPlanAdmin, showTemplates, snap]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Rows to show: grouped, ranked, capped. Flattened for keyboard order.
   const rows = useMemo(() => {
@@ -283,7 +288,7 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
         <div className="cmdk-input">
           <Search size={16} strokeWidth={2} aria-hidden />
           <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
-            placeholder="Search tasks, spaces, commands…"
+            placeholder="Search tasks, spaces, programs, commands…"
             role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-autocomplete="list"
             aria-activedescendant={cur >= 0 ? optId(cur) : undefined} autoComplete="off" spellCheck={false} />
           <Kbd>Esc</Kbd>

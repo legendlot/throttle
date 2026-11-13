@@ -8,7 +8,7 @@
 // mode. Title cell: [expand] status circle · title (ellipsis) · DKT id (never wraps)
 // · REV / sub-task count · F7 dependency badge · hover + sub-task and ⋯ menu.
 import { memo, useEffect, useRef, useState } from 'react';
-import { ChevronRight, Check, X, Plus, MoreHorizontal, Link2, MessageSquare, UserPlus, Users, Building2, ExternalLink, CornerDownRight, Ban, CircleCheck, CircleDashed } from 'lucide-react';
+import { ChevronRight, Check, X, Plus, MoreHorizontal, Link2, MessageSquare, UserPlus, Users, Building2, Tag, ExternalLink, CornerDownRight, Ban, CircleCheck, CircleDashed } from 'lucide-react';
 import { Avatar, OptionList, personColor } from '../primitives.js';
 import { AvatarStack, GhostCell, Menu, MenuItem, MenuSeparator, Popover, Button } from '../ui/index.js';
 import { EditableSelect, StatusCircle, StatusCell, PriorityFlag, DeadlineCell, AbandonForm, PlanCell, stop, contain } from './TaskCells.js';
@@ -69,6 +69,13 @@ export const TaskRow = memo(function TaskRow({
           <EditableSelect editable={ed} value={task.department_id || ''} options={opts.teamCellOpts} searchable empty={!task.department_name}
             ghostIcon={Building2} label="Team" onPick={(v) => saveField(task, 'department_id', v)}>
             <span className="chip tl-chip"><span className="dot" style={{ background: personColor(task.department_id) }} /><span className="lbl">{task.department_name}</span></span>
+          </EditableSelect>
+        );
+      case 'program':
+        return (
+          <EditableSelect editable={ed} value={task.program_id || task.program?.id || ''} options={opts.programCellOpts} searchable empty={!task.program?.name}
+            ghostIcon={Tag} label="Program" onPick={(v) => saveField(task, 'program_id', v)}>
+            <span className="chip soft tl-chip"><span className="dot" style={{ background: task.program?.color || personColor(task.program?.id) }} /><span className="lbl">{task.program?.name}</span></span>
           </EditableSelect>
         );
       case 'plan':

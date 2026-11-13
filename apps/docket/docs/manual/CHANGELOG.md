@@ -3,6 +3,13 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [2.1.0] - 2026-11-13
+### Changed
+- **Programs are back** as a free label alongside the Plan: the Programs chapter returns to Organising
+  Work, and the "Programs are retired" notes in the introduction, navigation, Spaces, Inside a Task,
+  the Tasks List and Linking Tasks to the Plan now say a task can carry a program, a plan link, both or
+  neither.
+
 ## [2.0.0] - 2026-11-13
 The F9 plan layer, a new part and a restructure.
 ### Added

@@ -11,7 +11,7 @@ import { fmtDate } from '../lib/format.js';
 
 // Children of a task (one level). Parent shows roll-up; rows link to the child.
 // Speed-create: a title-only inline add lets you fire off sub-tasks one after the
-// other (the input keeps focus); owner / team carry over from the parent
+// other (the input keeps focus); owner / program / team carry over from the parent
 // (worker-side, createSubtask) — fill the rest in later from the sub-task itself.
 // Hidden when this task is itself a sub-task (a child can't take children — one level).
 // `onOpen(id)` (TaskView) opens a child in place; without it a row routes to /tasks/detail.
@@ -73,7 +73,7 @@ export function SubtaskPanel({ task, session, canEdit = false, onChange, onOpen 
         <div style={addRow}>
           <Plus size={14} style={{ color: 'var(--text-4)', flexShrink: 0 }} />
           <input ref={inputRef} data-subtask-add value={title} onChange={e => setTitle(e.target.value)} disabled={saving}
-            placeholder="Add a sub-task, press Enter — owner & team carry over"
+            placeholder="Add a sub-task, press Enter — owner & program carry over"
             style={addInput}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} />
           {title.trim() && (

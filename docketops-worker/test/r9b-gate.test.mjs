@@ -2,7 +2,7 @@
 // F9 R9b end to end against a stubbed Supabase: measure.reading only at levels F / R / O (never T / L, never a
 // restricted row below F; one batched read of plan_measure_latest), getReachedTargets level F only, the score trend's
 // scoping (a lead: own team only; below F never a Founders'-space task; F = week_score's whole team rows; only
-// CLOSED weeks are read), the re-plan's readiness math, and Programs retired on every write.
+// CLOSED weeks are read), the re-plan's readiness math, and Programs (restored 2026-11-13) writable alongside the plan link.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -15,15 +15,16 @@ const code = readFileSync(join(SRC, 'index.js'), 'utf8').replace(/from '\.\/([^'
 const worker = (await import('data:text/javascript,' + encodeURIComponent(code))).default;
 
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-const ME = U(1), MEE = U(2), D1 = U(10), D2 = U(11), G = U(20), FND = U(22);
+const ME = U(1), MEE = U(2), D1 = U(10), D2 = U(11), G = U(20), PRIV = U(21), FND = U(22);
 const ENV = { SUPABASE_URL: 'https://sb.test', SUPABASE_SERVICE_ROLE_KEY: 'k', SUPABASE_ANON_KEY: 'a' };
 const SPACES = {
   [G]: { id: G, name: 'General', is_default: true, is_private: false, owner_user_id: null, is_founders: false },
+  [PRIV]: { id: PRIV, name: 'ZZ Private', is_default: false, is_private: true, owner_user_id: U(9), is_founders: false },
   [FND]: { id: FND, name: 'Founders', is_default: false, is_private: true, owner_user_id: U(9), is_founders: true },
 };
 const inIds = (v) => (v || '').replace(/^in\.\(|\)$/g, '').split(',');
 
-function stub({ role = null, planRows = [], readings = [], readingsFail = false, tasks = [], weeks = [], scores = {}, proposals = [], employees = [], members = [] } = {}) {
+function stub({ role = null, planRows = [], readings = [], readingsFail = false, tasks = [], weeks = [], scores = {}, proposals = [], employees = [], members = [], programs = [] } = {}) {
   const calls = [];
   const fn = async (input, init = {}) => {
     const u = new URL(typeof input === 'string' ? input : input.url);
@@ -65,7 +66,13 @@ function stub({ role = null, planRows = [], readings = [], readingsFail = false,
         && (q.get('is_recurring') !== 'eq.false' || !t.is_recurring)));
       return body([]);
     }
-    if (u.pathname === '/rest/v1/tasks' && method === 'POST') return body([{ id: U(999), task_no: 'DKT-1', ...reqBody[0] }], 201);
+    // tasks.program_id → docket.programs FK: an unknown program is refused by the DB (23503), as live
+    const fk = (row) => row && row.program_id && !programs.some(x => x.id === row.program_id)
+      ? body({ code: '23503', message: 'insert or update on table "tasks" violates foreign key constraint "tasks_program_id_fkey"' }, 409) : null;
+    if (u.pathname === '/rest/v1/programs' && method === 'GET') return body(programs);
+    if (u.pathname === '/rest/v1/programs' && method === 'POST') return body([{ id: U(41), ...reqBody[0] }], 201);
+    if (u.pathname === '/rest/v1/tasks' && method === 'POST') return fk(reqBody[0]) || body([{ id: U(999), task_no: 'DKT-1', ...reqBody[0] }], 201);
+    if (u.pathname === '/rest/v1/tasks' && method === 'PATCH') return fk(reqBody) || body([]);
     return body([]);
   };
   return { fn, calls };
@@ -212,22 +219,84 @@ test('getReplan: level F only; readiness = agreed, active owner, data source, ac
   assert.deepEqual(s.calls.filter(c => c.p.startsWith('/rest/v1/weeks?')).map(c => inIds(new URL('https://x' + c.p).searchParams.get('week_end')))[0], ['2026-11-01', '2026-11-08', '2026-11-15', '2026-11-22', '2026-11-29'].filter(w => w < today));
 });
 
-test('Programs retired: create / update / bulk refuse a program (400 programs_retired), clearing still works; createProgram → 410', async () => {
-  for (const post of [{ action: 'createTask', title: 'ZZ', program_id: U(40) }, { action: 'updateTask', id: U(901), program_id: U(40) },
-    { action: 'bulkUpdateTasks', ids: [U(901)], field: 'program_id', value: U(40) }]) {
-    const r = await run(stub(), { post });
-    assert.equal(r.status, 400, post.action); assert.equal(r.j.error, 'programs_retired');
-  }
-  const c = await run(stub(), { post: { action: 'createProgram', name: 'ZZ' } });
-  assert.equal(c.status, 410); assert.equal(c.j.error, 'programs_retired');
-  const s = stub({ tasks: [TT(1, { status: 'in_progress', program_id: U(40), created_by_user_id: ME })] });
-  const b = await run(s, { post: { action: 'bulkUpdateTasks', ids: [U(901)], field: 'program_id', value: null } });
-  assert.equal(b.status, 200, JSON.stringify(b.j)); assert.equal(b.j.data.updated, 1);
+test('Programs (restored): create / update / bulk accept a program; a sub-task inherits its parent\'s; createProgram creates (idempotent); clearing works', async () => {
+  const PRG = [{ id: U(40), name: 'ZZ Prog', color: null }];
+  // create — with a program AND a plan-free task; the program lands on the insert
+  let s = stub({ programs: PRG });
+  let r = await run(s, { post: { action: 'createTask', title: 'ZZ', program_id: U(40) } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  assert.equal(s.calls.find(x => x.method === 'POST' && x.p.startsWith('/rest/v1/tasks')).body[0].program_id, U(40));
+  // a sub-task (title only) inherits the parent's program
+  s = stub({ programs: PRG, tasks: [TT(5, { status: 'in_progress', program_id: U(40), created_by_user_id: ME })] });
+  r = await run(s, { post: { action: 'createTask', title: 'ZZ sub', parent_task_id: U(905) } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  assert.equal(s.calls.find(x => x.method === 'POST' && x.p.startsWith('/rest/v1/tasks')).body[0].program_id, U(40));
+  // update
+  s = stub({ programs: PRG, tasks: [TT(1, { status: 'in_progress', created_by_user_id: ME })] });
+  r = await run(s, { post: { action: 'updateTask', id: U(901), program_id: U(40) } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  assert.equal(s.calls.find(x => x.method === 'PATCH' && x.p.startsWith('/rest/v1/tasks')).body.program_id, U(40));
+  // bulk set, then bulk clear
+  s = stub({ programs: PRG, tasks: [TT(1, { status: 'in_progress', created_by_user_id: ME })] });
+  r = await run(s, { post: { action: 'bulkUpdateTasks', ids: [U(901)], field: 'program_id', value: U(40) } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(r.j.data.updated, 1);
+  assert.equal(s.calls.find(x => x.method === 'PATCH').body.program_id, U(40));
+  s = stub({ tasks: [TT(1, { status: 'in_progress', program_id: U(40), created_by_user_id: ME })] });
+  r = await run(s, { post: { action: 'bulkUpdateTasks', ids: [U(901)], field: 'program_id', value: null } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(r.j.data.updated, 1);
   assert.equal(s.calls.find(x => x.method === 'PATCH').body.program_id, null);
-  const n = stub();
-  const ok1 = await run(n, { post: { action: 'createTask', title: 'ZZ', program_id: null } });
-  assert.equal(ok1.status, 200, JSON.stringify(ok1.j));
-  assert.equal(n.calls.find(x => x.method === 'POST' && x.p.startsWith('/rest/v1/tasks')).body[0].program_id, null);
+  // createProgram: reuses an existing (case-insensitive) program, else inserts; a blank name is refused
+  r = await run(stub({ programs: PRG }), { post: { action: 'createProgram', name: 'zz prog' } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(r.j.data.id, U(40));
+  s = stub({ programs: PRG });
+  r = await run(s, { post: { action: 'createProgram', name: ' ZZ New ' } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(r.j.data.id, U(41));
+  assert.equal(s.calls.find(x => x.method === 'POST' && x.p.startsWith('/rest/v1/programs')).body[0].name, 'ZZ New');
+  r = await run(stub(), { post: { action: 'createProgram', name: '  ' } });
+  assert.equal(r.status, 400); assert.equal(r.j.error, 'name required');
+});
+
+test('Programs (restored): a sub-task inherits only when program_id is OMITTED — explicit null / \'\' stays null; update \'\' clears', async () => {
+  const PRG = [{ id: U(40), name: 'ZZ Prog', color: null }];
+  const parent = TT(5, { status: 'in_progress', program_id: U(40), created_by_user_id: ME });
+  for (const [extra, want] of [[{}, U(40)], [{ program_id: null }, null], [{ program_id: '' }, null], [{ program_id: U(40) }, U(40)]]) {
+    const s = stub({ programs: PRG, tasks: [parent] });
+    const r = await run(s, { post: { action: 'createSubtask', parent_task_id: U(905), title: 'ZZ sub', ...extra } });
+    assert.equal(r.status, 200, JSON.stringify(r.j));
+    assert.equal(s.calls.find(x => x.method === 'POST' && x.p.startsWith('/rest/v1/tasks')).body[0].program_id, want, JSON.stringify(extra));
+  }
+  const s = stub({ programs: PRG, tasks: [TT(1, { status: 'in_progress', program_id: U(40), created_by_user_id: ME })] });
+  const r = await run(s, { post: { action: 'updateTask', id: U(901), program_id: '' } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  assert.equal(s.calls.find(x => x.method === 'PATCH' && x.p.startsWith('/rest/v1/tasks')).body.program_id, null);
+});
+
+test('Programs (restored): a private-space task the caller is not a member of — updateTask 404, bulk skips it; no write', async () => {
+  const PRG = [{ id: U(40), name: 'ZZ Prog', color: null }];
+  const hidden = TT(1, { status: 'in_progress', space_id: PRIV, created_by_user_id: ME });   // even their own creation: not a member
+  let s = stub({ programs: PRG, tasks: [hidden] });
+  let r = await run(s, { post: { action: 'updateTask', id: U(901), program_id: U(40) } });
+  assert.equal(r.status, 404, JSON.stringify(r.j)); assert.equal(r.j.error, 'not_found');
+  assert.ok(!s.calls.some(x => x.method === 'PATCH'));
+  s = stub({ programs: PRG, tasks: [hidden, TT(2, { status: 'in_progress', created_by_user_id: ME })] });
+  r = await run(s, { post: { action: 'bulkUpdateTasks', ids: [U(901), U(902)], field: 'program_id', value: U(40) } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.deepEqual([r.j.data.updated, r.j.data.skipped], [1, 1]);
+  const patches = s.calls.filter(x => x.method === 'PATCH');
+  assert.equal(patches.length, 1); assert.deepEqual(inIds(new URL('https://x' + patches[0].p).searchParams.get('id')), [U(902)]);
+  // and once a member, the same write goes through
+  s = stub({ programs: PRG, tasks: [hidden], members: [PRIV] });
+  r = await run(s, { post: { action: 'updateTask', id: U(901), program_id: U(40) } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+});
+
+test('Programs (restored): an unknown program_id is refused (the tasks_program_id_fkey, as before R9b) — create, update and bulk', async () => {
+  const PRG = [{ id: U(40), name: 'ZZ Prog', color: null }];
+  let r = await run(stub({ programs: PRG }), { post: { action: 'createTask', title: 'ZZ', program_id: U(49) } });
+  assert.equal(r.status, 400); assert.match(r.j.error, /^create_failed: .*tasks_program_id_fkey/);
+  r = await run(stub({ programs: PRG, tasks: [TT(1, { status: 'in_progress', created_by_user_id: ME })] }), { post: { action: 'updateTask', id: U(901), program_id: U(49) } });
+  assert.equal(r.status, 400); assert.match(r.j.error, /^update_failed: .*tasks_program_id_fkey/);
+  r = await run(stub({ programs: PRG, tasks: [TT(1, { status: 'in_progress', created_by_user_id: ME })] }), { post: { action: 'bulkUpdateTasks', ids: [U(901)], field: 'program_id', value: U(49) } });
+  assert.equal(r.status, 400); assert.match(r.j.error, /^update_failed: .*tasks_program_id_fkey/);
 });
 
 test('review: a reading only for the item\'s CURRENT measure — edited to manual / another metric → no reading, off the queue; a new target → reached null', async () => {

@@ -269,7 +269,7 @@ test('F9 R4: docket_tasks takes a week filter (this/next/overdue/none/a date) an
     assert.equal(seen[0].u.searchParams.get('week'), w);
   }
   for (const bad of ['last', '2026-02-30', "this'", 'x'.repeat(11)]) assert.equal(rd.parse({ report: 'my_tasks', week: bad }, NOW).ok, false, bad);
-  assert.equal(rd.parse({ report: 'program_tasks', program_id: U, week: 'this' }, NOW).ok, false);   // programs retired (R9b): no such report
+  assert.equal(rd.parse({ report: 'program_tasks', program_id: U, week: 'this' }, NOW).ok, false);   // not on program_tasks
 });
 test('comment: a task you cannot open (private space) is refused before writing', async () => {
   const seen = []; const t = findTool('docket_add_comment');
@@ -657,7 +657,7 @@ test('docket_apply_template: id + anchor + date + roles (label → employee uuid
   assert.equal(refused.ok, false);
 });
 
-// ---- Docket F9 R9b (2026-11-12): measure readings, the reached queue, the score trend, the re-plan; Programs retired
+// ---- Docket F9 R9b (2026-11-12): measure readings, the reached queue, the score trend, the re-plan (its Programs retirement reverted 2026-11-13)
 test('R9b: docket_plan report=reached / trend / replan → getReachedTargets / getScoreTrend / getReplan as the person; params checked', async () => {
   const t = findTool('docket_plan');
   const seen = [];
@@ -687,11 +687,30 @@ test('R9b: items keep measure.reading (Docket attaches it at the levels that see
   const r = await t.run({ env, sbAccess: 'J', input: t.parse({ report: 'items' }, NOW).value });
   assert.deepEqual(r.data.result.items[0].measure.reading, reading);
 });
-test('R9b: Programs retired — no program filter, report or field on any Docket tool', () => {
+test('Programs (restored 2026-11-13): program filter, program_tasks / programs reports and the program field on create / update', async () => {
   const rd = findTool('docket_tasks');
-  assert.ok(!('program_tasks' in rd.reports) && !('programs' in rd.reports));
-  for (const report of ['my_tasks', 'space_tasks']) assert.equal(rd.parse({ report, program_id: U }, NOW).ok, false, report);
-  assert.equal(findTool('docket_create_task').parse({ title: 'x', program_id: U }, NOW).ok, false);
-  assert.equal(findTool('docket_update_task').parse({ id: U, program_id: U }, NOW).ok, false);
-  for (const name of ['docket_tasks', 'docket_create_task', 'docket_update_task']) assert.doesNotMatch(JSON.stringify(findTool(name).inputSchema), /program/i, name);
+  assert.equal(rd.reports.program_tasks.action, 'getProgramTasks'); assert.equal(rd.reports.programs.action, 'getPrograms');
+  for (const report of ['my_tasks', 'space_tasks']) assert.equal(rd.parse({ report, program_id: U }, NOW).ok, true, report);
+  assert.equal(rd.parse({ report: 'my_tasks', program_id: 'x' }, NOW).ok, false);
+  assert.equal(rd.parse({ report: 'program_tasks' }, NOW).ok, false);            // program_id required
+  const seen = [];
+  await rd.run({ env: docketEnv(seen), sbAccess: 'J', input: rd.parse({ report: 'program_tasks', program_id: U }, NOW).value });
+  assert.deepEqual(Object.fromEntries(seen.at(-1).u.searchParams), { action: 'getProgramTasks', program_id: U });
+  assert.equal(findTool('docket_create_task').parse({ title: 'x', program_id: U }, NOW).ok, true);
+  assert.equal(findTool('docket_update_task').parse({ id: U, program_id: U }, NOW).ok, true);
+  assert.equal(findTool('docket_update_task').parse({ id: U, program_id: 'nope' }, NOW).ok, false);
+  // alongside, never instead of, the plan link
+  assert.equal(findTool('docket_create_task').parse({ title: 'x', program_id: U, plan_item_id: U }, NOW).ok, true);
+  assert.match(rd.reports.programs.about, /company-wide/);
+});
+test('docket_update_task: program_id null removes the program — the explicit null reaches docketops', async () => {
+  const u = findTool('docket_update_task');
+  const p = u.parse({ id: U, program_id: null }, NOW);
+  assert.equal(p.ok, true, JSON.stringify(p));
+  assert.deepEqual(p.value, { id: U, program_id: null });
+  assert.ok(u.inputSchema.properties.program_id.type.includes('null'));
+  const seen = [];
+  await u.run({ env: docketEnv(seen), sbAccess: 'J', input: p.value });
+  const post = seen.find(x => x.init.method === 'POST');
+  assert.deepEqual(JSON.parse(post.init.body), { action: 'updateTask', data: { id: U, program_id: null } });
 });

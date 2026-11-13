@@ -4,6 +4,7 @@
 // `edit` (owned by TaskView so Shift+S / A / D / P can open one). The writes are the
 // TaskView actions — the same docketops calls + payloads the old drawer made.
 import { useEffect, useState } from 'react';
+import { Combobox } from '@throttle/ui';
 import { CircleDot, User, Users, Calendar, Flag, Network, Layers, Hash, Clock, CheckCheck, Repeat, Plus, X, Check, Ban, Target, ArrowRightLeft } from 'lucide-react';
 import { PlanPicker, PlanChip } from '../plan/PlanPicker.js';
 import { StatusBadge } from '../StatusBadge.js';
@@ -153,13 +154,18 @@ export function TaskProps({ task, canEdit, busy, edit, setEdit, refs, abandonMod
           onPick={(v) => { actions.saveField('department_id', v); close(); }} />)}
       </Prop>
 
-      {/* F9 R9b: Programs are retired (spec §7.1). A task that already has one shows it, read-only, so old
-          history stays legible; nothing sets one any more. */}
-      {task.program?.name && (
-        <Prop icon={Layers} label="Program">
-          <span className="tv-static tv-retired">Program: {task.program.name} <span className="tv-sub-inline">· retired — use Plan</span></span>
-        </Prop>
-      )}
+      <Prop icon={Layers} label="Program">
+        <Trigger field="program" label="Program" {...{ refs, edit, setEdit, canEdit }}>
+          {task.program ? <span className="tv-person">{task.program.name}</span> : <Empty />}
+        </Trigger>
+        {canEdit && pop('program', 260, (
+          <div style={{ padding: 6 }}>
+            <Combobox value={task.program_id || ''} options={opts.programCellOpts} placeholder="Pick or type to create…" allowClear={false} style={{ width: '100%' }}
+              onChange={(v, opt) => { if (!opt) return; actions.saveField('program_id', opt.value || null); close(); }}
+              onCreateOption={(text) => { actions.createProgramInline(text); close(); }} />
+          </div>
+        ))}
+      </Prop>
 
       {/* F9 R2: the plan link. A sub-task shows its parent's (muted, read-only) — set it on the parent. */}
       <Prop icon={Target} label="Plan">

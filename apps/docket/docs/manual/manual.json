@@ -2,7 +2,7 @@
   "title": "Docket",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to Legend of Toys' org-wide task manager: capturing, owning and tracking work across every department.",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "date": "2026-11-13",
   "app_url": "docket.legendoftoys.com",
   "owner": "Legend of Toys",
@@ -210,8 +210,18 @@
     },
     {
       "part": "Organising Work",
-      "subtitle": "Spaces: private, walled-off areas for tasks. (Programs are retired; the Plan replaces them.)",
+      "subtitle": "The two ways to group tasks: Programs (a soft label) and Spaces (a private, walled-off area).",
       "chapters": [
+        {
+          "id": "programs",
+          "title": "Programs",
+          "file": "org-programs.html",
+          "roles": [
+            "mem",
+            "view",
+            "adm"
+          ]
+        },
         {
           "id": "spaces",
           "title": "Spaces",
