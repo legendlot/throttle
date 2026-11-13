@@ -46,10 +46,10 @@ begin
 
   -- 1: My tasks (owner / collaborator / own open creation only — so asg and rcv are not "mine"); fnd, arch out
   out := '1:my=' || coalesce((select string_agg(z.label, ',' order by z.label) from zz_p3a z
-    where z.id in (select t.id from docket.list_my_tasks(L, E, false, '{}', G))), '');
+    where z.id in (select t.id from docket.list_my_tasks(L, E, false, '{}', G) t)), '');
   -- 2: a program's list — every involved row, never the sibling / Founders' / personal-not-involved / archived
   out := out || ' 2:prog=' || coalesce((select string_agg(z.label, ',' order by z.label) from zz_p3a z
-    where z.id in (select t.id from docket.list_tasks_by_program(L, E, D, false, '{}', G, PR))), '');
+    where z.id in (select t.id from docket.list_tasks_by_program(L, E, D, false, '{}', G, PR) t)), '');
   -- 3: the program's sidebar count = those rows
   out := out || ' 3:count=' || coalesce((select task_count::text from docket.programs_for_user(L, E, D, false, '{}', G) where id = PR), '0');
   -- 4: search
@@ -60,7 +60,7 @@ begin
     join docket.task_cards(ids, L, E, D, false, '{}', G) c on c.id = z.id where c.visible), '');
   -- 6: membership still works as before (the private space passed in → its sibling too; the rest unchanged)
   out := out || ' 6:member=' || coalesce((select string_agg(z.label, ',' order by z.label) from zz_p3a z
-    where z.id in (select t.id from docket.list_tasks_by_program(L, E, D, false, array[P], G, PR))), '');
+    where z.id in (select t.id from docket.list_tasks_by_program(L, E, D, false, array[P], G, PR) t)), '');
   -- 7: service_role only, on all five
   out := out || ' 7:' || case when (select bool_and(has_function_privilege('service_role', f, 'execute')
       and not has_function_privilege('anon', f, 'execute') and not has_function_privilege('authenticated', f, 'execute')) from unnest(array[
