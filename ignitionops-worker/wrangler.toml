@@ -43,3 +43,12 @@ crons = ["20 2 * * *", "10 3 * * *", "30 3 * * 1", "*/15 * * * *"]
 # SUPABASE_ANON_KEY
 # SUPABASE_SERVICE_ROLE_KEY
 # META_SYSTEM_USER_TOKEN  (same permanent System User token as odoops; arms C2)
+
+# Run next to the database (Supabase lot-production = AWS ap-south-1, Mumbai). Measured 2026-11-13:
+# requests from India executed in Marseille, so every Supabase call crossed Europe<->Mumbai.
+# A region hint, not mode = "smart" (that needs traffic from several locations). Proven on
+# lotopsproxy first (calls ~40% faster, client IP preserved). Verify: `cf-placement` response
+# header. Roll back: delete this block and redeploy. Kept LAST in the file on purpose — a table
+# header placed above top-level keys would swallow them.
+[placement]
+region = "aws:ap-south-1"

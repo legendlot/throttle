@@ -35,6 +35,8 @@ let SUPABASE_SERVICE_KEY = ''; // loaded from env each invocation
 const CORS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  // Browser may reuse the preflight for an hour (default is 5 s) — saves an OPTIONS round trip on most calls. See root reference/decisions.md 2026-11-13.
+  'Access-Control-Max-Age': '3600',
   'Access-Control-Allow-Headers': 'Content-Type, apikey, Authorization',
 };
 
