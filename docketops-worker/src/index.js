@@ -1048,6 +1048,10 @@ async function searchTasks(url, auth, env) {
   return ok(planned.map(t => ({ ...t, owner_name: name[t.owner_employee_id] || null })));
 }
 
+async function parentCrumb(p, space, auth, env) {
+  if (!p || (space.is_default && !(await canSeeTask(auth, p, env)))) return null;
+  return { id: p.id, task_no: p.task_no, title: p.title, status: p.status };
+}
 async function getTask(url, auth, env) {
   const id = url.searchParams.get('id');
   if (!id) return err('id required', 400);
@@ -1060,9 +1064,12 @@ async function getTask(url, auth, env) {
   if (space.is_default) { if (!(await canSeeTask(auth, task, env))) return err('forbidden', 403); }
   else { if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403); }
 
+  // The parent crumb {task_no, title} only when the caller could open the parent itself: same space
+  // always (setParent / moveTask keep it so); private = flat, General = canSeeTask on the parent — the
+  // stale sweep's crumb gate. A sub-task can be visible (own / dept / collaborator) under a parent that isn't.
   const [parentRes, childRes, collabRes, docRes, commRes, histRes] = await Promise.all([
     task.parent_task_id
-      ? sbDocket(`/rest/v1/tasks?id=eq.${enc(task.parent_task_id)}&space_id=eq.${enc(task.space_id)}&select=id,task_no,title,status&limit=1`, env)
+      ? sbDocket(`/rest/v1/tasks?id=eq.${enc(task.parent_task_id)}&space_id=eq.${enc(task.space_id)}&select=*&limit=1`, env)
       : { data: [] },
     sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(id)}&space_id=eq.${enc(task.space_id)}&select=id,task_no,title,status,priority,owner_employee_id,deadline,revised_deadline&order=created_at.asc`, env),
     sbDocket(`/rest/v1/task_collaborators?task_id=eq.${enc(id)}&select=employee_id,added_at`, env),
@@ -1125,7 +1132,7 @@ async function getTask(url, auth, env) {
     can_accept_handoff: isHandoffReceiver(auth, task) && handoffOpen(task) && !task.handoff_accepted_at && !space.archived_at,
     space: { id: space.id, name: space.name, is_private: space.is_private, is_founders: !!space.is_founders },
     program: prog || null,
-    parent: parentRes.data?.[0] || null,
+    parent: await parentCrumb(parentRes.data?.[0], space, auth, env),
     children: children.map(c => ({ ...c, plan: childPlan })),
     child_count: children.length,
     child_done: children.filter(c => c.status === 'done').length,
