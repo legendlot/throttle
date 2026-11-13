@@ -683,6 +683,101 @@ test('syncTeamOrgUnits: dry run writes nothing; the run creates parents first, l
   assert.deepEqual(bad.body.skipped.filter(x => x.reason === 'ou_not_created').map(x => x.employee_code), ['EMP-020', 'EMP-021']);
 });
 
+// deleteEmptyOrgUnits (2026-11-14): the OUs left empty after people moved to team OUs.
+import { emptyOuDeletePlan } from '../src/googlesync.js';
+import { deleteEmptyOrgUnits } from '../src/index.js';
+const DEL_OUS = ['/Supply chain', '/Supply chain/Production', '/Brand', '/Production', '/Production/Factory', '/Production/Factory/Line 1',
+  '/Sales', '/Sales/Online', '/Sales/Offline', '/Admin and general', '/Admin and general/Desk', '/Legacy', '/Legacy/Shared', '/Old', '/Old/Keep'];
+const DEL_USERS = ['/Sales/Online', '/old/keep', '/Brand'];   // a suspended user counts the same (the list has no status)
+test('emptyOuDeletePlan: never root, team OUs or their parents, excluded, OUs with users below, or above a kept OU; deepest first', () => {
+  const p = emptyOuDeletePlan({ ous: ['/', ...DEL_OUS], userOus: DEL_USERS,
+    teamPaths: ['/supply chain/production', '/Supply chain', '/brand'], excluded: ['/Admin and general', '/Legacy/Shared'] });
+  assert.deepEqual(p.toDelete, ['/Production/Factory/Line 1', '/Production/Factory', '/Sales/Offline', '/Production']);
+  assert.deepEqual(p.kept, {
+    '/': 'root', '/Supply chain': 'team_ou', '/Supply chain/Production': 'team_ou', '/Brand': 'team_ou',
+    '/Sales': 'has_users', '/Sales/Online': 'has_users', '/Old': 'has_users', '/Old/Keep': 'has_users',
+    '/Admin and general': 'excluded_ou', '/Admin and general/Desk': 'excluded_ou', '/Legacy/Shared': 'excluded_ou', '/Legacy': 'has_kept_child',
+  });
+  // a team parent is kept even when the team OU itself is missing from the list
+  assert.equal(emptyOuDeletePlan({ ous: ['/Ops'], userOus: [], teamPaths: ['/Ops/Desk'], excluded: [] }).kept['/Ops'], 'team_ou_parent');
+  // excluded "/" keeps everything; a user in an OU missing from the list still keeps its parents
+  assert.deepEqual(emptyOuDeletePlan({ ous: DEL_OUS, userOus: [], teamPaths: [], excluded: ['/'] }).toDelete, []);
+  assert.deepEqual(emptyOuDeletePlan({ ous: ['/A', '/A/B'], userOus: ['/A/B/C'], teamPaths: [], excluded: [] }).toDelete, []);
+  assert.deepEqual(emptyOuDeletePlan({}).toDelete, []);
+});
+test('deleteEmptyOrgUnits: dry run writes nothing; stale hash 409; deepest-first deletes, logged; parent skipped when a child fails', async () => {
+  const pem = await rsaPem();
+  const ENVO = { ...ENVW, GOOGLE_SA_JSON: JSON.stringify({ client_email: 'r@x.iam', private_key: pem }), GOOGLE_IMPERSONATE_EMAIL: 'admin@legendoftoys.com', GOOGLE_ADMIN_SA_JSON: JSON.stringify({ client_email: 'w@x.iam', private_key: pem }), GOOGLE_ADMIN_IMPERSONATE_EMAIL: 'admin@legendoftoys.com' };
+  const run = async (dry, { failDelete = null, planHash, users = DEL_USERS.map((ou, i) => ({ primaryEmail: `u${i}@legendoftoys.com`, orgUnitPath: ou, suspended: i === 0 })) } = {}) => {
+    const seen = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = async (u, o = {}) => {
+      const url = String(u); const method = o.method || 'GET';
+      let body = null; try { body = typeof o.body === 'string' ? JSON.parse(o.body) : null; } catch { body = null; }
+      seen.push({ url, method, body });
+      if (url.includes('/rest/v1/google_admin_access')) return json([{ auth_user_id: AUTH_ID }]);
+      if (url.includes('/rest/v1/employees?auth_user_id=')) return json([{ id: 'me' }]);
+      if (url.startsWith('https://oauth2.googleapis.com/token')) return json({ access_token: 'tok' });
+      if (url.includes('/rest/v1/settings')) return json([{ directory_excluded_ous: ['/Admin and general', '/Legacy/Shared'] }]);
+      if (url.includes('/rest/v1/departments')) return json(TEAMS.slice(0, 3));
+      if (url.includes('/admin/directory/v1/users?')) return json({ users });
+      if (url.includes('/orgunits?type=all')) return json({ organizationUnits: DEL_OUS.map(orgUnitPath => ({ orgUnitPath })) });
+      if (url.includes('/orgunits/') && method === 'DELETE') {
+        if (failDelete && url.endsWith(failDelete)) return json({ error: { message: 'Org unit contains devices' } }, 400);
+        return new Response(null, { status: 204 });
+      }
+      if (url.includes('/rest/v1/google_admin_log')) return json(null, 201);
+      throw new Error('unexpected fetch ' + method + ' ' + url);
+    };
+    try { const r = await deleteEmptyOrgUnits({ data: { dry_run: dry, plan_hash: planHash } }, { userId: AUTH_ID }, ENVO); const j = await r.json(); return { status: r.status, body: j.data || j, seen }; }
+    finally { globalThis.fetch = real; }
+  };
+  const dels = (x) => x.seen.filter(c => c.method === 'DELETE').map(c => c.url.split('/orgunits/')[1]);
+  const dry = await run(undefined);   // dry_run defaults on
+  assert.equal(dry.status, 200, JSON.stringify(dry.body));
+  assert.equal(dry.body.dry_run, true);
+  assert.deepEqual(dry.body.to_delete, ['/Production/Factory/Line 1', '/Production/Factory', '/Sales/Offline', '/Production']);
+  assert.equal(dry.body.kept_reasons['/Supply chain/Production'], 'team_ou');
+  assert.equal(dry.body.kept_reasons['/Sales'], 'has_users', 'a suspended user below keeps the OU');
+  assert.equal(dry.body.kept_reasons['/Legacy'], 'has_kept_child');
+  assert.match(dry.body.plan_hash, /^[0-9a-f]{64}$/);
+  assert.equal(dry.seen.some(c => c.method !== 'GET' && !c.url.startsWith('https://oauth2')), false, 'dry run: no write anywhere');
+
+  const stale = await run(false, { planHash: 'f'.repeat(64) });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error?.code || stale.body.code || stale.body.error, 'stale_preview');
+  assert.equal(stale.seen.some(c => c.method === 'DELETE' || c.url.includes('google_admin_log')), false);
+
+  const live = await run(false, { planHash: dry.body.plan_hash });
+  assert.equal(live.status, 200, JSON.stringify(live.body));
+  assert.deepEqual(dels(live), ['Production/Factory/Line%201', 'Production/Factory', 'Sales/Offline', 'Production'], 'deepest first, no leading slash, segments encoded');
+  assert.deepEqual(live.body.deleted, ['/Production/Factory/Line 1', '/Production/Factory', '/Sales/Offline', '/Production']);
+  const logs = live.seen.filter(c => c.url.includes('/rest/v1/google_admin_log'));
+  assert.equal(logs.length, 4, 'one log insert per delete, written as it happens');
+  assert.deepEqual(logs.flatMap(l => l.body).map(x => [x.action, x.target_email, x.ok]),
+    [['delete_org_unit', '/Production/Factory/Line 1', true], ['delete_org_unit', '/Production/Factory', true], ['delete_org_unit', '/Sales/Offline', true], ['delete_org_unit', '/Production', true]]);
+
+  const bad = await run(false, { planHash: dry.body.plan_hash, failDelete: 'Line%201' });
+  assert.equal(bad.status, 200);
+  assert.deepEqual(dels(bad), ['Production/Factory/Line%201', 'Sales/Offline'], 'no parent attempted after its child failed; the rest carries on');
+  assert.deepEqual(bad.body.deleted, ['/Sales/Offline']);
+  assert.deepEqual(bad.body.delete_errors, [{ path: '/Production/Factory/Line 1', error: 'Org unit contains devices' },
+    { path: '/Production/Factory', error: 'child_not_deleted' }, { path: '/Production', error: 'child_not_deleted' }]);
+  assert.deepEqual(bad.seen.filter(c => c.url.includes('google_admin_log')).flatMap(l => l.body).map(x => [x.target_email, x.ok, x.error]),
+    [['/Production/Factory/Line 1', false, 'Org unit contains devices'], ['/Sales/Offline', true, null]]);
+
+  const none = await run(false, { planHash: dry.body.plan_hash, users: [] });
+  assert.equal(none.status, 502, 'an empty user list is a bad read, never "every OU is empty"');
+  assert.equal(none.seen.some(c => c.method === 'DELETE'), false);
+});
+test('0027: delete_org_unit widens the google_admin_log action CHECK, every earlier action kept; registered', () => {
+  const m = readFileSync(new URL('../migrations/0027_org_unit_delete_log.sql', import.meta.url), 'utf8');
+  for (const a of ['create_user', 'link_existing', 'suspend_user', 'reset_password', 'suspend_exited', 'drive_transfer',
+    'keep_active', 'transfer_checked', 'account_gone', 'sync_fields', 'sync_fields_failed', 'create_org_unit', 'delete_org_unit']) assert.match(m, new RegExp(`'${a}'`));
+  assert.match(SRC, /action: 'delete_org_unit'/);
+  assert.match(SRC, /syncTeamOrgUnits, deleteEmptyOrgUnits,/);
+});
+
 // Codex 2026-11-14: exclusions are case-insensitive and "/" excludes every OU.
 import { ouExcluded as ouEx2 } from '../src/googlesync.js';
 test('ouExcluded: case-insensitive, root excludes all, trailing slash tolerated', () => {

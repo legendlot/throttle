@@ -100,7 +100,7 @@ import {
   SYNC_FIELDS, DRAIN_CAP as GSYNC_CAP, GOOGLE_CALL_TIMEOUT_MS, SYNC_LEASE_MS, IDENTITY_RETRY_ATTEMPTS, desiredGoogleFields,
   googleFieldsOf, mergeGoogleUser, bodyFields, scopeOf, diffPerson, nextLastPushed, nextAttemptAt, syncClaimFilter,
   cleanSyncFields, ouExcluded, fieldsToPush, leaseHeld, previewHash, needsOuCheck, effectiveFields, identityChanged,
-  FOUNDER_CODES, googleDepartmentLabel, teamOuPath, resolveOu, teamOuPlan, teamOuMoves,
+  FOUNDER_CODES, googleDepartmentLabel, teamOuPath, resolveOu, teamOuPlan, teamOuMoves, emptyOuDeletePlan,
 } from './googlesync.js';   // J1b Podium → Google field sync (test/googlesync.test.mjs)
 import {
   LEDGER_TYPES, TYPE_LABELS, LEAVE_COPY, LEAVE_POLICIES, DEFAULT_CUTOVER_MONTH, isIsoDay, isMonth, monthOf, yearOf,
@@ -315,6 +315,8 @@ async function fetchGoogleUsers(env) {
     (d.users || []).forEach(x => out.push(x));
     pageToken = d.nextPageToken || '';
   } while (pageToken && ++pages < 10);
+  // Fail closed (Codex 2026-11-14): a truncated list would make occupied OUs look empty to deleteEmptyOrgUnits.
+  if (pageToken) throw new Error('google_dir_truncated: more than 10 pages of users');
   return out;
 }
 
@@ -7405,6 +7407,60 @@ export async function syncTeamOrgUnits(body, auth, env) {
   return ok({ ...out, ous_to_create: plan.toCreate, created, create_errors: createErrors,
     updated: { count: updated.length, list: updated }, update_errors: updateErrors, skipped });
 }
+
+// POST deleteEmptyOrgUnits {dry_run, plan_hash} — Google admin. Deletes the OUs left empty once people moved to team
+// OUs (syncTeamOrgUnits). The rule is emptyOuDeletePlan: never "/", a team OU or its parent, anything in / under an
+// excluded OU, nor an OU with any Google user (suspended included — users.list has no status filter here) in it or
+// below it. Deepest first; a parent is only deleted when every planned child below it was. Nothing else is touched.
+// dry_run (the default) writes nothing; Apply must send back the preview's plan_hash. Google refuses an OU that still
+// holds users or devices: that error is returned per path and the run carries on.
+export async function deleteEmptyOrgUnits(body, auth, env) {
+  const gate = await requireGoogleAdmin(auth, env); if (gate) return gate;
+  if (!googleWriteConfigured(env)) return j1bErr('google_write_not_configured', 400);
+  const d = body.data || body;
+  const dryRun = d.dry_run !== false;
+  let token;
+  try { token = await googleWriteToken(env, 'orgunit'); }
+  catch (e) { return err('google_orgunit_token_failed: ' + (e?.message || e), 502); }
+  const [sres, dr] = await Promise.all([
+    sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
+    sb(`/rest/v1/departments?active=eq.true&select=id,name,parent_department_id&order=name.asc`, env),
+  ]);
+  if (!sres.ok || !dr.ok || !Array.isArray(dr.data)) return err('db_error', 500);
+  let gusers, existing;
+  try { gusers = await fetchGoogleUsers(env); }
+  catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
+  // No users at all = a bad read, not an empty domain: every OU would look empty.
+  if (!Array.isArray(gusers) || !gusers.length) return err('google_users_empty', 502);
+  try { existing = await listOrgUnitPaths(env, token); }
+  catch (e) { return err(String(e?.message || e).slice(0, 300), 502); }
+  const excluded = sres.data?.[0]?.directory_excluded_ous || ['/Admin and general'];
+  const plan = emptyOuDeletePlan({
+    ous: existing, userOus: (gusers || []).map(u => u.orgUnitPath || '/'),
+    teamPaths: dr.data.map(t => teamOuPath(t, dr.data)), excluded,
+  });
+  const out = { dry_run: dryRun, ous_existing: existing.length, users_seen: (gusers || []).length, to_delete: plan.toDelete, kept_reasons: plan.kept };
+  const planHash = await previewHash({ delete: plan.toDelete });
+  if (dryRun) return ok({ ...out, plan_hash: planHash });
+  if (d.plan_hash !== planHash) return errCode('stale_preview', 'Org units or users changed since the preview — preview again', 409);
+
+  // orgunits.delete takes the full path minus the leading "/" (or the OU id); each segment is URL-encoded.
+  const deleted = [], deleteErrors = [], failed = [];
+  const below = (p, anc) => p.toLowerCase().startsWith(anc.toLowerCase() + '/');
+  for (const path of plan.toDelete) {
+    if (failed.some(f => below(f, path))) { failed.push(path); deleteErrors.push({ path, error: 'child_not_deleted' }); continue; }
+    const req = { orgUnitPath: path };
+    let r;
+    try { r = await googleFetch(`${GDIR_ORGUNITS}/${path.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }); }
+    catch (x) { r = { ok: false, data: { error: { message: googleCallError(x) } } }; }
+    const error = r.ok ? null : (r.data?.error?.message || `HTTP ${r.status}`);
+    // target_email is NOT NULL and an OU has no address: it carries the OU path (as create_org_unit).
+    await googleAdminLogMany(env, [{ actor: auth.userId, actor_email: auth.email || null, action: 'delete_org_unit', target_email: path, request: req, ok: !error, error }]);
+    if (error) { failed.push(path); deleteErrors.push({ path, error }); }
+    else deleted.push(path);
+  }
+  return ok({ ...out, deleted, delete_errors: deleteErrors });
+}
 // ── end J1b
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -11511,7 +11567,7 @@ const POST_ACTIONS = {
   // Google Directory sync
   importDirectoryCandidates,
   // J1b — Podium → Google field sync (Google admins; requireGoogleAdmin inside)
-  retryGoogleSync, pushGoogleFields, syncTeamOrgUnits,
+  retryGoogleSync, pushGoogleFields, syncTeamOrgUnits, deleteEmptyOrgUnits,
   // Appraisal engine
   createAppraisalCycle, setCycleStatus, enrollAppraisalCycle,
   submitSelfReview, submitManagerReview, acknowledgeAppraisal,

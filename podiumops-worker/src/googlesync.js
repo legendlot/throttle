@@ -190,6 +190,40 @@ export function teamOuPlan(depts, existing, excluded) {
   return { byDept, toCreate, blocked };
 }
 
+// deleteEmptyOrgUnits' rule. ous = every OU path Google has (orgunits.list) · userOus = the orgUnitPath of EVERY Google
+// user (suspended included) · teamPaths = teamOuPath of every ACTIVE team · excluded = settings.directory_excluded_ous.
+// All compared case-insensitively. A candidate is not "/", not a team OU nor an ancestor of one, not in / under an
+// excluded OU, has no user in it or below it, and has no OU below it that is itself kept. → { toDelete: [path]
+// deepest first, kept: { path: reason } for every other OU }
+export function emptyOuDeletePlan({ ous, userOus, teamPaths, excluded } = {}) {
+  const norm = (p) => { const s = String(p ?? '').trim().replace(/\/+$/, ''); return s || '/'; };
+  const under = (p, anc) => anc === '/' || p.startsWith(anc + '/');   // p strictly below anc (both lower-cased)
+  const seen = new Set(), list = [];
+  for (const p0 of ous || []) {
+    if (blank(p0)) continue;
+    const p = norm(p0);
+    if (seen.has(lc(p))) continue;
+    seen.add(lc(p)); list.push(p);
+  }
+  const users = [...new Set((userOus || []).filter(x => !blank(x)).map(x => lc(norm(x))))];
+  const teams = [...new Set((teamPaths || []).filter(x => !blank(x)).map(x => lc(norm(x))))];
+  const depth = (p) => (p === '/' ? 0 : p.split('/').length - 1);
+  list.sort((a, b) => depth(b) - depth(a) || (lc(a) < lc(b) ? -1 : lc(a) > lc(b) ? 1 : 0));
+  const kept = {}, keptLc = new Set(), toDelete = [];
+  for (const p of list) {   // deepest first, so every OU below p is already decided
+    const k = lc(p);
+    let why = null;
+    if (k === '/') why = 'root';
+    else if (ouExcludedCi(p, excluded)) why = 'excluded_ou';
+    else if (teams.includes(k)) why = 'team_ou';
+    else if (teams.some(t => under(t, k))) why = 'team_ou_parent';
+    else if (users.some(u => u === k || under(u, k))) why = 'has_users';
+    else if ([...keptLc].some(c => under(c, k))) why = 'has_kept_child';
+    if (why) { kept[p] = why; keptLc.add(k); } else toDelete.push(p);
+  }
+  return { toDelete, kept };
+}
+
 // syncTeamOrgUnits' people half. emps = non-exited rows { id, employee_code, full_name, department_id, org_unit_path,
 // google_org_unit } · byDept = teamOuPlan().byDept. Founders, and anyone whose Podium or Google OU is in / under an
 // excluded OU, are skipped; a person with no team is left alone. → { moves: [{ id, employee_code, full_name, from,
