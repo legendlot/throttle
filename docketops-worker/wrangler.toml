@@ -12,3 +12,11 @@ SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
 
 [triggers]
 crons = ["0,30 * * * *"]
+
+# Run next to the database (Supabase lot-production = AWS ap-south-1, Mumbai). Before this, requests
+# from India executed in Marseille and every Supabase call crossed Europe<->Mumbai. Same change as
+# lotopsproxy and 9 other workers (2026-11-13). Verify: `cf-placement` response header. Roll back:
+# delete this block and redeploy. Kept LAST in the file on purpose — a table header placed above
+# top-level keys would swallow them. The cron trigger above is unaffected.
+[placement]
+region = "aws:ap-south-1"

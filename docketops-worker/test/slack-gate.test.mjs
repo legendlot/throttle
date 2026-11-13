@@ -77,7 +77,7 @@ function stub({ cached = [], tasks = [], profileActive = true, hooksDown = false
       return body(EMPS.filter(e => e.work_email.toLowerCase() === want.toLowerCase()).map(({ slack, ...e }) => e));
     }
     if (p.startsWith('/rest/v1/users_profile?id=eq.')) return body([{ role: 'viewer', full_name: 'ZZ', active: profileActive }]);
-    if (u.pathname === '/rest/v1/users_profile' && method === 'POST') { posted.push({ provision: reqBody }); return body([]); }
+    if (u.pathname === '/rest/v1/users_profile' && method === 'POST') { posted.push({ provision: reqBody }); return body([reqBody]); }   // a real insert returns the new row (ignore-duplicates returns [] only when it already existed)
     if (p.startsWith('/rest/v1/users_profile?')) return body([]);
     if (p.startsWith('/rest/v1/docket_user_roles?')) return body([]);
     if (p.includes('/employees?auth_user_id=eq.')) return body(EMPS.filter(e => e.auth_user_id === eq('auth_user_id')).map(({ slack, ...e }) => e));

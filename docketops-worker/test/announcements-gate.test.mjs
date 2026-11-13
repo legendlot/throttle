@@ -426,7 +426,8 @@ test('mirror runs in ctx.waitUntil when the platform gives one', async () => {
   const s = stub({ perms: FOUNDER, settings: LIVE });
   const waits = [];
   const r = await run(s, { post: NEW() }, { waitUntil: (p) => waits.push(p) });
-  assert.equal(r.status, 200); assert.equal(waits.length, 1);
+  // two: handlePost's presence ping (non-blocking since 2026-11-14) and the mirror
+  assert.equal(r.status, 200); assert.equal(waits.length, 2);
   await Promise.all(waits);
   assert.deepEqual(posted(s).map(m => m.body.channel), [ORG]);
 });

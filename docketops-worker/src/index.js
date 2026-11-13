@@ -55,6 +55,7 @@ import { deptTree, headedTeams, readerTeams, postableTeams,
   parseAnnouncementSettings, validateAnnouncementSettings, validateCreate, validateUpdate, teamIdsOf, isLive,
   canSeeAnnouncement, canManageAnnouncement, sortAnnouncements, audienceOf, unreadCount, mirrorTargets,
   announcementMessage, testDmMessage, mirrorSummary } from './announcements-core.mjs';
+import { LIMITS, canonicalIds, canonicalizeUrlUuids, taskFieldsError, docError, commentError, bulkIdsError, scratchBodyError } from './request-core.mjs';
 
 
 // ── CORS ──────────────────────────────────────────────────────────────────
@@ -62,6 +63,7 @@ const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, If-Match',
+  'Access-Control-Max-Age': '3600',   // the browser caches the preflight an hour instead of one per POST
 };
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -127,61 +129,92 @@ async function sbAll(sb, path, env, page = 1000) {
   }
 }
 
+// A read started EARLY, alongside a read (or an access check) whose result used to decide whether it ran at all.
+// Its throw (a failed fetch) is held until the handler calls the returned function at the point the old serial
+// code awaited it, so the earlier step's early return (its 403 / 404 / 500) still wins exactly as before and the
+// held rejection is never unhandled. (Mirrors podiumops-worker's deferThrow.) → Promise<() => value | throws>
+function deferThrow(p) {
+  return p.then(v => () => v, e => () => { throw e; });
+}
+
 // ── Auth ────────────────────────────────────────────────────────────────────
+// Any thrown lookup (a failed fetch) → null → 401, never an unhandled exception (fail closed).
 async function verifyJWT(authHeader, env) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.slice(7);
-  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
-    headers: { apikey: env.SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) return null;
-  const user = await res.json();
-  if (!user?.id) return null;
-
-  const profileRes = await sbStore(
-    `/rest/v1/users_profile?id=eq.${user.id}&select=role,full_name,active&limit=1`, env);
-  let profile = (profileRes.ok && profileRes.data?.[0]) || null;
-
-  // Durable self-provision (2026-06-13): a valid @legendoftoys.com Google login with no
-  // users_profile row used to make this return null → Docket hung forever at "Loading"
-  // (every new hire who opened Docket before being set up in Garage /users — happened to
-  // Chiragh/Nitesh/Rayn/Prarthi/Aakash). Instead, auto-create a least-privilege baseline
-  // identity (viewer) so Docket's "no role = baseline" tier works immediately. Domain is
-  // already enforced at Google OAuth (RULE-010); re-checked here defensively. Upsert
-  // (merge-duplicates) is race-safe for a brand-new user's first concurrent calls. An
-  // admin can elevate/deactivate the role later in Garage /users.
-  if (!profile) {
-    const email = (user.email || '').toLowerCase();
-    if (!email.endsWith('@legendoftoys.com')) return null;
-    const fname = user.user_metadata?.full_name || user.user_metadata?.name || user.email;
-    const ins = await sbStore('/rest/v1/users_profile', env, {
-      method: 'POST',
-      prefer: 'return=representation,resolution=merge-duplicates',
-      body:   JSON.stringify({ id: user.id, full_name: fname, role: 'viewer', active: true }),
+  try {
+    const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: env.SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
     });
-    profile = (ins.ok && ins.data?.[0]) || { role: 'viewer', full_name: fname, active: true };
-  }
-  const auth = await authForUser(user.id, user.email, env, { profile });
-  if (auth) auth.bearer = token;
-  return auth;
+    if (!res.ok) return null;
+    const user = await res.json();
+    if (!user?.id || !isUuid(user.id)) return null;   // authForUser refuses a non-uuid id too — before any read now
+
+    // One wave: the profile, the Docket role and the podium employee are independent reads.
+    const wave = await authWave(user.id, env, true);
+    // A FAILED profile read is not "no profile": provisioning on it would upsert role 'viewer' / active true over
+    // an existing row — demoting an admin in every LOT app, or re-activating a deactivated login, on one transient
+    // 5xx (found in review 2026-11-14). Refuse (401); the app retries.
+    if (!wave.profileRes.ok || !Array.isArray(wave.profileRes.data)) return null;
+    let profile = wave.profileRes.data[0] || null;
+
+    // Durable self-provision (2026-06-13): a valid @legendoftoys.com Google login with no
+    // users_profile row used to make this return null → Docket hung forever at "Loading"
+    // (every new hire who opened Docket before being set up in Garage /users — happened to
+    // Chiragh/Nitesh/Rayn/Prarthi/Aakash). Instead, auto-create a least-privilege baseline
+    // identity (viewer) so Docket's "no role = baseline" tier works immediately. Domain is
+    // already enforced at Google OAuth (RULE-010); re-checked here defensively. The insert
+    // IGNORES a duplicate (a brand-new user's concurrent first calls race; so could an admin
+    // creating the row) — it must never overwrite an existing row's role / active. An
+    // admin can elevate/deactivate the role later in Garage /users.
+    if (!profile) {
+      const email = (user.email || '').toLowerCase();
+      if (!email.endsWith('@legendoftoys.com')) return null;
+      const fname = user.user_metadata?.full_name || user.user_metadata?.name || user.email;
+      const ins = await sbStore('/rest/v1/users_profile', env, {
+        method: 'POST',
+        prefer: 'return=representation,resolution=ignore-duplicates',
+        body:   JSON.stringify({ id: user.id, full_name: fname, role: 'viewer', active: true }),
+      });
+      if (!ins.ok) return null;
+      profile = ins.data?.[0] || null;
+      if (!profile) {   // lost the race: the row exists now — read it (its role / active decide, not ours)
+        const again = await sbStore(`/rest/v1/users_profile?id=eq.${user.id}&select=role,full_name,active&limit=1`, env);
+        profile = (again.ok && again.data?.[0]) || null;
+        if (!profile) return null;
+      }
+    }
+    const auth = await authForUser(user.id, user.email, env, { profile, wave });
+    if (auth) auth.bearer = token;
+    return auth;
+  } catch { return null; }
+}
+
+// The identity reads that need only the user id, in one wave: users_profile (when `withProfile`), the Docket role
+// assignment and the podium employee. Each keeps its own { ok, data } — a !ok read is judged by the caller exactly
+// as the serial reads were; a thrown fetch rejects the wave (Promise.all also handles its siblings' rejections).
+async function authWave(userId, env, withProfile) {
+  const [profileRes, urRes, empRes] = await Promise.all([
+    withProfile ? sbStore(`/rest/v1/users_profile?id=eq.${userId}&select=role,full_name,active&limit=1`, env) : null,
+    sbStore(`/rest/v1/docket_user_roles?user_id=eq.${userId}&select=role_key&limit=1`, env),
+    sbPodium(`/rest/v1/employees?auth_user_id=eq.${userId}&select=id,full_name,department_id,status&limit=1`, env),
+  ]);
+  return { profileRes, urRes, empRes };
 }
 
 // A Supabase auth user → Docket's `auth` object (profile → Docket role → podium employee). Shared by verifyJWT
-// (after its /auth/v1/user call + self-provision) and the Slack path (F9 R7a), which calls it directly with
-// NO self-provision: a login with no users_profile row, or an inactive one, is refused (null).
-async function authForUser(userId, email, env, { profile } = {}) {
+// (after its /auth/v1/user call + self-provision; it passes the wave it already read) and the Slack path (F9 R7a),
+// which calls it directly with NO self-provision: a login with no users_profile row, or an inactive one, is refused
+// (null). The role and employee reads ride with the profile read; nothing they return is used before the
+// profile / active check, which still decides first.
+async function authForUser(userId, email, env, { profile, wave } = {}) {
   if (!isUuid(userId)) return null;
-  if (profile === undefined) {
-    const profileRes = await sbStore(
-      `/rest/v1/users_profile?id=eq.${userId}&select=role,full_name,active&limit=1`, env);
-    profile = (profileRes.ok && profileRes.data?.[0]) || null;
-  }
+  const w = wave || await authWave(userId, env, profile === undefined);
+  if (profile === undefined) profile = (w.profileRes.ok && w.profileRes.data?.[0]) || null;
   if (!profile || !profile.active) return null;
 
   // Permissions from Docket's own layer (RULE-DOCKET-002). No role → {} → baseline.
-  const urRes = await sbStore(
-    `/rest/v1/docket_user_roles?user_id=eq.${userId}&select=role_key&limit=1`, env);
-  const docketRole = (urRes.ok && urRes.data?.[0]?.role_key) || null;
+  const docketRole = (w.urRes.ok && w.urRes.data?.[0]?.role_key) || null;
   let permissions = {};
   if (docketRole) {
     const prRes = await sbStore(
@@ -191,10 +224,8 @@ async function authForUser(userId, email, env, { profile } = {}) {
     permissions = normalizeDocketPerms((prRes.ok && prRes.data?.[0]?.permissions) || {});
   }
 
-  // Resolve the caller's podium employee (for default owner + department scoping).
-  const empRes = await sbPodium(
-    `/rest/v1/employees?auth_user_id=eq.${userId}&select=id,full_name,department_id,status&limit=1`, env);
-  const emp = (empRes.ok && empRes.data?.[0]) || null;
+  // The caller's podium employee (for default owner + department scoping).
+  const emp = (w.empRes.ok && w.empRes.data?.[0]) || null;
 
   return {
     userId, email, role: profile.role,
@@ -235,8 +266,11 @@ async function isDashboardViewer(userId, env) {
 }
 async function canViewDashboard(auth, env) {
   if (canViewAll(auth)) return true;
-  if (await dashboardPublic(env)) return true;
-  return isDashboardViewer(auth.userId, env);
+  // Both reads at once; each fails closed on its own (a !ok read → false). The grant read's throw is held
+  // (deferThrow) so a public dashboard still opens exactly when it used to.
+  const [pub, viewer] = await Promise.all([dashboardPublic(env), deferThrow(isDashboardViewer(auth.userId, env))]);
+  if (pub) return true;
+  return viewer();
 }
 
 // Edit a task's core fields: creator, owner or assignee — widened by the task's SPACE (spec §5.1 P0-a):
@@ -693,10 +727,13 @@ async function canAccessSpaceDirect(auth, space, env) {
   if (!space) return false;
   if (space.is_default) return false;   // P3c: General is retired — it opens nothing
   if (space.owner_user_id === auth.userId) return true;
-  if (await isSpaceMember(space.id, auth.userId, env)) return true;
+  // The membership read and the team-share set are independent reads — one wave. Each fails closed on its own
+  // (a !ok read → not a member / an empty set); a thrown fetch rejects as before.
+  const [member, team] = await Promise.all([isSpaceMember(space.id, auth.userId, env), teamSpaceSet(auth, env)]);
+  if (member) return true;
   // A team share never opens the Founders' space (refused at share time and by the 0035 trigger; this is the
   // read-side belt for a stray row).
-  return !space.is_founders && (await teamSpaceSet(auth, env)).has(space.id);
+  return !space.is_founders && team.has(space.id);
 }
 // P3a: does a docket_admin's override (edit someone's comment / record) apply in this space? Only in the
 // Founders' space for a plan admin, or where the admin has real rights (canAccessSpaceDirect) — never through
@@ -748,6 +785,11 @@ async function accessibleSpaces(auth, env) {
 // GET handlers
 // ════════════════════════════════════════════════════════════════════════════
 async function getMe(url, auth, env) {
+  // The team home space and the announcements badge need only `auth`, so they start in the first wave; deferThrow
+  // holds a throw until the point they used to be awaited (no unhandled rejection, same error order). The Personal
+  // fallback of default_space_id (personalSpaceId) still runs AFTER the _personalP seed below.
+  const homeP = deferThrow(homeSpaceFor(auth, auth.departmentId, env));
+  const annP = deferThrow(announceForMe(auth, env));
   let [spaces, can_view_dashboard] = await Promise.all([
     accessibleSpaces(auth, env),
     canViewDashboard(auth, env),
@@ -764,13 +806,14 @@ async function getMe(url, auth, env) {
   const defaultId = null;
   // Space badges (S309) run alongside the programs call, not after it — both are
   // independent reads and getMe is on the app-load path.
-  // default_space_id (P3c): where /tasks with no space opens — the caller's team home space, else Personal.
-  // P4: announcements_unread (the sidebar badge) + can_announce (the composer) — two reads, alongside.
+  // default_space_id (P3c): where /tasks with no space opens — the caller's team home space, else Personal
+  // (defaultTargetSpace's rule, its home read started above).
+  // P4: announcements_unread (the sidebar badge) + can_announce (the composer) — started above.
   const [programs, spaceCounts, default_space_id, ann] = await Promise.all([
     programsForUser(auth, memberSpaceIds, defaultId, env),
     spaceCountsForUser(auth, spaces.map(s => s.id), env),
-    defaultTargetSpace(auth, auth.departmentId, env),
-    announceForMe(auth, env),
+    homeP.then(get => get() || personalSpaceId(auth, env)),
+    annP.then(get => get()),
   ]);
   // A space with no open work is ABSENT from the RPC result and is left without a
   // task_count entirely, so the sidebar renders no badge rather than a "0" — a zero
@@ -978,9 +1021,13 @@ async function hydrateTasks(rows, auth, env) {
   const deptIds = uniq(rows.flatMap(t => [t.department_id, t.handoff_to_department_id]));
   const taskIds = uniq(rows.map(t => t.id));
   const userIds = uniq(rows.flatMap(t => [t.created_by_user_id, t.handoff_accepted_by]));
+  const progIds = uniq(rows.map(t => t.program_id));
+  // The program scope (involvementOnlyIds below) starts with wave 1; a no-op when the list handler already set it.
+  auth._scopeP = auth._scopeP || programScopeArgs(auth, env);
+  auth._scopeP.catch(() => {});   // awaited (and its error surfaced) by involvementOnlyIds; never an unhandled rejection
   // Every id list goes through sbIn (≤150 per request) — a big list would overflow the URL.
-  // F9 R2: the plan link (one batched projection call) and the rows' spaces (canEditTask) ride along.
-  const [deptRes, childRes, collabRes, docRes, commRes, creatorRes, linkRaw, planCtx] = await Promise.all([
+  // F9 R2: the plan link (one batched projection call), the rows' spaces (canEditTask) and the programs ride along.
+  const [deptRes, childRes, collabRes, docRes, commRes, creatorRes, linkRaw, planCtx, , progRes] = await Promise.all([
     sbIn(sbPodium, deptIds, l => `/rest/v1/departments?id=in.${l}&select=id,name`, env),
     sbIn(sbDocket, taskIds, l => `/rest/v1/tasks?parent_task_id=in.${l}&select=${KID_COLS}`, env),
     sbIn(sbDocket, taskIds, l => `/rest/v1/task_collaborators?task_id=in.${l}&select=task_id,employee_id`, env),
@@ -990,13 +1037,12 @@ async function hydrateTasks(rows, auth, env) {
     rawLinks(taskIds, env),
     planContext(rows, auth, env),
     knowSpaces(auth, rows, env),
+    sbIn(sbDocket, progIds, l => `/rest/v1/programs?id=in.${l}&select=id,name,color`, env),
   ]);
   const linkN = linkCounts(linkRaw);
   // Employee names: owners + every collaborator (collaborator ids are only known after collabRes).
   const empIds = uniq([...rows.flatMap(t => [t.owner_employee_id, t.handoff_to_employee_id]), ...(collabRes.data || []).map(c => c.employee_id)]);
   const empRes = await sbIn(sbPodium, empIds, l => `/rest/v1/employees?id=in.${l}&select=id,full_name`, env);
-  const progIds = uniq(rows.map(t => t.program_id));
-  const progRes = await sbIn(sbDocket, progIds, l => `/rest/v1/programs?id=in.${l}&select=id,name,color`, env);
   const progMap = {}; (progRes.data || []).forEach(p => { progMap[p.id] = p; });
   const deptName = {}; (deptRes.data || []).forEach(d => { deptName[d.id] = d.name; });
   const empName  = {}; (empRes.data  || []).forEach(e => { empName[e.id] = e.full_name; });
@@ -1069,6 +1115,7 @@ async function getTasks(url, auth, env) {
   const space = await loadSpace(spaceId, env);
   if (!space) return err('space_not_found', 404);
   if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
+  noteSpaces(auth, [space]);   // the rows' space, already read (SPACE_COLS) — knowSpaces in hydrateTasks skips it
   const params = {
     p_user: auth.userId, p_employee: auth.employeeId, p_dept: auth.departmentId,
     p_view_all: canViewAll(auth), p_space_id: spaceId,
@@ -1089,6 +1136,22 @@ async function getTasks(url, auth, env) {
   return ok(depsFilter(rows, q.get('deps')));
 }
 
+// The per-row space_name of the cross-space lists. hydrateTasks' knowSpaces already noted every row's space
+// (SPACE_COLS carries name) on auth._spaceRows; only ids it could not read (a failed read) are read here, as before.
+async function withSpaceNames(rows, auth, env) {
+  const spaceIds = uniq(rows.map(t => t.space_id));
+  if (!spaceIds.length) return rows;
+  const known = auth._spaceRows || new Map();
+  const sName = {};
+  spaceIds.forEach(id => { if (known.has(id)) sName[id] = known.get(id).name; });
+  const missing = spaceIds.filter(id => !known.has(id));
+  if (missing.length) {
+    const sr = await sbDocket(`/rest/v1/spaces?id=in.${inList(missing)}&select=id,name`, env);
+    (sr.ok ? sr.data : []).forEach(s => { sName[s.id] = s.name; });
+  }
+  return rows.map(t => ({ ...t, space_name: sName[t.space_id] || null }));
+}
+
 // Cross-space program view: every visible top-level task tagged to a program, across all
 // accessible spaces (membership-respecting). Hydrated like getTasks + a per-row space_name.
 async function getProgramTasks(url, auth, env) {
@@ -1097,7 +1160,8 @@ async function getProgramTasks(url, auth, env) {
   if (!programId) return err('program_id required', 400);
   const wf = await weekFilterFor(q, env);
   if (!wf) return err('bad_week', 400);
-  const { memberSpaceIds, defaultId } = await programScopeArgs(auth, env);
+  auth._scopeP = auth._scopeP || programScopeArgs(auth, env);   // one accessibleSpaces read per request (hydrateTasks reuses it)
+  const { memberSpaceIds, defaultId } = await auth._scopeP;
   const params = {
     p_user: auth.userId, p_employee: auth.employeeId, p_dept: auth.departmentId,
     p_view_all: canViewAll(auth), p_member_space_ids: memberSpaceIds, p_default_space_id: defaultId,
@@ -1114,12 +1178,7 @@ async function getProgramTasks(url, auth, env) {
   const r = await sbDocket(`/rest/v1/rpc/list_tasks_by_program`, env, { method: 'POST', body: JSON.stringify(params) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
   let rows = await hydrateTasks((r.data || []).filter(wf.test), auth, env);
-  const spaceIds = uniq(rows.map(t => t.space_id));
-  if (spaceIds.length) {
-    const sr = await sbDocket(`/rest/v1/spaces?id=in.${inList(spaceIds)}&select=id,name`, env);
-    const sName = {}; (sr.ok ? sr.data : []).forEach(s => { sName[s.id] = s.name; });
-    rows = rows.map(t => ({ ...t, space_name: sName[t.space_id] || null }));
-  }
+  rows = await withSpaceNames(rows, auth, env);
   return ok(depsFilter(rows, q.get('deps')));
 }
 
@@ -1130,7 +1189,8 @@ async function getMyTasks(url, auth, env) {
   const q = url.searchParams;
   const wf = await weekFilterFor(q, env);
   if (!wf) return err('bad_week', 400);
-  const { memberSpaceIds, defaultId } = await programScopeArgs(auth, env);
+  auth._scopeP = auth._scopeP || programScopeArgs(auth, env);   // one accessibleSpaces read per request (hydrateTasks reuses it)
+  const { memberSpaceIds, defaultId } = await auth._scopeP;
   const params = {
     p_user: auth.userId, p_employee: auth.employeeId,
     p_view_all: canViewAll(auth), p_member_space_ids: memberSpaceIds, p_default_space_id: defaultId,
@@ -1145,12 +1205,7 @@ async function getMyTasks(url, auth, env) {
   const r = await sbDocket(`/rest/v1/rpc/list_my_tasks`, env, { method: 'POST', body: JSON.stringify(params) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
   let rows = await hydrateTasks((r.data || []).filter(wf.test), auth, env);
-  const spaceIds = uniq(rows.map(t => t.space_id));
-  if (spaceIds.length) {
-    const sr = await sbDocket(`/rest/v1/spaces?id=in.${inList(spaceIds)}&select=id,name`, env);
-    const sName = {}; (sr.ok ? sr.data : []).forEach(s => { sName[s.id] = s.name; });
-    rows = rows.map(t => ({ ...t, space_name: sName[t.space_id] || null }));
-  }
+  rows = await withSpaceNames(rows, auth, env);
   // Three-way relation, checked most-specific first. 'creator' is the S153 addition: a task
   // you raised and handed to someone else, which list_my_tasks used to omit entirely (246
   // such tasks live, 138 open, 25 creators). Ownership wins over collaboration, and both win
@@ -1322,12 +1377,15 @@ async function getTask(url, auth, env) {
   if (!id) return err('id required', 400);
   const task = await loadTaskFor(id, auth, env);
   if (!task) return err('not_found', 404);
-  // Space gate: a space requires access (admins included — RULE-DOCKET-003) or, P3a, involvement in this task
-  // (loadTaskFor proved it and marked the row INVOLVED_ONLY).
-  const space = await loadSpace(task.space_id, env);
-  if (!space) return err('space_not_found', 404);
+  // Space gate: a space requires access (admins included — RULE-DOCKET-003) or, P3a, involvement in this task.
+  // loadTaskFor IS that gate: it read the space, returned null (→ 404) unless canAccessSpace held or the caller is
+  // involved (marked INVOLVED_ONLY), and kept the space row in TASK_SPACE — so no second loadSpace / canAccessSpace.
+  const space = TASK_SPACE.get(task);
+  if (!space) return err('space_not_found', 404);   // unreachable: loadTaskFor sets it on every row it returns
   const involvedOnly = INVOLVED_ONLY.has(task);
-  if (!involvedOnly && !(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
+  // Past the gate: the program scope (task_cards, via buildLinks / taskCards below) starts now, alongside the reads.
+  auth._scopeP = auth._scopeP || programScopeArgs(auth, env);
+  auth._scopeP.catch(() => {});   // awaited (and its error surfaced) by taskCards; never an unhandled rejection
 
   // The parent crumb {task_no, title} only when the caller could open the parent itself: same space
   // always (setParent / moveTask keep it so), and a space is flat.
@@ -1335,7 +1393,7 @@ async function getTask(url, auth, env) {
   // the rest of that space is not theirs (the child read then carries the involvement fields).
   const childCols = 'id,task_no,title,status,priority,owner_employee_id,deadline,revised_deadline'
     + (involvedOnly ? ',assignee_employee_id,handoff_to_department_id,handoff_to_employee_id' : '');   // involvedIds reads these
-  const [parentRes, childRes, collabRes, docRes, commRes, histRes] = await Promise.all([
+  const [parentRes, childRes, collabRes, docRes, commRes, histRes, progRes] = await Promise.all([
     task.parent_task_id
       ? sbDocket(`/rest/v1/tasks?id=eq.${enc(task.parent_task_id)}&space_id=eq.${enc(task.space_id)}&select=*&limit=1`, env)
       : { data: [] },
@@ -1344,6 +1402,7 @@ async function getTask(url, auth, env) {
     sbDocket(`/rest/v1/task_documents?task_id=eq.${enc(id)}&select=*&order=added_at.asc`, env),
     sbDocket(`/rest/v1/task_comments?task_id=eq.${enc(id)}&deleted_at=is.null&select=*&order=created_at.asc`, env),
     sbDocket(`/rest/v1/task_history?task_id=eq.${enc(id)}&select=*&order=created_at.asc`, env),
+    task.program_id ? sbDocket(`/rest/v1/programs?id=eq.${enc(task.program_id)}&select=id,name,color&limit=1`, env) : null,
   ]);
 
   // Resolve all employee names referenced (owner/assignee/collaborators/children-assignees) in one read.
@@ -1360,21 +1419,21 @@ async function getTask(url, auth, env) {
     ...(childRes.data || []).map(c => c.owner_employee_id),
     ...hoHist.map(h => h.note).filter(v => isUuid(v || '')),
   ]);
-  const deptRes = await sbIn(sbPodium, uniq([task.department_id, task.handoff_to_department_id,
-    ...hoHist.flatMap(h => [h.old_value, h.new_value]).filter(v => isUuid(v || ''))]), l => `/rest/v1/departments?id=in.${l}&select=id,name`, env);
-  const deptName = {}; (deptRes.data || []).forEach(x => { deptName[x.id] = x.name; });
-  const empRes = empIds.length
-    ? await sbPodium(`/rest/v1/employees?id=in.${inList(empIds)}&select=id,full_name`, env) : { data: [] };
-  const empName = {}; (empRes.data || []).forEach(e => { empName[e.id] = e.full_name; });
-
   // Resolve LOT user names for the creator + comment authors + history actors (store.users_profile).
   const userIds = uniq([
     task.created_by_user_id, task.handoff_accepted_by,
     ...(commRes.data || []).map(c => c.author_user_id),
     ...(histRes.data || []).map(h => h.actor_user_id),
   ]);
-  const upRes = userIds.length
-    ? await sbStore(`/rest/v1/users_profile?id=in.${inList(userIds)}&select=id,full_name`, env) : { data: [] };
+  // The three name reads are independent — one wave.
+  const [deptRes, empRes, upRes] = await Promise.all([
+    sbIn(sbPodium, uniq([task.department_id, task.handoff_to_department_id,
+      ...hoHist.flatMap(h => [h.old_value, h.new_value]).filter(v => isUuid(v || ''))]), l => `/rest/v1/departments?id=in.${l}&select=id,name`, env),
+    empIds.length ? sbPodium(`/rest/v1/employees?id=in.${inList(empIds)}&select=id,full_name`, env) : { data: [] },
+    userIds.length ? sbStore(`/rest/v1/users_profile?id=in.${inList(userIds)}&select=id,full_name`, env) : { data: [] },
+  ]);
+  const deptName = {}; (deptRes.data || []).forEach(x => { deptName[x.id] = x.name; });
+  const empName = {}; (empRes.data || []).forEach(e => { empName[e.id] = e.full_name; });
   const userName = {}; (upRes.data || []).forEach(u => { userName[u.id] = u.full_name; });
 
   const children = (childRes.data || []).map(c => ({ ...c, owner_name: empName[c.owner_employee_id] || null }));
@@ -1400,9 +1459,7 @@ async function getTask(url, auth, env) {
   const planned = withPlan(task, planCtx);
   // A sub-task shows its parent's link, so a top-level task's children all carry this one, inherited.
   const childPlan = planned.plan && !planned.plan.inherited ? { ...planned.plan, inherited: true } : null;
-  const prog = task.program_id
-    ? (await sbDocket(`/rest/v1/programs?id=eq.${enc(task.program_id)}&select=id,name,color&limit=1`, env)).data?.[0]
-    : null;
+  const prog = progRes ? progRes.data?.[0] : null;
   return ok({
     ...planned,
     department_name: deptName[task.department_id] || null,
@@ -1458,7 +1515,7 @@ async function addTaskLink(body, auth, env) {
   if (!d.id || !d.other_id || !d.kind) return err('id, other_id and kind required', 400);
   if (!['waiting_on', 'blocks', 'relates'].includes(d.kind)) return err('bad_kind', 400);
   if (!UUID_RE.test(String(d.id)) || !UUID_RE.test(String(d.other_id))) return err('invalid id', 400);
-  if (d.id === d.other_id) return err('self_link', 422);
+  if (lcId(d.id) === lcId(d.other_id)) return err('self_link', 422);   // case-blind, as Postgres matches it
   const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   const cards = await taskCards([d.id, d.other_id], auth, env);
@@ -1508,8 +1565,11 @@ async function getDashboard(url, auth, env) {
   if (!spaceId) {
     // The org dashboard (was General's) is shareable — view_all, the dashboard_public flag, or a per-person grant
     // (RULE-DOCKET-006) — and spans every live team space (dashboard_stats_spaces, 0039).
+    // The team-space list rides with the access check; nothing from it is used (or thrown — deferThrow) unless the
+    // check passes, so a refused caller gets the same 403 and nothing else.
+    const spacesP = deferThrow(orgTeamSpaces(auth, env));
     if (!(await canViewDashboard(auth, env))) return err('forbidden_dashboard', 403);
-    orgSpaces = await orgTeamSpaces(auth, env);
+    orgSpaces = (await spacesP)();
     if (!orgSpaces) return err('db_error: spaces', 500);
     r = await sbDocket(`/rest/v1/rpc/dashboard_stats_spaces`, env, { method: 'POST', body: JSON.stringify({ p_space_ids: orgSpaces.map(s => s.id) }) });
   } else {
@@ -2041,6 +2101,7 @@ async function createTaskCore(d, auth, env) {
   // deadline) is optional and enriched later — the task lands in "The Grid" until it
   // has both an owner and a deadline. (RULE-DOCKET-001, V2.)
   if (!d.title || !String(d.title).trim()) return err('title required', 400);
+  { const e = taskFieldsError(d); if (e) return err(e, 400); }   // size caps (request-core.mjs LIMITS), before any read
   if (d.program_id === '') d.program_id = null;   // '' = "No program" (an explicit choice, never inherited)
   // Optional initial status (a status-group "+ Add task"), so it is one write + one history row.
   if (d.status != null && d.status !== '' && !d.is_recurring) {
@@ -2386,9 +2447,24 @@ async function assignChecklistTemplate(body, auth, env) {
   if (!r.ok) return err('assign_failed: ' + JSON.stringify(r.data), 400);
   return ok({ template_id: d.template_id, employee_id: d.employee_id });
 }
+// Unassign: an admin, the template's editor (canEditTemplate — saveChecklistTemplate's rule), the employee being
+// unassigned themselves, or whoever made that assignment. (Not one of the S288 ungated writes — assign is.)
+// Any failed read refuses (fail closed).
 async function unassignChecklistTemplate(body, auth, env) {
   const d = body.data || body;
   if (!d.template_id || !d.employee_id) return err('template_id + employee_id required', 400);
+  const self = !!auth.employeeId && lcId(d.employee_id) === lcId(auth.employeeId);
+  if (!isAdmin(auth) && !self) {
+    if (!isUuid(String(d.template_id)) || !isUuid(String(d.employee_id))) return err('forbidden', 403);   // no right is provable
+    const [tr, ar] = await Promise.all([
+      sbDocket(`/rest/v1/checklist_templates?id=eq.${enc(d.template_id)}&select=created_by_user_id&limit=1`, env),
+      sbDocket(`/rest/v1/checklist_assignments?template_id=eq.${enc(d.template_id)}&employee_id=eq.${enc(d.employee_id)}&unassigned_at=is.null&select=assigned_by_user_id`, env),
+    ]);
+    if (!tr.ok || !ar.ok) return err('db_error', 500);
+    const tmpl = tr.data?.[0];
+    const assigner = (Array.isArray(ar.data) ? ar.data : []).some(a => a.assigned_by_user_id === auth.userId);
+    if (!(tmpl && canEditTemplate(auth, tmpl)) && !assigner) return err('forbidden', 403);
+  }
   const r = await sbDocket(
     `/rest/v1/checklist_assignments?template_id=eq.${enc(d.template_id)}&employee_id=eq.${enc(d.employee_id)}&unassigned_at=is.null`,
     env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ unassigned_at: nowIso() }) });
@@ -2450,7 +2526,8 @@ async function toggleChecklistItem(body, auth, env) {
     // a tick is the record, so one assignee can't wipe another's (hostile review #5).
     if (shared && !(isAdmin(auth) || canEditTemplate(auth, tmpl))) {
       const ex = await sbDocket(`/rest/v1/checklist_item_completions?${itemQ}&select=completed_by_user_id`, env);
-      const rows = ex.ok ? ex.data : [];
+      if (!ex.ok) return err('db_error', 500);   // fail closed: an unread tick must not skip the guard (the DELETE takes every tick)
+      const rows = Array.isArray(ex.data) ? ex.data : [];
       if (rows.length && !rows.some(r => r.completed_by_user_id === auth.userId)) return err('not_your_tick', 403);
     }
     await sbDocket(`/rest/v1/checklist_item_completions?${itemQ}${shared ? '' : `&employee_id=eq.${enc(auth.employeeId)}`}`, env,
@@ -2481,6 +2558,7 @@ const EDITABLE  = ['title','description','department_id','owner_employee_id','pr
 async function updateTask(body, auth, env) {
   const d = body.data || body;
   if (!d.id) return err('id required', 400);
+  { const e = taskFieldsError(d); if (e) return err(e, 400); }   // size caps (request-core.mjs LIMITS), before any read
   if (d.program_id === '') d.program_id = null;   // '' clears, same as null
   const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
@@ -2662,6 +2740,7 @@ async function reviseDeadline(body, auth, env) {
 const BULK_FIELDS = new Set(['owner_employee_id', 'priority', 'program_id', 'status', 'deadline']);
 async function bulkUpdateTasks(body, auth, env) {
   const d = body.data || body;
+  if (bulkIdsError(d.ids)) return err(bulkIdsError(d.ids), 400);   // LIMITS.bulkIds, before any read
   const ids = Array.isArray(d.ids) ? uniq(d.ids) : [];
   const field = d.field;
   if (!ids.length) return err('ids required', 400);
@@ -2768,6 +2847,7 @@ async function bulkUpdateTasks(body, auth, env) {
 // Add or remove ONE collaborator across N tasks.
 async function bulkSetCollaborator(body, auth, env) {
   const d = body.data || body;
+  if (bulkIdsError(d.ids)) return err(bulkIdsError(d.ids), 400);   // LIMITS.bulkIds, before any read
   const ids = Array.isArray(d.ids) ? uniq(d.ids) : [];
   const employeeId = d.employee_id;
   const mode = d.mode === 'remove' ? 'remove' : 'add';
@@ -2821,6 +2901,7 @@ async function bulkSetCollaborator(body, auth, env) {
 // space and could push a task into a space the mover cannot see.
 async function bulkMoveTasks(body, auth, env) {
   const d = body.data || body;
+  if (bulkIdsError(d.ids)) return err(bulkIdsError(d.ids), 400);   // LIMITS.bulkIds, before any read
   const ids = Array.isArray(d.ids) ? uniq(d.ids) : [];
   if (!ids.length) return err('ids required', 400);
   if (!d.space_id) return err('space_id required', 400);
@@ -2883,6 +2964,7 @@ async function bulkMoveTasks(body, auth, env) {
 // N single abandonTask calls, not this.
 async function bulkAbandonTasks(body, auth, env) {
   const d = body.data || body;
+  if (bulkIdsError(d.ids)) return err(bulkIdsError(d.ids), 400);   // LIMITS.bulkIds, before any read
   const ids = Array.isArray(d.ids) ? uniq(d.ids) : [];
   const reason = String(d.reason || '').trim();
   if (!ids.length) return err('ids required', 400);
@@ -2940,7 +3022,10 @@ async function setParent(body, auth, env) {
   if (task.status === 'abandoned') return abandonedRO();
   const newParent = d.parent_task_id || null;
   if (newParent) {
-    if (newParent === task.id) return err('a task cannot be its own parent', 422);
+    // Compared lower-cased: Postgres matches an UPPERCASE uuid, so a case change must not slip the self-check (the
+    // router canonicalises too — this holds without it). A non-uuid finds no parent, as it always did.
+    if (!isUuid(String(newParent))) return err('parent_not_found', 404);
+    if (lcId(newParent) === lcId(task.id)) return err('a task cannot be its own parent', 422);
     const parent = await loadTaskFor(newParent, auth, env);
     if (!parent || !(await seesTask(auth, parent, env))) return err('parent_not_found', 404);
     // A sub-task lives in its parent's space (createTaskCore, moveTask) — never across a space wall,
@@ -3038,6 +3123,7 @@ async function addDocument(body, auth, env) {
   const d = body.data || body;
   if (!d.id || !d.url) return err('id and url required', 400);
   if (!isHttpUrl(d.url)) return err('url must start with http:// or https://', 400);
+  { const e = docError(d); if (e) return err(e, 400); }   // LIMITS.docTitle / docUrl
   const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!(await seesTask(auth, task, env))) return err('forbidden', 403);
@@ -3068,6 +3154,7 @@ async function removeDocument(body, auth, env) {
 async function addComment(body, auth, env) {
   const d = body.data || body;
   if (!d.id || !d.body || !String(d.body).trim()) return err('id and body required', 400);
+  if (commentError(d.body)) return err(commentError(d.body), 400);   // LIMITS.comment
   const task = await loadTaskFor(d.id, auth, env);
   if (!task) return err('not_found', 404);
   if (!(await seesTask(auth, task, env))) return err('forbidden', 403);
@@ -3081,6 +3168,7 @@ async function addComment(body, auth, env) {
 async function editComment(body, auth, env) {
   const d = body.data || body;
   if (!d.comment_id || d.body === undefined) return err('comment_id and body required', 400);
+  if (commentError(d.body)) return err(commentError(d.body), 400);   // LIMITS.comment
   const cRes = await sbDocket(`/rest/v1/task_comments?id=eq.${enc(d.comment_id)}&select=*&limit=1`, env);
   const c = cRes.ok && cRes.data?.[0];
   if (!c) return err('not_found', 404);
@@ -3337,7 +3425,7 @@ async function unshareSpaceTeam(body, auth, env) {
 async function removeSpaceMember(body, auth, env) {
   const d = body.data || body; if (!d.space_id || !d.user_id) return err('space_id and user_id required', 400);
   const space = await loadSpace(d.space_id, env); const gate = await requireSpaceOwner(auth, space); if (gate) return gate;
-  if (space.owner_user_id === d.user_id) return err('cannot remove the owner — transfer ownership first', 422);
+  if (lcId(space.owner_user_id) === lcId(d.user_id)) return err('cannot remove the owner — transfer ownership first', 422);
   await sbDocket(`/rest/v1/space_members?space_id=eq.${enc(d.space_id)}&user_id=eq.${enc(d.user_id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
   await logSpace(env, d.space_id, auth.userId, 'member_removed', d.user_id);
   return ok({ removed: d.user_id });
@@ -3404,6 +3492,7 @@ async function getScratchNotes(url, auth, env) {
 }
 async function createScratchNote(body, auth, env) {
   const d = body.data || body;
+  if (scratchBodyError(d.body)) return err(scratchBodyError(d.body), 400);   // LIMITS.scratchBody
   const r = await sbDocket(`/rest/v1/scratch_notes`, env, {
     method: 'POST', body: JSON.stringify([{ user_id: auth.userId, title: d.title || null, body: d.body || '', updated_at: nowIso() }]) });
   if (!r.ok || !r.data?.[0]) return err('create_failed: ' + JSON.stringify(r.data), 400);
@@ -3412,6 +3501,7 @@ async function createScratchNote(body, auth, env) {
 async function updateScratchNote(body, auth, env) {
   const d = body.data || body;
   if (!d.id) return err('id required', 400);
+  if (scratchBodyError(d.body)) return err(scratchBodyError(d.body), 400);   // LIMITS.scratchBody
   const updates = { updated_at: nowIso() };
   if (d.title !== undefined) updates.title = d.title;
   if (d.body !== undefined) updates.body = d.body;
@@ -5024,7 +5114,7 @@ async function createTaskFromRecordItem(body, auth, env) {
   if (rec.status === 'archived') return err('record_archived', 409);
   if (item.task_id) return err('item_has_task', 409);
   if (item.state !== 'open') return err('item_not_open', 422);
-  const td = { title: String(d.title || '').trim() || `${item.title} — ${rec.title}`, space_id: rec.space_id,
+  const td = { title: String(d.title || '').trim() || `${item.title} — ${rec.title}`.slice(0, LIMITS.title), space_id: rec.space_id,
     owner_employee_id: auth.employeeId || null, department_id: auth.departmentId || null };
   for (const k of ['owner_employee_id', 'deadline', 'priority', 'department_id', 'description']) if (d[k] !== undefined) td[k] = d[k];
   const res = await createTaskCore(td, auth, env);
@@ -5440,6 +5530,7 @@ const POST_ACTIONS = {
 // Slack / system sources are stamped by their own paths (R7 / the database), never from a header.
 function requestSource(request) { return request.headers.get('X-LOT-Source') === 'connector' ? 'connector' : 'app'; }
 async function handleGet(url, request, env) {
+  canonicalizeUrlUuids(url);   // id-keyed uuid params lowercased once, before any handler (request-core.mjs)
   const action = url.searchParams.get('action');
   if (!action) return err('action_required', 400);
   if (action === 'ping') return ok({ pong: true });
@@ -5458,9 +5549,14 @@ async function handlePost(request, env, ctx) {
   if (!auth) return err('unauthorized', 401);
   auth.source = requestSource(request);
   let body; try { body = await request.json(); } catch { return err('bad_json', 400); }
+  // Id-keyed uuids lowercased once, before any handler (request-core.mjs); an over-deep / over-large body is refused.
+  try { if (!canonicalIds(body)) return err('invalid_request', 400); } catch { return err('invalid_request', 400); }
   const action = body?.action;
   if (!action) return err('action_required', 400);
-  await touchActivity(auth, env);   // mutation presence ping (best-effort, swallows its own errors)
+  // Mutation presence ping (best-effort, swallows its own errors) — after the response on the platform (no handler
+  // reads user_activity; only GET reads do); without a ctx (tests) it simply runs first, as before.
+  const ping = touchActivity(auth, env).catch(() => {});
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(ping); else await ping;
   const handler = POST_ACTIONS[action];
   if (!handler) return err(`unknown_action: ${action}`, 400);
   try { return await handler(body, auth, env, ctx); }
