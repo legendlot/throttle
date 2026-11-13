@@ -3691,8 +3691,11 @@ const OPENING_EMBED =
   'department:department_id(id,name),job_role:job_role_id(id,title),level:level_id(id,code,name,rank),reporting_manager:reporting_manager_employee_id(id,employee_code,full_name,job_title),hiring_owner:hiring_owner_employee_id(id,employee_code,full_name,job_title)';
 
 // Founders = active, no manager, users_profile.role = 'super_admin' (EMP-001 / EMP-002 today).
+// A failed read throws (→ 500 at the router), as before: [] would read as "no founders" and wrongly deny a founder.
 async function loadFounders(env) {
-  return (await loadFoundersStrict(env)) || [];
+  const f = await loadFoundersStrict(env);
+  if (f === null) throw new Error('db_error: founders read');
+  return f;
 }
 
 // Same, but null when either read fails — leave routing fails closed instead of silently sending a request to HR.
@@ -9542,7 +9545,8 @@ async function cvImportAccept(body, auth, env) {
   };
   try {
     let draft = pickCvDraft(d.draft || item.final || item.extracted?.fields || {});
-    // A caller who can't see salary never sets CTC (cvImportSaveItem's rule): keep what the item already holds.
+    // A caller who can't see salary never sets CTC (cvImportSaveItem's rule): keep what the item already holds. The
+    // application still gets no CTC from this caller (cleanApplication) — deliberate; a salary viewer adds it there.
     if (!c.salary) draft = { ...draft, current_ctc: item.final?.current_ctc ?? null, expected_ctc: item.final?.expected_ctc ?? null };
     const appData = { opening_id: c.imp.opening_id, source: c.imp.source, source_detail: c.imp.source_detail,
       referrer_employee_id: c.imp.referrer_employee_id || null, notice_period_days: draft.notice_period_days, current_ctc: draft.current_ctc, expected_ctc: draft.expected_ctc };

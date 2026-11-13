@@ -492,7 +492,7 @@ function CandidatesCard({ opening, applications, hasJd, isOpen, canManage, canSe
                   <F label="Referred by"><Combobox value={cv.referrer_employee_id} onChange={v => setCv(s => ({ ...s, referrer_employee_id: v }))} inputStyle={comboInp} placeholder="Search people…"
                     options={emps.map(e => ({ value: e.id, label: e.full_name, hint: e.employee_code }))} /></F>
                 )}
-                <F label="Source detail"><input style={inp} value={cv.source_detail} onChange={e => setCv(s => ({ ...s, source_detail: e.target.value }))} placeholder={sourceDetailHint(cv.source)} /></F>
+                <F label="Source detail"><input style={inp} value={cv.source_detail} maxLength={200} onChange={e => setCv(s => ({ ...s, source_detail: e.target.value }))} placeholder={sourceDetailHint(cv.source)} /></F>
               </Row>
               <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
                 <span style={{ ...muted, marginRight: 'auto' }}>PDF, Word or image · up to 15 MB each · several at once is fine.</span>
@@ -544,7 +544,7 @@ function CandidatesCard({ opening, applications, hasJd, isOpen, canManage, canSe
               <F label="Referred by"><Combobox value={form.referrer_employee_id} onChange={v => set('referrer_employee_id', v)} inputStyle={comboInp} placeholder="Search people…"
                 options={emps.map(e => ({ value: e.id, label: e.full_name, hint: e.employee_code }))} /></F>
             )}
-            <F label="Source detail"><input style={inp} value={form.source_detail} onChange={e => set('source_detail', e.target.value)} placeholder={sourceDetailHint(form.source)} /></F>
+            <F label="Source detail"><input style={inp} value={form.source_detail} maxLength={200} onChange={e => set('source_detail', e.target.value)} placeholder={sourceDetailHint(form.source)} /></F>
           </Row>
           <Row>
             <F label="Notice (days)" style={{ maxWidth: 130 }}><input style={inp} inputMode="numeric" value={form.notice_period_days} onChange={e => set('notice_period_days', e.target.value)} /></F>

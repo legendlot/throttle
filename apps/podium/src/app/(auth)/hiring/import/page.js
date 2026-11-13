@@ -68,7 +68,7 @@ export default function CvImportsPage() {
             </F>
           )}
           <F label="Detail (optional)" style={{ flex: 1, minWidth: 160 }}>
-            <input value={form.source_detail} onChange={e => setForm(f => ({ ...f, source_detail: e.target.value }))} placeholder={sourceDetailHint(form.source)} style={inp} />
+            <input value={form.source_detail} maxLength={200} onChange={e => setForm(f => ({ ...f, source_detail: e.target.value }))} placeholder={sourceDetailHint(form.source)} style={inp} />
           </F>
         </Row>
         <div style={{ marginTop: 12 }}>

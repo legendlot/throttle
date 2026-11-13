@@ -276,7 +276,7 @@ function ApplicationRow({ a, emps, openOpenings, session, onChanged }) {
               <F label="Referred by"><Combobox value={edit.referrer_employee_id} onChange={v => setEdit(s => ({ ...s, referrer_employee_id: v }))} inputStyle={comboInp}
                 options={emps.map(e => ({ value: e.id, label: e.full_name, hint: e.employee_code }))} /></F>
             )}
-            <F label="Source detail"><input style={inp} value={edit.source_detail} onChange={e => setEdit(s => ({ ...s, source_detail: e.target.value }))} placeholder={sourceDetailHint(edit.source)} /></F>
+            <F label="Source detail"><input style={inp} value={edit.source_detail} maxLength={200} onChange={e => setEdit(s => ({ ...s, source_detail: e.target.value }))} placeholder={sourceDetailHint(edit.source)} /></F>
             <F label="Notice (days)"><input style={inp} inputMode="numeric" value={edit.notice_period_days} onChange={e => setEdit(s => ({ ...s, notice_period_days: e.target.value }))} /></F>
           </Row>
           {seesSalary && (
