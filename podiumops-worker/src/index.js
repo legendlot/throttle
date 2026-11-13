@@ -122,6 +122,8 @@ import {
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  // Browser may reuse the preflight for an hour (default is 5 s) — saves an OPTIONS round trip on most calls. See root reference/decisions.md 2026-11-13.
+  'Access-Control-Max-Age': '3600',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, If-Match',
 };
 
@@ -154,6 +156,13 @@ async function sb(path, env, opts = {}) {
   let data;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   return { ok: res.ok, status: res.status, data };
+}
+
+// A read started EARLY, alongside a read whose result used to decide whether it ran at all. Its throw (a failed
+// fetch) is held until the handler calls the returned function at the point the old serial code awaited it, so the
+// earlier read's early return (its 404 / 500) still wins exactly as before. → Promise<() => value | throws>
+export function deferThrow(p) {
+  return p.then(v => () => v, e => () => { throw e; });
 }
 
 async function sbStore(path, env, opts = {}) {
@@ -195,7 +204,7 @@ const DOC_BUCKET = 'podium-documents';
 
 // ── Auth ────────────────────────────────────────────────────────────────────
 
-async function verifyJWT(authHeader, env) {
+export async function verifyJWT(authHeader, env) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.slice(7);
   const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
@@ -205,22 +214,37 @@ async function verifyJWT(authHeader, env) {
   const user = await res.json();
   if (!user?.id) return null;
 
-  const profileRes = await sbStore(
-    `/rest/v1/users_profile?id=eq.${user.id}&select=role,full_name,active&limit=1`,
-    env,
-  );
+  // The three lookups below are independent of each other (each is keyed only on the verified
+  // user id), so they run TOGETHER: this function used to make five Supabase calls in a row on
+  // every request (measured 2026-11-13: ~1.2 s floor per action). Nothing about WHAT is decided
+  // changed — an inactive or missing profile still returns null, and the role/comp answers are
+  // simply discarded in that case. A REJECTED read (network error) on any of the three fails
+  // CLOSED and quiet: null → a clean 401 with CORS, never a throw out of the auth gate.
+  let profileRes, urRes, caRes;
+  try { [profileRes, urRes, caRes] = await Promise.all([
+    sbStore(
+      `/rest/v1/users_profile?id=eq.${user.id}&select=role,full_name,active&limit=1`,
+      env,
+    ),
+    // Podium permissions come from Podium's OWN layer (store.podium_user_roles →
+    // store.podium_roles.permissions), NOT the shared store.roles (RULE-PODIUM-006,
+    // mirrors Snorkel/RULE-SNORKEL-002). No assigned role → {} → self-only baseline
+    // (own profile + own wins via /me; see the self-serve gate in handleGet/handlePost).
+    sbStore(
+      `/rest/v1/podium_user_roles?user_id=eq.${user.id}&select=role_key&limit=1`,
+      env,
+    ),
+    // Salary access is an explicit allow-list (podium.comp_access), decoupled from
+    // admin/hr (RULE-PODIUM-002, amended 2026-07-06). Resolved once per request.
+    sb(
+      `/rest/v1/comp_access?auth_user_id=eq.${user.id}&select=auth_user_id&limit=1`,
+      env,
+    ),
+  ]); } catch (_e) { return null; }
   if (!profileRes.ok || !profileRes.data?.[0]) return null;
   const profile = profileRes.data[0];
   if (!profile.active) return null;
 
-  // Podium permissions come from Podium's OWN layer (store.podium_user_roles →
-  // store.podium_roles.permissions), NOT the shared store.roles (RULE-PODIUM-006,
-  // mirrors Snorkel/RULE-SNORKEL-002). No assigned role → {} → self-only baseline
-  // (own profile + own wins via /me; see the self-serve gate in handleGet/handlePost).
-  const urRes = await sbStore(
-    `/rest/v1/podium_user_roles?user_id=eq.${user.id}&select=role_key&limit=1`,
-    env,
-  );
   const podiumRole = (urRes.ok && urRes.data?.[0]?.role_key) || null;
   let permissions = {};
   if (podiumRole) {
@@ -230,13 +254,6 @@ async function verifyJWT(authHeader, env) {
     );
     permissions = (prRes.ok && prRes.data?.[0]?.permissions) || {};
   }
-
-  // Salary access is an explicit allow-list (podium.comp_access), decoupled from
-  // admin/hr (RULE-PODIUM-002, amended 2026-07-06). Resolved once per request.
-  const caRes = await sb(
-    `/rest/v1/comp_access?auth_user_id=eq.${user.id}&select=auth_user_id&limit=1`,
-    env,
-  );
   const compAccess = !!(caRes.ok && caRes.data?.[0]);
 
   return {
@@ -559,10 +576,18 @@ async function getMe(url, auth, env) {
   });
 }
 
-async function getSettings(url, auth, env) {
+export async function getSettings(url, auth, env) {
   const r = await sb(`/rest/v1/settings?id=eq.1&select=*&limit=1`, env);
   if (!r.ok) return err('db_error', 500);
-  return ok(r.data?.[0] || null);
+  return ok(projectSettings(r.data?.[0] || null, auth));
+}
+// The appraisal increment bands + PIP threshold go only to HR / comp — the same line getAppraisalConfig draws.
+export const SETTINGS_HR_COMP_FIELDS = ['increment_bands', 'pip_rating_threshold'];
+export function projectSettings(row, auth) {
+  if (!row || isHr(auth) || canComp(auth)) return row;
+  const out = { ...row };
+  for (const f of SETTINGS_HR_COMP_FIELDS) delete out[f];
+  return out;
 }
 
 // Directory list. Everyone with podium_view sees it; rows the caller can't see in
@@ -574,28 +599,46 @@ async function getEmployees(url, auth, env, ctx) {
   const search = (url.searchParams.get('search') || '').trim();
   const limit = intParam(url, 'limit', 500, { min: 1, max: 2000 });
   const offset = intParam(url, 'offset', 0);
+  // Encoded up front: a throw here must come before any read starts (as it did when the open-exit read was awaited alone).
+  const statusEnc = status ? encodeURIComponent(status) : '';
+  // cleanSearch drops PostgREST's filter grammar (, ( ) * " \) first: encoding alone is not enough inside or=(),
+  // because PostgREST decodes %2C back to a comma and a term like "x*,pan_number.like.A*" would add an OR branch.
+  const searchFilter = search ? employeeSearchFilter(search) : '';
+  if (department && !isUuid(department)) return err('bad department_id', 400);
 
   // X1: "on notice" is an OPEN exit, not a status (0010 deviation 1) — ?status=notice lists those people.
-  const onNotice = await openExitEmployeeIds(env);
+  // Only ?status=notice builds its filter from it; every other list fetches it alongside the employees + edges.
+  const onNoticeP = openExitEmployeeIds(env);
   const filters = [];
-  if (status === 'notice') filters.push(onNotice.size ? `id=in.(${[...onNotice].join(',')})` : 'id=is.null');
-  else if (status && status !== 'all') filters.push(`status=eq.${encodeURIComponent(status)}`);
+  if (status === 'notice') {
+    const ids = await onNoticeP;
+    filters.push(ids.size ? `id=in.(${[...ids].join(',')})` : 'id=is.null');
+  }
+  else if (status && status !== 'all') filters.push(`status=eq.${statusEnc}`);
   else if (!status) filters.push('status=neq.exited');
   if (department) filters.push(`department_id=eq.${department}`);
-  if (search) {
-    const s = encodeURIComponent(search);
-    filters.push(`or=(full_name.ilike.*${s}*,preferred_name.ilike.*${s}*,employee_code.ilike.*${s}*,work_email.ilike.*${s}*,job_title.ilike.*${s}*)`);
-  }
+  if (search) filters.push(searchFilter);
 
-  const [r, edges] = await Promise.all([
-    sb(`/rest/v1/employees?${filters.join('&')}&select=*,${EMP_EMBED}&order=full_name.asc&limit=${limit}&offset=${offset}`, env),
-    loadOrgEdges(env),
+  // The open-exit read's failure still comes first (the serial code awaited it alone, before the other two).
+  const [onNotice, restF] = await Promise.all([
+    onNoticeP,
+    deferThrow(Promise.all([
+      sb(`/rest/v1/employees?${filters.join('&')}&select=*,${EMP_EMBED}&order=full_name.asc&limit=${limit}&offset=${offset}`, env),
+      loadOrgEdges(env),
+    ])),
   ]);
+  const [r, edges] = restF();
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
   const rows = (r.data || []).map(e => ({
     ...(canSeeFull(auth, edges, e.id) ? stripPan(e, auth, edges) : projectPublic(e)), on_notice: onNotice.has(e.id),
   }));
   return ok({ employees: rows, offset, limit });
+}
+
+export const EMPLOYEE_SEARCH_COLUMNS = ['full_name', 'preferred_name', 'employee_code', 'work_email', 'job_title'];
+export function employeeSearchFilter(search) {
+  const s = cleanSearch(search);
+  return `or=(${EMPLOYEE_SEARCH_COLUMNS.map(c => `${c}.ilike.*${s}*`).join(',')})`;
 }
 
 // Employees with an OPEN exit (= on notice). Best-effort: the directory must not fail on it.
@@ -604,11 +647,12 @@ async function openExitEmployeeIds(env) {
   return new Set(r.ok && Array.isArray(r.data) ? r.data.map(x => x.employee_id).filter(id => UUID_RE.test(id)) : []);
 }
 
-async function getEmployee(url, auth, env, ctx) {
+export async function getEmployee(url, auth, env, ctx) {
   kickGoogleSync(env, auth, ctx);   // J1b D7: opening a person's page drains the Google push queue
   const id = url.searchParams.get('id');
   const code = url.searchParams.get('code');
   if (!id && !code) return err('id or code required', 400);
+  if (id && !isUuid(id)) return err('bad id', 400);   // a code is free text: it goes in whole-value encoded, below
   const filter = id ? `id=eq.${id}` : `employee_code=eq.${encodeURIComponent(code)}`;
   const [r, edges] = await Promise.all([
     sb(`/rest/v1/employees?${filter}&select=*,${EMP_EMBED}&limit=1`, env),
@@ -618,11 +662,14 @@ async function getEmployee(url, auth, env, ctx) {
   const emp = r.data?.[0];
   if (!emp) return err('not_found', 404);
   const full = canSeeFull(auth, edges, emp.id);
-  // Direct reports (directory-safe) for the profile's "Team" section.
-  const reports = (r2 => (r2 || []))((await sb(
-    `/rest/v1/employees?manager_id=eq.${emp.id}&status=neq.exited&select=id,employee_code,full_name,job_title,photo_url,status,level:level_id(code,name)&order=full_name.asc`, env,
-  )).data);
-  const onNotice = (await openExitEmployeeIds(env)).has(emp.id);
+  // Direct reports (directory-safe) for the profile's "Team" section, with the open-exit read — both ran for every
+  // caller who got past not_found, one after the other; now together.
+  const [rr, openExitsF] = await Promise.all([
+    sb(`/rest/v1/employees?manager_id=eq.${emp.id}&status=neq.exited&select=id,employee_code,full_name,job_title,photo_url,status,level:level_id(code,name)&order=full_name.asc`, env),
+    deferThrow(openExitEmployeeIds(env)),   // the reports read's failure still comes first
+  ]);
+  const reports = rr.data || [];
+  const onNotice = openExitsF().has(emp.id);
   return ok({ employee: { ...(full ? stripPan(emp, auth, edges) : projectPublic(emp)), on_notice: onNotice }, can_see_full: full, can_see_comp: canComp(auth), reports });
 }
 
@@ -650,6 +697,7 @@ async function getOrgChart(url, auth, env) {
 async function getOrgSnapshots(url, auth, env) {
   const id = url.searchParams.get('id');
   if (id) {
+    if (!isUuid(id)) return err('bad id', 400);
     const r = await sb(`/rest/v1/org_snapshots?id=eq.${id}&select=*&limit=1`, env);
     if (!r.ok) return err('db_error', 500);
     return ok({ snapshot: r.data?.[0] || null });
@@ -659,7 +707,7 @@ async function getOrgSnapshots(url, auth, env) {
   return ok({ snapshots: r.data || [] });
 }
 
-async function getDepartments(url, auth, env) {
+export async function getDepartments(url, auth, env) {
   const r = await sb(
     `/rest/v1/departments?select=*,head:head_employee_id(id,full_name),parent:parent_department_id(id,name),founder_owner:founder_owner_employee_id(id,full_name,employee_code)&order=name.asc`,
     env,
@@ -712,7 +760,7 @@ async function getJobRoles(url, auth, env) {
 
 async function getJobRole(url, auth, env) {
   const id = url.searchParams.get('id');
-  if (!id) return err('id required', 400);
+  if (!isUuid(id)) return err('id required', 400);
   const r = await sb(`/rest/v1/job_roles?id=eq.${id}&select=*,department:department_id(id,name)&limit=1`, env);
   if (!r.ok) return err('db_error', 500);
   const role = r.data?.[0];
@@ -747,7 +795,7 @@ async function logCompAccess(auth, action, subjectEmployeeId, subjectLabel, env,
 async function getCompensation(url, auth, env) {
   const gate = requireComp(auth); if (gate) return gate;
   const employee_id = url.searchParams.get('employee_id');
-  if (!employee_id) return err('employee_id required', 400);
+  if (!isUuid(employee_id)) return err('employee_id required', 400);
   await logCompAccess(auth, 'getCompensation', employee_id, null, env);
   const r = await sb(
     `/rest/v1/compensation_events?employee_id=eq.${employee_id}&select=*&order=effective_date.desc,created_at.desc`,
@@ -826,7 +874,7 @@ function isAuditedSalaryDocRead(auth, edges, employeeId, docType) {
 
 async function getDocuments(url, auth, env) {
   const employee_id = url.searchParams.get('employee_id');
-  if (!employee_id) return err('employee_id required', 400);
+  if (!isUuid(employee_id)) return err('employee_id required', 400);
   const edges = await loadOrgEdges(env);
   if (!canSeeFull(auth, edges, employee_id)) return err('forbidden', 403);
   const r = await sb(`/rest/v1/documents?employee_id=eq.${employee_id}&select=*&order=uploaded_at.desc`, env);
@@ -839,7 +887,7 @@ async function getDocuments(url, auth, env) {
 
 async function getDocumentDownloadUrl(url, auth, env) {
   const id = url.searchParams.get('id');
-  if (!id) return err('id required', 400);
+  if (!isUuid(id)) return err('id required', 400);
   const dr = await sb(`/rest/v1/documents?id=eq.${id}&select=*&limit=1`, env);
   if (!dr.ok) return err('db_error', 500);
   const doc = dr.data?.[0];
@@ -1125,7 +1173,7 @@ async function reassignReportsOnExit(exitingId, auth, env) {
 
 async function updateEmployee(body, auth, env, ctx) {
   const gate = requireHr(auth); if (gate) return gate;
-  if (!body.employee_id) return err('employee_id required', 400);
+  if (!isUuid(body.employee_id)) return err('employee_id required', 400);
   const patch = pickPatch(body, EMPLOYEE_FIELDS);
   delete patch.employee_code; // immutable
   // A person can't be their own (solid or dotted) manager.
@@ -1205,7 +1253,7 @@ async function createDepartment(body, auth, env) {
 
 async function updateDepartment(body, auth, env, ctx) {
   const gate = requireHr(auth); if (gate) return gate;
-  if (!body.department_id) return err('department_id required', 400);
+  if (!isUuid(body.department_id)) return err('department_id required', 400);
   const patch = pickPatch(body, DEPARTMENT_FIELDS);
   { const fe = await cleanFounderOwnerField(patch, env); if (fe) return fe; }
   patch.updated_at = nowIso();
@@ -1235,7 +1283,7 @@ async function createJobRole(body, auth, env) {
 
 async function updateJobRole(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
-  if (!body.job_role_id) return err('job_role_id required', 400);
+  if (!isUuid(body.job_role_id)) return err('job_role_id required', 400);
   const patch = pickPatch(body, JOB_ROLE_FIELDS);
   if (!canComp(auth)) for (const f of BAND_FIELDS) delete patch[f];
   patch.updated_at = nowIso();
@@ -1248,7 +1296,7 @@ async function updateJobRole(body, auth, env) {
 // Replace the full KPI set for a role (delete + insert).
 async function setRoleKpis(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
-  if (!body.job_role_id) return err('job_role_id required', 400);
+  if (!isUuid(body.job_role_id)) return err('job_role_id required', 400);
   const kpis = Array.isArray(body.kpis) ? body.kpis : [];
   await sb(`/rest/v1/role_kpis?job_role_id=eq.${body.job_role_id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
   if (kpis.length === 0) return ok({ kpis: [] });
@@ -1334,7 +1382,7 @@ async function recordDocument(body, auth, env) {
 
 async function deleteDocument(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
-  if (!body.id) return err('id required', 400);
+  if (!isUuid(body.id)) return err('id required', 400);
   const dr = await sb(`/rest/v1/documents?id=eq.${body.id}&select=storage_path&limit=1`, env);
   const path = dr.data?.[0]?.storage_path;
   const r = await sb(`/rest/v1/documents?id=eq.${body.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
@@ -1470,7 +1518,7 @@ const ONE_EMBED = 'manager:employees!manager_employee_id(id,full_name,job_title)
 
 async function getObservations(url, auth, env) {
   const employee_id = url.searchParams.get('employee_id');
-  if (!employee_id) return err('employee_id required', 400);
+  if (!isUuid(employee_id)) return err('employee_id required', 400);
   const edges = await loadOrgEdges(env);
   if (!canSeeFull(auth, edges, employee_id)) return err('forbidden', 403);
   const r = await sb(
@@ -1509,7 +1557,7 @@ async function createObservation(body, auth, env) {
 }
 
 async function updateObservation(body, auth, env) {
-  if (!body.id) return err('id required', 400);
+  if (!isUuid(body.id)) return err('id required', 400);
   const cur = await sb(`/rest/v1/observations?id=eq.${body.id}&select=author_employee_id&limit=1`, env);
   const row = cur.data?.[0]; if (!row) return err('not_found', 404);
   const me = await meOf(auth, env);
@@ -1527,7 +1575,7 @@ async function updateObservation(body, auth, env) {
 
 async function getAccomplishments(url, auth, env) {
   const employee_id = url.searchParams.get('employee_id');
-  if (!employee_id) return err('employee_id required', 400);
+  if (!isUuid(employee_id)) return err('employee_id required', 400);
   const edges = await loadOrgEdges(env);
   if (!canSeeFull(auth, edges, employee_id)) return err('forbidden', 403);
   const me = callerEmployee(edges, auth.userId);
@@ -1551,7 +1599,7 @@ async function createAccomplishment(body, auth, env) {
 }
 
 async function updateAccomplishment(body, auth, env) {
-  if (!body.id) return err('id required', 400);
+  if (!isUuid(body.id)) return err('id required', 400);
   const cur = await sb(`/rest/v1/accomplishments?id=eq.${body.id}&select=employee_id&limit=1`, env);
   const row = cur.data?.[0]; if (!row) return err('not_found', 404);
   const me = await meOf(auth, env);
@@ -1568,7 +1616,7 @@ async function updateAccomplishment(body, auth, env) {
 
 async function getOneOnOnes(url, auth, env) {
   const employee_id = url.searchParams.get('employee_id'); // the report
-  if (!employee_id) return err('employee_id required', 400);
+  if (!isUuid(employee_id)) return err('employee_id required', 400);
   const edges = await loadOrgEdges(env);
   if (!canSeeFull(auth, edges, employee_id)) return err('forbidden', 403);
   const me = callerEmployee(edges, auth.userId);
@@ -1601,7 +1649,7 @@ async function createOneOnOne(body, auth, env) {
 }
 
 async function updateOneOnOne(body, auth, env) {
-  if (!body.id) return err('id required', 400);
+  if (!isUuid(body.id)) return err('id required', 400);
   const cur = await sb(`/rest/v1/one_on_ones?id=eq.${body.id}&select=manager_employee_id&limit=1`, env);
   const row = cur.data?.[0]; if (!row) return err('not_found', 404);
   const me = await meOf(auth, env);
@@ -1618,7 +1666,7 @@ async function updateOneOnOne(body, auth, env) {
 // ── Shared delete (author or HR) ─────────────────────────────────────────────
 
 async function deleteEntry(table, ownerCol, body, auth, env) {
-  if (!body.id) return err('id required', 400);
+  if (!isUuid(body.id)) return err('id required', 400);
   const cur = await sb(`/rest/v1/${table}?id=eq.${body.id}&select=${ownerCol}&limit=1`, env);
   const row = cur.data?.[0]; if (!row) return err('not_found', 404);
   const me = await meOf(auth, env);
@@ -1671,13 +1719,17 @@ async function getTeamActivity(url, auth, env) {
   const ids = [...scope];
   if (ids.length === 0) return ok({ activity: [], team: [] });
   const inList = `(${ids.join(',')})`;
-  const teamRes = await sb(`/rest/v1/employees?id=in.${inList}&status=neq.exited&select=id,full_name,job_title&order=full_name.asc`, env);
-  const team = teamRes.data || [];
-  const [obs, wins, oned] = await Promise.all([
-    sb(`/rest/v1/observations?subject_employee_id=in.${inList}&select=*,subject:employees!subject_employee_id(id,full_name),${OBS_EMBED}&order=observed_on.desc&limit=50`, env),
-    sb(`/rest/v1/accomplishments?employee_id=in.${inList}&select=*,employee:employees!employee_id(id,full_name)&order=achieved_on.desc&limit=50`, env),
-    sb(`/rest/v1/one_on_ones?report_employee_id=in.${inList}&select=*,report:employees!report_employee_id(id,full_name),${ONE_EMBED}&order=met_on.desc&limit=50`, env),
+  // The team read's failure still comes first (the serial code awaited it before the other three's Promise.all).
+  const [teamRes, threeF] = await Promise.all([
+    sb(`/rest/v1/employees?id=in.${inList}&status=neq.exited&select=id,full_name,job_title&order=full_name.asc`, env),
+    deferThrow(Promise.all([
+      sb(`/rest/v1/observations?subject_employee_id=in.${inList}&select=*,subject:employees!subject_employee_id(id,full_name),${OBS_EMBED}&order=observed_on.desc&limit=50`, env),
+      sb(`/rest/v1/accomplishments?employee_id=in.${inList}&select=*,employee:employees!employee_id(id,full_name)&order=achieved_on.desc&limit=50`, env),
+      sb(`/rest/v1/one_on_ones?report_employee_id=in.${inList}&select=*,report:employees!report_employee_id(id,full_name),${ONE_EMBED}&order=met_on.desc&limit=50`, env),
+    ])),
   ]);
+  const team = teamRes.data || [];
+  const [obs, wins, oned] = threeF();
   const obsRows = (obs.data || []).filter(r => {
     if (isHr(auth)) return true;
     if (me && r.author_employee_id === me.id) return true;
@@ -2105,10 +2157,20 @@ async function saveKpiRatings(appraisalId, list, side, env) {
   if (!Array.isArray(list) || !list.length) return;
   const col = side === 'manager' ? 'manager_rating' : 'self_rating';
   for (const item of list.slice(0, 25)) {
-    if (!item || !item.id) continue;
+    if (!item || !isUuid(item.id)) continue;
     await sb(`/rest/v1/appraisal_kpi_ratings?id=eq.${item.id}&appraisal_id=eq.${appraisalId}`, env,
       { method: 'PATCH', body: JSON.stringify({ [col]: clampRating(item.rating) }) });
   }
+}
+// The cycle's company increment budget (budget_type / budget_value) goes only to the callers who may set it
+// (setCycleBudget: requireCalibrateComp = calibrator AND comp); everyone else gets the cycle without it. Every
+// action that returns an appraisal_cycles row goes through this (the calibrator-only ones pass canComp(auth)).
+export const CYCLE_BUDGET_FIELDS = ['budget_type', 'budget_value'];
+export function cycleForViewer(cycle, showBudget) {
+  if (!cycle || showBudget) return cycle;
+  const out = { ...cycle };
+  for (const f of CYCLE_BUDGET_FIELDS) delete out[f];
+  return out;
 }
 // Subject sees own self-side always; manager qualitative + final + outcome only once shared;
 // never manager_overall_rating or calibration_note.
@@ -2137,14 +2199,14 @@ async function getAppraisalConfig(url, auth, env) {
 }
 
 // ── Cycles (HR) ───────────────────────────────────────────────────────────────
-async function getAppraisalCycles(url, auth, env) {
+export async function getAppraisalCycles(url, auth, env) {
   const gate = requireCalibrate(auth); if (gate) return gate;
   const r = await sb(`/rest/v1/appraisal_cycles?select=*&order=appraisal_date.desc&limit=100`, env);
-  return ok({ cycles: r.data || [] });
+  return ok({ cycles: (r.data || []).map(c => cycleForViewer(c, canComp(auth))) });
 }
-async function getAppraisalCycle(url, auth, env) {
+export async function getAppraisalCycle(url, auth, env) {
   const gate = requireCalibrate(auth); if (gate) return gate;
-  const id = url.searchParams.get('id'); if (!id) return err('id required', 400);
+  const id = url.searchParams.get('id'); if (!isUuid(id)) return err('id required', 400);
   const [cr, ar] = await Promise.all([
     sb(`/rest/v1/appraisal_cycles?id=eq.${id}&select=*&limit=1`, env),
     sb(`/rest/v1/appraisals?cycle_id=eq.${id}&select=status,self_submitted_at,manager_submitted_at,manager_draft_saved_at,final_rating,outcome&limit=2000`, env),
@@ -2152,7 +2214,7 @@ async function getAppraisalCycle(url, auth, env) {
   const cycle = cr.data?.[0]; if (!cycle) return err('not_found', 404);
   const a = ar.data || [];
   return ok({
-    cycle,
+    cycle: cycleForViewer(cycle, canComp(auth)),
     counts: {
       total: a.length,
       self_done: a.filter(x => x.self_submitted_at).length,
@@ -2166,7 +2228,7 @@ async function getAppraisalCycle(url, auth, env) {
     },
   });
 }
-async function createAppraisalCycle(body, auth, env) {
+export async function createAppraisalCycle(body, auth, env) {
   const gate = requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
   if (!d.appraisal_date) return err('appraisal_date required (e.g. an Apr 1 / Oct 1)', 400);
@@ -2184,21 +2246,21 @@ async function createAppraisalCycle(body, auth, env) {
   };
   const r = await sb(`/rest/v1/appraisal_cycles`, env, { method: 'POST', body: JSON.stringify([row]) });
   if (!r.ok) return err('create_failed: ' + JSON.stringify(r.data), 400);
-  return ok(r.data?.[0]);
+  return ok(cycleForViewer(r.data?.[0], canComp(auth)));
 }
 async function setCycleStatus(body, auth, env) {
   const gate = requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
-  if (!d.cycle_id || !['draft', 'active', 'calibration', 'closed'].includes(d.status)) return err('cycle_id + valid status required', 400);
+  if (!isUuid(d.cycle_id) || !['draft', 'active', 'calibration', 'closed'].includes(d.status)) return err('cycle_id + valid status required', 400);
   const r = await sb(`/rest/v1/appraisal_cycles?id=eq.${d.cycle_id}`, env, { method: 'PATCH', body: JSON.stringify({ status: d.status, updated_at: nowIso() }) });
   if (!r.ok) return err('update_failed', 400);
   return ok({ cycle_id: d.cycle_id, status: d.status });
 }
 
 // ── Enrollment (HR) ────────────────────────────────────────────────────────────
-async function getEnrollmentPreview(url, auth, env) {
+export async function getEnrollmentPreview(url, auth, env) {
   const gate = requireCalibrate(auth); if (gate) return gate;
-  const cycleId = url.searchParams.get('cycle_id'); if (!cycleId) return err('cycle_id required', 400);
+  const cycleId = url.searchParams.get('cycle_id'); if (!isUuid(cycleId)) return err('cycle_id required', 400);
   const cr = await sb(`/rest/v1/appraisal_cycles?id=eq.${cycleId}&select=*&limit=1`, env);
   const cycle = cr.data?.[0]; if (!cycle) return err('cycle not found', 404);
   const [er, ar, existing] = await Promise.all([
@@ -2231,13 +2293,13 @@ async function getEnrollmentPreview(url, auth, env) {
       manager_id: e.manager_id, manager_name: mgr ? mgr.full_name : null,
     };
   });
-  return ok({ cycle, candidates: cands });
+  return ok({ cycle: cycleForViewer(cycle, canComp(auth)), candidates: cands });
 }
 async function enrollAppraisalCycle(body, auth, env) {
   const gate = requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
   const cycleId = d.cycle_id, ids = Array.isArray(d.employee_ids) ? d.employee_ids : [];
-  if (!cycleId || !ids.length) return err('cycle_id and employee_ids[] required', 400);
+  if (!isUuid(cycleId) || !ids.length || !ids.every(isUuid)) return err('cycle_id and employee_ids[] required', 400);
   const cr = await sb(`/rest/v1/appraisal_cycles?id=eq.${cycleId}&select=*&limit=1`, env);
   const cycle = cr.data?.[0]; if (!cycle) return err('cycle not found', 404);
   const ex = await sb(`/rest/v1/appraisals?cycle_id=eq.${cycleId}&select=employee_id&limit=5000`, env);
@@ -2277,7 +2339,7 @@ async function enrollAppraisalCycle(body, auth, env) {
 // ── Reviews (self-serve, relationship-checked) ─────────────────────────────────
 async function submitSelfReview(body, auth, env) {
   const d = body.data || body;
-  if (!d.appraisal_id) return err('appraisal_id required', 400);
+  if (!isUuid(d.appraisal_id)) return err('appraisal_id required', 400);
   const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=*,cycle:cycle_id(status)&limit=1`, env);
   const a = ar.data?.[0]; if (!a) return err('not_found', 404);
   const me = await meOf(auth, env);
@@ -2303,7 +2365,7 @@ async function submitSelfReview(body, auth, env) {
 }
 async function submitManagerReview(body, auth, env) {
   const d = body.data || body;
-  if (!d.appraisal_id) return err('appraisal_id required', 400);
+  if (!isUuid(d.appraisal_id)) return err('appraisal_id required', 400);
   const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=*,cycle:cycle_id(status)&limit=1`, env);
   const a = ar.data?.[0]; if (!a) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
@@ -2345,7 +2407,7 @@ async function submitManagerReview(body, auth, env) {
 }
 async function acknowledgeAppraisal(body, auth, env) {
   const d = body.data || body;
-  if (!d.appraisal_id) return err('appraisal_id required', 400);
+  if (!isUuid(d.appraisal_id)) return err('appraisal_id required', 400);
   const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=employee_id,status&limit=1`, env);
   const a = ar.data?.[0]; if (!a) return err('not_found', 404);
   const me = await meOf(auth, env);
@@ -2361,7 +2423,7 @@ async function finalizeAppraisal(body, auth, env) {
   const gate = requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
   const fr = clampRating(d.final_rating);
-  if (!d.appraisal_id || !fr) return err('appraisal_id + final_rating (1-5) required', 400);
+  if (!isUuid(d.appraisal_id) || !fr) return err('appraisal_id + final_rating (1-5) required', 400);
   const own = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=employee_id,comp_locked_at&limit=1`, env);
   if (!own.data?.[0]) return err('not_found', 404);
   if (own.data[0].comp_locked_at) return err('compensation is locked in for this appraisal — the final rating can no longer change', 422);
@@ -2381,7 +2443,7 @@ async function shareAppraisal(body, auth, env) {
   const gate = requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
   const ids = Array.isArray(d.appraisal_ids) ? d.appraisal_ids : (d.appraisal_id ? [d.appraisal_id] : []);
-  if (!ids.length) return err('appraisal_id or appraisal_ids[] required', 400);
+  if (!ids.length || !ids.every(isUuid)) return err('appraisal_id or appraisal_ids[] required', 400);
   const meE = callerEmployee(await loadOrgEdges(env), auth.userId);
   const notOwn = meE ? `&employee_id=neq.${meE.id}` : '';   // HR never releases their own result
   const r = await sb(`/rest/v1/appraisals?id=in.(${ids.join(',')})&final_rating=not.is.null&status=neq.acknowledged${notOwn}`, env,
@@ -2426,7 +2488,7 @@ const newCtc = (base, pct) => (base == null ? null : (pct == null ? base : Math.
 async function saveCalibratedComp(body, auth, env) {
   const gate = requireCalibrateComp(auth); if (gate) return gate;
   const d = body.data || body;
-  if (!d.appraisal_id) return err('appraisal_id required', 400);
+  if (!isUuid(d.appraisal_id)) return err('appraisal_id required', 400);
   const pct = parseIncrementPct(d.calibrated_increment_pct);
   if (Number.isNaN(pct)) return err('increment must be a % between 0 and 100', 400);
   const bonus = parseMoney(d.calibrated_bonus);
@@ -2538,7 +2600,7 @@ async function lockAppraisalComp(body, auth, env) {
 async function waiveSelfReview(body, auth, env) {
   const gate = requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
-  if (!d.appraisal_id) return err('appraisal_id required', 400);
+  if (!isUuid(d.appraisal_id)) return err('appraisal_id required', 400);
   const waive = d.waived !== false;
   const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, { method: 'PATCH', prefer: 'return=representation',
     body: JSON.stringify(waive ? { self_review_waived_at: nowIso(), self_review_waived_by: auth.userId, updated_at: nowIso() }
@@ -2551,7 +2613,7 @@ async function waiveSelfReview(body, auth, env) {
 async function setCycleBudget(body, auth, env) {
   const gate = requireCalibrateComp(auth); if (gate) return gate;
   const d = body.data || body;
-  if (!d.cycle_id) return err('cycle_id required', 400);
+  if (!isUuid(d.cycle_id)) return err('cycle_id required', 400);
   const type = d.budget_type == null || d.budget_type === '' ? null : d.budget_type;
   if (type != null && !['pct', 'amount'].includes(type)) return err("budget_type must be 'pct' or 'amount'", 400);
   const value = parseMoney(d.budget_value);
@@ -2566,9 +2628,9 @@ async function setCycleBudget(body, auth, env) {
 // The cycle overview (spec §1): every enrolled person with their manager + department, review
 // progress, current CTC and calibrated comp, plus company-level totals against the cycle budget.
 // Totals include every row (a budget has to); rows keep the own-appraisal mask.
-async function getCycleOverview(url, auth, env) {
+export async function getCycleOverview(url, auth, env) {
   const gate = requireCalibrate(auth); if (gate) return gate;
-  const cycleId = url.searchParams.get('cycle_id'); if (!cycleId) return err('cycle_id required', 400);
+  const cycleId = url.searchParams.get('cycle_id'); if (!isUuid(cycleId)) return err('cycle_id required', 400);
   const compOk = canComp(auth);
   const [cr, ar] = await Promise.all([
     sb(`/rest/v1/appraisal_cycles?id=eq.${cycleId}&select=*&limit=1`, env),
@@ -2625,15 +2687,18 @@ async function getCycleOverview(url, auth, env) {
     if (compOk) { row.current_ctc = base[a.employee_id] ?? null; row.new_ctc = row._own ? null : newCtc(row.current_ctc, row.calibrated_increment_pct); }
     return row;
   });
-  return ok({ cycle, counts, comp, appraisals: rows, can_comp: compOk });
+  return ok({ cycle: cycleForViewer(cycle, compOk), counts, comp, appraisals: rows, can_comp: compOk });
 }
 
 // ── Reads: subject / manager / HR views ────────────────────────────────────────
 async function getMyAppraisals(url, auth, env) {
-  const me = await meOf(auth, env);
   // Open cycles are returned even to an unlinked login, so /reviews can say "no cycle open"
-  // vs "you have nothing in this cycle" truthfully.
-  const cr = await sb(`/rest/v1/appraisal_cycles?status=eq.active&select=id,name,appraisal_date,period_start,period_end,self_review_due,manager_review_due&order=appraisal_date.desc&limit=20`, env);
+  // vs "you have nothing in this cycle" truthfully. Independent of the caller → read with the edges.
+  const [me, crF] = await Promise.all([
+    meOf(auth, env),
+    deferThrow(sb(`/rest/v1/appraisal_cycles?status=eq.active&select=id,name,appraisal_date,period_start,period_end,self_review_due,manager_review_due&order=appraisal_date.desc&limit=20`, env)),   // org-edges' failure still first
+  ]);
+  const cr = crF();
   const active_cycles = cr.data || [];
   if (!me) return ok({ employee_id: null, active_cycles, appraisals: [], to_review: [] });
   const [ar, tr] = await Promise.all([
@@ -2648,17 +2713,18 @@ async function getMyAppraisals(url, auth, env) {
   return ok({ employee_id: me.id, active_cycles, appraisals, to_review });
 }
 async function getTeamAppraisals(url, auth, env) {
+  const cycleId = url.searchParams.get('cycle_id');
+  if (cycleId && !isUuid(cycleId)) return err('bad cycle_id', 400);   // before any read
   const me = await meOf(auth, env);
   const hr = canCalibrate(auth);   // the all-appraisals list is super-admin only (S396)
   if (!me && !hr) return ok({ appraisals: [] });
-  const cycleId = url.searchParams.get('cycle_id');
   let filter = cycleId ? `cycle_id=eq.${cycleId}` : `cycle_id=not.is.null`;
   if (!hr) filter += `&manager_id=eq.${me.id}`;
   const ar = await sb(`/rest/v1/appraisals?${filter}&select=id,employee_id,status,self_submitted_at,manager_submitted_at,final_rating,outcome,employee:employee_id(full_name,job_title),cycle:cycle_id(name,status)&order=created_at.desc&limit=500`, env);
   return ok({ appraisals: (ar.data || []).map(a => maskOwnAppraisal(a, me)) });
 }
-async function getAppraisal(url, auth, env) {
-  const id = url.searchParams.get('id'); if (!id) return err('id required', 400);
+export async function getAppraisal(url, auth, env) {
+  const id = url.searchParams.get('id'); if (!isUuid(id)) return err('id required', 400);
   const ar = await sb(`/rest/v1/appraisals?id=eq.${id}&select=*,cycle:cycle_id(*),employee:employee_id(id,full_name,job_title,department:department_id(name)),manager:manager_id(id,full_name)&limit=1`, env);
   const a = ar.data?.[0]; if (!a) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
@@ -2688,6 +2754,7 @@ async function getAppraisal(url, auth, env) {
   const okrs = await subjectOkrsForAnchor(a.employee_id, a.cycle?.appraisal_date, env);
   let increment = null;
   const compView = hr && canComp(auth);
+  a.cycle = cycleForViewer(a.cycle, compView);   // S1: no company budget outside calibrator + comp
   if (isSubject || compView) {
     // A lock-in writes up to two events (increment + one_time_bonus); present them as one.
     const cr = await sb(`/rest/v1/compensation_events?appraisal_id=eq.${id}&select=increment_pct,amount,currency,effective_date,event_type,old_ctc,new_ctc&order=created_at.desc&limit=10`, env);
@@ -2725,9 +2792,9 @@ async function getAppraisal(url, auth, env) {
   out.kpis = kpis.map(k => ({ id: k.id, kpi_name: k.kpi_name, weight: k.weight, self_rating: k.self_rating, manager_rating: (a.status === 'shared' || a.status === 'acknowledged') ? k.manager_rating : null }));
   return ok(out);
 }
-async function getAppraisals(url, auth, env) {
+export async function getAppraisals(url, auth, env) {
   const gate = requireCalibrate(auth); if (gate) return gate;
-  const cycleId = url.searchParams.get('cycle_id'); if (!cycleId) return err('cycle_id required', 400);
+  const cycleId = url.searchParams.get('cycle_id'); if (!isUuid(cycleId)) return err('cycle_id required', 400);
   const compOk = canComp(auth);
   const [cr, ar] = await Promise.all([
     sb(`/rest/v1/appraisal_cycles?id=eq.${cycleId}&select=*&limit=1`, env),
@@ -2741,7 +2808,8 @@ async function getAppraisals(url, auth, env) {
     const row = { ...a, review_period_months: months, suggested_pct: compOk ? suggestedPct(s.bands, a.final_rating || a.manager_overall_rating, months) : null };
     return maskOwnAppraisal(stripDrafts(row), meE);
   });
-  return ok({ cycle, appraisals: rows, increment_bands: compOk ? s.bands : null, pip_rating_threshold: s.pipThreshold });
+  return ok({ cycle: cycleForViewer(cycle, compOk), appraisals: rows, increment_bands: compOk ? s.bands : null,
+    pip_rating_threshold: (isHr(auth) || compOk) ? s.pipThreshold : null });   // the getSettings / getAppraisalConfig line
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -2953,7 +3021,7 @@ const PAYOUT_ORDER = 'order=period_start.desc.nullslast,paid_on.desc.nullslast,c
 async function getPayouts(url, auth, env) {
   const gate = requireComp(auth); if (gate) return gate;
   const employee_id = url.searchParams.get('employee_id');
-  if (!employee_id) return err('employee_id required', 400);
+  if (!isUuid(employee_id)) return err('employee_id required', 400);
   await logCompAccess(auth, 'getPayouts', employee_id, null, env);
   const r = await sb(`/rest/v1/payouts?employee_id=eq.${employee_id}&select=*&${PAYOUT_ORDER}`, env);
   if (!r.ok) return err('db_error', 500);
@@ -2981,7 +3049,7 @@ async function getPayoutPeriodSheet(url, auth, env) {
   const er = await sb(`/rest/v1/employees?status=neq.exited&select=id,employee_code,full_name,department:department_id(name)&order=full_name.asc`, env);
   const emps = er.ok ? (er.data || []) : [];
   const comps = await currentComponentsFor(emps.map(e => e.id), env);
-  const xr = await sb(`/rest/v1/payouts?period_key=eq.${encodeURIComponent(period_key)}&payout_type=eq.${payout_type}&select=*`, env);
+  const xr = await sb(`/rest/v1/payouts?period_key=eq.${encodeURIComponent(period_key)}&payout_type=eq.${encodeURIComponent(payout_type)}&select=*`, env);
   const existing = {}; for (const row of (xr.ok ? xr.data || [] : [])) existing[row.employee_id] = row;
   const rows = emps.map(e => {
     const c = comps[e.id] || {};
@@ -3341,7 +3409,7 @@ async function getOkrConfig(url, auth, env) {
 
 async function getOkrCycle(url, auth, env) {
   const id = url.searchParams.get('id') || url.searchParams.get('cycle_id');
-  if (!id) return err('id required', 400);
+  if (!isUuid(id)) return err('id required', 400);
   const r = await sb(`/rest/v1/rpc/f_okr_cycle`, env, { method: 'POST', body: JSON.stringify({ p_cycle_id: id }) });
   if (!r.ok) return err('load_failed: ' + JSON.stringify(r.data), 400);
   const doc = r.data;
@@ -3361,7 +3429,7 @@ async function getOkrCycle(url, auth, env) {
 }
 
 async function getObjective(url, auth, env) {
-  const id = url.searchParams.get('id'); if (!id) return err('id required', 400);
+  const id = url.searchParams.get('id'); if (!isUuid(id)) return err('id required', 400);
   const or = await sb(`/rest/v1/objectives?id=eq.${id}&select=*,cycle:cycle_id(id,name,status,anchor_date)&limit=1`, env);
   const obj = or.data?.[0]; if (!obj) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
@@ -3472,7 +3540,7 @@ async function createOkrCycle(body, auth, env) {
 async function updateOkrCycle(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   const d = body.data || body;
-  if (!d.cycle_id) return err('cycle_id required', 400);
+  if (!isUuid(d.cycle_id)) return err('cycle_id required', 400);
   const patch = { updated_at: nowIso() };
   for (const k of ['name', 'anchor_date', 'period_start', 'period_end']) if (k in d) patch[k] = d[k];
   const r = await sb(`/rest/v1/okr_cycles?id=eq.${d.cycle_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
@@ -3482,7 +3550,7 @@ async function updateOkrCycle(body, auth, env) {
 async function setOkrCycleStatus(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   const d = body.data || body;
-  if (!d.cycle_id || !['draft', 'active', 'scoring', 'closed'].includes(d.status)) return err('cycle_id + valid status required', 400);
+  if (!isUuid(d.cycle_id) || !['draft', 'active', 'scoring', 'closed'].includes(d.status)) return err('cycle_id + valid status required', 400);
   const r = await sb(`/rest/v1/okr_cycles?id=eq.${d.cycle_id}`, env, { method: 'PATCH', body: JSON.stringify({ status: d.status, updated_at: nowIso() }) });
   if (!r.ok) return err('update_failed', 400);
   return ok({ cycle_id: d.cycle_id, status: d.status });
@@ -3490,7 +3558,7 @@ async function setOkrCycleStatus(body, auth, env) {
 async function deleteOkrCycle(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   const d = body.data || body;
-  if (!d.cycle_id) return err('cycle_id required', 400);
+  if (!isUuid(d.cycle_id)) return err('cycle_id required', 400);
   if (!d.confirm) {
     const oc = await sb(`/rest/v1/objectives?cycle_id=eq.${d.cycle_id}&select=id&limit=1`, env);
     if (oc.data?.length) return err('cycle_has_objectives — pass confirm:true to delete it and all its objectives', 409);
@@ -3505,11 +3573,12 @@ async function createObjective(body, auth, env) {
   const d = body.data || body;
   if (!d.cycle_id || !d.level || !d.title) return err('cycle_id, level, title required', 400);
   if (!['company', 'department', 'individual'].includes(d.level)) return err('bad level', 400);
-  if (d.level === 'department' && !d.department_id) return err('department_id required for a department objective', 400);
+  if (d.level === 'department' && !isUuid(d.department_id)) return err('department_id required for a department objective', 400);
   if (d.level === 'individual' && !d.owner_employee_id) return err('owner_employee_id required for an individual objective', 400);
   const edges = await loadOrgEdges(env);
   if (!(await canAuthorObjective(auth, edges, { level: d.level, department_id: d.department_id, owner_employee_id: d.owner_employee_id }, env))) return err('forbidden', 403);
   if (d.parent_objective_id) {
+    if (!isUuid(d.parent_objective_id)) return err('parent objective not found', 400);
     const pr = await sb(`/rest/v1/objectives?id=eq.${d.parent_objective_id}&select=level,cycle_id&limit=1`, env);
     const parent = pr.data?.[0];
     if (!parent) return err('parent objective not found', 400);
@@ -3531,7 +3600,7 @@ async function createObjective(body, auth, env) {
 }
 async function updateObjective(body, auth, env) {
   const d = body.data || body;
-  if (!d.id) return err('id required', 400);
+  if (!isUuid(d.id)) return err('id required', 400);
   const or = await sb(`/rest/v1/objectives?id=eq.${d.id}&select=*&limit=1`, env);
   const obj = or.data?.[0]; if (!obj) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
@@ -3545,6 +3614,7 @@ async function updateObjective(body, auth, env) {
   if ('parent_objective_id' in d) {
     if (d.parent_objective_id) {
       if (d.parent_objective_id === d.id) return err('objective cannot be its own parent', 400);
+      if (!isUuid(d.parent_objective_id)) return err('invalid parent alignment', 400);
       const pr = await sb(`/rest/v1/objectives?id=eq.${d.parent_objective_id}&select=level,cycle_id&limit=1`, env);
       const parent = pr.data?.[0];
       if (!parent || parent.cycle_id !== obj.cycle_id || !okrAlignmentOk(obj.level, parent.level)) return err('invalid parent alignment', 400);
@@ -3557,7 +3627,7 @@ async function updateObjective(body, auth, env) {
 }
 async function deleteObjective(body, auth, env) {
   const d = body.data || body;
-  if (!d.id) return err('id required', 400);
+  if (!isUuid(d.id)) return err('id required', 400);
   const or = await sb(`/rest/v1/objectives?id=eq.${d.id}&select=*&limit=1`, env);
   const obj = or.data?.[0]; if (!obj) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
@@ -3570,7 +3640,7 @@ async function deleteObjective(body, auth, env) {
 // ── Key results ─────────────────────────────────────────────────────────────
 async function createKeyResult(body, auth, env) {
   const d = body.data || body;
-  if (!d.objective_id || !d.title || !d.metric_type) return err('objective_id, title, metric_type required', 400);
+  if (!isUuid(d.objective_id) || !d.title || !d.metric_type) return err('objective_id, title, metric_type required', 400);
   if (!['number', 'percentage', 'currency', 'milestone'].includes(d.metric_type)) return err('bad metric_type', 400);
   const or = await sb(`/rest/v1/objectives?id=eq.${d.objective_id}&select=*&limit=1`, env);
   const obj = or.data?.[0]; if (!obj) return err('objective not found', 404);
@@ -3595,7 +3665,7 @@ async function createKeyResult(body, auth, env) {
 }
 async function updateKeyResult(body, auth, env) {
   const d = body.data || body;
-  if (!d.id) return err('id required', 400);
+  if (!isUuid(d.id)) return err('id required', 400);
   const kr = await sb(`/rest/v1/key_results?id=eq.${d.id}&select=*,objective:objective_id(*)&limit=1`, env);
   const krRow = kr.data?.[0]; if (!krRow) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
@@ -3615,7 +3685,7 @@ async function updateKeyResult(body, auth, env) {
 }
 async function deleteKeyResult(body, auth, env) {
   const d = body.data || body;
-  if (!d.id) return err('id required', 400);
+  if (!isUuid(d.id)) return err('id required', 400);
   const kr = await sb(`/rest/v1/key_results?id=eq.${d.id}&select=id,objective:objective_id(*)&limit=1`, env);
   const krRow = kr.data?.[0]; if (!krRow) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
@@ -3628,7 +3698,7 @@ async function deleteKeyResult(body, auth, env) {
 // ── Check-ins + grading ───────────────────────────────────────────────────────
 async function recordCheckin(body, auth, env) {
   const d = body.data || body;
-  if (!d.key_result_id || d.value == null || !d.confidence) return err('key_result_id, value, confidence required', 400);
+  if (!isUuid(d.key_result_id) || d.value == null || !d.confidence) return err('key_result_id, value, confidence required', 400);
   if (!['on_track', 'at_risk', 'off_track'].includes(d.confidence)) return err('bad confidence', 400);
   const kr = await sb(`/rest/v1/key_results?id=eq.${d.key_result_id}&select=id,objective:objective_id(*)&limit=1`, env);
   const krRow = kr.data?.[0]; if (!krRow) return err('key_result not found', 404);
@@ -3651,7 +3721,7 @@ async function recordCheckin(body, auth, env) {
 }
 async function gradeObjective(body, auth, env) {
   const d = body.data || body;
-  if (!d.id) return err('id required', 400);
+  if (!isUuid(d.id)) return err('id required', 400);
   const or = await sb(`/rest/v1/objectives?id=eq.${d.id}&select=*,cycle:cycle_id(status)&limit=1`, env);
   const obj = or.data?.[0]; if (!obj) return err('not_found', 404);
   const st = obj.cycle?.status;
@@ -4103,7 +4173,7 @@ async function findCandidateDuplicates(url, auth, env) {
   const e = normEmailKey(url.searchParams.get('email'));
   const p = normPhoneKey(url.searchParams.get('phone'));
   const ors = [];
-  if (e) ors.push(`email_norm.eq.${encodeURIComponent(e.replace(/[,()]/g, ''))}`);
+  if (e) ors.push(`email_norm.eq.${encodeURIComponent(e.replace(/[,()"\\]/g, ''))}`);   // or=() grammar out, incl. quotes
   if (p && p.length >= 6) ors.push(`phone_norm.eq.${p}`);
   if (!ors.length) return ok({ count: 0, matches: [] });
   const cr = await sb(`/rest/v1/candidates?or=(${ors.join(',')})&select=id,candidate_code,full_name,email,phone&order=created_at.desc&limit=5`, env);
@@ -5805,13 +5875,17 @@ async function revealCandidateBank(body, auth, env) {
 }
 
 // GET getOfferResponses — unseen candidate responses on offers the caller can manage (dashboard card + Hiring page).
-async function getOfferResponses(url, auth, env) {
-  const r = await sb(`/rest/v1/offer_responses?seen_at=is.null&select=id,offer_id,application_id,kind,reason,text,proposed_join_date,created_at,`
-    + `offer:offer_id(id,offer_ref,revision,opening_id,candidate_id,designation,status)&order=created_at.desc&limit=200`, env);
+export async function getOfferResponses(url, auth, env) {
+  // The org edges ride with the responses read; the 500 / empty returns still come first (deferThrow).
+  const [r, edgesF] = await Promise.all([
+    sb(`/rest/v1/offer_responses?seen_at=is.null&select=id,offer_id,application_id,kind,reason,text,proposed_join_date,created_at,`
+      + `offer:offer_id(id,offer_ref,revision,opening_id,candidate_id,designation,status)&order=created_at.desc&limit=200`, env),
+    deferThrow(loadOrgEdges(env)),
+  ]);
   if (!r.ok) return err('db_error', 500);
   const rows = (r.data || []).filter(x => x.offer);
   if (!rows.length) return ok({ responses: [] });
-  const edges = await loadOrgEdges(env);
+  const edges = edgesF();
   const me = callerEmployee(edges, auth.userId);
   const ops = await loadOpeningsWithRoles(auth, me, env, { ids: [...new Set(rows.map(x => x.offer.opening_id))] });
   const manage = new Map(ops.filter(x => canManageOffers(x.roles)).map(x => [x.o.id, x.o]));
@@ -5846,6 +5920,7 @@ async function getOfferMailCheck(url, auth, env) {
     all_good: res.ok && String(d.emailAddress || '').toLowerCase() === mailbox });
 }
 
+export function bankVisible(auth) { return canSeeCandidateDoc('bank', null, isHr(auth)) || canComp(auth); }
 // getOffer's O1 part: emails (never token_hash), responses, the acceptance evidence, the joining checklist, the bank.
 async function offerLinkExtras(env, auth, o, sal, canManage) {
   const hr = isHr(auth);
@@ -5881,7 +5956,9 @@ async function offerLinkExtras(env, auth, o, sal, canManage) {
         verified_at: f.verified_at, verified_by: f.verified_by })) : null };
   });
   const b = rowsOf(br)[0] || null;
-  const bank = (hr || canComp(auth) || canManage) && b ? { bank_account_number: maskBankAccount(b.bank_account_number), bank_ifsc: b.bank_ifsc,
+  // S5: bank identity is the 'bank' document tier (HR, canSeeCandidateDoc) — plus the salary allow-list, which can
+  // already reveal the full number (revealCandidateBank) and needs the card to do it. Anyone else (an opening manager) gets bank: null — getOffer drops has_bank from the response.
+  const bank = bankVisible(auth) && b ? { bank_account_number: maskBankAccount(b.bank_account_number), bank_ifsc: b.bank_ifsc,
     bank_account_name: b.bank_account_name, bank_name: b.bank_name, submitted_at: b.submitted_at, editable_until: b.editable_until,
     editable: !!b.editable_until && Date.parse(b.editable_until) > Date.now() } : null;
   return { emails, responses, acceptance, joining, bank, has_bank: !!b };
@@ -8566,13 +8643,14 @@ async function startOnboardingFor(env, employeeId, actorUserId, via) {
 
 // GET getMyProfile — the caller's own profile, private details (full), documents, policies with ack status, open
 // onboarding (read-only), pending change requests and the completion rule's missing list.
-async function getMyProfile(url, auth, env) {
-  const m = await myOnboardingEmployee(auth, env);
+export async function getMyProfile(url, auth, env) {
+  // The settings read rides with the employee read; the employee's 500 / null returns still come first (deferThrow).
+  const [m, stF] = await Promise.all([myOnboardingEmployee(auth, env), deferThrow(j2Settings(env))]);
   if (m.res) return m.res;
   if (!m.emp) return ok({ employee: null });
   const emp = m.emp;
   const today = istToday();
-  const st = await j2Settings(env);
+  const st = stF();
   const [facts, dr, obr, cr] = await Promise.all([
     loadProfileFacts(env, [emp], st.required_doc_types),
     sb(`/rest/v1/documents?employee_id=eq.${emp.id}&select=id,doc_type,title,file_name,uploaded_at,storage_path&order=uploaded_at.desc`, env),
@@ -11071,7 +11149,7 @@ async function applyLeave(body, auth, env) {
 // GET getTeamLeave?from&to — pending requests the caller may decide (with the split as of now + balances), the team's
 // pending / approved requests in [from, to] (the "who's out" calendar) and the team's balances. Team = descendantsOf
 // the caller (HR: every covered person). Types and reasons are shown: this is the chain's own view (D11).
-async function getTeamLeave(url, auth, env) {
+export async function getTeamLeave(url, auth, env) {
   const edges = await loadOrgEdgesStrict(env);
   if (!edges) return err('db_error: org read', 500);   // fail closed: [] would read as "not me" (Codex S453)
   const me = callerEmployee(edges, auth.userId);
@@ -11080,20 +11158,28 @@ async function getTeamLeave(url, auth, env) {
   const today = istToday(), cy = yearOf(today);
   const from = url.searchParams.get('from') || today, to = url.searchParams.get('to') || from;
   if (!isIsoDay(from) || !isIsoDay(to) || to < from || yearOf(to) - yearOf(from) > 1) return leaveErr('bad_dates');
-  const settings = await loadLeaveSettings(env);
+  // The leading plain reads together: settings ∥ the HR team rows ∥ pending. Their checks still run in the old order
+  // (settings → team → pending; deferThrow holds a later read's throw), and applyOpenExits / loadLeaveEmployees stay
+  // where they were — serial, after the settings check, before ensureLeaveCurrent.
+  const reports = me ? edges.filter(e => e.manager_id === me.id).map(e => e.id) : [];
+  const [settings, teamF, prF] = await Promise.all([
+    loadLeaveSettings(env),
+    hr ? deferThrow(sb(`/rest/v1/employees?leave_policy=not.is.null&status=neq.exited&select=${LEAVE_EMP_SELECT}&order=full_name.asc&limit=${LEAVE_PAGE}`, env))
+      : Promise.resolve(null),
+    deferThrow(hr
+      ? sb(`/rest/v1/leave_requests?status=eq.pending&select=${LEAVE_REQ_SELECT}&order=start_date.asc&limit=${LEAVE_PAGE}`, env)
+      : sb(`/rest/v1/leave_requests?status=eq.pending&approver_employee_id=in.(${[me.id, ...reports].join(',')})&select=${LEAVE_REQ_SELECT}&order=start_date.asc&limit=${LEAVE_PAGE}`, env)),
+  ]);
   if (!settings) return err('db_error: leave settings', 500);
   let team;
   if (hr) {
-    const r = await sb(`/rest/v1/employees?leave_policy=not.is.null&status=neq.exited&select=${LEAVE_EMP_SELECT}&order=full_name.asc&limit=${LEAVE_PAGE}`, env);
+    const r = teamF();
     if (!r.ok) return err('db_error: leave team', 500);
     team = (await applyOpenExits(env, r.data || [])).filter(e => e.id !== me?.id);
   } else {
     team = (await loadLeaveEmployees(env, [...descendantsOf(edges, me.id)])).filter(leaveCovered);
   }
-  const reports = me ? edges.filter(e => e.manager_id === me.id).map(e => e.id) : [];
-  const pr = hr
-    ? await sb(`/rest/v1/leave_requests?status=eq.pending&select=${LEAVE_REQ_SELECT}&order=start_date.asc&limit=${LEAVE_PAGE}`, env)
-    : await sb(`/rest/v1/leave_requests?status=eq.pending&approver_employee_id=in.(${[me.id, ...reports].join(',')})&select=${LEAVE_REQ_SELECT}&order=start_date.asc&limit=${LEAVE_PAGE}`, env);
+  const pr = prF();
   if (!pr.ok) return err('db_error: leave pending', 500);
   const toDecide = (pr.data || []).map(numRow)
     .filter(r => !decideBlock({ req: r, meId: me?.id || null, hr, approverManagerId: approverManagerOf(edges, r.approver_employee_id) }));
@@ -11319,18 +11405,24 @@ async function deleteHoliday(body, auth, env) {
 async function hrLedgerTarget(auth, env, d) {
   if (!isHr(auth)) return { res: leaveErr('forbidden') };
   if (!isUuid(d.employee_id)) return { res: leaveErr('not_found') };
+  // Never your own ledger — the same self-block grantLeave has (fail closed on the org read).
+  const edges = await loadOrgEdgesStrict(env);
+  if (!edges) return { res: err('db_error: org read', 500) };
+  const me = callerEmployee(edges, auth.userId);
+  if (me && me.id === d.employee_id) return { res: leaveErr('no_self_approval') };
   if (!LEDGER_TYPES.includes(d.leave_type)) return { res: leaveErr('bad_type') };
   const eff = d.effective_date || istToday();
   if (!isIsoDay(eff)) return { res: leaveErr('bad_dates') };
   const emp = (await loadLeaveEmployees(env, [d.employee_id]))[0];
   if (!emp) return { res: leaveErr('not_found') };
+  if (me && me.id === emp.id) return { res: leaveErr('no_self_approval') };   // again, on the LOADED row's canonical id
   if (!leaveCovered(emp)) return { res: leaveErr('not_covered') };
   return { emp, eff };
 }
 
 // POST setOpeningBalance {employee_id, leave_type, days, note?, effective_date?} — once per person × type (L5); a
 // second entry → 409 opening_exists (use adjustLeave). 0 is allowed (records "opening set").
-async function setOpeningBalance(body, auth, env) {
+export async function setOpeningBalance(body, auth, env) {
   const d = body.data || body;
   const t = await hrLedgerTarget(auth, env, d);
   if (t.res) return t.res;
@@ -11349,7 +11441,7 @@ async function setOpeningBalance(body, auth, env) {
 }
 
 // POST adjustLeave {employee_id, leave_type, delta, note, effective_date?} — ± in 0.5 steps, a note required.
-async function adjustLeave(body, auth, env) {
+export async function adjustLeave(body, auth, env) {
   const d = body.data || body;
   const t = await hrLedgerTarget(auth, env, d);
   if (t.res) return t.res;
@@ -11730,7 +11822,48 @@ const SELF_SERVE_POST = new Set([
   'markLopExported', 'grantLeave',
 ]);
 
+// Postgres accepts an UPPERCASE uuid and answers lowercase, so a request id compared in JS (`me.id === d.employee_id`,
+// Set/Map lookups keyed by id) could slip a self-block or a chain test by changing case. Canonicalised ONCE, here,
+// before any handler — but ONLY under an id-bearing KEY (id / ids / *_id / *_ids, any case): a whole-string uuid
+// there (or in an array there) is lowercased in place. Codes, titles, notes, tokens, paths are never touched.
+// Iterative and bounded (depth / node caps) so a hostile body cannot blow the stack. → false when over a cap.
+const ID_KEY_RE = /^ids?$|_ids?$/i;
+// Caps are deliberately generous: the walk is a loop (no recursion to overflow), so they only stop an
+// abusive body. A legitimate bulk request (payout sheets, factory pay upload, CV batches) must never trip
+// them — 20,000 values was low enough that a few hundred rows × a few dozen fields could have.
+const CANON_MAX_DEPTH = 64, CANON_MAX_NODES = 500000;
+export function canonicalIds(root) {
+  const stack = [[root, false, 0]];
+  let nodes = 0;
+  while (stack.length) {
+    const [v, idKey, depth] = stack.pop();
+    if (depth > CANON_MAX_DEPTH) return false;
+    const keys = Array.isArray(v) ? null : (v && typeof v === 'object' ? Object.keys(v) : []);
+    const n = keys ? keys.length : v.length;
+    for (let i = 0; i < n; i++) {
+      if (++nodes > CANON_MAX_NODES) return false;
+      const k = keys ? keys[i] : i;
+      const isId = keys ? ID_KEY_RE.test(k) : idKey;   // an array element takes its array's key
+      const x = v[k];
+      if (typeof x === 'string') { if (isId && UUID_RE.test(x)) v[k] = x.toLowerCase(); }
+      else if (x && typeof x === 'object') stack.push([x, isId, depth + 1]);
+    }
+  }
+  return true;
+}
+export function canonicalizeUrlUuids(url) {
+  for (const k of [...new Set(url.searchParams.keys())]) {
+    if (!ID_KEY_RE.test(k)) continue;
+    const vals = url.searchParams.getAll(k);
+    if (!vals.some(x => UUID_RE.test(x) && x !== x.toLowerCase())) continue;
+    url.searchParams.delete(k);
+    for (const x of vals) url.searchParams.append(k, UUID_RE.test(x) ? x.toLowerCase() : x);
+  }
+  return url;
+}
+
 async function handleGet(url, request, env, ctx) {
+  canonicalizeUrlUuids(url);
   const action = url.searchParams.get('action');
   if (!action) return err('action_required', 400);
   if (action === 'ping') return ok({ pong: true });
@@ -11752,6 +11885,7 @@ async function handlePost(request, env, ctx) {
 
   let body;
   try { body = await request.json(); } catch { return err('bad_json', 400); }
+  try { if (!canonicalIds(body)) return err('invalid_request', 400); } catch { return err('invalid_request', 400); }
   const action = body?.action;
   if (!action) return err('action_required', 400);
   const handler = POST_ACTIONS[action];
