@@ -1,8 +1,7 @@
 'use client';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { useCachedQuery, getValidSession } from '@throttle/db';
-import { Spinner, Modal, Combobox, Skeleton } from '@throttle/ui';
+import { Spinner, Modal, Combobox } from '@throttle/ui';
 import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod, defaultRange, DEFAULT_RANGE_PRESET } from '../../lib/api.js';
 import { downloadXlsx } from '../../lib/xlsx.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
@@ -11,13 +10,7 @@ import ChannelFilter from '../../components/ChannelFilter.js';
 import { hybridHeadline, hybridByChannel } from '../../lib/segregation.js';
 // Prism atoms — shared vocabulary, presentational only.
 import { Swatch, PanelHead, PageHead, Bar, Donut, Nil } from '../../components/prism.js';
-import { HUE, STATUS, hueStyle } from '../../lib/hues.js';
-import {
-  BOOT_KEY, VARIANTS_KEY, selectionKeys, slimBootstrap, slimVariants, packSales, unpackSales, slimSeg,
-  slimAccessories, forSel, need, exportGate, pageFreshness, panelAsOf, withTimeout, FETCH_TIMEOUT_MS,
-} from '../../lib/dashboard.mjs';
-import { rollPreset } from '../../lib/ranges.mjs';
-import { useRefreshOnReturn } from '../../hooks/useRefreshOnReturn.js';
+import { HUE, STATUS } from '../../lib/hues.js';
 // Channel families — single source of truth (shared with the Channels section). Aliased so the
 // existing chart/chip code keeps its names.
 import { FAMILIES as GROUP_META, FAMILY_ORDER as GROUP_ORDER, familyOf as channelGroup } from '../../lib/families.js';
@@ -51,11 +44,9 @@ const NAME = { fontFamily: 'var(--ui)', fontSize: 12, color: 'var(--t1)', flex: 
 const NUM = { fontFamily: 'var(--mono)', fontSize: 11, fontVariantNumeric: 'tabular-nums', textAlign: 'right' };
 const EMPTY = { fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t3)' };
 
-const NO_ROWS = [];
-const NO_ACC = { buckets: [], total: { units: 0, gross: 0, skus: 0 } };
-
 export default function Dashboard() {
-  const { session, userId, perms } = useAuth();
+  const { session } = useAuth();
+  const [channels, setChannels] = useState([]);
   const [sel, setSel] = useState([]);            // selected channel ids ([] = all)
   const MTD = defaultRange();
   const [preset, setPreset] = useState(DEFAULT_RANGE_PRESET);
@@ -67,6 +58,10 @@ export default function Dashboard() {
   const [variantMetric, setVariantMetric] = useState('gross');
   const [mixMetric, setMixMetric] = useState('net');  // Channel mix: net (ex-GST) by default, gross on toggle (Afshaan S403)
   const [sellerRollup, setSellerRollup] = useState('variant'); // variant | product
+  const [connectors, setConnectors] = useState([]);
+  const [unmappedCount, setUnmappedCount] = useState(0);
+  const [codeToProduct, setCodeToProduct] = useState({});
+  const [variants, setVariants] = useState([]);   // product_master rows — feeds the Detail product search
   // Detail-only product filter. '' = everything. 'p:<product>' = every variant of a product,
   // 'v:<product_code>' = one variant. Deliberately scoped to the Detail table (that is what was
   // asked for) — the KPIs, mix board and movers above stay whole-catalogue, so the panel head
@@ -75,94 +70,66 @@ export default function Dashboard() {
   // Detail-only category switch (Karan, #bugs 1793710445.319899). 'all' = no restriction, else a
   // product_master.category value. Same Detail-only scope as productFilter above.
   const [categoryFilter, setCategoryFilter] = useState('all');
-  // ── data: one cached query per source (instant-load pattern, decisions "Instant-load pattern") ──
-  // Each section paints from this tab's last-known result for EXACTLY its selection and refreshes
-  // behind it; the freshness line under the header says when the page fetched what it shows.
-  // Every payload carries its key (`k`) and every figure renders through `need()`, so a number is
-  // never shown under a range or channel set it was not fetched for. The fetchers never swallow a
-  // failure — a failure is the section's error + Retry, never zeros or an empty state.
-  // Nothing seeds or fetches until perms are known AND grant sales_view — the permission odoops
-  // checks on every one of these reads (canView). The cached-identity auth path paints with perms
-  // still null, and a cached figure must never show to someone who may not see it; without an
-  // identity (qUser null) the hook neither reads the cache nor fetches.
-  const access = !!perms?.sales_view;
-  const live = !!session && access;
-  const qUser = access ? userId : null;
-  // The token is read at CALL time, never closed over: a tab hidden past the token's life would
-  // otherwise refresh with the expired one and 401 every section. Each call also races a 90 s
-  // timer, so a request that never answers ends as the section's error + Retry, not a skeleton.
-  const call = (action, params) => withTimeout(getValidSession().then(s => salesGet(action, params, s)), FETCH_TIMEOUT_MS, action);
-  const pp = useMemo(() => priorPeriod(from, to), [from, to]);
-  const K = useMemo(() => selectionKeys({ from, to, sel, prior: pp }), [from, to, sel, pp]);
-  const bootQ = useCachedQuery({ key: BOOT_KEY, userId: qUser, enabled: live,
-    fetcher: () => call('getBootstrap', {}).then(b => slimBootstrap(BOOT_KEY, b)) });
-  // product_master rows — feeds the Detail product search, the product roll-up and the drill.
-  const variantsQ = useCachedQuery({ key: VARIANTS_KEY, userId: qUser, enabled: live,
-    fetcher: () => call('getVariants', {}).then(r => slimVariants(VARIANTS_KEY, r)) });
-  const salesQ = useCachedQuery({ key: K.sales, userId: qUser, enabled: live,
-    fetcher: () => call('getSales', { from, to, group: 'variant', channel_id: K.ch }).then(d => packSales(K.sales, d?.rows)) });
-  const salesPrevQ = useCachedQuery({ key: K.salesPrev, userId: qUser, enabled: live,
-    fetcher: () => call('getSales', { from: pp.from, to: pp.to, group: 'variant', channel_id: K.ch }).then(d => packSales(K.salesPrev, d?.rows)) });
-  // order-grain (complete, sku-map-independent) — drives the hybrid headline totals only
-  const segQ = useCachedQuery({ key: K.seg, userId: qUser, enabled: live,
-    fetcher: () => call('getSegregation', { from, to, channel_id: K.ch }).then(d => slimSeg(K.seg, d)) });
-  const segPrevQ = useCachedQuery({ key: K.segPrev, userId: qUser, enabled: live,
-    fetcher: () => call('getSegregation', { from: pp.from, to: pp.to, channel_id: K.ch }).then(d => slimSeg(K.segPrev, d)) });
-  // ⚠️ The accessories MEMO must never be load-bearing. It once shipped inside one Promise.all
-  // with the KPIs and took the WHOLE dashboard down when its RPC 502'd on an FY range: every KPI,
-  // the mix board and the drill table silently kept the previous range's numbers under the new
-  // range's labels. It is its own query now, so it can only ever fail to itself — and a failure is
-  // still SAID ("couldn't load"), never hidden: an absent strip reads as "no accessories sold".
-  const accQ = useCachedQuery({ key: K.acc, userId: qUser, enabled: live,
-    fetcher: () => call('getAccessories', { from, to, channel_id: K.ch }).then(d => slimAccessories(K.acc, d)) });
-
-  // [query, key] pairs — the inputs `need()` checks.
-  const S = [salesQ, K.sales], SP = [salesPrevQ, K.salesPrev], G = [segQ, K.seg], GP = [segPrevQ, K.segPrev];
-  const A = [accQ, K.acc], B = [bootQ, BOOT_KEY], V = [variantsQ, VARIANTS_KEY];
-  const selPairs = [S, SP, G, GP, A];
-
-  // When the page last ASKED for each key — the export only trusts a result that landed after it.
-  const startedRef = useRef({});
-  const refreshPair = useCallback(([q, k]) => { startedRef.current[k] = Date.now(); return q.refresh(); }, []);
-  const retry = (gate) => gate.retry.forEach(refreshPair);
-  const refreshSelection = () => selPairs.forEach(refreshPair);
-  // No polling: on mount, on a selection change, and once on return to a tab hidden > 5 min.
-  useEffect(() => { if (live) { refreshPair(B); refreshPair(V); } }, [live, qUser]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (live) refreshSelection(); }, [live, qUser, K.sales, K.salesPrev, K.seg, K.segPrev, K.acc]); // eslint-disable-line react-hooks/exhaustive-deps
-  // A renewed token heals whatever failed on the old one (e.g. the 401s of a refresh fired on
-  // return before the session renewed) — only the failed queries are asked again.
-  useEffect(() => {
-    if (live) [...selPairs, B, V].forEach(p => { if (p[0].error) refreshPair(p); });
-  }, [session?.access_token]); // eslint-disable-line react-hooks/exhaustive-deps
-  // On every return to the tab: a preset range left open across IST midnight rolls to today's
-  // range first (presets recomputed now; custom ranges untouched) — the new keys fetch it, so
-  // yesterday's figures are never re-stamped as freshly loaded under "Today"/"MTD". After more
-  // than 5 min hidden, everything else is refreshed once too.
-  useRefreshOnReturn((stale) => {
-    if (!live) return;
-    const rolled = rollPreset(preset, from, to, rangePresets());
-    if (rolled) { setFrom(rolled.from); setTo(rolled.to); }
-    if (stale) { refreshPair(B); refreshPair(V); if (!rolled) refreshSelection(); }
-  });
-
-  const salesD = forSel(salesQ, K.sales), salesPrevD = forSel(salesPrevQ, K.salesPrev);
-  const rows = useMemo(() => (salesD ? unpackSales(salesD) : NO_ROWS), [salesD]);
-  const prevRows = useMemo(() => (salesPrevD ? unpackSales(salesPrevD) : NO_ROWS), [salesPrevD]);
-  const segRows = forSel(segQ, K.seg)?.rows || NO_ROWS;
-  const segPrevRows = forSel(segPrevQ, K.segPrev)?.rows || NO_ROWS;
+  const [rows, setRows] = useState([]);
+  const [prevRows, setPrevRows] = useState([]);
+  const [segRows, setSegRows] = useState([]);        // order-grain (f_order_rollup) — headline only
+  const [segPrevRows, setSegPrevRows] = useState([]);
   // "Accessories & others" MEMO — unmapped spares/gift-wrap/service. Deliberately NOT folded into
-  // any total: it is read off staging, never sales_fact. Kept in its own query so it can't leak in.
-  const acc = forSel(accQ, K.acc) || NO_ACC;
-  const boot = forSel(bootQ, BOOT_KEY);
-  const channels = boot?.channels || NO_ROWS;
-  const connectors = boot?.connectors || NO_ROWS;
-  const unmappedCount = boot?.unmapped_count || 0;
-  const variants = forSel(variantsQ, VARIANTS_KEY)?.rows || NO_ROWS;
-  const codeToProduct = useMemo(() => {
-    const m = {}; variants.forEach(v => { m[v.product_code] = v.product; }); return m;
-  }, [variants]);
+  // any total: it is read off staging, never sales_fact. Kept in its own state so it can't leak in.
+  const [acc, setAcc] = useState({ rows: [], total: { units: 0, gross: 0, skus: 0 } });
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    if (!session) return;
+    salesGet('getBootstrap', {}, session)
+      .then(b => {
+        setChannels((b?.channels || []).map(c => ({ channel_id: c.channel_id || c.id, name: c.name, type: c.type })));
+        setConnectors(b?.connectors || []);
+        setUnmappedCount(b?.unmapped_count || 0);
+      })
+      .catch(() => {});
+    salesGet('getVariants', {}, session)
+      .then(r => {
+        const rows = r?.rows || [];
+        const m = {}; rows.forEach(v => { m[v.product_code] = v.product; });
+        setCodeToProduct(m); setVariants(rows);
+      })
+      .catch(() => {});
+  }, [session]);
 
   const chName = useMemo(() => Object.fromEntries(channels.map(c => [c.channel_id, c.name])), [channels]);
+
+  useEffect(() => {
+    if (!session) return;
+    setLoading(true); setErr('');
+    const pp = priorPeriod(from, to);
+    const chArg = sel.join(',');
+    Promise.all([
+      salesGet('getSales', { from, to, group: 'variant', channel_id: chArg }, session),
+      salesGet('getSales', { from: pp.from, to: pp.to, group: 'variant', channel_id: chArg }, session),
+      // order-grain (complete, sku-map-independent) — drives the hybrid headline totals only
+      salesGet('getSegregation', { from, to, channel_id: chArg }, session),
+      salesGet('getSegregation', { from: pp.from, to: pp.to, channel_id: chArg }, session),
+      // ⚠️ The accessories MEMO must never be load-bearing. It shipped inside this Promise.all
+      // without a catch and took the WHOLE dashboard down when its RPC 502'd on an FY range:
+      // every KPI, the mix board and the drill table silently kept the previous range's numbers
+      // under the new range's labels — stale data reading as fresh, the worst failure shape here.
+      // A decorative panel gets its own catch so it can only ever fail to itself.
+      salesGet('getAccessories', { from, to, channel_id: chArg }, session).catch(() => 'ERR'),
+    ]).then(([cur, prev, seg, segPrev, accessories]) => {
+      setRows(cur?.rows || []); setPrevRows(prev?.rows || []);
+      setSegRows(seg?.rows || []); setSegPrevRows(segPrev?.rows || []);
+      // Distinguish FAILED from GENUINELY EMPTY. Swallowing the error entirely would hide the strip,
+      // which reads as "no accessories sold this period" — and there is ~₹1.5L of them. A memo may
+      // fail quietly; it must not lie quietly.
+      setAcc(accessories === 'ERR'
+        ? { rows: [], total: { units: 0, gross: 0, skus: 0 }, failed: true }
+        : { rows: accessories?.rows || [], total: accessories?.total || { units: 0, gross: 0, skus: 0 }, failed: false });
+    })
+      .catch(e => setErr(e.message || 'Failed to load'))
+      .finally(() => setLoading(false));
+  }, [session, from, to, sel]);
 
   // ── aggregations ──
   const aggOf = (rs) => {
@@ -412,77 +379,37 @@ export default function Dashboard() {
     else setDrill({ title: `${filterLabel ? filterLabel + ' · ' : ''}${r.label} · ${rangeLabel}`, params: { ...base, channel_id: r.key, ...(filtered ? { products: filtered } : {}) } });
   };
 
-  // ── per-section guards (lib/dashboard.mjs need()): a section renders only when EVERY query it
-  // reads holds data for this exact selection; else its skeleton, or its error + Retry. ──
-  const filterActive = !!productFilter || categoryFilter !== 'all';
-  const gHead = need([S, G, SP, GP]);      // Net revenue + Gross sales: value, Δ vs prior, spark, settled badge
-  const gCurPrev = need([S, SP]);          // Units, ASP, Active channels (value + Δ); Movers
-  const gTrend = need([S, B]);             // family per row = channel name → family
-  const gMix = need([S, G, SP, GP, B]);    // per-channel hybrid net/gross, Δ, shares, names, family arcs
-  const gSellers = need(sellerRollup === 'product' ? [S, V] : [S]);
-  const gAcc = need([A]);
-  const gConn = need([B]);
-  const gVariants = need([V]);             // the Detail product picker + category switch
-  const gDetail = need([S, ...(group === 'channel' ? [B] : []), ...(group === 'product' || filterActive ? [V] : [])]);
-  // When the PAGE fetched the current selection's figures (sales, segregation, accessories — the
-  // queries a selection change or return refreshes). Bootstrap/variants stamp their own sections.
-  // Not the top-bar chip, which is how recent each channel's
-  // source data is (getFreshness) — hence "Loaded", never "As of" / "Updated" / "synced" here.
-  const fresh = pageFreshness(selPairs);
-  const bootAsOf = panelAsOf(bootQ, BOOT_KEY);
-  const variantsAsOf = panelAsOf(variantsQ, VARIANTS_KEY);
-  // The export re-fetches, but is enabled off these rows and filtered by the variants: only on a
-  // fresh, complete result for this selection — never off a cache seed or mid-refresh.
-  const xg = exportGate({ salesQ, salesKey: K.sales, salesStartedAt: startedRef.current[K.sales], rowCount: rows.length,
-    filterActive, variantsQ, variantsStartedAt: startedRef.current[VARIANTS_KEY] });
-
-  // No sales_view: the worker would 403 every read ("No permission" — what this page showed before),
-  // so it is said without making the calls or showing anything cached.
-  if (perms && !access) {
-    return (
-      <div className="so-page">
-        <PageHead title="Cross-channel dashboard" />
-        <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>No permission</div>
-      </div>
-    );
-  }
-
   return (
     <div className="so-page">
       <PageHead
         title="Cross-channel dashboard"
         sub={<>Net revenue, mix and movers across every sales channel <span className="so-qual">· {rangeLabel}</span></>}
-        right={fresh.text ? (<>
-          <span aria-live="polite" title="When this page last fetched its figures. How recent each channel's source data is: the freshness chip in the top bar."
-            style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: fresh.warn ? STATUS.warn : 'var(--t3)', whiteSpace: 'nowrap' }}>{fresh.text}</span>
-          {fresh.warn && <button className="so-btn ghost" onClick={refreshSelection}>Retry</button>}
-        </>) : null}
       />
 
       {/* controls — range + channel filter + export, one row. Stays a PAGE-LEVEL sticky
           header; never nest it inside a .so-card. */}
-      <RangePicker from={from} to={to} presets={rangePresets()}
+      <RangePicker from={from} to={to}
         onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset); }}
         right={<>
-          {gConn.state === 'ready' ? <ChannelFilter channels={orderedChannels} value={sel} onChange={setSel} />
-            : gConn.state === 'error' ? <PanelError message="the channel list." onRetry={() => retry(gConn)} />
-            : <Skeleton width={130} height={28} radius={8} />}
-          <button className="so-btn ghost" onClick={() => exportRows('xlsx')} disabled={!xg.ok} title={xg.why || undefined}>Export Excel</button>
-          <button className="so-btn ghost" onClick={() => exportRows('csv')} disabled={!xg.ok} title={xg.why || undefined}>CSV</button>
+          <ChannelFilter channels={orderedChannels} value={sel} onChange={setSel} />
+          <button className="so-btn ghost" onClick={() => exportRows('xlsx')} disabled={!rows.length}>Export Excel</button>
+          <button className="so-btn ghost" onClick={() => exportRows('csv')} disabled={!rows.length}>CSV</button>
         </>} />
 
+      {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
+
+      {loading && !rows.length ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
       <>
         {/* ── hero KPI 5-up — every tile owns a metric hue (handoff §3.4) ── */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,minmax(0,1fr))', gap: 14 }}>
           {[
-            { g: gHead, lbl: 'Net revenue (ex-GST)', val: inr(head.netExGst), d: pct(head.netExGst, headPrev.netExGst), spark: headDaily.net, hue: HUE.primary, sub: 'after disc · returns · GST', badge: <SettledBadge pct={head.settledPct} /> },
-            { g: gHead, lbl: 'Gross sales', val: inr(head.grossAll), d: pct(head.grossAll, headPrev.grossAll), spark: headDaily.gross, hue: HUE.gross, sub: 'tax-incl · all channels' },
-            { g: gCurPrev, lbl: 'Units sold', val: fmtInt(head.units), d: pct(head.units, headPrev.units), spark: daySeries.units, hue: HUE.units },
-            { g: gCurPrev, lbl: 'Avg selling price', val: inr(curAsp), d: pct(curAsp, prevAsp), spark: daySeries.asp, hue: HUE.derived },
-            { g: gCurPrev, lbl: 'Active channels', val: fmtInt(activeChannels), d: pct(activeChannels, prevActive), spark: null, hue: HUE.count },
-          ].map((k, i) => (k.g.state === 'ready'
-            ? <Kpi key={i} lbl={k.lbl} val={k.val} pct={k.d} sub={k.sub} badge={k.badge} spark={k.spark} hue={k.hue} deltaNote={`vs ${ppLabel}`} />
-            : <KpiPending key={i} lbl={k.lbl} hue={k.hue} failed={k.g.state === 'error'} onRetry={() => retry(k.g)} />
+            { lbl: 'Net revenue (ex-GST)', val: inr(head.netExGst), d: pct(head.netExGst, headPrev.netExGst), spark: headDaily.net, hue: HUE.primary, sub: 'after disc · returns · GST', badge: <SettledBadge pct={head.settledPct} /> },
+            { lbl: 'Gross sales', val: inr(head.grossAll), d: pct(head.grossAll, headPrev.grossAll), spark: headDaily.gross, hue: HUE.gross, sub: 'tax-incl · all channels' },
+            { lbl: 'Units sold', val: fmtInt(head.units), d: pct(head.units, headPrev.units), spark: daySeries.units, hue: HUE.units },
+            { lbl: 'Avg selling price', val: inr(curAsp), d: pct(curAsp, prevAsp), spark: daySeries.asp, hue: HUE.derived },
+            { lbl: 'Active channels', val: fmtInt(activeChannels), d: pct(activeChannels, prevActive), spark: null, hue: HUE.count },
+          ].map((k, i) => (
+            <Kpi key={i} lbl={k.lbl} val={k.val} pct={k.d} sub={k.sub} badge={k.badge} spark={k.spark} hue={k.hue} deltaNote={`vs ${ppLabel}`} />
           ))}
         </div>
 
@@ -496,7 +423,7 @@ export default function Dashboard() {
             right={
               <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', gap: 13, flexWrap: 'wrap' }}>
-                  {gTrend.state === 'ready' && GROUP_ORDER.filter(g => trend.days.some(d => (trend.dv[d]?.[g] || 0) > 0)).map(g => (
+                  {GROUP_ORDER.filter(g => trend.days.some(d => (trend.dv[d]?.[g] || 0) > 0)).map(g => (
                     <span key={g} style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t2)' }}>
                       <Swatch color={GROUP_META[g].color} />{GROUP_META[g].label}
                     </span>
@@ -506,11 +433,8 @@ export default function Dashboard() {
               </div>
             } />
           <div>
-            {gTrend.state === 'ready' ? (
-              <StackedTrendChart days={trend.days} dayVals={trend.dv} metric={trendMetric}
-                groups={GROUP_ORDER.map(k => ({ key: k, label: GROUP_META[k].label, color: GROUP_META[k].color }))} />
-            ) : gTrend.state === 'error' ? <PanelError message="the daily trend." onRetry={() => retry(gTrend)} pad="24px 0" />
-              : <Skeleton height={290} radius={10} />}
+            <StackedTrendChart days={trend.days} dayVals={trend.dv} metric={trendMetric}
+              groups={GROUP_ORDER.map(k => ({ key: k, label: GROUP_META[k].label, color: GROUP_META[k].color }))} />
           </div>
         </div>
 
@@ -521,9 +445,7 @@ export default function Dashboard() {
           <div className="so-card">
             <PanelHead title="Channel mix" qual={mixMetric === 'net' ? '· net share (ex-GST)' : '· gross share'}
               right={<SegmentedToggle options={['net', 'gross']} value={mixMetric} onChange={setMixMetric} size="sm" />} />
-            {gMix.state === 'error' ? <PanelError message="the channel mix." onRetry={() => retry(gMix)} />
-            : gMix.state === 'loading' ? <MixSkeleton />
-            : channelBoard.arr.length === 0 ? <div style={EMPTY}>No sales in range.</div> : (
+            {channelBoard.arr.length === 0 ? <div style={EMPTY}>No sales in range.</div> : (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
                 <Donut segments={famMix.map(f => ({ key: f.key, label: f.label, value: f.value, color: f.color }))}
@@ -575,10 +497,8 @@ export default function Dashboard() {
                 </div>
               } />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-              {gSellers.state === 'error' && <PanelError message={`the top ${sellerRollup === 'product' ? 'products' : 'variants'}.`} onRetry={() => retry(gSellers)} />}
-              {gSellers.state === 'loading' && <BarRowsSkeleton rows={8} />}
-              {gSellers.state === 'ready' && variantBoard.arr.length === 0 && <div style={EMPTY}>No sales in range.</div>}
-              {gSellers.state === 'ready' && variantBoard.arr.map(v => {
+              {variantBoard.arr.length === 0 && <div style={EMPTY}>No sales in range.</div>}
+              {variantBoard.arr.map(v => {
                 const onUnits = variantMetric === 'units';
                 const m = onUnits ? v.units : v.gross;
                 // Both numbers show, but the SELECTED metric is the emphasised one (bright + wider
@@ -602,17 +522,13 @@ export default function Dashboard() {
                 purpose: these are real sales that have no product variant (gift wrap, spares,
                 paid repairs), so they can be seen without being attributed to a car. NOT in any
                 total above — mapping them to variants would inflate variant units. */}
-            {gAcc.state === 'error' && (
-              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10,
+            {acc.failed && (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)',
                             fontFamily: 'var(--ui)', fontSize: 11, color: 'var(--t3)' }}>
-                <span>Accessories &amp; others — <span style={{ color: STATUS.warn }}>couldn’t load</span>. The totals above are unaffected.</span>
-                <button className="so-btn ghost" onClick={() => retry(gAcc)}>Retry</button>
+                Accessories &amp; others — <span style={{ color: STATUS.warn }}>couldn’t load</span>. The totals above are unaffected.
               </div>
             )}
-            {gAcc.state === 'loading' && (
-              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}><Skeleton width="60%" height={12} /></div>
-            )}
-            {gAcc.state === 'ready' && acc.total.gross > 0 && (
+            {!acc.failed && acc.total.gross > 0 && (
               <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ ...NAME, color: 'var(--t2)' }}>Accessories &amp; others</span>
@@ -620,7 +536,7 @@ export default function Dashboard() {
                   <span style={{ ...NUM, color: 'var(--t2)', fontWeight: 600, width: 78 }}>{inr(acc.total.gross)}</span>
                 </div>
                 <div style={{ fontFamily: 'var(--ui)', fontSize: 10.5, color: 'var(--t3)', marginTop: 5, lineHeight: 1.5 }}>
-                  {acc.buckets.join(' · ')}
+                  {acc.rows.map(r => r.bucket).filter((v, i, a) => a.indexOf(v) === i).join(' · ')}
                   {' — '}{fmtInt(acc.total.skus)} unmapped SKUs.{' '}
                   <b style={{ color: 'var(--t2)' }}>Memo only — not counted in the totals above.</b>
                 </div>
@@ -634,14 +550,12 @@ export default function Dashboard() {
 
           <div className="so-card">
             <PanelHead title="Movers" qual={`· gross ₹ vs ${ppLabel}`} />
-            {gCurPrev.state === 'error' ? <PanelError message="the movers." onRetry={() => retry(gCurPrev)} /> : (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 22 }}>
               {[['Gaining', movers.up, STATUS.good], ['Slipping', movers.down, STATUS.bad]].map(([title, list, color]) => (
                 <div key={title} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{title}</div>
-                  {gCurPrev.state === 'loading' && <BarRowsSkeleton rows={4} bars={false} />}
-                  {gCurPrev.state === 'ready' && list.length === 0 && <Nil />}
-                  {gCurPrev.state === 'ready' && list.map(m => (
+                  {list.length === 0 && <Nil />}
+                  {list.map(m => (
                     <div key={m.code} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={NAME}>{m.label}</span>
                       <span style={{ ...NUM, color, width: 84 }}>{m.delta >= 0 ? '+' : '−'}{inr(Math.abs(m.delta))}</span>
@@ -651,23 +565,17 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
-            )}
           </div>
 
           <div className="so-card">
-            <PanelHead title="Connector health"
-              qual={bootAsOf && <span style={{ color: bootAsOf.warn ? STATUS.warn : undefined }}>· {bootAsOf.text}
-                {bootAsOf.warn && <button className="so-btn bare" style={{ marginLeft: 6, fontSize: 'inherit', color: 'var(--accent)' }} onClick={() => refreshPair(B)}>Retry</button>}</span>}
-              right={gConn.state === 'ready' &&
+            <PanelHead title="Connector health" right={
               <a href="/mapping" style={{ fontFamily: 'var(--mono)', fontSize: 10, color: unmappedCount ? 'var(--amber)' : 'var(--t3)', border: `1px solid ${unmappedCount ? 'rgba(245,158,11,.4)' : 'var(--border-ctl)'}`, borderRadius: 'var(--r-pill)', padding: '3px 10px', whiteSpace: 'nowrap' }}>
                 {unmappedCount} unmapped SKU{unmappedCount === 1 ? '' : 's'}{unmappedCount ? ' →' : ''}
               </a>
             } />
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {gConn.state === 'error' && <PanelError message="connector health." onRetry={() => retry(gConn)} />}
-              {gConn.state === 'loading' && [0, 1, 2, 3, 4].map(i => <Skeleton key={i} width={118} height={30} radius={8} />)}
-              {gConn.state === 'ready' && health.length === 0 && <div style={EMPTY}>No connectors enabled.</div>}
-              {gConn.state === 'ready' && health.map(c => {
+              {health.length === 0 && <div style={EMPTY}>No connectors enabled.</div>}
+              {health.map(c => {
                 const gk = channelGroup(c.name || '');
                 const sc = HEALTH_COLOR[c.statusKey];
                 return (
@@ -693,21 +601,11 @@ export default function Dashboard() {
                 {/* `portal` is REQUIRED here — the dropdown lives inside .so-card, which clips
                     and establishes its own stacking/transform context (PATTERN-160). */}
                 {/* No category on the rows (variants failed to load) would read as a false zero. */}
-                {/* Variants failed with nothing cached: say so where the picker would be, never a blank picker. */}
-                {gVariants.state === 'error' ? <PanelError message="the product list." onRetry={() => retry(gVariants)} />
-                  : gVariants.state === 'loading' ? <Skeleton width={250} height={28} radius={8} /> : (<>
-                {/* A failed refresh over a cached product list says so here, not in the header line. */}
-                {variantsAsOf?.warn && (
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: STATUS.warn }}>
-                    Product list: {variantsAsOf.text} <button className="so-btn bare" style={{ fontSize: 'inherit', color: 'var(--accent)' }} onClick={() => refreshPair(V)}>Retry</button>
-                  </span>
-                )}
                 {variants.some(v => v.category) && <SegmentedToggle options={CATEGORY_OPTS} value={categoryFilter} onChange={pickCategory} size="sm" />}
                 <div style={{ minWidth: 250 }}>
                   <Combobox options={productOptions} value={productFilter} onChange={setProductFilter}
                     placeholder="Search product, variant or colour…" portal />
                 </div>
-                </>)}
                 <SegmentedToggle options={GROUPS.map(g => [g.key, g.label])} value={group} onChange={setGroup} size="sm" />
               </div>
             } />
@@ -715,18 +613,14 @@ export default function Dashboard() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
               padding: '8px 14px', borderBottom: '1px solid var(--border)',
               fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
-              {gDetail.state === 'ready' ? <>
               <span><b style={{ color: 'var(--t1)' }}>{fmtInt(tableTotals.units)}</b> units</span>
               <span><b style={{ color: 'var(--t1)' }}>{inr(tableTotals.gross)}</b> gross</span>
               {tableTotals.retU > 0 && <span>{fmtInt(tableTotals.retU)} returned</span>}
-              </> : <Skeleton width={180} height={12} />}
               <span style={{ color: 'var(--t4)' }}>· {rangeLabel} · this panel only, the figures above are all products</span>
               <button className="so-btn ghost" style={{ marginLeft: 'auto' }} onClick={() => pickCategory('all')}>Clear</button>
             </div>
           )}
-          {gDetail.state === 'error' ? <PanelError message="the detail table." onRetry={() => retry(gDetail)} pad="24px 14px" />
-          : gDetail.state === 'loading' ? <TableSkeleton rows={8} />
-          : table.length === 0 ? (
+          {table.length === 0 ? (
             <div style={{ ...EMPTY, padding: 36, textAlign: 'center' }}>
               {filterLabel
                 ? <>No sales of <b style={{ color: 'var(--t2)' }}>{filterLabel}</b> in this range. Widen the range, clear the channel filter, or check it is mapped under <b style={{ color: 'var(--t2)' }}>Mapping</b>.</>
@@ -772,80 +666,7 @@ export default function Dashboard() {
             chName={chName} codeToProduct={codeToProduct} onClose={() => setDrill(null)} />
         )}
       </>
-    </div>
-  );
-}
-
-// ── loading / error states (instant-load pattern) — shaped like what they stand in for ──
-
-// A section whose call failed with nothing to show: say so, offer Retry. Never zeros.
-function PanelError({ message, onRetry, pad }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: pad,
-      fontFamily: 'var(--ui)', fontSize: 12, color: 'var(--t3)' }}>
-      <span><span style={{ color: STATUS.warn }}>Couldn’t load</span> {message}</span>
-      <button className="so-btn ghost" onClick={onRetry}>Retry</button>
-    </div>
-  );
-}
-
-// A KPI tile (label kept, no value) while any input of its figure is missing.
-function KpiPending({ lbl, hue, failed, onRetry }) {
-  return (
-    <div className="so-stat" style={hueStyle(hue)} aria-busy={!failed}>
-      <div className="so-stat-top">
-        <span className="so-stat-swatch" />
-        <span className="so-stat-lbl">{lbl}</span>
-      </div>
-      {failed ? <PanelError message="" onRetry={onRetry} /> : (
-        <>
-          <Skeleton width="60%" height={26} />
-          <Skeleton width="45%" height={11} style={{ marginTop: 8 }} />
-          <Skeleton height={28} style={{ marginTop: 8 }} />
-        </>
       )}
-    </div>
-  );
-}
-
-function MixSkeleton() {
-  return (
-    <div aria-busy="true">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 22 }}>
-        <Skeleton width={150} height={150} radius={75} />
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 11 }}>
-          {[0, 1, 2, 3].map(i => <Skeleton key={i} height={12} />)}
-        </div>
-      </div>
-      <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--row-border)' }}>
-        <BarRowsSkeleton rows={5} />
-      </div>
-    </div>
-  );
-}
-
-function BarRowsSkeleton({ rows, bars = true }) {
-  return (
-    <div aria-busy="true" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {Array.from({ length: rows }, (_, i) => (
-        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <Skeleton width={`${85 - (i % 4) * 9}%`} height={12} />
-          {bars && <Skeleton height={5} radius={3} />}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function TableSkeleton({ rows }) {
-  return (
-    <div aria-busy="true" style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {Array.from({ length: rows }, (_, i) => (
-        <div key={i} style={{ display: 'flex', gap: 16 }}>
-          <Skeleton width="34%" height={12} />
-          {[0, 1, 2, 3, 4].map(j => <Skeleton key={j} width="11%" height={12} />)}
-        </div>
-      ))}
     </div>
   );
 }

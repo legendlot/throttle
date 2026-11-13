@@ -1,6 +1,5 @@
 'use client';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { rangePresetsAt } from './ranges.mjs';
 
 // GET — returns the worker payload (garageFetch unwraps { data }).
 export const salesGet = (action, params, session) => garageFetch(action, params, session);
@@ -26,15 +25,36 @@ export function istDaysAgo(days) {
   return new Date(Date.now() + 5.5 * 3600 * 1000 - days * 86400 * 1000).toISOString().slice(0, 10);
 }
 
+// IST wall-clock parts (UTC getters on a +5.5h-shifted Date == IST Y/M/D).
+function istParts() { const d = new Date(Date.now() + 5.5 * 3600 * 1000); return { y: d.getUTCFullYear(), m: d.getUTCMonth(), d: d.getUTCDate() }; }
+
 // Quick-range presets → [{ key, label, from, to }] (IST). FY = Indian fiscal year (Apr 1).
 // Odo initialises every range picker on MTD (S169, systems/odo.md §Shared UI kit) — a deliberate departure from the
 // every-picker-defaults-to-Today rule, pending Afshaan's ruling (reference/decisions.md, 2026-09-22). One constant flips it.
 export const DEFAULT_RANGE_PRESET = 'mtd';
 export function defaultRange() { const all = rangePresets(); return all.find(p => p.key === DEFAULT_RANGE_PRESET) || all[0]; }
 
-// Computed from the clock at CALL time (see lib/ranges.mjs, which also holds the logic so it can be
-// tested across an IST midnight). Same output as before the move.
-export function rangePresets() { return rangePresetsAt(Date.now()); }
+export function rangePresets() {
+  const to = istToday();
+  const { y, m } = istParts();
+  const pad = n => String(n).padStart(2, '0');
+  const mtd = `${y}-${pad(m + 1)}-01`;
+  const fy = `${m >= 3 ? y : y - 1}-04-01`;
+  // Last calendar month (full 1st→last day of the previous month, IST).
+  const lmY = m === 0 ? y - 1 : y, lmM = m === 0 ? 11 : m - 1;   // 0-indexed prev month
+  const lmFrom = `${lmY}-${pad(lmM + 1)}-01`;
+  const lmLast = new Date(Date.UTC(lmY, lmM + 1, 0)).getUTCDate();   // day 0 of next month = last day
+  const lmTo = `${lmY}-${pad(lmM + 1)}-${pad(lmLast)}`;
+  return [
+    { key: 'today', label: 'Today',   from: to, to },
+    { key: '7d',    label: '7D',      from: istDaysAgo(6),  to },
+    { key: '30d',   label: '30D',     from: istDaysAgo(29), to },
+    { key: '90d',   label: '90D',     from: istDaysAgo(89), to },
+    { key: 'mtd',   label: 'MTD',     from: mtd, to },
+    { key: 'lm',    label: 'Last mo', from: lmFrom, to: lmTo },
+    { key: 'fy',    label: 'FY',      from: fy,  to },
+  ];
+}
 
 // The equal-length window immediately preceding [from,to] (for period-over-period deltas).
 export function priorPeriod(from, to) {
