@@ -1,5 +1,5 @@
 'use client';
-import { createContext, useContext, useMemo, useState, useEffect, useCallback } from 'react';
+import { createContext, useContext, useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, useSearchShortcut } from '@throttle/ui';
@@ -122,11 +122,16 @@ function AuthLayoutInner({ children }) {
 
   // Leave R1 (D15): requests waiting for the caller → a badge on "Leave". getMe's podium_leave_pending on load;
   // re-read from getMe on every visit to /leave (perms are loaded once per session, decisions change the count).
+  // Except the route the app LOADED on: AuthProvider's getMe has just answered, so landing on /leave reuses the
+  // count it holds instead of asking a second time. Once the user has been anywhere else, a visit re-reads as before.
   const [leavePending, setLeavePending] = useState(null);
   const leaveKey = (pathname || '').startsWith('/leave') ? pathname : '';
   const leaveOn = !!perms?.podium_leave_access;
+  const landingPath = useRef(pathname);
+  const movedOn = useRef(false);
+  if (pathname !== landingPath.current) movedOn.current = true;
   useEffect(() => {
-    if (!session || !leaveOn || !leaveKey) return;
+    if (!session || !leaveOn || !leaveKey || !movedOn.current) return;
     podiumopsGet('getMe', {}, session).then(d => setLeavePending(Number(d?.permissions?.podium_leave_pending) || 0)).catch(() => {});
   }, [session, leaveOn, leaveKey]);
   const leaveBadge = leavePending ?? (Number(perms?.podium_leave_pending) || 0);

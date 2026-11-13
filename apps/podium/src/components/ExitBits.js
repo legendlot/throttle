@@ -7,7 +7,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useToast } from '@throttle/ui';
 import { LogOut, Check, Ban, RotateCcw, X, AlertTriangle, Users, ChevronDown, ChevronRight, FileText, Download } from 'lucide-react';
-import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
+import { podiumopsGet, podiumopsPost, isForbidden } from '../lib/podiumopsFetch.js';
+import { LoadError } from './LoadError.js';
 import { fmtDate, fmtMoney } from '../lib/format.js';
 import { EXIT_REASONS, CHECKLIST_OWNERS, AUTO_SOURCE_LABELS, blockerText, exitError, addDaysIso, labelOfList,
   EXIT_LETTER_KINDS, letterError, letterBlockText } from '../lib/exits.js';
@@ -30,10 +31,13 @@ export function ExitPanel({ employeeId, session, onChanged }) {
   const [starting, setStarting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [docs, setDocs] = useState([]);
+  const [err, setErr] = useState(null);
 
+  // 403 = the worker's "not yours to see" → hidden, as always. Any other failure → error + Retry.
   const load = useCallback(() => {
     if (!session || !employeeId) return;
-    podiumopsGet('getExit', { employee_id: employeeId }, session).then(setD).catch(() => setD(false));
+    setErr(null);
+    podiumopsGet('getExit', { employee_id: employeeId }, session).then(setD).catch(e => (isForbidden(e) ? setD(false) : setErr(e)));
   }, [employeeId, session]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -41,6 +45,7 @@ export function ExitPanel({ employeeId, session, onChanged }) {
     podiumopsGet('getDocuments', { employee_id: employeeId }, session).then(r => setDocs(r.documents || [])).catch(() => setDocs([]));
   }, [d, employeeId, session]);
 
+  if (!d && err) return <Card title="Exit" style={{ gridColumn: '1 / -1' }}><LoadError compact message="Couldn't load the exit." onRetry={load} /></Card>;
   if (!d) return null;
   const x = d.exit;
   const open = x?.status === 'open';
@@ -68,6 +73,7 @@ export function ExitPanel({ employeeId, session, onChanged }) {
     <Card title="Exit" style={{ gridColumn: '1 / -1' }}
       right={canStart ? <button onClick={() => setStarting(true)} style={d.role === 'employee' ? ghostBtn : dangerBtn}><LogOut size={13} /> {startLabel}</button> : null}>
       {starting && <StartExitModal d={d} session={session} onClose={() => setStarting(false)} onStarted={() => { setStarting(false); load(); onChanged && onChanged(); }} />}
+      {err && <LoadError compact message="Couldn't refresh the exit." onRetry={load} style={{ marginBottom: 8 }} />}
       {!x ? <div style={muted}>No exit recorded.</div>
         : !open ? <>
           <ClosedExit x={x} role={d.role} session={session} onSaved={load} />
@@ -515,14 +521,18 @@ const modal = { width: 'min(520px, 100%)', background: 'var(--surface)', border:
 export function MyExitBlock({ employeeId, session }) {
   const [d, setD] = useState(null);
   const [openId, setOpenId] = useState(null);
+  const [err, setErr] = useState(null);
   const load = useCallback(() => {
     if (!session) return;
-    podiumopsGet('getMyTeamExits', {}, session).then(setD).catch(() => setD(false));
+    setErr(null);
+    podiumopsGet('getMyTeamExits', {}, session).then(setD).catch(e => (isForbidden(e) ? setD(false) : setErr(e)));
   }, [session]);
   useEffect(() => { load(); }, [load]);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 18 }}>
       {employeeId && <ExitPanel employeeId={employeeId} session={session} onChanged={load} />}
+      {/* Hidden when nobody reports to you; a failed read says so instead of vanishing. */}
+      {!d && err && <LoadError compact message="Couldn't load your team's exits." onRetry={load} />}
       {d && d.team?.length > 0 && (
         <Card title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Users size={13} /> Your team — exits</span>}>
           <div style={{ ...muted, marginBottom: 6 }}>Start a report’s exit, or sign off the manager lines (open work handed over) on one already open.</div>

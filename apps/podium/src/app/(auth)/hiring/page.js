@@ -1,12 +1,13 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, useListNav, useToast, Combobox } from '@throttle/ui';
+import { Spinner, useListNav, Combobox } from '@throttle/ui';
 import { Search, Briefcase, UploadCloud } from 'lucide-react';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import { Avatar, FilterChip, GridHead, GridRow, gridTh, btnGhost } from '../../../components/ui.js';
 import { ListBadge } from '../../../components/HiringBits.js';
+import { LoadError } from '../../../components/LoadError.js';
 import { APP_STATUSES, listOf, hiringError } from '../../../lib/hiring.js';
 
 const TABS = [
@@ -23,29 +24,54 @@ const COLS = '2fr 1.6fr 1.5fr 1.6fr 120px';
 export default function CandidatesPage() {
   const { session } = useAuth();
   const router = useRouter();
-  const { showToast } = useToast();
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
   const [openingId, setOpeningId] = useState('');
   const [openings, setOpenings] = useState([]);
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
-    const r = rows[i]; if (r) router.push(`/hiring/detail/?id=${r.id}`);
+  const [query, setQuery] = useState('');        // `search`, debounced — what the server is asked for
+  const [result, setResult] = useState(null);    // { key, rows } — tagged with what was asked
+  const [rowsErr, setRowsErr] = useState(null);  // { key, msg }
+  const [openingsErr, setOpeningsErr] = useState(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const reqSeq = useRef(0);
+
+  // One request per pause in typing (250 ms), not per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(search), 250);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Results are shown only while they answer what is asked now (no other query's rows paint or take an
+  // Enter under this one), and only the LATEST request may store.
+  const keyNow = `${query}|${status}|${openingId}`;
+  const rowsNow = result?.key === keyNow ? result.rows : null;
+  const errNow = rowsErr?.key === keyNow ? rowsErr.msg : null;
+  const rows = rowsNow || [];
+  // Typed text not yet asked (the 250 ms debounce): the rows on screen answer the previous text — keep them
+  // visible but inert (no click, no Enter-to-open) until the matching results arrive.
+  const pending = search !== query;
+  const openable = pending ? [] : rows;
+  const { focusedIdx, setFocusedIdx } = useListNav(openable.length, (i) => {
+    const r = openable[i]; if (r) router.push(`/hiring/detail/?id=${r.id}`);
   });
 
-  useEffect(() => {
-    if (session) podiumopsGet('getOpenings', {}, session).then(d => setOpenings(listOf(d, 'openings'))).catch(() => {});
+  // A failed read is an error with a Retry — never "No candidates" or an empty openings picker.
+  const loadOpenings = useCallback(() => {
+    if (!session) return;
+    setOpeningsErr(null);
+    podiumopsGet('getOpenings', {}, session).then(d => setOpenings(listOf(d, 'openings'))).catch(setOpeningsErr);
   }, [session]);
+  useEffect(() => { loadOpenings(); }, [loadOpenings]);
 
   useEffect(() => {
+    const mine = ++reqSeq.current;
     if (!session) return;
-    setLoading(true);
-    podiumopsGet('getCandidates', { search, status, opening_id: openingId }, session)
-      .then(d => setRows(listOf(d, 'candidates')))
-      .catch(e => { setRows([]); showToast(hiringError(e, 'Failed to load candidates'), 'error'); })
-      .finally(() => setLoading(false));
-  }, [session, search, status, openingId, showToast]);
+    const key = `${query}|${status}|${openingId}`;
+    setRowsErr(null);
+    podiumopsGet('getCandidates', { search: query, status, opening_id: openingId }, session)
+      .then(d => { if (mine === reqSeq.current) setResult({ key, rows: listOf(d, 'candidates') }); })
+      .catch(e => { if (mine === reqSeq.current) setRowsErr({ key, msg: hiringError(e, 'Failed to load candidates') }); });
+  }, [session, query, status, openingId, retryKey]);
 
   return (
     <div>
@@ -55,6 +81,7 @@ export default function CandidatesPage() {
           <Combobox value={openingId} onChange={v => setOpeningId(v)} inputStyle={{ fontFamily: 'var(--font-ui)', fontSize: 13, padding: '6px 10px' }}
             placeholder="All openings" options={openings.map(o => ({ value: o.id, label: o.designation, hint: o.opening_code }))} />
         </div>
+        {openingsErr && <LoadError compact message="Openings didn't load." onRetry={loadOpenings} />}
         <span style={{ flex: 1 }} />
         <label style={searchBox}>
           <Search size={14} strokeWidth={1.9} />
@@ -65,8 +92,9 @@ export default function CandidatesPage() {
       </div>
       <div style={{ fontSize: 12, color: 'var(--t4)', marginBottom: 10 }}>Candidates are added from an opening (the JD comes first).</div>
 
-      {loading ? <Spinner /> : (
-        <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 11, overflow: 'hidden' }}>
+      {errNow && rowsNow && <LoadError compact message="Couldn't refresh candidates — showing the last list loaded." onRetry={() => setRetryKey(k => k + 1)} style={{ marginBottom: 10 }} />}
+      {errNow && !rowsNow ? <LoadError message={errNow} onRetry={() => setRetryKey(k => k + 1)} /> : !rowsNow ? <Spinner /> : (
+        <div aria-busy={pending} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 11, overflow: 'hidden', ...(pending ? { opacity: 0.45, pointerEvents: 'none' } : {}) }}>
           <GridHead cols={COLS}>
             <div style={gridTh}>Candidate</div>
             <div style={gridTh}>Contact</div>
@@ -78,7 +106,7 @@ export default function CandidatesPage() {
           {rows.map((c, i) => {
             const la = c.latest_application || {};
             return (
-              <GridRow key={c.id} cols={COLS} onClick={() => router.push(`/hiring/detail/?id=${c.id}`)} onMouseEnter={() => setFocusedIdx(i)} focused={focusedIdx === i}>
+              <GridRow key={c.id} cols={COLS} onClick={() => !pending && router.push(`/hiring/detail/?id=${c.id}`)} onMouseEnter={() => setFocusedIdx(i)} focused={focusedIdx === i}>
                 <div style={{ ...cell, display: 'flex', alignItems: 'center', gap: 11 }}>
                   <Avatar name={c.full_name} tintKey={c.id} size={32} />
                   <div style={{ minWidth: 0 }}>

@@ -8,6 +8,7 @@ import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import { fmtDate } from '../../../lib/format.js';
 import { sentimentMeta } from '../../../lib/performance.js';
 import { ObservationsPanel } from '../../../components/PerformancePanels.js';
+import { LoadError } from '../../../components/LoadError.js';
 import { Avatar, FilterChip } from '../../../components/ui.js';
 import { ObjectiveCard } from '../../../components/OkrPanels.js';
 
@@ -30,13 +31,17 @@ export default function TeamFeedPage() {
   const [kind, setKind] = useState('all');
   const [person, setPerson] = useState('');
   const [logFor, setLogFor] = useState('');
+  const [err, setErr] = useState(null);
 
   const load = useCallback(() => {
     if (!session) return;
-    podiumopsGet('getTeamActivity', {}, session).then(setData).catch(() => setData({ activity: [], team: [] }));
+    setErr(null);
+    podiumopsGet('getTeamActivity', {}, session).then(setData).catch(setErr);
   }, [session]);
   useEffect(() => { load(); }, [load]);
 
+  // A failed read is an error with a Retry — never "You don't manage anyone yet".
+  if (data == null && err) return <div style={{ maxWidth: 880 }}><LoadError message="Couldn't load your team's activity." onRetry={load} /></div>;
   if (data == null) return <Spinner />;
   const team = data.team || [];
   if (team.length === 0) {

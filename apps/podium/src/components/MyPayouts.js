@@ -1,16 +1,25 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Wallet } from 'lucide-react';
 import { podiumopsGet } from '../lib/podiumopsFetch.js';
+import { LoadError } from './LoadError.js';
 import { fmtINR, payoutTypeLabel, periodLabel } from '../lib/payouts.js';
 
 // Own payouts only (getMyPayouts is parameter-less + self-scoped in the worker).
 export default function MyPayouts() {
   const { session } = useAuth();
   const [d, setD] = useState(null);
-  useEffect(() => { if (session) podiumopsGet('getMyPayouts', {}, session).then(setD).catch(() => setD(false)); }, [session]);
-  if (!d || d === false || !d.payouts?.length) return null;
+  const [err, setErr] = useState(null);
+  const load = useCallback(() => {
+    if (!session) return;
+    setErr(null);
+    podiumopsGet('getMyPayouts', {}, session).then(setD).catch(setErr);
+  }, [session]);
+  useEffect(() => { load(); }, [load]);
+  // Hidden when there are genuinely no payouts; a failed read says so instead of vanishing.
+  if (!d && err) return <div style={card}><LoadError compact message="Couldn't load your payouts." onRetry={load} /></div>;
+  if (!d || !d.payouts?.length) return null;
   return (
     <div style={card}>
       <div style={cardTitle}><Wallet size={14} /> My Payouts</div>

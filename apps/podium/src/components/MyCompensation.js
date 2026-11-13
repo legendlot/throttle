@@ -1,8 +1,9 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Lock } from 'lucide-react';
 import { podiumopsGet } from '../lib/podiumopsFetch.js';
+import { LoadError } from './LoadError.js';
 
 // Own-salary view. Calls getMyCompensation (parameter-less, self-scoped in the worker),
 // so it can never show anyone else's pay. Renders nothing until loaded; hidden if the
@@ -10,12 +11,18 @@ import { podiumopsGet } from '../lib/podiumopsFetch.js';
 export default function MyCompensation() {
   const { session } = useAuth();
   const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
 
-  useEffect(() => {
-    if (session) podiumopsGet('getMyCompensation', {}, session).then(setD).catch(() => setD(false));
+  const load = useCallback(() => {
+    if (!session) return;
+    setErr(null);
+    podiumopsGet('getMyCompensation', {}, session).then(setD).catch(setErr);
   }, [session]);
+  useEffect(() => { load(); }, [load]);
 
-  if (!d || d === false) return null;
+  // Hidden when there is genuinely nothing recorded; a failed read says so instead of vanishing.
+  if (!d && err) return <div style={card}><LoadError compact message="Couldn't load your compensation." onRetry={load} /></div>;
+  if (!d) return null;
   if (!d.events?.length && d.current_ctc == null) return null;
 
   const fmt = (n) => (n == null ? '—' : '₹' + Number(n).toLocaleString('en-IN'));

@@ -8,18 +8,23 @@ import { Target, Plus, ChevronRight } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
 import { CYCLE_STATUS } from '../lib/okrs.js';
 import { ObjectiveCard, Field, inp, miniBtn } from './OkrPanels.js';
+import { LoadError } from './LoadError.js';
 
 export default function MyOkrsBlock({ session, employeeId }) {
   const router = useRouter();
   const [d, setD] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [err, setErr] = useState(null);
 
   const load = useCallback(() => {
-    podiumopsGet('getMyOkrs', {}, session).then(setD).catch(() => setD(false));
+    setErr(null);
+    podiumopsGet('getMyOkrs', {}, session).then(setD).catch(setErr);
   }, [session]);
   useEffect(() => { load(); }, [load]);
 
-  if (!d || d === false) return null;
+  // Hidden when there is no active cycle; a failed read says so instead of vanishing.
+  if (!d && err) return <LoadError compact message="Couldn't load your OKRs." onRetry={load} style={{ marginBottom: 18 }} />;
+  if (!d) return null;
   if (!d.cycle) return null; // no active OKR cycle — stay quiet
 
   const mine = d.my_objectives || [];

@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
@@ -12,6 +12,8 @@ import MyPayouts from '../../../components/MyPayouts.js';
 import MyOkrsBlock from '../../../components/MyOkrsBlock.js';
 import { MyExitBlock } from '../../../components/ExitBits.js';
 import { ProfileBanner } from '../../../components/OnboardingBits.js';
+import { LoadError } from '../../../components/LoadError.js';
+import { decideLink } from '../../../lib/myLink.mjs';
 
 const TABS = [
   { id: 'wins',         label: 'My Wins' },
@@ -20,26 +22,50 @@ const TABS = [
 ];
 
 export default function MyPerformancePage() {
-  const { session } = useAuth();
-  const [me, setMe] = useState(null);
+  const { session, brandUser } = useAuth();
   const [tab, setTab] = useState('wins');
 
-  const load = useCallback(() => {
+  // getMyPerformance feeds only the open 1:1 action items here (and confirms the employee link) — a
+  // panel-level call, not a gate: the page mounts as soon as the caller's employee id is known, and
+  // every panel (Wins included, via its own getAccomplishments) fetches in parallel with it.
+  const [perf, setPerf] = useState(null);
+  const [perfErr, setPerfErr] = useState(null);
+  const seq = useRef(0);
+  const loadPerf = useCallback(() => {
     if (!session) return;
-    podiumopsGet('getMyPerformance', {}, session).then(setMe).catch(() => setMe(false));
+    const mine = ++seq.current;
+    setPerfErr(null);
+    podiumopsGet('getMyPerformance', {}, session)
+      .then(d => { if (mine === seq.current) setPerf(d); })
+      .catch(e => { if (mine === seq.current) setPerfErr(e); });
   }, [session]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadPerf(); }, [loadPerf]);
 
-  if (me == null) return <Spinner />;
-  if (me === false || !me.employee_id) {
+  // The auth context's id mounts the panels optimistically; this page's own getMyPerformance is the
+  // authority — its id wins, and only its successful "no employee" shows "no profile" (lib/myLink.mjs).
+  const link = decideLink({
+    contextId: brandUser?.employee_id || null,
+    perfStatus: perf ? 'ok' : perfErr ? 'error' : 'loading',
+    perfId: perf?.employee_id || null,
+  });
+  const employeeId = link.employeeId;
+
+  if (link.state === 'noProfile') {
     return (
       <div style={{ maxWidth: 840 }}>
         <div style={{ color: 'var(--t3)', fontSize: 14 }}>You don&apos;t have an employee profile linked to your login yet. Ask HR to set one up.</div>
       </div>
     );
   }
+  if (link.state !== 'panels') {
+    return (
+      <div style={{ maxWidth: 840 }}>
+        {link.state === 'error' ? <LoadError message="Couldn't load your performance page." onRetry={loadPerf} /> : <Spinner />}
+      </div>
+    );
+  }
 
-  const open = me.open_action_items || [];
+  const open = perf?.open_action_items || [];
   return (
     <div style={{ maxWidth: 840 }}>
       {/* J2: "Complete your profile — N items left" while the campaign is on (or a joiner's onboarding is open). */}
@@ -48,11 +74,12 @@ export default function MyPerformancePage() {
 
       <MyCompensation />
       <MyPayouts />
-      <MyOkrsBlock session={session} employeeId={me.employee_id} />
+      <MyOkrsBlock session={session} employeeId={employeeId} />
       {/* X1: Resign / your own exit, and your reports' exits — most managers hold no podium_view, so this is
           their only way in (getExit / getMyTeamExits / startExit / updateExitItem are self-serve). */}
-      <MyExitBlock employeeId={me.employee_id} session={session} />
+      <MyExitBlock employeeId={employeeId} session={session} />
 
+      {link.perfError && <LoadError compact message="Couldn't load your open 1:1 action items." onRetry={loadPerf} style={{ marginBottom: 18 }} />}
       {open.length > 0 && (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 11, padding: '13px 16px', marginBottom: 18 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: 'var(--t1)', marginBottom: 8 }}>
@@ -72,9 +99,9 @@ export default function MyPerformancePage() {
         ))}
       </div>
 
-      {tab === 'wins' ? <WinsPanel employeeId={me.employee_id} session={session} />
-        : tab === 'observations' ? <ObservationsPanel employeeId={me.employee_id} session={session} />
-        : <OneOnOnesPanel employeeId={me.employee_id} session={session} />}
+      {tab === 'wins' ? <WinsPanel employeeId={employeeId} session={session} />
+        : tab === 'observations' ? <ObservationsPanel employeeId={employeeId} session={session} />
+        : <OneOnOnesPanel employeeId={employeeId} session={session} />}
     </div>
   );
 }

@@ -1,66 +1,137 @@
 'use client';
-import { useEffect, useState } from 'react';
+// Instant load (2026-11-14, Snorkel's permission-gated pattern), DEPARTMENTS ONLY: that read paints its
+// last-known result from this tab's sessionStorage and refreshes behind it. The people read is never
+// cached for anyone — skeletons, then a fresh, server-projected answer (lib/dashboard.mjs cacheIdentities).
+// Each section fills when its own call lands; a failure with nothing to show is an error + Retry, never
+// zeros. Candidate responses and the profile banner are fresh too.
+// Not polled: refreshed on mount and when the tab returns after more than a minute hidden.
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner } from '@throttle/ui';
+import { getValidSession, useCachedQuery, writeCache } from '@throttle/db';
+import { Skeleton } from '@throttle/ui';
 import { CalendarDays } from 'lucide-react';
-import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
+import { podiumopsGet, isForbidden } from '../../../lib/podiumopsFetch.js';
 import { labelOf, EMPLOYMENT_TYPES, tenure } from '../../../lib/format.js';
 import { Avatar, KpiTile, card, cardLabel } from '../../../components/ui.js';
 import { fmtDateTime } from '../../../lib/hiring.js';
 import { RESPONSE_KIND } from '../../../components/OfferBits.js';
 import { ProfileBanner } from '../../../components/OnboardingBits.js';
+import { LoadError } from '../../../components/LoadError.js';
+import {
+  dashboardPeople, dashboardDepartments, peopleKey, cacheIdentities, purgeLegacyPeopleCache, DEPARTMENTS_KEY,
+  freshness, shouldRefreshOnReturn, istDate, msUntilNextIstMidnight,
+} from '../../../lib/dashboard.mjs';
 
 const BAR_COLS = ['#F2CD1A', '#9fb0ff', '#4ade80', '#fb923c', '#fbbf24', '#ff8a8a'];
 
 export default function DashboardPage() {
-  const { session, perms } = useAuth();
+  const { session, userId, perms, user, loading: authLoading } = useAuth();
   const router = useRouter();
-  const [emps, setEmps] = useState(null);
-  const [depts, setDepts] = useState([]);
-  const [replies, setReplies] = useState([]);   // O1: open candidate responses (caller's offers only)
 
+  // Nothing seeds or fetches until perms are known AND grant podium_view (the dashboard's gate):
+  // a cached figure must never show to someone whose rights have since narrowed. The token is read
+  // at call time — the session this render closed over may have expired while the tab was hidden.
+  // A failure THROWS (podiumopsGet, and the builders on a bad reply) — never cached, never a 0.
+  const live = !!session && !!perms?.podium_view;
+  const ids = cacheIdentities(perms?.podium_view ? userId : null); // null = no identity → no seed, no write
+  const qUser = ids.departments;
+  // Anything an earlier build cached for the people tiles is removed on mount.
   useEffect(() => {
-    if (!session) return;
-    Promise.all([
-      podiumopsGet('getEmployees', { status: 'all', limit: 2000 }, session),
-      podiumopsGet('getDepartments', {}, session).catch(() => ({ departments: [] })),
-    ]).then(([e, d]) => { setEmps(e.employees || []); setDepts(d.departments || []); });
-    podiumopsGet('getOfferResponses', {}, session)
-      .then(r => setReplies(Array.isArray(r) ? r : (r?.responses || [])))
-      .catch(() => setReplies([]));
-  }, [session]);
+    try { purgeLegacyPeopleCache(window.sessionStorage); } catch { /* storage blocked: nothing to purge */ }
+  }, []);
 
-  if (!emps) return <Spinner />;
+  // The IST day the tiles are for. A render at or after IST midnight picks up the new day (new key → refresh,
+  // via the effect below); `tick` forces that render — at the next IST midnight while mounted, and on a tab
+  // return that crosses midnight. setTimeout/clearTimeout are called directly (decisions: Odo, 2026-11-14).
+  const [tick, setTick] = useState(0);
+  const day = istDate();
+  const dayRef = useRef(day);
+  dayRef.current = day;
+  useEffect(() => {
+    const t = setTimeout(() => setTick(n => n + 1), msUntilNextIstMidnight(Date.now()) + 1000);
+    return () => clearTimeout(t);
+  }, [tick]);
 
-  const active = emps.filter(e => e.status === 'active');
-  const byStatus = tally(emps, e => e.status);
-  const byType = tally(active, e => e.employment_type || 'unknown');
-  const newCount = active.filter(e => withinDays(e.date_joined, 30)).length;
+  const pKey = peopleKey(day);
+  const peopleQ = useCachedQuery({ key: pKey, userId: ids.people, enabled: live,
+    fetcher: async () => dashboardPeople(await podiumopsGet('getEmployees', { status: 'all', limit: 2000 }, await getValidSession()), Date.now()) });
+  const deptQ = useCachedQuery({ key: DEPARTMENTS_KEY, userId: qUser, enabled: live,
+    fetcher: async () => dashboardDepartments(await podiumopsGet('getDepartments', {}, await getValidSession())) });
 
-  const recent = [...active]
-    .filter(e => e.date_joined)
-    .sort((a, b) => (b.date_joined || '').localeCompare(a.date_joined || ''))
-    .slice(0, 6);
-  const anniv = upcoming(active, 'date_joined');
-  const bdays = upcoming(active, 'date_of_birth');
+  // O1: open candidate responses (caller's offers only) — candidate data, so fresh every time, never cached.
+  // Gated on the same `live` as the cached sections: nothing is asked before perms are known.
+  const [replies, setReplies] = useState([]);
+  const [repliesErr, setRepliesErr] = useState(null);
+  const loadReplies = useCallback(async () => {
+    setRepliesErr(null);
+    try {
+      const r = await podiumopsGet('getOfferResponses', {}, await getValidSession());
+      setReplies(Array.isArray(r) ? r : (r?.responses || []));
+    } catch (e) { setRepliesErr(e); }
+  }, []);
 
-  const deptRows = depts.slice().sort((a, b) => (b.headcount || 0) - (a.headcount || 0));
-  const maxHc = Math.max(1, ...deptRows.map(d => d.headcount || 0));
-  const typeRows = Object.entries(byType).sort((a, b) => b[1] - a[1]);
-  const typeMax = Math.max(1, ...typeRows.map(([, v]) => v));
+  const refreshAll = () => { peopleQ.refresh(); deptQ.refresh(); };
+  useEffect(() => { if (live) refreshAll(); }, [userId, live, pKey]); // eslint-disable-line
+  useEffect(() => { if (live) loadReplies(); }, [userId, live, loadReplies]);
+
+  // Access revoked mid-tab: a refresh answered 403 (the worker's forbidden_podium_view). The cached tiles are
+  // not this viewer's to see any more — take them off the screen and out of the cache (writeCache with no
+  // value removes the key), rather than "Couldn't refresh — showing HH:MM" over them.
+  const revoked = isForbidden(peopleQ.error) || isForbidden(deptQ.error);
+  useEffect(() => {
+    if (!revoked || !qUser) return;
+    writeCache(qUser, DEPARTMENTS_KEY, undefined);
+  }, [revoked, qUser]);
+
+  // Back on the tab: the IST day changed while away → re-render for the new day (its key change refreshes,
+  // whatever the 60 s rule says); otherwise after more than a minute away → one refresh of every section.
+  const hiddenAt = useRef(null);
+  useEffect(() => {
+    if (!userId) return undefined;
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') { hiddenAt.current = Date.now(); return; }
+      const wasHiddenAt = hiddenAt.current;
+      hiddenAt.current = null;
+      if (istDate() !== dayRef.current) { setTick(n => n + 1); if (live) loadReplies(); return; }
+      if (shouldRefreshOnReturn(wasHiddenAt) && live) { refreshAll(); loadReplies(); }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [userId, live]); // eslint-disable-line
+
+  // getMe failed with no cached identity: AuthProvider has finished (not loading), holds a session, but has
+  // neither perms nor a user — without this the sections would wait on perms for ever.
+  if (session && !authLoading && !perms && !user) {
+    return <LoadError message="Couldn't load your access." onRetry={() => window.location.reload()} />;
+  }
+  if ((perms && !perms.podium_view) || revoked) {
+    return <div style={{ color: 'var(--t3)', fontSize: 14 }}>The dashboard needs People access. Your own record is under My Performance.</div>;
+  }
+
+  const fresh = freshness([peopleQ, deptQ]);
+  const p = peopleQ.data;
+  const dp = deptQ.data;
+  const pFailed = !!peopleQ.error && p === undefined;
+  const dFailed = !!deptQ.error && dp === undefined;
+  const pTile = (label, render) => p !== undefined ? render() : pFailed ? <KpiError label={label} onRetry={peopleQ.refresh} /> : <KpiSkeleton />;
 
   return (
     <div>
-      {/* J2: your own "Complete your profile" banner (self-scoped getMyProfile). */}
+      {/* J2: your own "Complete your profile" banner (self-scoped getMyProfile) — fresh, not cached. */}
       <ProfileBanner session={session} />
+      <div aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, minHeight: 15, marginBottom: 8, color: fresh.warn ? 'var(--warn-fg)' : 'var(--t4)' }}>
+        <span>{fresh.text}</span>
+        {fresh.warn && <button type="button" onClick={refreshAll} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'inherit', fontSize: 11.5, textDecoration: 'underline' }}>Retry</button>}
+      </div>
       {/* KPI rail */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
-        <KpiTile label="Headcount" value={active.length} sub={newCount ? `+${newCount} this month` : 'steady'} subColor="var(--green-bright)" stripe />
-        <KpiTile label="Departments" value={depts.length} sub={`${deptRows.filter(d => (d.headcount || 0) > 0).length} active`} />
-        <KpiTile label="On Leave" value={byStatus.on_leave || 0} sub={(byStatus.on_leave || 0) ? 'currently away' : 'none'} subColor="var(--warn-fg)" />
-        <KpiTile label="Notice" value={byStatus.notice || 0} sub={(byStatus.notice || 0) ? 'serving notice' : 'none'} subColor="var(--bad-fg)" />
-        <KpiTile label="New · 30d" value={newCount} sub={newCount ? 'onboarding' : 'none'} subColor="var(--green-bright)" />
+        {pTile('Headcount', () => <KpiTile label="Headcount" value={p.headcount} sub={p.newCount ? `+${p.newCount} this month` : 'steady'} subColor="var(--green-bright)" stripe />)}
+        {dp !== undefined ? <KpiTile label="Departments" value={dp.count} sub={`${dp.activeCount} active`} />
+          : dFailed ? <KpiError label="Departments" onRetry={deptQ.refresh} /> : <KpiSkeleton />}
+        {pTile('On Leave', () => <KpiTile label="On Leave" value={p.onLeave} sub={p.onLeave ? 'currently away' : 'none'} subColor="var(--warn-fg)" />)}
+        {pTile('Notice', () => <KpiTile label="Notice" value={p.notice} sub={p.notice ? 'serving notice' : 'none'} subColor="var(--bad-fg)" />)}
+        {pTile('New · 30d', () => <KpiTile label="New · 30d" value={p.newCount} sub={p.newCount ? 'onboarding' : 'none'} subColor="var(--green-bright)" />)}
       </div>
 
       {/* Leave R1 (D15): requests the caller may decide (getMe's podium_leave_pending). */}
@@ -74,6 +145,12 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {repliesErr && (
+        <div style={{ ...card, marginBottom: 14 }}>
+          <div style={cardLabel}>Candidate responses</div>
+          <LoadError message="Couldn't load candidate responses." onRetry={loadReplies} style={{ padding: 0 }} />
+        </div>
+      )}
       {replies.length > 0 && (
         <div style={{ ...card, marginBottom: 14 }}>
           <div style={cardLabel}>Candidate responses</div>
@@ -92,49 +169,91 @@ export default function DashboardPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 14 }}>
         <div style={card}>
           <div style={cardLabel}>By Department</div>
-          {deptRows.length === 0 ? <Empty /> : deptRows.map((d, i) => (
-            <Bar key={d.id} label={d.name} value={d.headcount || 0} pct={Math.round((d.headcount || 0) / maxHc * 100)} color={BAR_COLS[i % BAR_COLS.length]} />
-          ))}
+          {dp === undefined ? (dFailed ? <LoadError message="Couldn't load departments." onRetry={deptQ.refresh} style={{ padding: 0 }} /> : <BarsSkeleton />)
+            : dp.rows.length === 0 ? <Empty /> : dp.rows.map((d, i) => (
+              <Bar key={d.id} label={d.name} value={d.value} pct={d.pct} color={BAR_COLS[i % BAR_COLS.length]} />
+            ))}
         </div>
 
         <div style={card}>
           <div style={cardLabel}>Recent Joiners</div>
-          {recent.length === 0 ? <Empty /> : recent.map(e => (
-            <div key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)}
-              style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '7px 0', borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
-              <Avatar name={e.full_name} photoUrl={e.photo_url} tintKey={e.id} size={30} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--t1)' }}>{e.full_name}</div>
-                <div style={{ fontSize: 11, color: 'var(--t3)' }}>{e.job_title || '—'}</div>
+          {p === undefined ? <PeopleFallback failed={pFailed} onRetry={peopleQ.refresh} />
+            : p.recent.length === 0 ? <Empty /> : p.recent.map(e => (
+              <div key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)}
+                style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '7px 0', borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
+                <Avatar name={e.full_name} photoUrl={e.photo_url} tintKey={e.id} size={30} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--t1)' }}>{e.full_name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--t3)' }}>{e.job_title || '—'}</div>
+                </div>
+                <span className="num" style={{ fontSize: 11.5, color: 'var(--yellow)' }}>{tenure(e.date_joined)}</span>
               </div>
-              <span className="num" style={{ fontSize: 11.5, color: 'var(--yellow)' }}>{tenure(e.date_joined)}</span>
-            </div>
-          ))}
+            ))}
         </div>
 
         <div style={card}>
           <div style={cardLabel}>By Employment Type</div>
-          {typeRows.length === 0 ? <Empty /> : typeRows.map(([k, v], i) => (
-            <Bar key={k} label={labelOf(EMPLOYMENT_TYPES, k)} value={v} pct={Math.round(v / typeMax * 100)} color={BAR_COLS[(i + 1) % BAR_COLS.length]} />
-          ))}
+          {p === undefined ? (pFailed ? <PeopleFallback failed onRetry={peopleQ.refresh} /> : <BarsSkeleton />)
+            : p.types.length === 0 ? <Empty /> : p.types.map((t, i) => (
+              <Bar key={t.key} label={labelOf(EMPLOYMENT_TYPES, t.key)} value={t.value} pct={t.pct} color={BAR_COLS[(i + 1) % BAR_COLS.length]} />
+            ))}
         </div>
 
         <div style={card}>
           <div style={cardLabel}>Upcoming Anniversaries</div>
-          {anniv.length === 0 ? <Empty text="None in the next 30 days" /> : anniv.map(e => (
-            <WhenRow key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)} name={e.full_name} title={e.job_title} when={e._when} />
-          ))}
+          {p === undefined ? <PeopleFallback failed={pFailed} onRetry={peopleQ.refresh} />
+            : p.anniversaries.length === 0 ? <Empty text="None in the next 30 days" /> : p.anniversaries.map(e => (
+              <WhenRow key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)} name={e.full_name} title={e.job_title} when={e.when} />
+            ))}
         </div>
 
         <div style={card}>
           <div style={cardLabel}>Upcoming Birthdays</div>
-          {bdays.length === 0 ? <Empty text="None in the next 30 days" /> : bdays.map(e => (
-            <WhenRow key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)} name={e.full_name} title={e.job_title} when={e._when} />
-          ))}
+          {p === undefined ? <PeopleFallback failed={pFailed} onRetry={peopleQ.refresh} />
+            : p.birthdays.length === 0 ? <Empty text="None in the next 30 days" /> : p.birthdays.map(e => (
+              <WhenRow key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)} name={e.full_name} title={e.job_title} when={e.when} />
+            ))}
         </div>
       </div>
     </div>
   );
+}
+
+// ── Loading / error states, laid out like what they stand in for ──
+const tileFrame = { flex: '1 1 150px', minWidth: 150, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 11, padding: '13px 16px' };
+function KpiSkeleton() {
+  return (
+    <div aria-busy="true" style={tileFrame}>
+      <Skeleton width="55%" height={9} />
+      <Skeleton width="40%" height={25} style={{ margin: '6px 0 4px' }} />
+      <Skeleton width="60%" height={10} />
+    </div>
+  );
+}
+function KpiError({ label, onRetry }) {
+  return (
+    <div style={tileFrame}>
+      <div style={{ fontFamily: 'var(--font-display)', fontSize: 9, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t4)' }}>{label}</div>
+      <LoadError compact message="Couldn't load." onRetry={onRetry} style={{ marginTop: 10 }} />
+    </div>
+  );
+}
+function BarsSkeleton() {
+  return (
+    <div aria-busy="true" style={{ display: 'grid', gap: 14 }}>
+      {Array.from({ length: 4 }, (_, i) => <div key={i}><Skeleton width="70%" height={11} style={{ marginBottom: 6 }} /><Skeleton height={5} /></div>)}
+    </div>
+  );
+}
+function RowsSkeleton() {
+  return (
+    <div aria-busy="true" style={{ display: 'grid', gap: 14, paddingTop: 7 }}>
+      {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} width={i % 2 ? '70%' : '85%'} height={13} />)}
+    </div>
+  );
+}
+function PeopleFallback({ failed, onRetry }) {
+  return failed ? <LoadError message="Couldn't load people." onRetry={onRetry} style={{ padding: 0 }} /> : <RowsSkeleton />;
 }
 
 function Bar({ label, value, pct, color }) {
@@ -159,25 +278,3 @@ function WhenRow({ name, title, when, onClick }) {
   );
 }
 function Empty({ text = 'No data' }) { return <div style={{ color: 'var(--t3)', fontSize: 12, padding: '6px 0' }}>{text}</div>; }
-
-function tally(arr, keyFn) { const o = {}; for (const x of arr) { const k = keyFn(x); o[k] = (o[k] || 0) + 1; } return o; }
-function withinDays(d, n) {
-  if (!d) return false;
-  const dt = new Date(d); if (isNaN(dt)) return false;
-  const days = Math.round((Date.now() - dt.getTime()) / 86400000);
-  return days >= 0 && days <= n;
-}
-function upcoming(arr, field) {
-  const now = new Date();
-  const out = [];
-  for (const e of arr) {
-    if (!e[field]) continue;
-    const d = new Date(e[field]);
-    if (isNaN(d)) continue;
-    const next = new Date(now.getFullYear(), d.getMonth(), d.getDate());
-    if (next < new Date(now.getFullYear(), now.getMonth(), now.getDate())) next.setFullYear(now.getFullYear() + 1);
-    const days = Math.round((next - now) / 86400000);
-    if (days >= 0 && days <= 30) out.push({ ...e, _days: days, _when: days === 0 ? 'Today' : `in ${days}d` });
-  }
-  return out.sort((a, b) => a._days - b._days).slice(0, 6);
-}

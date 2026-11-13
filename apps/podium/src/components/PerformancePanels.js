@@ -2,10 +2,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useToast } from '@throttle/ui';
 import { Plus, Pencil, Trash2, Lock, Check } from 'lucide-react';
-import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
+import { podiumopsGet, podiumopsPost, isForbidden } from '../lib/podiumopsFetch.js';
 import { fmtDate } from '../lib/format.js';
 import { SENTIMENTS, VISIBILITIES, sentimentMeta, visibilityMeta, parseTags, joinTags } from '../lib/performance.js';
 import { todayStr as domainToday } from '@throttle/domain';
+import { LoadError } from './LoadError.js';
 
 function todayStr() { return domainToday(); }
 
@@ -47,12 +48,16 @@ function AddBtn({ open, onClick, label }) {
 export function ObservationsPanel({ employeeId, session }) {
   const { showToast } = useToast();
   const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
   const [form, setForm] = useState(null); // { id?, body, sentiment, visibility, tags, observed_on }
 
+  // 403 = the worker's "not yours to see" (a directory-only viewer on someone's profile) → the empty list it
+  // always showed. Any other failure is an error with a Retry, never "No observations yet".
   const load = useCallback(() => {
     if (!session || !employeeId) return;
+    setErr(null);
     podiumopsGet('getObservations', { employee_id: employeeId }, session)
-      .then(setData).catch(() => setData({ observations: [], can_add: false }));
+      .then(setData).catch(e => (isForbidden(e) ? setData({ observations: [], can_add: false }) : setErr(e)));
   }, [session, employeeId]);
   useEffect(() => { load(); }, [load]);
 
@@ -74,9 +79,11 @@ export function ObservationsPanel({ employeeId, session }) {
     catch (e) { showToast(e.message || 'Delete failed', 'error'); }
   }
 
+  if (!data && err) return <LoadError message="Couldn't load observations." onRetry={load} />;
   if (!data) return <Empty>Loading…</Empty>;
   return (
     <div>
+      {err && <LoadError compact message="Couldn't refresh observations." onRetry={load} style={{ marginBottom: 8 }} />}
       {data.can_add && !form && <AddBtn onClick={openNew} label="Log observation" />}
       {form && (
         <div style={formCard}>
@@ -123,12 +130,15 @@ export function ObservationsPanel({ employeeId, session }) {
 export function WinsPanel({ employeeId, session }) {
   const { showToast } = useToast();
   const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
   const [form, setForm] = useState(null);
 
+  // Same rule as observations: 403 → the empty list it always showed; any other failure → error + Retry.
   const load = useCallback(() => {
     if (!session || !employeeId) return;
+    setErr(null);
     podiumopsGet('getAccomplishments', { employee_id: employeeId }, session)
-      .then(setData).catch(() => setData({ accomplishments: [], can_add: false }));
+      .then(setData).catch(e => (isForbidden(e) ? setData({ accomplishments: [], can_add: false }) : setErr(e)));
   }, [session, employeeId]);
   useEffect(() => { load(); }, [load]);
 
@@ -150,9 +160,11 @@ export function WinsPanel({ employeeId, session }) {
     catch (e) { showToast(e.message || 'Delete failed', 'error'); }
   }
 
+  if (!data && err) return <LoadError message="Couldn't load wins." onRetry={load} />;
   if (!data) return <Empty>Loading…</Empty>;
   return (
     <div>
+      {err && <LoadError compact message="Couldn't refresh wins." onRetry={load} style={{ marginBottom: 8 }} />}
       {data.can_add && !form && <AddBtn onClick={openNew} label="Add win" />}
       {form && (
         <div style={formCard}>
@@ -191,12 +203,15 @@ export function WinsPanel({ employeeId, session }) {
 export function OneOnOnesPanel({ employeeId, session }) {
   const { showToast } = useToast();
   const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
   const [form, setForm] = useState(null);
 
+  // Same rule as observations: 403 → the empty list it always showed; any other failure → error + Retry.
   const load = useCallback(() => {
     if (!session || !employeeId) return;
+    setErr(null);
     podiumopsGet('getOneOnOnes', { employee_id: employeeId }, session)
-      .then(setData).catch(() => setData({ one_on_ones: [], can_add: false }));
+      .then(setData).catch(e => (isForbidden(e) ? setData({ one_on_ones: [], can_add: false }) : setErr(e)));
   }, [session, employeeId]);
   useEffect(() => { load(); }, [load]);
 
@@ -228,9 +243,11 @@ export function OneOnOnesPanel({ employeeId, session }) {
     catch (e) { showToast(e.message || 'Update failed', 'error'); }
   }
 
+  if (!data && err) return <LoadError message="Couldn't load 1:1s." onRetry={load} />;
   if (!data) return <Empty>Loading…</Empty>;
   return (
     <div>
+      {err && <LoadError compact message="Couldn't refresh 1:1s." onRetry={load} style={{ marginBottom: 8 }} />}
       {data.can_add && !form && <AddBtn onClick={openNew} label="Log 1:1" />}
       {form && (
         <div style={formCard}>

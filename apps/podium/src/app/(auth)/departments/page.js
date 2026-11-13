@@ -6,6 +6,7 @@ import { Spinner, useToast, Modal, Combobox } from '@throttle/ui';
 import { Pencil } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../lib/podiumopsFetch.js';
 import { GridHead, GridRow, gridTh, PrimaryButton, iconBtn, formLabel } from '../../../components/ui.js';
+import { LoadError } from '../../../components/LoadError.js';
 
 const COLS = '1.8fr 0.7fr 1.4fr 1.2fr 1.2fr 110px 60px';
 
@@ -18,13 +19,23 @@ export default function DepartmentsPage() {
   const [edit, setEdit] = useState(null);   // dept object or {} for new, null = closed
   const [busy, setBusy] = useState(false);
   const canManage = !!perms?.podium_hr;
+  const [rowsErr, setRowsErr] = useState(null);
+  const [peopleErr, setPeopleErr] = useState(null);
 
-  function load() { podiumopsGet('getDepartments', {}, session).then(d => { setRows(d.departments || []); setFounders(d.founders || []); }).catch(() => setRows([])); }
+  // A failed read is an error with a Retry — never "0 departments" or an empty Head picker.
+  function load() {
+    setRowsErr(null);
+    podiumopsGet('getDepartments', {}, session).then(d => { setRows(d.departments || []); setFounders(d.founders || []); }).catch(setRowsErr);
+  }
+  function loadPeople() {
+    setPeopleErr(null);
+    podiumopsGet('getEmployees', { status: 'all', limit: 2000 }, session).then(e => setPeople(e.employees || [])).catch(setPeopleErr);
+  }
   useEffect(() => {
     if (!session) return;
     load();
-    podiumopsGet('getEmployees', { status: 'all', limit: 2000 }, session).then(e => setPeople(e.employees || [])).catch(() => {});
-  }, [session]);
+    loadPeople();
+  }, [session]); // eslint-disable-line
 
   async function save() {
     if (!edit.name?.trim()) { showToast('Name required', 'error'); return; }
@@ -38,6 +49,7 @@ export default function DepartmentsPage() {
     finally { setBusy(false); }
   }
 
+  if (!rows && rowsErr) return <LoadError message="Couldn't load departments." onRetry={load} />;
   if (!rows) return <Spinner />;
   const total = rows.reduce((s, d) => s + (d.headcount || 0), 0);
   // Founder owner: the team's own, else inherited from the nearest parent that names one, else both founders.
@@ -88,7 +100,8 @@ export default function DepartmentsPage() {
         {edit && <>
           <Field label="Name *"><input style={inp} value={edit.name || ''} onChange={e => setEdit(s => ({ ...s, name: e.target.value }))} /></Field>
           <Field label="Code"><input style={inp} value={edit.code || ''} onChange={e => setEdit(s => ({ ...s, code: e.target.value }))} /></Field>
-          <Field label="Head"><Combobox value={edit.head_employee_id || ''} onChange={v => setEdit(s => ({ ...s, head_employee_id: v }))} inputStyle={comboInp} placeholder="To be hired" options={people.map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} /></Field>
+          <Field label="Head"><Combobox value={edit.head_employee_id || ''} onChange={v => setEdit(s => ({ ...s, head_employee_id: v }))} inputStyle={comboInp} placeholder="To be hired" options={people.map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} />
+            {peopleErr && <LoadError compact message="The people list didn't load." onRetry={loadPeople} style={{ marginTop: 4 }} />}</Field>
           <Field label="Founder owner">
             <select style={inp} value={edit.founder_owner_employee_id || ''} onChange={e => setEdit(s => ({ ...s, founder_owner_employee_id: e.target.value }))}>
               <option value="">{edit.parent_department_id ? 'Same as parent team' : 'Both'}</option>

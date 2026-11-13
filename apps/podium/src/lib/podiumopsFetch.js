@@ -21,9 +21,17 @@ export async function podiumopsGet(action, params = {}, session) {
     headers: { Authorization: `Bearer ${token(session)}` },
   });
   const data = await res.json();
-  if (!res.ok || data.ok === false) throw new Error(data.error || `podiumopsGet ${action} failed (${res.status})`);
+  if (!res.ok || data.ok === false) {
+    // `status` lets a screen tell "not allowed" (403) from "didn't load"; the message stays the worker's code.
+    const e = new Error(data.error || `podiumopsGet ${action} failed (${res.status})`);
+    e.status = res.status;
+    throw e;
+  }
   return data.data;
 }
+
+// The worker refused this caller (403) — an access answer, not a failed load.
+export function isForbidden(e) { return e?.status === 403; }
 
 export async function podiumopsPost(action, body = {}, session) {
   const res = await fetch(`${PD_URL}/?action=${action}`, {

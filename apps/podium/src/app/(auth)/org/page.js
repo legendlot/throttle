@@ -6,6 +6,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Camera, History } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../lib/podiumopsFetch.js';
 import OrgChart from '../../../components/OrgChart.js';
+import { LoadError } from '../../../components/LoadError.js';
 import { fmtDate } from '../../../lib/format.js';
 import { todayStr } from '@throttle/domain';
 
@@ -17,12 +18,17 @@ export default function OrgPage() {
   const [snaps, setSnaps] = useState([]);
   const [viewing, setViewing] = useState(null);   // snapshot id being viewed, or null = live
   const [busy, setBusy] = useState(false);
+  const [liveErr, setLiveErr] = useState(null);
+  const [snapsErr, setSnapsErr] = useState(null);
 
+  // A failed read is an error with a Retry — never an empty chart or an empty snapshot list.
   const loadLive = useCallback(() => {
-    podiumopsGet('getOrgChart', {}, session).then(r => setNodes(r.nodes || [])).catch(() => setNodes([]));
+    setLiveErr(null);
+    podiumopsGet('getOrgChart', {}, session).then(r => setNodes(r.nodes || [])).catch(e => { setNodes(null); setLiveErr(e); });
   }, [session]);
   const loadSnaps = useCallback(() => {
-    podiumopsGet('getOrgSnapshots', {}, session).then(r => setSnaps(r.snapshots || [])).catch(() => {});
+    setSnapsErr(null);
+    podiumopsGet('getOrgSnapshots', {}, session).then(r => setSnaps(r.snapshots || [])).catch(setSnapsErr);
   }, [session]);
 
   useEffect(() => { if (session) { loadLive(); loadSnaps(); } }, [session, loadLive, loadSnaps]);
@@ -45,11 +51,13 @@ export default function OrgPage() {
     finally { setBusy(false); }
   }
 
+  if (!nodes && liveErr) return <LoadError message="Couldn't load the org chart." onRetry={loadLive} />;
   if (!nodes) return <Spinner />;
 
   return (
     <div>
       <header style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+        {snapsErr && <LoadError compact message="Snapshots didn't load." onRetry={loadSnaps} />}
         {viewing && <span style={{ flex: 1, fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--warn-fg)' }}>Viewing snapshot</span>}
         <select value={viewing || ''} onChange={e => viewSnap(e.target.value || null)} style={sel}>
           <option value="">Live (current)</option>
