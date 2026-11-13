@@ -384,15 +384,24 @@ function NewPOPage() {
     setBomLoading(true);
     try {
       const data = await garageFetch('getBOM', { product: bomProduct, variant: bomVariant || '' }, session);
-      const rows = (Array.isArray(data) ? data : []).map((r) => ({
+      const list = Array.isArray(data) ? data : [];
+      // Platform products (RULE-PLATFORM-001 — Bhoot/Vortex 2.0/Shadow/Flare on Drift 1, …): the
+      // worker appends the shared CKD chassis + remote. The product's own SKD/FBU rows (Flare's
+      // built-up remote, Titan's FBU remote, Shadow's built cars) then cover the same thing in
+      // another format, so they start UNTICKED — still listed, tick them to order built-up.
+      const hasPlatform = list.some((r) => r.from_platform);
+      const rows = list.map((r) => ({
         part_code: r.part_code,
         part_name: r.part_name,
+        // Owner for the vendor-facing description: a D1-* part reads "Drift 1 Remote PCB", not
+        // "Bhoot Remote PCB" (partDesc.js qualifies platform parts by the platform).
+        owner:     r.product || bomProduct,
         category:  r.part_category || '',
         type:      r.part_type || '',
         hsn_code:  r.hsn_code || '',
         bom_qty:   parseFloat(r.qty_per_unit) || 0,
         qty:       String((parseFloat(r.qty_per_unit) || 0) * (parseInt(bomQty, 10) || 1)),
-        checked:   true,
+        checked:   !(hasPlatform && ['SKD', 'FBU'].includes(String(r.bom_format || '').toUpperCase())),
       }));
       // Filter by group
       const group = groupOverride !== undefined ? groupOverride : bomGroup;
@@ -448,7 +457,7 @@ function NewPOPage() {
           // Product-qualify so the vendor sees "Flare Ecomm Box", not "Ecomm Box".
           // The BOM was fetched for bomProduct, so that is this line's owner;
           // partDescription skips the cross-product codes (RULE-003).
-          description:  partDescription(r.part_code, bomProduct, r.part_name),
+          description:  partDescription(r.part_code, r.owner || bomProduct, r.part_name),
           item_type:    'Part',
           qty_ordered:  String(r.qty),
           unit:         'pcs',
@@ -1220,7 +1229,7 @@ function BomMode(props) {
               </tr></thead>
               <tbody>
                 {bomChecklist.map((r, i) => (
-                  <tr key={r.part_code}>
+                  <tr key={`${r.part_code}-${i}`}>
                     <td style={tableTdStyle}>
                       <input type="checkbox" checked={!!r.checked} onChange={(e) => updateRow(i, 'checked', e.target.checked)} />
                     </td>

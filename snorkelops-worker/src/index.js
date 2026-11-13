@@ -3746,7 +3746,29 @@ export default {
             const r = await query('bom_current',
               `?product=eq.${encodeURIComponent(product)}&order=common_variant.asc,variant_model.asc`);
             if (!r.ok) return err(r.data);
-            const partCodes = [...new Set((r.data || []).map(b => b.part_code).filter(Boolean))];
+            // Platform layer (RULE-PLATFORM-001) — same union lotopsproxy's getBOM does: a
+            // product mapped in store.product_platforms (Bhoot / Vortex 2.0 / Shadow / Flare →
+            // Drift 1, …) owns only its delta; the shared chassis + remote live once under the
+            // platform's Common rows. Without this a PO for Bhoot listed only the body parts
+            // (Joseph #bugs 1794475254.604389). Unmapped ⇒ no extra rows ⇒ unchanged.
+            // Appended as-is, as lotopsproxy does. The one code on both sides (Flare's
+            // HW-SC-HT-230-30-8) is Flare's SKD row vs Drift 1's CKD row — two lines only in the
+            // "full" view, never double-counted within one format. Platform rows carry
+            // `from_platform` so the PO form can start the product's own SKD/FBU rows unticked
+            // (a Flare/Titan remote chip would otherwise order the built remote AND its parts).
+            let bomRows = r.data || [];
+            const platR = await query('product_platforms',
+              `?product=eq.${encodeURIComponent(product)}&select=platform&limit=1`);
+            // Fail loud: a silent miss here is exactly the "body parts only" PO this fixes.
+            if (!platR.ok) return err(platR.data);
+            const platform = platR.data && platR.data[0] ? platR.data[0].platform : null;
+            if (platform) {
+              const pR = await query('bom_current',
+                `?product=eq.${encodeURIComponent(platform)}&common_variant=eq.Common&order=part_category.asc,part_code.asc`);
+              if (!pR.ok) return err(pR.data);
+              bomRows = [...bomRows, ...(pR.data || []).map(b => ({ ...b, from_platform: platform }))];
+            }
+            const partCodes = [...new Set(bomRows.map(b => b.part_code).filter(Boolean))];
             const hsnMap = {}, imgMap = {};
             if (partCodes.length) {
               const inList = partCodes.map(encodeURIComponent).join(',');
@@ -3757,7 +3779,7 @@ export default {
               if (hsnR.ok) for (const row of hsnR.data) if (row.hsn_code)  hsnMap[row.part_code] = row.hsn_code;
               if (imgR.ok) for (const row of imgR.data) if (row.image_url) imgMap[row.part_code] = row.image_url;
             }
-            return ok((r.data || []).map(row => ({
+            return ok(bomRows.map(row => ({
               ...row,
               hsn_code:  hsnMap[row.part_code] || null,
               image_url: imgMap[row.part_code] || null,
