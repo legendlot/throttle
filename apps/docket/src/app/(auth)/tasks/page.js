@@ -580,8 +580,9 @@ function TasksBoard() {
         ? await sendDone(send, (m) => window.confirm(m), bulkDoneConfirmText)
         : await send(false);
       if (res === DECLINED) return;
-      const updated = res?.updated ?? 0, skipped = res?.skipped ?? 0;
-      showToast(`Updated ${updated}${skipped ? ` · skipped ${skipped}` : ''}`, updated ? 'success' : 'info');
+      const updated = res?.updated ?? 0, skipped = res?.skipped ?? 0, sameTeam = res?.handoff_same_team ?? 0;
+      const why = sameTeam ? ` (${sameTeam} handed off to that person or their team)` : '';
+      showToast(`Updated ${updated}${skipped ? ` · skipped ${skipped}${why}` : ''}`, updated ? 'success' : 'info');
       clearSelection();
       await load();
     } catch (e) { showToast(handoffErrorText(e) || 'Bulk update failed', 'error'); }

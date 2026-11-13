@@ -337,7 +337,7 @@ export default function ChecklistPage() {
             {!collapsed.tmpl && (editorOpen ? (
               <ChecklistTemplateEditor templateId={editorTemplateId} employees={employees} departments={departments} session={session}
                 onSaved={() => { setEditorOpen(false); setEditorTemplateId(null); loadTemplates(); }}
-                onCancel={() => { setEditorOpen(false); setEditorTemplateId(null); }} />
+                onCancel={() => { setEditorOpen(false); setEditorTemplateId(null); loadTemplates(); /* a failed save may still have written the row */ }} />
             ) : templates.length === 0 ? <div className="cl-empty">No templates yet. Create a routine (a role’s daily checklist) or a record template (copied per product launch).</div> : (
               <ul className="cl-rows">
                 {templates.map(t => (

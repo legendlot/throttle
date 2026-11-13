@@ -548,3 +548,58 @@ test('pack + founders: a no-team hand-off gives from its owner\'s team (out on t
   assert.deepEqual(r.j.data.handoffs.map(h => [h.title, h.from_team_name]), [['ZZ noteam out', 'ZZ team 1']]);   // same-team + archived out
   assert.equal(r.j.data.hidden_asks, 0);
 });
+
+test('bulk owner change: the named receiver, or (no-team task) an owner in the receiving team, is skipped as same-team', async () => {
+  const mk = (n, o) => T(n, { owner_employee_id: MEE, created_by_user_id: ME, ...o });
+  const patchedIds = (s) => s.patches.map(x => inIds(new URL('https://x' + x.p).searchParams.get('id'))).flat().sort();
+  // OE is in D1: T1 has no team and goes to D1 → same team; T2 has its own team; T3 is no hand-off
+  let s = stub({ dept: D2, tasks: [mk(1, { department_id: null, handoff_to_department_id: D1 }), mk(2, { department_id: D3, handoff_to_department_id: D1 }), mk(3)] });
+  let r = await run(s, { post: { action: 'bulkUpdateTasks', ids: [U(101), U(102), U(103)], field: 'owner_employee_id', value: OE } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  assert.deepEqual([r.j.data.updated, r.j.data.skipped, r.j.data.handoff_same_team], [2, 1, 1]);
+  assert.deepEqual(patchedIds(s), [U(102), U(103)]);
+  assert.deepEqual(s.history.map(h => h.task_id).sort(), [U(102), U(103)]);
+  // RE is the named receiver of T4 → skipped; T5 has no team and goes to D1 while RE is in D2 → fine
+  s = stub({ dept: D2, tasks: [mk(4, { department_id: D3, handoff_to_department_id: D2, handoff_to_employee_id: RE }), mk(5, { department_id: null, handoff_to_department_id: D1 })] });
+  r = await run(s, { post: { action: 'bulkUpdateTasks', ids: [U(104), U(105)], field: 'owner_employee_id', value: RE } });
+  assert.deepEqual([r.j.data.updated, r.j.data.skipped, r.j.data.handoff_same_team], [1, 1, 1]);
+  assert.deepEqual(patchedIds(s), [U(105)]);
+  // single edit agrees: making the named receiver the owner is refused; another owner on the same task passes
+  s = stub({ dept: D2, tasks: [mk(4, { department_id: D3, handoff_to_department_id: D2, handoff_to_employee_id: RE })] });
+  r = await run(s, { post: { action: 'updateTask', data: { id: U(104), owner_employee_id: RE } } });
+  assert.equal(r.status, 400); assert.equal(r.j.error, 'handoff_same_team'); assert.equal(s.patches.length, 0);
+  r = await run(s, { post: { action: 'updateTask', data: { id: U(104), owner_employee_id: OE } } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.history.filter(h => h.field === 'handoff').length, 0);
+  // every row clashes → nothing written; clearing the owner never clashes; a junk id is refused
+  s = stub({ dept: D2, tasks: [mk(1, { department_id: null, handoff_to_department_id: D1 })] });
+  r = await run(s, { post: { action: 'bulkUpdateTasks', ids: [U(101)], field: 'owner_employee_id', value: OE } });
+  assert.deepEqual([r.j.data.updated, r.j.data.skipped, s.patches.length], [0, 1, 0]);
+  r = await run(s, { post: { action: 'bulkUpdateTasks', ids: [U(101)], field: 'owner_employee_id', value: null } });
+  assert.equal(r.j.data.updated, 1); assert.equal(r.j.data.handoff_same_team, undefined);
+  r = await run(stub({ tasks: [mk(3)] }), { post: { action: 'bulkUpdateTasks', ids: [U(103)], field: 'owner_employee_id', value: 'zz' } });
+  assert.equal(r.status, 400); assert.equal(r.j.error, 'invalid owner');
+});
+
+test('0033: link / unblocked RPCs carry the request source; getProposals passes the review flag', async () => {
+  const s = stub({ dept: D2, tasks: [T(1, { owner_employee_id: MEE, created_by_user_id: ME }), T(2, { owner_employee_id: MEE, created_by_user_id: ME })] });
+  const real = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {   // both ends visible to the caller
+    const u = new URL(typeof input === 'string' ? input : input.url);
+    if (u.pathname === '/rest/v1/rpc/task_cards') {
+      const ids = JSON.parse(init.body).p_ids; s.calls.push({ method: 'POST', p: u.pathname, body: JSON.parse(init.body) });
+      return new Response(JSON.stringify(ids.map(id => ({ id, visible: true, status: 'in_progress' }))), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return s.fn(input, init);
+  };
+  const post = (b, src) => worker.fetch(new Request('https://docketops.test/', { method: 'POST',
+    headers: { Authorization: 'Bearer zz', 'content-type': 'application/json', ...(src ? { 'X-LOT-Source': src } : {}) }, body: JSON.stringify(b) }), ENV);
+  try {
+    await post({ action: 'addTaskLink', id: U(101), other_id: U(102), kind: 'waiting_on' }, 'connector');
+    await post({ action: 'bulkUpdateTasks', ids: [U(101)], field: 'status', value: 'done' });
+    await worker.fetch(new Request('https://docketops.test/?action=getProposals', { headers: { Authorization: 'Bearer zz' } }), ENV);
+  } finally { globalThis.fetch = real; }
+  const rpc = (n) => s.calls.find(c => c.p.includes(`/rpc/${n}`))?.body;
+  assert.equal(rpc('add_task_link')?.p_source, 'connector');
+  assert.equal(rpc('log_unblocked')?.p_source, 'app');
+  assert.equal(rpc('plan_proposals_for')?.p_is_review, false);
+});

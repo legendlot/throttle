@@ -61,6 +61,7 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
     const isRecord = draft.kind === 'record';
     if (!isRecord && !isValidTemplateRecurrence(draft.recurrence)) { showToast('Pick a valid schedule', 'error'); return; }
     setBusy(true);
+    let newId = null;
     try {
       const res = await docketopsPost('saveChecklistTemplate', {
         id: draft.id, kind: draft.kind, name: draft.name.trim(), role_label: draft.role_label || null,
@@ -68,7 +69,7 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
         ...(isRecord ? {} : { recurrence: draft.recurrence, run_scope: draft.run_scope }),
         sections: draft.sections.map(s => ({ id: s.id, title: s.title, subtitle: s.subtitle || null, due_time: s.due_time || null, items: s.items.map(i => ({ id: i.id, title: i.title, help_text: i.help_text || null, tags: i.tags || [] })) })),
       }, session);
-      const newId = res?.id || draft.id;
+      newId = res?.id || draft.id;
       if (isNew && newId && !isRecord) {
         for (const a of assignees) { await docketopsPost('assignChecklistTemplate', { template_id: newId, employee_id: a.employee_id }, session); }
       }
@@ -76,6 +77,8 @@ export function ChecklistTemplateEditor({ templateId, employees, departments, se
     } catch (e) {
       // A refusal after the template row exists carries its id: close the editor so a retry edits it, not a copy.
       if (e?.detail?.id && e.detail.partial) { showToast(`Saved partly — reopen the template to check it (${recordErrorText(e)})`, 'error'); onSaved(); }
+      // The template saved but an assignee didn't: close, so a retry edits it rather than making a second copy.
+      else if (isNew && newId) { showToast(`Saved, but an assignee wasn't added — reopen the template to check (${recordErrorText(e)})`, 'error'); onSaved(); }
       else showToast(recordErrorText(e), 'error');
     }
     finally { setBusy(false); }

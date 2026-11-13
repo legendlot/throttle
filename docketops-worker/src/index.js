@@ -741,7 +741,7 @@ function depsFilter(rows, deps) {
 // After tasks go done/abandoned: an 'unblocked' history row on every task whose LAST open blocker that was.
 async function logUnblocked(ids, auth, env) {
   if (!ids.length) return;
-  await sbDocket(`/rest/v1/rpc/log_unblocked`, env, { method: 'POST', body: JSON.stringify({ p_closed_ids: ids, p_actor: auth.userId }) });
+  await sbDocket(`/rest/v1/rpc/log_unblocked`, env, { method: 'POST', body: JSON.stringify({ p_closed_ids: ids, p_actor: auth.userId, p_source: auth.source || 'app' }) });
 }
 
 async function hydrateTasks(rows, auth, env) {
@@ -1211,7 +1211,7 @@ async function addTaskLink(body, auth, env) {
   if (!cards[d.other_id]) return err('not_found', 404);
   if (!cards[d.other_id].visible) return err('forbidden_other', 403);
   const r = await sbDocket(`/rest/v1/rpc/add_task_link`, env, { method: 'POST', body: JSON.stringify({
-    p_task: d.id, p_other: d.other_id, p_kind: d.kind, p_user: auth.userId }) });
+    p_task: d.id, p_other: d.other_id, p_kind: d.kind, p_user: auth.userId, p_source: auth.source || 'app' }) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
   const res = r.data || {};
   if (!res.ok) return err(res.code || 'link_failed', res.code === 'not_found' ? 404 : 422);
@@ -1230,7 +1230,7 @@ async function removeTaskLink(body, auth, env) {
   await knowSpaces(auth, ends, env);   // canEditTask reads each end's space
   const cards = await taskCards(ends.map(t => t.id), auth, env);
   if (!ends.some(t => t.status !== 'abandoned' && canEditTask(auth, t) && cards[t.id]?.visible)) return err('forbidden', 403);
-  const r = await sbDocket(`/rest/v1/rpc/remove_task_link`, env, { method: 'POST', body: JSON.stringify({ p_link_id: d.link_id, p_user: auth.userId }) });
+  const r = await sbDocket(`/rest/v1/rpc/remove_task_link`, env, { method: 'POST', body: JSON.stringify({ p_link_id: d.link_id, p_user: auth.userId, p_source: auth.source || 'app' }) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
   if (!r.data?.ok) return err(r.data?.code || 'not_found', 404);
   return ok({ removed: true });
@@ -1724,7 +1724,9 @@ async function resolveHandoff(d, cur, next, isSub, env) {
     : (has('handoff_to_department_id') && dept !== curDept ? null : curEmp);
   if (has('handoff_to_department_id') && dept === null) return { fields: { handoff_to_department_id: null, handoff_to_employee_id: null } };
   const recvChanged = dept !== curDept || emp !== curEmp;
-  const ownMoved = cur.own !== undefined && (own !== lcId(cur.own) || (!own && owner !== lcId(cur.owner)));
+  // The owner counts as the own side when the task has no department (it gives from the owner's team) AND when a
+  // receiver is named (the owner can't be them) — bulk owner changes apply the same two checks.
+  const ownMoved = cur.own !== undefined && (own !== lcId(cur.own) || ((!own || !!curEmp) && owner !== lcId(cur.owner)));
   if (!recvChanged && !(ownMoved && curDept)) return { none: true };
   // One read for the new receiver and (no task department) the owner, whose department is the giving side.
   const ids = uniq([recvChanged ? emp : null, own ? null : owner]);
@@ -2413,13 +2415,30 @@ async function bulkUpdateTasks(body, auth, env) {
   let value = d.value;
   if (field === 'owner_employee_id' || field === 'program_id') value = value || null;
   if (field === 'priority' && !['P0', 'P1', 'P2', 'P3'].includes(value)) return err('invalid priority', 400);
-  const targets = editable.filter(t => (t[field] || null) !== (value || null));
-  if (!targets.length) return ok({ updated: 0, skipped, field });
+  if (field === 'owner_employee_id' && value && !isUuid(String(value))) return err('invalid owner', 400);
+  let targets = editable.filter(t => (t[field] || null) !== (value || null));
+  // F9 R8: a new owner can make a hand-off same-team — the named receiver can't own it, and a task with no
+  // department gives from its OWNER's team (resolveHandoff's check on a single edit). Those rows are skipped.
+  let sameTeam = 0;
+  if (field === 'owner_employee_id' && value && targets.some(t => t.handoff_to_department_id)) {
+    let ownerDept = null;
+    if (targets.some(t => t.handoff_to_department_id && !t.department_id)) {
+      const er = await sbPodium(`/rest/v1/employees?id=eq.${enc(value)}&select=department_id&limit=1`, env);
+      if (!er.ok) return err('db_error', 500);
+      ownerDept = lcId(er.data?.[0]?.department_id);
+    }
+    const clash = (t) => !!t.handoff_to_department_id && (lcId(t.handoff_to_employee_id) === lcId(value)
+      || (!t.department_id && !!ownerDept && ownerDept === lcId(t.handoff_to_department_id)));
+    sameTeam = targets.filter(clash).length;
+    targets = targets.filter(t => !clash(t));
+  }
+  const out = (n) => ok({ updated: n, skipped: skipped + sameTeam, field, ...(sameTeam ? { handoff_same_team: sameTeam } : {}) });
+  if (!targets.length) return out(0);
   const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(targets.map(t => t.id))}`, env, {
     method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ...stamp, [field]: value }) });
   if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
   await logHistoryBatch(env, auth, targets.map(t => ({ task_id: t.id, event_type: `${field}_changed`, field, old: t[field], new: value })));
-  return ok({ updated: targets.length, skipped, field });
+  return out(targets.length);
 }
 
 // ── S153 bulk follow-ups ──────────────────────────────────────────────────────
@@ -3251,7 +3270,7 @@ async function decideProposal(body, auth, env) {
 }
 async function getProposals(url, auth, env) {
   const r = await sbDocket(`/rest/v1/rpc/plan_proposals_for`, env, { method: 'POST', body: JSON.stringify({
-    p_actor: auth.userId, p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth) }) });
+    p_actor: auth.userId, p_actor_employee: auth.employeeId, p_is_super: isPlanAdmin(auth), p_is_review: isReviewer(auth) }) });
   if (!r.ok) return err('db_error', 500);
   const rows = Array.isArray(r.data) ? r.data : [];
   const [owners, people] = await Promise.all([
