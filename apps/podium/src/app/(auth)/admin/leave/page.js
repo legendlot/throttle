@@ -384,7 +384,7 @@ function GrantLeave({ session, people, onGranted }) {
   return (
     <Card title={title(Baby, 'Grant maternity / paternity leave')}>
       <div style={{ ...muted, marginBottom: 8 }}>
-        Maternity: 182 calendar days (26 weeks) from the start. Paternity: 15 working days from the start (weekends and fixed holidays are free).
+        Maternity: 182 calendar days (26 weeks) from the start. Paternity: 15 calendar days from the start (two weeks plus a day, weekends included).
         Both may cross 31 December, use no leave balance and are approved on save. Returning early? Cancel it and grant again with the actual end date.
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>

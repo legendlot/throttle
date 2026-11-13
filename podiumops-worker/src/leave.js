@@ -14,7 +14,7 @@ export const LEAVE_TYPES = ['PL', 'SL', 'PERIOD', 'OPTIONAL_HOLIDAY', 'MATERNITY
 export const APPLY_TYPES = ['PL', 'SL', 'PERIOD', 'OPTIONAL_HOLIDAY', 'WFH'];
 export const GRANT_TYPES = ['MATERNITY', 'PATERNITY'];
 export const MATERNITY_CALENDAR_DAYS = 182;                     // 26 weeks (L9), calendar days from the start
-export const PATERNITY_WORKING_DAYS = 15;                       // ⚠️ plan default: working days (Mon–Fri minus fixed holidays)
+export const PATERNITY_CALENDAR_DAYS = 15;                      // Afshaan 2026-11-13: 15 total days incl. weekends (2 weeks + 1)
 export const LEDGER_TYPES = ['PL', 'SL'];                       // the only types with a ledger / balance
 export const ACCRUAL_RATE = { PL: 1.5, SL: 1 };                 // per earning month (L3, credited on the 1st)
 export const PL_CARRY_MAX = 5;                                  // D5: PL above this lapses at year end; SL lapses fully (L8)
@@ -80,7 +80,7 @@ export const LEAVE_COPY = {
   gender_unknown: "Fill the person's gender first",
   maternity_not_eligible: 'Maternity leave can be granted only to a person recorded as female',
   paternity_not_eligible: 'Paternity leave can be granted only to a person recorded as male',
-  grant_too_long: 'The end date is after the full leave length (maternity 182 calendar days, paternity 15 working days)',
+  grant_too_long: 'The end date is after the full leave length (maternity 182 days, paternity 15 days, weekends included)',
   report_changed: 'The report changed since you loaded it — reload, download again, then mark exported',
 };
 
@@ -669,14 +669,13 @@ export async function applyOpenExitsWith(emps, readOpenExits) {
 }
 
 // ── E3: maternity / paternity grant ──────────────────────────────────────────
-// MATERNITY: 182 calendar days from the start (end = start + 181), gender 'f', a note required (HR records the
-// eligibility check there). PATERNITY: 15 working days from the start (Mon–Fri minus fixed holidays; the end is the
-// 15th working day), gender 'm'. Both may cross 31 Dec. holidays: [{date, kind}] for every year the range may touch;
-// a touched year with no fixed holiday → no_holiday_list (PATERNITY only — maternity counts calendar days).
+// Both count CALENDAR days from the start, weekends and holidays included: MATERNITY 182 (26 weeks, end = start + 181),
+// gender 'f', a note required (HR records the eligibility check there); PATERNITY 15 (Afshaan 2026-11-13: "15 total
+// days ... including Saturday and Sunday", end = start + 14), gender 'm'. Both may cross 31 Dec; no holiday list needed.
 // An optional end_date (review C: returning early = cancel + grant again with the actual end) must be ≥ the start and
-// ≤ the full-length end; days = the calendar days (MATERNITY) / working days (PATERNITY) in that range.
-// → { value: { leave_type, start_date, end_date, start_half, end_half, days, note } } | { error, year? }
-export function grantPlan(d, { gender = null, holidays = [], today = null } = {}) {
+// ≤ the full-length end; days = the calendar days in that range.
+// → { value: { leave_type, start_date, end_date, start_half, end_half, days, note } } | { error }
+export function grantPlan(d, { gender = null, today = null } = {}) {
   const t = String(d?.leave_type || '');
   if (!GRANT_TYPES.includes(t)) return { error: 'bad_type' };
   const start = d?.start_date;
@@ -687,41 +686,20 @@ export function grantPlan(d, { gender = null, holidays = [], today = null } = {}
   if (gender !== 'f' && gender !== 'm') return { error: 'gender_unknown' };
   if (t === 'MATERNITY' && gender !== 'f') return { error: 'maternity_not_eligible' };
   if (t === 'PATERNITY' && gender !== 'm') return { error: 'paternity_not_eligible' };
-  const base = { leave_type: t, start_date: start, start_half: 'full', end_half: 'full', note: n.value };
   const wantEnd = d?.end_date == null || d.end_date === '' ? null : d.end_date;
   if (wantEnd !== null && (!isIsoDay(wantEnd) || wantEnd < start)) return { error: 'bad_dates' };
-  if (t === 'MATERNITY') {
-    const full = addDays(start, MATERNITY_CALENDAR_DAYS - 1);
-    if (wantEnd && wantEnd > full) return { error: 'grant_too_long' };
-    const end = wantEnd || full;
-    return { value: { ...base, end_date: end, days: Math.round((Date.parse(end + 'T00:00:00Z') - Date.parse(start + 'T00:00:00Z')) / 86400000) + 1 } };
-  }
-  const fixed = new Set((holidays || []).filter(h => h.kind === 'fixed').map(h => h.date));
-  const working = (x) => !isWeekend(x) && !fixed.has(x);
-  let d0 = start, count = 0, guard = 0;
-  for (; guard++ < 400; d0 = addDays(d0, 1)) {
-    if (working(d0)) count++;
-    if (count === PATERNITY_WORKING_DAYS) break;
-  }
-  if (wantEnd && wantEnd > d0) return { error: 'grant_too_long' };
-  const end = wantEnd || d0;
-  for (let y = yearOf(start); y <= yearOf(end); y++) {
-    if (holidayListMissing((holidays || []).filter(h => yearOf(h.date) === y))) return { error: 'no_holiday_list', year: y };
-  }
-  let days = 0;
-  for (let x = start, g = 0; x <= end && g++ < 400; x = addDays(x, 1)) if (working(x)) days++;
-  if (days <= 0) return { error: 'no_working_days' };
-  return { value: { ...base, end_date: end, days } };
+  const full = addDays(start, (t === 'MATERNITY' ? MATERNITY_CALENDAR_DAYS : PATERNITY_CALENDAR_DAYS) - 1);
+  if (wantEnd && wantEnd > full) return { error: 'grant_too_long' };
+  const end = wantEnd || full;
+  const days = Math.round((Date.parse(end + 'T00:00:00Z') - Date.parse(start + 'T00:00:00Z')) / 86400000) + 1;
+  return { value: { leave_type: t, start_date: start, end_date: end, start_half: 'full', end_half: 'full', days, note: n.value } };
 }
 
 // ── E4: WFH approver at submit ───────────────────────────────────────────────
-// The skip-level manager (the manager's manager); no skip-level → the manager; no manager → null (HR decides).
-// ⚠️ Plan default per the spec ("needs the skip-level manager's approval"). managerOf: (employeeId) → manager_id | null.
-export function wfhApprover(emp, managerOf = () => null) {
-  const m = emp?.manager_id || null;
-  if (!m) return null;
-  const s = managerOf(m) || null;
-  return s && s !== emp.id ? s : m;
+// Afshaan 2026-11-13: "Let work from home go to the manager, not just the skip level" → the approver is the direct
+// manager; the skip-level (the approver's manager) and HR may also decide (D9, decideBlock). No manager → null (HR).
+export function wfhApprover(emp) {
+  return emp?.manager_id || null;
 }
 
 // ── E5: year-end preview ─────────────────────────────────────────────────────

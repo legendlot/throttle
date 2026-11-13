@@ -10359,8 +10359,6 @@ function leaveSplitFor({ emp, ledger, reqs, leaveType, startDate, days, exceptId
 
 // The approver's own manager (D9 cover) from the org edges.
 const approverManagerOf = (edges, approverId) => (approverId ? edges.find(e => e.id === approverId)?.manager_id || null : null);
-// (employeeId) → manager_id | null over the org edges (wfhApprover's lookup).
-const managerOfIn = (edges) => (id) => (id ? edges.find(e => e.id === id)?.manager_id || null : null);
 
 // Who the request is for: the caller, or (HR only) employee_id. → { emp, other } | { res }
 async function leaveTarget(auth, me, employeeId) {
@@ -10444,7 +10442,7 @@ async function getMyLeave(url, auth, env) {
   if (!books || !holidays) return err('db_error: leave read', 500);
   const reqs = books.reqs[emp.id] || [];
   const approverId = resolveLeaveApprover(emp, founders);
-  const wfhId = wfhApprover(emp, managerOfIn(edges));   // E4: skip-level → manager → HR
+  const wfhId = wfhApprover(emp);   // E4: the manager → HR
   const names = await empNames(env, [approverId, wfhId, ...reqs.map(r => r.decided_by_employee_id)]);
   return ok({
     employee: { id: emp.id, full_name: emp.full_name, employee_code: emp.employee_code, leave_policy: emp.leave_policy },
@@ -10496,8 +10494,8 @@ async function applyLeave(body, auth, env) {
   const q = await leaveQuote(env, emp, d, { notice: !t.other, settings });
   if (q.error === 'db') return err('db_error: leave read', 500);
   if (q.error) return leaveErr(q.error, q.message ? { message: q.message } : null);
-  // E4: WFH goes to the skip-level manager (else the manager, else HR); leave as D9.
-  const approverId = q.v.leave_type === 'WFH' ? wfhApprover(emp, managerOfIn(edges))
+  // E4: WFH goes to the manager (the skip-level may also decide, D9), else HR; leave as D9.
+  const approverId = q.v.leave_type === 'WFH' ? wfhApprover(emp)
     : resolveLeaveApprover(emp, emp.manager_id ? [] : await loadFounders(env));
   const r = await hiringRpc(env, 'leave_apply', {
     employee_id: emp.id, ...q.v, borrowed_days: q.split.borrowed_days, lop_days: q.split.lop_days,
@@ -10909,11 +10907,7 @@ async function grantLeave(body, auth, env) {
   const emp = (await loadLeaveEmployees(env, [d.employee_id]))[0];
   if (!emp) return leaveErr('not_found');
   if (!leaveCovered(emp)) return leaveErr('not_covered');
-  const y = isIsoDay(d.start_date) ? yearOf(d.start_date) : yearOf(istToday());
-  const holidays = await loadHolidays(env, y, y + 1);
-  if (!holidays) return err('db_error: holidays', 500);
-  const g = grantPlan(d, { gender: emp.gender, holidays, today: istToday() });
-  if (g.error === 'no_holiday_list') return leaveErr('no_holiday_list', { message: noHolidayListMessage(g.year) });
+  const g = grantPlan(d, { gender: emp.gender, today: istToday() });   // calendar days: no holiday list needed
   if (g.error) return leaveErr(g.error);
   const r = await hiringRpc(env, 'leave_grant', { employee_id: emp.id, ...g.value, actor_user_id: auth.userId, actor_employee_id: me?.id || null });
   const code = leaveDbErrorCode(r);

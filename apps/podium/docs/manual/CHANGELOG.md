@@ -3,6 +3,11 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.9.1] - 2026-11-13
+### Changed
+- Leave: work from home is approved by the manager (the manager's manager or HR can also approve it);
+  paternity is 15 calendar days, weekends and holidays included (Afshaan).
+
 ## [1.9.0] - 2026-11-13
 ### Added
 - New "Leave" part and chapter: who is covered; PL / SL balances and monthly credits; applying (half days,

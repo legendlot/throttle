@@ -6,8 +6,8 @@ import { podiumopsGet, podiumopsPost } from './podiumopsFetch.js';
 
 // D2 / D12. PERIOD is labelled as itself only on the person's own view, their approver chain and HR (D11);
 // GENERIC_LABEL is what any wider view shows.
-// R2 (plan 2026-11-13-podium-leave-r2): WFH is applied like leave (no balance, no LOP; approved by the skip-level
-// manager, E4); MATERNITY / PATERNITY are HR grants only (`grant: true` — never on the apply form, E3).
+// R2 (plan 2026-11-13-podium-leave-r2): WFH is applied like leave (no balance, no LOP; approved by the manager,
+// the skip-level may also decide, E4); MATERNITY / PATERNITY are HR grants only (`grant: true` — never on the apply form, E3).
 export const LEAVE_TYPES = [
   { id: 'PL',               label: 'Privilege leave', short: 'PL' },
   { id: 'SL',               label: 'Sick leave',      short: 'SL' },
@@ -89,7 +89,7 @@ const ERROR_COPY = {
   maternity_not_eligible: 'Maternity leave can be granted only to a person recorded as female.',
   paternity_not_eligible: 'Paternity leave can be granted only to a person recorded as male.',
   too_far:                'Leave can be applied at most for next calendar year.',
-  grant_too_long:         'The end date is after the full length (maternity 182 calendar days, paternity 15 working days).',
+  grant_too_long:         'The end date is after the full length (maternity 182 days, paternity 15 days, weekends included).',
   report_changed:         'The report changed since you loaded it — reload, download again, then mark exported.',
 };
 export function leaveError(e, fallback = 'Something went wrong') {

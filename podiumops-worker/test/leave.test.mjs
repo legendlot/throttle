@@ -617,27 +617,24 @@ test('E3 maternity: 182 calendar days, may cross 31 Dec; gender f; a note is req
   assert.equal(grantPlan({ leave_type: 'MATERNITY', start_date: '2028-01-03', note: 'x' }, { gender: 'f', today: '2026-12-10' }).error, 'too_far');
 });
 
-test('E3 paternity: 15 working days over holidays and 31 Dec; needs the next year\'s list', () => {
-  const hol = [{ date: '2026-12-25', kind: 'fixed' }, { date: '2027-01-01', kind: 'fixed' }, { date: '2027-01-26', kind: 'fixed' }];
-  // Mon 21 Dec: 21–24 (4), 25 hol, 28–31 (8), 1 Jan hol, 4–8 Jan (13), 11–12 Jan (15)
-  const g = grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21' }, { gender: 'm', holidays: hol });
-  assert.equal(g.value.end_date, '2027-01-12');
-  assert.equal(g.value.days, 15);
-  assert.equal(g.value.note, null);
-  // without 2027's list → refuse, naming the year
-  assert.deepEqual(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21' }, { gender: 'm', holidays: hol.slice(0, 1) }), { error: 'no_holiday_list', year: 2027 });
-  // inside one year with no holiday in range: 3 weeks of weekdays
-  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-11-16' }, { gender: 'm', holidays: hol }).value.end_date, '2026-12-04');
-  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-11-16' }, { gender: 'f', holidays: hol }).error, 'paternity_not_eligible');
+test('E3 paternity: 15 calendar days incl. weekends + holidays, may cross 31 Dec; no holiday list needed', () => {
+  // Afshaan 2026-11-13: "15 total days ... 2 weeks in total, including Saturday and Sunday"
+  const g = grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21' }, { gender: 'm' });
+  assert.deepEqual([g.value.end_date, g.value.days, g.value.note], ['2027-01-04', 15, null]);
+  assert.deepEqual([grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-01' }, { gender: 'm' }).value.end_date], ['2026-12-15']);
+  // a weekend start still counts (calendar days)
+  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-11-14' }, { gender: 'm' }).value.end_date, '2026-11-28');
+  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-11-16' }, { gender: 'f' }).error, 'paternity_not_eligible');
 });
 
-test('E4 WFH approver: skip-level, else the manager, else HR (null)', () => {
-  const mgr = { [U(2)]: U(3), [U(3)]: null, [U(5)]: U(1) };
-  const of = (id) => mgr[id] ?? null;
-  assert.equal(wfhApprover({ id: U(1), manager_id: U(2) }, of), U(3));      // skip-level
-  assert.equal(wfhApprover({ id: U(2), manager_id: U(3) }, of), U(3));      // manager has no manager → the manager
-  assert.equal(wfhApprover({ id: U(3), manager_id: null }, of), null);      // no manager → HR
-  assert.equal(wfhApprover({ id: U(1), manager_id: U(5) }, of), U(5));      // a loop back to the person → the manager
+test('E4 WFH approver: the manager, else HR (null); the skip-level may still decide', () => {
+  assert.equal(wfhApprover({ id: U(1), manager_id: U(2) }), U(2));
+  assert.equal(wfhApprover({ id: U(3), manager_id: null }), null);
+  assert.equal(wfhApprover(null), null);
+  const req = { employee_id: U(1), approver_employee_id: U(2) };
+  assert.equal(decideBlock({ req, meId: U(2), hr: false, approverManagerId: U(3) }), null);   // manager
+  assert.equal(decideBlock({ req, meId: U(3), hr: false, approverManagerId: U(3) }), null);   // skip-level
+  assert.equal(decideBlock({ req, meId: U(1), hr: true, approverManagerId: U(3) }), 'no_self_approval');
 });
 
 test('E5 year-end window + preview (negative PL carries; PL above 5 and positive SL lapse)', () => {
@@ -702,13 +699,11 @@ test('review C: a grant may end early (≤ the full length); days follow the ran
   assert.equal(grantPlan({ leave_type: 'MATERNITY', start_date: '2026-10-01', end_date: '2027-04-01', note: 'checked' }, { gender: 'f' }).error, 'grant_too_long');
   assert.equal(grantPlan({ leave_type: 'MATERNITY', start_date: '2026-10-01', end_date: '2027-03-31', note: 'checked' }, { gender: 'f' }).value.days, 182);
   assert.equal(grantPlan({ leave_type: 'MATERNITY', start_date: '2026-10-01', end_date: '2026-09-30', note: 'checked' }, { gender: 'f' }).error, 'bad_dates');
-  // paternity Mon 21 Dec → Thu 31 Dec: 21–24, 28–31 = 8 working days (25 Dec is a holiday)
-  const p = grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21', end_date: '2026-12-31' }, { gender: 'm', holidays: hol });
-  assert.deepEqual([p.value.end_date, p.value.days], ['2026-12-31', 8]);
-  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21', end_date: '2027-01-13' }, { gender: 'm', holidays: hol }).error, 'grant_too_long');
-  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-26', end_date: '2026-12-27' }, { gender: 'm', holidays: hol }).error, 'no_working_days');
-  // ending in this year needs only this year's list
-  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21', end_date: '2026-12-31' }, { gender: 'm', holidays: hol.slice(0, 1) }).value.days, 8);
+  // paternity with an early end: 21 → 31 Dec = 11 calendar days; past the 15th day → too long; same day = 1
+  const p = grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21', end_date: '2026-12-31' }, { gender: 'm' });
+  assert.deepEqual([p.value.end_date, p.value.days], ['2026-12-31', 11]);
+  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-21', end_date: '2027-01-05' }, { gender: 'm' }).error, 'grant_too_long');
+  assert.equal(grantPlan({ leave_type: 'PATERNITY', start_date: '2026-12-26', end_date: '2026-12-26' }, { gender: 'm' }).value.days, 1);
 });
 
 test('review A: a confirmed leave line goes stale on a new LWD, a ledger move, a pending or after-LWD request', () => {

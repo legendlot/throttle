@@ -204,7 +204,7 @@ export function ApplyForm({ session, canPeriod, holidays, people, onApplied, wfh
       </F>
       {wfh && !forOther && (
         <div style={{ ...muted, marginBottom: 8 }}>
-          Work from home is approved by {wfhApprover?.full_name ? <b>{wfhApprover.full_name}</b> : 'HR'}{wfhApprover?.full_name ? ' (your manager’s manager, or your manager when there is none)' : ''}. It uses no leave balance.
+          Work from home is approved by {wfhApprover?.full_name ? <b>{wfhApprover.full_name}</b> : 'HR'}{wfhApprover?.full_name ? ' (your manager; your manager’s manager or HR can also approve it)' : ''}. It uses no leave balance.
         </div>
       )}
       <PreviewLine pv={pv} busy={pvBusy} type={type} />
