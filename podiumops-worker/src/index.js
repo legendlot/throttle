@@ -100,7 +100,7 @@ import {
   SYNC_FIELDS, DRAIN_CAP as GSYNC_CAP, GOOGLE_CALL_TIMEOUT_MS, SYNC_LEASE_MS, IDENTITY_RETRY_ATTEMPTS, desiredGoogleFields,
   googleFieldsOf, mergeGoogleUser, bodyFields, scopeOf, diffPerson, nextLastPushed, nextAttemptAt, syncClaimFilter,
   cleanSyncFields, ouExcluded, fieldsToPush, leaseHeld, previewHash, needsOuCheck, effectiveFields, identityChanged,
-  FOUNDER_CODES, googleDepartmentLabel,
+  FOUNDER_CODES, googleDepartmentLabel, teamOuPath, resolveOu, teamOuPlan, teamOuMoves,
 } from './googlesync.js';   // J1b Podium → Google field sync (test/googlesync.test.mjs)
 import {
   LEDGER_TYPES, TYPE_LABELS, LEAVE_COPY, LEAVE_POLICIES, DEFAULT_CUTOVER_MONTH, isIsoDay, isMonth, monthOf, yearOf,
@@ -325,6 +325,8 @@ async function fetchGoogleUsers(env) {
 const GOOGLE_WRITE_SCOPES = {
   directory: 'https://www.googleapis.com/auth/admin.directory.user',
   datatransfer: 'https://www.googleapis.com/auth/admin.datatransfer',
+  // Team org units (syncTeamOrgUnits) + the full OU list (listOrgUnitPaths). Added to the DWD grant 2026-11-14.
+  orgunit: 'https://www.googleapis.com/auth/admin.directory.orgunit',
 };
 function googleWriteConfigured(env) { return !!(env.GOOGLE_ADMIN_SA_JSON && env.GOOGLE_ADMIN_IMPERSONATE_EMAIL); }
 async function googleWriteToken(env, which) {
@@ -360,7 +362,9 @@ async function getGoogleWriteCheck(url, auth, env) {
   out.datatransfer = await probe('datatransfer',
     'https://admin.googleapis.com/admin/datatransfer/v1/applications',
     d => ({ applications: (d.applications || []).map(a => a.name) }));
-  out.all_good = !!(out.separate_from_shared_sa && out.directory.call && out.datatransfer.call);
+  out.orgunit = await probe('orgunit', `${GDIR_ORGUNITS}?type=all`,
+    d => ({ org_units: (d.organizationUnits || []).length }));
+  out.all_good = !!(out.separate_from_shared_sa && out.directory.call && out.datatransfer.call && out.orgunit.call);
   return ok(out);
 }
 
@@ -6307,6 +6311,7 @@ async function requireGoogleAdmin(auth, env) { return (await isGoogleAdmin(auth,
 const canConfirmJoining = (roles) => !!(roles?.hr || roles?.hiring);
 
 const GDIR_USERS = 'https://admin.googleapis.com/admin/directory/v1/users';
+const GDIR_ORGUNITS = 'https://admin.googleapis.com/admin/directory/v1/customer/my_customer/orgunits';
 const gJson = { 'Content-Type': 'application/json' };
 
 // Best-effort like logCompAccess: the Google write already happened. `request` never carries the password.
@@ -6327,9 +6332,23 @@ async function loadWorkAccount(env, q) {
   return (await sb(`/rest/v1/work_accounts?${q}&select=*&limit=1`, env)).data?.[0] || null;
 }
 
-// The OUs that exist (from the live user list) — the create path only accepts one of these.
-function liveOus(gusers) {
-  return [...new Set(['/', ...(gusers || []).map(u => u.orgUnitPath).filter(Boolean)])].sort();
+// The OUs that exist: the ones users sit in ∪ orgunits.list (`ouPaths`, so an empty OU counts too; null when that
+// list failed → users-only, as before). The create path only accepts one of these.
+function liveOus(gusers, ouPaths = null) {
+  return [...new Set(['/', ...(gusers || []).map(u => u.orgUnitPath).filter(Boolean), ...(ouPaths || [])])].sort();
+}
+
+// Every OU path Google has (orgunits.list type=all; not paged), with the write SA's orgunit token. Throws on failure.
+async function listOrgUnitPaths(env, token = null) {
+  const t = token || await googleWriteToken(env, 'orgunit');
+  const r = await googleFetch(`${GDIR_ORGUNITS}?type=all`, { headers: { Authorization: `Bearer ${t}` } });
+  if (!r.ok) throw new Error('google_orgunits_failed: ' + (r.data?.error?.message || `HTTP ${r.status}`));
+  return (r.data?.organizationUnits || []).map(o => o?.orgUnitPath).filter(Boolean);
+}
+// The same, for the OU-validity checks: null when the token / list fails, so they fall back to users' OUs silently.
+async function orgUnitPathsOrNull(env) {
+  if (!googleWriteConfigured(env)) return null;
+  try { return await listOrgUnitPaths(env); } catch (_e) { return null; }
 }
 
 // Is each address free? Taken if a Podium employee has it, a live work_accounts row claims it, or Google
@@ -6358,18 +6377,27 @@ async function emailAvailability(env, emails, { exceptWaId = null } = {}) {
   });
 }
 
-// The create form: names, the two L1 proposals with availability, the live OUs, the L2 default OU.
+// The create form: names, the two L1 proposals with availability, the live OUs, the L2 default OU (the team's OU
+// when Google has it — teamOuPath — else the department's most common OU).
 async function accountFormSetup(env, names, departmentId, exceptWaId) {
-  const [gusers, er] = await Promise.all([
+  const hasDept = departmentId && isUuid(departmentId);
+  const [gusers, ouPaths, er, dr, sr] = await Promise.all([
     fetchGoogleUsers(env),
-    departmentId && isUuid(departmentId)
+    orgUnitPathsOrNull(env),
+    hasDept
       ? sb(`/rest/v1/employees?department_id=eq.${departmentId}&status=eq.active&select=department_id,status,google_org_unit`, env)
       : Promise.resolve({ data: [] }),
+    hasDept ? sb(`/rest/v1/departments?active=eq.true&select=id,name,parent_department_id`, env) : Promise.resolve({ data: [] }),
+    sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
   ]);
-  const ous = liveOus(gusers);
+  const ous = liveOus(gusers, ouPaths);
+  // The team OU is suggested only when it is not excluded (hostile review 2026-11-14).
+  const excludedOus = sr?.data?.[0]?.directory_excluded_ous || ['/Admin and general'];
   const locals = proposeLocalParts(names.given, names.family);
   const avail = await emailAvailability(env, locals.map(toEmail), { exceptWaId });
-  const dou = defaultOu(departmentId, er.data || []);
+  const depts = Array.isArray(dr.data) ? dr.data : [];
+  const tou = resolveOu(teamOuPath(depts.find(d => d.id === departmentId), depts), ous.filter(o => !ouExcluded(o, excludedOus)));
+  const dou = tou || defaultOu(departmentId, er.data || []);
   return {
     given: names.given, family: names.family, domain: WORK_DOMAIN, ous, default_ou: ous.includes(dou) ? dou : '/',
     proposals: locals.map((local, i) => ({ local, ...avail[i] })),
@@ -6466,10 +6494,10 @@ async function createWorkAccount(body, auth, env) {
     if (overrideReason.length < 10) return j1Err('override_reason_required', 400);
   }
 
-  let gusers;
-  try { gusers = await fetchGoogleUsers(env); }
+  let gusers, ouPaths;
+  try { [gusers, ouPaths] = await Promise.all([fetchGoogleUsers(env), orgUnitPathsOrNull(env)]); }
   catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
-  if (!liveOus(gusers).includes(ou)) return j1Err('bad_org_unit', 400);
+  if (!liveOus(gusers, ouPaths).includes(ou)) return j1Err('bad_org_unit', 400);
   const inPodium = await sb(`/rest/v1/employees?work_email=eq.${encodeURIComponent(email)}&select=id&limit=1`, env);
   if (inPodium.data?.length) return j1Err('email_taken');
 
@@ -6823,12 +6851,14 @@ function desiredFor(e) {
 
 // Who is excluded (D4). FAILS CLOSED: null when any lookup fails, and callers push nothing — a push without the
 // super-admin list could write to a founder's account. `gusers` (optional) = the live list for the OU check;
-// without it the live OUs load lazily, once, only when a push would MOVE someone (loadLiveOus).
+// without it the live OUs load lazily, once, only when a push would MOVE someone (loadLiveOus). Either way the OU set
+// is users' OUs ∪ orgunits.list (users-only when that list fails).
 async function googleSyncContext(env, gusers = null) {
-  const [sres, igRes, saRes] = await Promise.all([
+  const [sres, igRes, saRes, ouPaths] = await Promise.all([
     sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
     sb(`/rest/v1/directory_ignored?select=email`, env),
     sbStore(`/rest/v1/users_profile?role=eq.super_admin&select=id`, env),
+    gusers ? orgUnitPathsOrNull(env) : Promise.resolve(null),
   ]);
   if (!sres.ok || !igRes.ok || !saRes.ok || !Array.isArray(igRes.data) || !Array.isArray(saRes.data)) return null;
   const c = {
@@ -6836,11 +6866,14 @@ async function googleSyncContext(env, gusers = null) {
     ignored: new Set(igRes.data.map(r => String(r.email || '').toLowerCase())),
     // + the FOUNDER_CODES deny-list inside scopeOf (src/googlesync.js).
     superAdminAuthIds: new Set(saRes.data.map(p => p.id)),
-    liveOus: gusers ? new Set(liveOus(gusers)) : null,
+    liveOus: gusers ? new Set(liveOus(gusers, ouPaths)) : null,
+    // false = orgunits.list failed: an OU nobody is in yet is invisible, so "unknown target" is not proof it is absent.
+    ouListComplete: ouPaths !== null,
     impersonateEmail: env.GOOGLE_ADMIN_IMPERSONATE_EMAIL || null,
   };
   let p = null;
-  c.loadLiveOus = () => (p ||= fetchGoogleUsers(env).then(us => { c.liveOus = new Set(liveOus(us)); }));
+  c.loadLiveOus = () => (p ||= Promise.all([fetchGoogleUsers(env), orgUnitPathsOrNull(env)])
+    .then(([us, paths]) => { c.liveOus = new Set(liveOus(us, paths)); c.ouListComplete = paths !== null; }));
   return c;
 }
 
@@ -6915,6 +6948,11 @@ export async function pushOneToGoogle(env, token, e, sctx, { fields, dryRun = fa
     try { await sctx.loadLiveOus(); } catch (x) { return { outcome: 'failed', error: 'google_ou_list_failed', user: g.user }; }
   }
   const eff = effectiveFields(e, g.user, fields, sctx);
+  // Hostile review 2026-11-14: with an incomplete OU list a brand-new (empty) team OU reads as unknown — retry later
+  // (failed + backoff, field stays dirty) rather than record org_unit as done and strand the person in the old OU.
+  if (eff.fieldSkips?.org_unit === 'target_ou_unknown' && sctx.ouListComplete === false) {
+    return { outcome: 'failed', error: 'google_ou_list_incomplete', user: g.user };
+  }
   // D5 backfill (read-only from Google): an unset org_unit_path takes Google's live OU, without dirtying anyone.
   const backfill_ou = !e.org_unit_path && g.user.orgUnitPath ? g.user.orgUnitPath : null;
   const desired = desiredFor(e);
@@ -7266,30 +7304,106 @@ async function getGoogleDiff(url, auth, env, ctx) {
   });
 }
 
-// GET getOrgUnitOptions — EmployeeForm's Org unit picker (HR): Google's live OUs minus the excluded ones, and the
-// L2 suggestion per department: defaultOu over the department's active people, by org_unit_path (what Podium
-// owns), falling back to google_org_unit. Never '/' (that is "no suggestion"). Empty when Google is not set up.
-// R7: the OU list is the OUs Google users sit in (fetchGoogleUsers), not orgunits.list — no new Directory scope for
-// J1b. So an empty OU is not offered (the form says so), and a stored OU
+// GET getOrgUnitOptions — EmployeeForm's Org unit picker (HR): Google's OUs minus the excluded ones, and the
+// suggestion per department = the team's OU (teamOuPath: "/<Parent>/<Team>" or "/<Team>"), only when Google has it.
+// The OU list = users' orgUnitPath ∪ orgunits.list (the write SA's admin.directory.orgunit scope, 2026-11-14); when
+// that list fails it is users-only as before (`ous_complete: false`: an empty OU is then not offered). A stored OU
 // Google no longer has is a push-time skip of the org_unit FIELD only (effectiveFields → target_ou_unknown).
 async function getOrgUnitOptions(url, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!googleConfigured(env)) return ok({ configured: false, ous: [], default_by_department: {} });
+  let gusers, ouPaths;
+  try { [gusers, ouPaths] = await Promise.all([fetchGoogleUsers(env), orgUnitPathsOrNull(env)]); }
+  catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
+  const [sres, dr] = await Promise.all([
+    sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
+    sb(`/rest/v1/departments?active=eq.true&select=id,name,parent_department_id`, env),
+  ]);
+  if (!sres.ok || !dr.ok) return err('db_error', 500);
+  const excluded = sres.data?.[0]?.directory_excluded_ous || ['/Admin and general'];
+  const ous = liveOus(gusers, ouPaths).filter(ou => !ouExcluded(ou, excluded));
+  const depts = dr.data || [];
+  const def = {};
+  for (const d of depts) { const ou = resolveOu(teamOuPath(d, depts), ous); if (ou && ou !== '/') def[d.id] = ou; }
+  return ok({ configured: true, ous, ous_complete: !!ouPaths, default_by_department: def });
+}
+
+// POST syncTeamOrgUnits {dry_run} — Google admin. Google org units follow Podium teams: every ACTIVE team's OU
+// (teamOuPath) is created in Google when missing, parents first (orgunits.insert; never in / under an excluded OU,
+// never a rename, move or delete of an OU), then every non-exited person with a team gets org_unit_path = that OU —
+// except founders and anyone whose Podium or Google OU is excluded (skipped[]). One PATCH per distinct target OU.
+// This does NOT push to Google: the 0015 trigger marks org_unit dirty and the sync takes it from there (drains on
+// the Directory screen, a person's save, or the Google vs Podium push). dry_run writes nothing anywhere.
+export async function syncTeamOrgUnits(body, auth, env) {
+  const gate = await requireGoogleAdmin(auth, env); if (gate) return gate;
+  if (!googleWriteConfigured(env)) return j1bErr('google_write_not_configured', 400);
+  const d = body.data || body;
+  const dryRun = d.dry_run !== false;
+  let token;
+  try { token = await googleWriteToken(env, 'orgunit'); }
+  catch (e) { return err('google_orgunit_token_failed: ' + (e?.message || e), 502); }
+  const [sres, dr, er] = await Promise.all([
+    sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
+    sb(`/rest/v1/departments?active=eq.true&select=id,name,parent_department_id&order=name.asc`, env),
+    sb(`/rest/v1/employees?status=neq.exited&department_id=not.is.null&select=id,employee_code,full_name,work_email,department_id,org_unit_path,google_org_unit&order=full_name.asc&limit=5000`, env),
+  ]);
+  if (!sres.ok || !dr.ok || !er.ok || !Array.isArray(dr.data) || !Array.isArray(er.data)) return err('db_error', 500);
+  // Eligibility reads the person's LIVE Google OU (not the cached google_org_unit): someone moved into an excluded
+  // OU since the last sync must be skipped here, not overwritten and left for the push to refuse.
   let gusers;
   try { gusers = await fetchGoogleUsers(env); }
   catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
-  const [sres, er] = await Promise.all([
-    sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
-    sb(`/rest/v1/employees?status=eq.active&select=department_id,status,org_unit_path,google_org_unit&limit=5000`, env),
-  ]);
-  if (!sres.ok || !er.ok) return err('db_error', 500);
+  const liveOuByEmail = new Map((gusers || []).map(u => [String(u.primaryEmail || '').toLowerCase(), u.orgUnitPath || null]));
+  for (const e of er.data) {
+    const live = liveOuByEmail.get(String(e.work_email || '').toLowerCase());
+    if (live) e.google_org_unit = live;
+  }
+  let existing;
+  try { existing = await listOrgUnitPaths(env, token); }
+  catch (e) { return err(String(e?.message || e).slice(0, 300), 502); }
   const excluded = sres.data?.[0]?.directory_excluded_ous || ['/Admin and general'];
-  const ous = liveOus(gusers).filter(ou => !ouExcluded(ou, excluded));
-  const rows = (er.data || []).map(x => ({ department_id: x.department_id, status: x.status, google_org_unit: x.org_unit_path || x.google_org_unit || null }));
-  const deptIds = [...new Set(rows.map(x => x.department_id).filter(Boolean))];
-  const def = {};
-  for (const id of deptIds) { const ou = defaultOu(id, rows); if (ou && ou !== '/' && ous.includes(ou)) def[id] = ou; }
-  return ok({ configured: true, ous, default_by_department: def });
+  const plan = teamOuPlan(dr.data, existing, excluded);
+  const { moves, skipped } = teamOuMoves(er.data, plan.byDept, excluded);
+  const out = { dry_run: dryRun, ous_existing: existing.length, teams_skipped: plan.blocked };
+  const brief = (m) => ({ employee_code: m.employee_code, full_name: m.full_name, from: m.from, to: m.to });
+  // Apply runs exactly what was previewed: the dry run returns plan_hash and Apply must send it back (as pushGoogleFields R1).
+  const planHash = await previewHash({ create: plan.toCreate.map(c => c.path), moves: moves.map(m => [m.id, m.to]) });
+  if (dryRun) return ok({ ...out, plan_hash: planHash, ous_to_create: plan.toCreate, create_errors: [], employees_to_update: moves.map(brief), skipped });
+  if (d.plan_hash !== planHash) return errCode('stale_preview', 'Org units or teams changed since the preview — preview again', 409);
+
+  // Create, parents first (toCreate is ordered); a child whose parent failed is not attempted.
+  const created = [], createErrors = [], failed = new Set();
+  for (const c of plan.toCreate) {
+    if (failed.has(c.parent)) { failed.add(c.path); createErrors.push({ path: c.path, error: 'parent_not_created' }); continue; }
+    const req = { name: c.name, parentOrgUnitPath: c.parent };
+    let r;
+    try { r = await googleFetch(GDIR_ORGUNITS, { method: 'POST', headers: { ...gJson, Authorization: `Bearer ${token}` }, body: JSON.stringify(req) }); }
+    catch (x) { r = { ok: false, data: { error: { message: googleCallError(x) } } }; }
+    const error = r.ok ? null : (r.data?.error?.message || `HTTP ${r.status}`);
+    // google_admin_log.target_email is NOT NULL and an OU has no address: it carries the OU path.
+    await googleAdminLogMany(env, [{ actor: auth.userId, actor_email: auth.email || null, action: 'create_org_unit', target_email: c.path, request: req, ok: !error, error }]);
+    if (error) { failed.add(c.path); createErrors.push({ path: c.path, error }); }
+    else created.push(r.data?.orgUnitPath || c.path);
+  }
+
+  // Assign: only into an OU Google now has. One PATCH per distinct target (never a per-row loop).
+  const live = [...existing, ...created];
+  const byTarget = new Map();
+  for (const m of moves) {
+    if (!resolveOu(m.to, live)) { skipped.push({ id: m.id, employee_code: m.employee_code, full_name: m.full_name, reason: 'ou_not_created' }); continue; }
+    if (!byTarget.has(m.to)) byTarget.set(m.to, []);
+    byTarget.get(m.to).push(m);
+  }
+  const updated = [], updateErrors = [];
+  await Promise.all([...byTarget].map(async ([to, ms]) => {
+    const r = await sb(`/rest/v1/employees?id=in.(${ms.map(m => m.id).join(',')})&status=neq.exited&select=id`, env,
+      { method: 'PATCH', body: JSON.stringify({ org_unit_path: to, updated_at: nowIso() }), headers: actorHeaders(auth) });
+    if (!r.ok || !Array.isArray(r.data)) { updateErrors.push({ to, count: ms.length, error: r.data?.message || `HTTP ${r.status}` }); return; }
+    const done = new Set(r.data.map(x => x.id));
+    for (const m of ms) if (done.has(m.id)) updated.push(brief(m));
+  }));
+  return ok({ ...out, ous_to_create: plan.toCreate, created, create_errors: createErrors,
+    updated: { count: updated.length, list: updated }, update_errors: updateErrors, skipped });
 }
 // ── end J1b
 
@@ -11397,7 +11511,7 @@ const POST_ACTIONS = {
   // Google Directory sync
   importDirectoryCandidates,
   // J1b — Podium → Google field sync (Google admins; requireGoogleAdmin inside)
-  retryGoogleSync, pushGoogleFields,
+  retryGoogleSync, pushGoogleFields, syncTeamOrgUnits,
   // Appraisal engine
   createAppraisalCycle, setCycleStatus, enrollAppraisalCycle,
   submitSelfReview, submitManagerReview, acknowledgeAppraisal,

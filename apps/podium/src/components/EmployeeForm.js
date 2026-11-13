@@ -20,8 +20,8 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
   const [founders, setFounders] = useState([]);
   const [levels, setLevels] = useState([]);
   const [people, setPeople] = useState([]);
-  // J1b D5: the Google org unit Podium owns. Options = Google's live OUs minus the excluded ones (getOrgUnitOptions);
-  // the department's usual OU is suggested when the department changes.
+  // J1b D5: the Google org unit Podium owns. Options = Google's OUs minus the excluded ones (getOrgUnitOptions);
+  // the team's own OU ("/<Parent>/<Team>", when Google has it) is suggested when the department changes.
   const [ouOpts, setOuOpts] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -52,7 +52,7 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
     }
     return 'HR (no founder owner on this team)';
   })();
-  // A department change pre-fills its usual org unit, but only over a blank OU or the OLD department's suggestion:
+  // A department change pre-fills its team's org unit, but only over a blank OU or the OLD department's suggestion:
   // an OU HR picked by hand is never replaced. HR can still pick another one.
   function setDepartment(v) {
     setF(prev => {
@@ -119,12 +119,12 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
             {ouOpts && ouList.length > 0 ? (
               <Select value={f.org_unit_path || ''} onChange={e => set('org_unit_path', e.target.value)}>
                 <option value="">Not set (Google keeps its own)</option>
-                {ouList.map(ou => <option key={ou} value={ou}>{ou}{ou === ouSuggested ? '  (usual for this department)' : ''}</option>)}
+                {ouList.map(ou => <option key={ou} value={ou}>{ou}{ou === ouSuggested ? '  (this team\'s org unit)' : ''}</option>)}
               </Select>
             ) : (
               <Input value={f.org_unit_path || ''} disabled placeholder={ouOpts ? 'Google org units unavailable' : 'Loading…'} />
             )}
-            <div style={{ fontSize: 11, color: 'var(--t4)', marginTop: 4 }}>Podium pushes this to Google on save. Org units with nobody in them yet don&apos;t appear.</div>
+            <div style={{ fontSize: 11, color: 'var(--t4)', marginTop: 4 }}>Podium pushes this to Google on save.{ouOpts && ouOpts.ous_complete === false ? ' Org units with nobody in them yet don\u2019t appear.' : ''}</div>
           </Field>
           {/* Job role is hidden (Title / Level / Team, 2026-11-14); job_role_id still round-trips unchanged. */}
           <div>

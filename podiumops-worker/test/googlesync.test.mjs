@@ -8,9 +8,9 @@ import {
   splitForGoogle, ouExcluded, desiredGoogleFields, googleFieldsOf, sameValue, mergeGoogleUser, bodyFields, scopeOf,
   classifyDiff, diffPerson, nextLastPushed, nextAttemptAt, syncClaimFilter, canClaimSync, cleanSyncFields,
   dirtiedFields, fieldsToPush, afterAttempt, leaseHeld, canonicalJson, previewHash, effectiveFields, needsOuCheck, identityChanged,
-  googleDepartmentLabel,
+  googleDepartmentLabel, teamOuPath, resolveOu, teamOuPlan, teamOuMoves,
 } from '../src/googlesync.js';
-import { pushOneToGoogle, googleFetch, pushGoogleFields, bulkPushPaused } from '../src/index.js';
+import { pushOneToGoogle, googleFetch, pushGoogleFields, bulkPushPaused, syncTeamOrgUnits } from '../src/index.js';
 import { WA_EXTERNAL_ID_TYPE, workAccountExternalIds } from '../src/workaccount.js';
 
 const SQL = readFileSync(new URL('../migrations/0015_google_field_sync.sql', import.meta.url), 'utf8');
@@ -539,4 +539,161 @@ test('bulk-push pause (0019): anything but an explicit false refuses a real push
   assert.notEqual(pv.status, 423, 'preview is not paused');
   assert.equal(pv.seen.some(u => u.includes('google_bulk_push_paused')), false, 'preview never reads the pause');
   assert.equal(typeof bulkPushPaused, 'function');
+});
+
+// ── Team org units: Google OU = the Podium team path (syncTeamOrgUnits, 2026-11-14) ─────────────────────────────
+const TEAMS = [
+  { id: 'sc', name: 'Supply chain', parent_department_id: null },
+  { id: 'pr', name: 'Production', parent_department_id: 'sc' },
+  { id: 'br', name: ' Brand ', parent_department_id: null },
+  { id: 'ci', name: 'Creator/Influencer', parent_department_id: null },
+  { id: 'sa', name: 'Sales', parent_department_id: null },
+  { id: 'gt', name: 'Offline - GT/MT', parent_department_id: 'sa' },
+];
+test('teamOuPath: top-level, sub-team, a slash in a name, a parent missing from the list, no team', () => {
+  const t = (id) => TEAMS.find(x => x.id === id);
+  assert.equal(teamOuPath(t('br'), TEAMS), '/Brand', 'top-level, trimmed');
+  assert.equal(teamOuPath(t('pr'), TEAMS), '/Supply chain/Production');
+  assert.equal(teamOuPath(t('ci'), TEAMS), '/Creator-Influencer');
+  assert.equal(teamOuPath(t('gt'), TEAMS), '/Sales/Offline - GT-MT');
+  assert.equal(teamOuPath(t('pr'), TEAMS.filter(x => x.id !== 'sc')), '/Production', 'parent not in the list (inactive) → top-level form');
+  assert.equal(teamOuPath(null, TEAMS), null);
+  assert.equal(teamOuPath(undefined, TEAMS), null);
+  assert.equal(teamOuPath({ id: 'x', name: '  ' }, TEAMS), null);
+});
+test('resolveOu: case-insensitive, Google spelling wins', () => {
+  assert.equal(resolveOu('/supply chain', ['/', '/Supply Chain']), '/Supply Chain');
+  assert.equal(resolveOu('/Brand', ['/Sales']), null);
+  assert.equal(resolveOu(null, ['/']), null);
+});
+test('teamOuPlan: parents first, existing reused (its casing), nothing created in / under an excluded OU', () => {
+  const depts = [...TEAMS, { id: 'ad', name: 'Admin and general', parent_department_id: null },
+    { id: 'ax', name: 'Desk', parent_department_id: 'ad' }];
+  const p = teamOuPlan(depts, ['/Sales', '/brand', '/Admin and general'], ['/Admin and general']);
+  assert.deepEqual(p.toCreate, [
+    { path: '/Supply chain', name: 'Supply chain', parent: '/' },
+    { path: '/Supply chain/Production', name: 'Production', parent: '/Supply chain' },
+    { path: '/Creator-Influencer', name: 'Creator-Influencer', parent: '/' },
+    { path: '/Sales/Offline - GT-MT', name: 'Offline - GT-MT', parent: '/Sales' },
+  ]);
+  assert.equal(p.byDept.br, '/brand', 'existing OU, Google casing');
+  assert.equal(p.byDept.pr, '/Supply chain/Production');
+  assert.deepEqual(p.blocked.map(b => b.department_id).sort(), ['ad', 'ax']);
+  assert.equal(p.toCreate.some(c => c.path.toLowerCase().startsWith('/admin and general')), false);
+  assert.equal(p.byDept.ad, undefined);
+  // a sub-team listed BEFORE its parent still creates the parent first, once
+  const q = teamOuPlan([TEAMS[1], TEAMS[0]], [], []);
+  assert.deepEqual(q.toCreate.map(c => c.path), ['/Supply chain', '/Supply chain/Production']);
+});
+test('teamOuMoves: founders + excluded OUs skipped, no team left alone, equal not moved', () => {
+  const byDept = { pr: '/Supply chain/Production', br: '/Brand' };
+  const r = teamOuMoves([
+    { id: '1', employee_code: 'EMP-001', department_id: 'br', org_unit_path: '/X' },
+    { id: '2', employee_code: 'EMP-010', department_id: 'pr', org_unit_path: '/Admin and general/Desk' },
+    { id: '3', employee_code: 'EMP-011', department_id: 'pr', org_unit_path: '/Production', google_org_unit: '/admin and general' },
+    { id: '4', employee_code: 'EMP-012', department_id: 'pr', org_unit_path: '/Production/Factory' },
+    { id: '5', employee_code: 'EMP-013', department_id: 'br', org_unit_path: '/Brand' },
+    { id: '6', employee_code: 'EMP-014', department_id: null, org_unit_path: '/Y' },
+    { id: '7', employee_code: 'EMP-015', department_id: 'gone', org_unit_path: null },
+    { id: '8', employee_code: 'EMP-016', department_id: 'br', org_unit_path: null },
+  ], byDept, ['/Admin and general']);
+  assert.deepEqual(r.moves.map(m => [m.id, m.from, m.to]), [['4', '/Production/Factory', '/Supply chain/Production'], ['8', null, '/Brand']]);
+  assert.deepEqual(r.skipped.map(x => [x.id, x.reason]), [['1', 'founder'], ['2', 'excluded_ou'], ['3', 'excluded_ou'], ['7', 'no_team_ou']]);
+});
+test('0026: create_org_unit widens the google_admin_log action CHECK, every earlier action kept', () => {
+  const m = readFileSync(new URL('../migrations/0026_org_unit_create_log.sql', import.meta.url), 'utf8');
+  for (const a of ['create_user', 'link_existing', 'suspend_user', 'reset_password', 'suspend_exited', 'drive_transfer',
+    'keep_active', 'transfer_checked', 'account_gone', 'sync_fields', 'sync_fields_failed', 'create_org_unit']) assert.match(m, new RegExp(`'${a}'`));
+  assert.match(SRC, /action: 'create_org_unit'/);
+});
+
+async function rsaPem() {
+  const k = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
+  const der = Buffer.from(await crypto.subtle.exportKey('pkcs8', k.privateKey)).toString('base64');
+  return `-----BEGIN PRIVATE KEY-----\n${der}\n-----END PRIVATE KEY-----\n`;
+}
+test('syncTeamOrgUnits: dry run writes nothing; the run creates parents first, logs, one PATCH per target OU', async () => {
+  const pem = await rsaPem();
+  const ENVO = { ...ENVW, GOOGLE_SA_JSON: JSON.stringify({ client_email: 'r@x.iam', private_key: pem }), GOOGLE_IMPERSONATE_EMAIL: 'admin@legendoftoys.com', GOOGLE_ADMIN_SA_JSON: JSON.stringify({ client_email: 'w@x.iam', private_key: pem }), GOOGLE_ADMIN_IMPERSONATE_EMAIL: 'admin@legendoftoys.com' };
+  const emps = [
+    { id: 'e1', employee_code: 'EMP-020', full_name: 'A', department_id: 'pr', org_unit_path: '/Production/Factory', google_org_unit: '/Production/Factory' },
+    { id: 'e2', employee_code: 'EMP-021', full_name: 'B', department_id: 'pr', org_unit_path: null, google_org_unit: null },
+    { id: 'e3', employee_code: 'EMP-022', full_name: 'C', work_email: 'c@legendoftoys.com', department_id: 'br', org_unit_path: '/Brand', google_org_unit: '/Brand' },
+    { id: 'e4', employee_code: 'EMP-002', full_name: 'F', department_id: 'br', org_unit_path: '/', google_org_unit: '/' },
+  ];
+  const run = async (dry, { failCreate = null, planHash } = {}) => {
+    const seen = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = async (u, o = {}) => {
+      const url = String(u); const method = o.method || 'GET';
+      let body = null; try { body = typeof o.body === 'string' ? JSON.parse(o.body) : null; } catch { body = null; }
+      seen.push({ url, method, body, headers: o.headers || {} });
+      if (url.includes('/rest/v1/google_admin_access')) return json([{ auth_user_id: AUTH_ID }]);
+      if (url.includes('/rest/v1/employees?auth_user_id=')) return json([{ id: 'me' }]);
+      if (url.startsWith('https://oauth2.googleapis.com/token')) return json({ access_token: 'tok' });
+      if (url.includes('/rest/v1/settings')) return json([{ directory_excluded_ous: ['/Admin and general'] }]);
+      if (url.includes('/rest/v1/departments')) return json(TEAMS.slice(0, 3));
+      if (url.includes('/rest/v1/employees?status=neq.exited')) return json(emps);
+      // Live Google users: EMP-022 has since moved into the excluded OU → skipped, not overwritten (Codex P2).
+      if (url.includes('/admin/directory/v1/users?')) return json({ users: [{ primaryEmail: 'c@legendoftoys.com', orgUnitPath: '/Admin and General/Desk' }] });
+      if (url.includes('/orgunits?type=all')) return json({ organizationUnits: [{ orgUnitPath: '/Brand' }, { orgUnitPath: '/Production' }] });
+      if (url.endsWith('/orgunits') && method === 'POST') {
+        const b = JSON.parse(o.body);
+        if (failCreate === b.name) return json({ error: { message: 'nope' } }, 400);
+        return json({ orgUnitPath: `${b.parentOrgUnitPath === '/' ? '' : b.parentOrgUnitPath}/${b.name}` });
+      }
+      if (url.includes('/rest/v1/google_admin_log')) return json(null, 201);
+      if (url.includes('/rest/v1/employees?id=in.') && method === 'PATCH') return json(url.match(/id=in\.\(([^)]*)\)/)[1].split(',').map(id => ({ id })));
+      throw new Error('unexpected fetch ' + method + ' ' + url);
+    };
+    try { const r = await syncTeamOrgUnits({ data: { dry_run: dry, plan_hash: planHash } }, { userId: AUTH_ID }, ENVO); const j = await r.json(); return { status: r.status, body: j.data || j, seen }; }
+    finally { globalThis.fetch = real; }
+  };
+  const dry = await run(true);
+  assert.equal(dry.status, 200, JSON.stringify(dry.body));
+  assert.equal(dry.body.dry_run, true);
+  assert.deepEqual(dry.body.ous_to_create.map(c => c.path), ['/Supply chain', '/Supply chain/Production']);
+  assert.deepEqual(dry.body.employees_to_update.map(m => m.employee_code), ['EMP-020', 'EMP-021']);
+  assert.deepEqual(dry.body.skipped.map(x => [x.employee_code, x.reason]).sort(), [['EMP-002', 'founder'], ['EMP-022', 'excluded_ou']]);
+  assert.equal(dry.seen.some(c => c.method !== 'GET' && !c.url.startsWith('https://oauth2')), false, 'dry run: no write anywhere');
+
+  assert.match(dry.body.plan_hash, /^[0-9a-f]{64}$/);
+  const staleApply = await run(false, { planHash: 'f'.repeat(64) });
+  assert.equal(staleApply.status, 409, 'apply must match its preview');
+  assert.equal(staleApply.seen.some(c => c.method === 'POST' && c.url.endsWith('/orgunits')), false);
+  const live = await run(false, { planHash: dry.body.plan_hash });
+  assert.equal(live.status, 200, JSON.stringify(live.body));
+  const posts = live.seen.filter(c => c.url.endsWith('/orgunits') && c.method === 'POST').map(c => c.body);
+  assert.deepEqual(posts, [{ name: 'Supply chain', parentOrgUnitPath: '/' }, { name: 'Production', parentOrgUnitPath: '/Supply chain' }]);
+  const logs = live.seen.filter(c => c.url.includes('/rest/v1/google_admin_log'));
+  assert.equal(logs.length, 2, 'one log insert per OU, written as it is created');
+  assert.deepEqual(logs.flatMap(l => l.body).map(x => [x.action, x.target_email, x.ok]), [['create_org_unit', '/Supply chain', true], ['create_org_unit', '/Supply chain/Production', true]]);
+  const patches = live.seen.filter(c => c.method === 'PATCH');
+  assert.equal(patches.length, 1, 'one PATCH per distinct target');
+  assert.match(patches[0].url, /id=in\.\(e1,e2\)/);
+  assert.equal(patches[0].body.org_unit_path, '/Supply chain/Production');
+  assert.equal(patches[0].headers['X-Podium-Actor'], AUTH_ID);
+  assert.equal(live.body.updated.count, 2);
+  assert.equal(live.seen.some(c => c.url.includes('/directory/v1/users') && c.method !== 'GET'), false, 'never pushes to Google users (reads the live list only)');
+
+  const bad = await run(false, { failCreate: 'Supply chain', planHash: dry.body.plan_hash });
+  assert.deepEqual(bad.body.create_errors.map(x => x.path), ['/Supply chain', '/Supply chain/Production']);
+  assert.equal(bad.seen.filter(c => c.url.endsWith('/orgunits') && c.method === 'POST').length, 1, 'child not attempted after its parent failed');
+  assert.equal(bad.seen.some(c => c.method === 'PATCH'), false, 'nobody moved into an OU that does not exist');
+  assert.deepEqual(bad.body.skipped.filter(x => x.reason === 'ou_not_created').map(x => x.employee_code), ['EMP-020', 'EMP-021']);
+});
+
+// Codex 2026-11-14: exclusions are case-insensitive and "/" excludes every OU.
+import { ouExcluded as ouEx2 } from '../src/googlesync.js';
+test('ouExcluded: case-insensitive, root excludes all, trailing slash tolerated', () => {
+  assert.equal(ouEx2('/Admin and General', ['/Admin and general']), true);
+  assert.equal(ouEx2('/admin and general/Desk', ['/Admin and general/']), true);
+  assert.equal(ouEx2('/Brand', ['/']), true);
+  assert.equal(ouEx2('/Brand', ['/Admin and general']), false);
+  assert.equal(ouEx2('/Admin and generalX', ['/Admin and general']), false);
+});
+test('ouExcluded: blank entries are ignored (only an explicit "/" excludes all)', () => {
+  assert.equal(ouEx2('/X', [null]), false);
+  assert.equal(ouEx2('/X', ['', '  ']), false);
+  assert.equal(ouEx2('/X', ['', '/']), true);
 });

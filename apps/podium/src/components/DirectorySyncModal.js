@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { teamOptions } from '../lib/format.js';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { X, RefreshCw, UserPlus, AlertTriangle, Ban, ArrowLeftRight, Eye, Upload } from 'lucide-react';
+import { X, RefreshCw, UserPlus, AlertTriangle, Ban, ArrowLeftRight, Eye, Upload, Network } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
 
 // On-demand Google Directory sync. Two tabs:
@@ -343,6 +343,8 @@ function GoogleVsPodium({ session, onClose }) {
   return (
     <>
       <div style={body}>
+        {/* Outside the loading branch: the reload after "Create and assign" must not wipe its result. */}
+        {data?.can_push && <TeamOrgUnits session={session} onApplied={load} bulkPaused={!!data?.bulk_paused} />}
         {loading ? <div style={{ padding: 40 }}><Spinner /></div>
         : error ? (
           <div style={{ padding: 20 }}>
@@ -469,6 +471,57 @@ function GoogleVsPodium({ session, onClose }) {
         )}
       </div>
     </>
+  );
+}
+
+// Team org units (syncTeamOrgUnits, Google admins): each person's Google org unit = their Podium team ("/<Parent>/<Team>").
+// Preview = dry run (OUs to create + people to move); "Create and assign" creates the missing OUs in Google and sets
+// Podium's org unit. It does not move anyone in Google itself: the org_unit field then goes through the sync below.
+const TEAM_OU_SKIP = { founder: 'founder (never synced)', excluded_ou: 'in an excluded org unit', no_team_ou: 'team has no org unit', ou_not_created: 'org unit could not be created' };
+function TeamOrgUnits({ session, onApplied, bulkPaused = true }) {
+  const { showToast } = useToast();
+  const [res, setRes] = useState(null);
+  const [busy, setBusy] = useState(null);   // 'preview' | 'apply' | null
+  async function go(dryRun) {
+    if (!dryRun && !window.confirm('Create the missing org units in Google and set these people\'s org unit in Podium?')) return;
+    setBusy(dryRun ? 'preview' : 'apply');
+    try {
+      const r = await podiumopsPost('syncTeamOrgUnits', { data: { dry_run: dryRun, ...(dryRun ? {} : { plan_hash: res?.plan_hash }) } }, session);
+      setRes(r);
+      if (!dryRun) {
+        const bad = (r.create_errors?.length || 0) + (r.update_errors?.length || 0);
+        showToast(`${r.created?.length || 0} org units created · ${r.updated?.count || 0} people set${bad ? ` · ${bad} errors` : ''}`, bad ? 'error' : 'success');
+        onApplied && onApplied();
+      }
+    } catch (e) { showToast(e.message || 'Team org units failed', 'error'); }
+    finally { setBusy(null); }
+  }
+  const moves = res ? (res.dry_run ? res.employees_to_update : res.updated?.list) || [] : [];
+  const ous = res ? (res.dry_run ? (res.ous_to_create || []).map(o => o.path) : res.created || []) : [];
+  const errs = res ? [...(res.create_errors || []).map(x => `${x.path}: ${x.error}`), ...(res.update_errors || []).map(x => `${x.to}: ${x.error}`)] : [];
+  return (
+    <div style={{ ...summary, marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ ...sectionTitle, margin: 0 }}><Network size={13} /> Team org units</span>
+        <span style={{ fontSize: 11.5, color: 'var(--text-3)', flex: 1 }}>Each person&apos;s Google org unit = their Podium team.</span>
+        <button style={{ ...btnSecondary, opacity: busy ? 0.6 : 1 }} onClick={() => go(true)} disabled={!!busy}><Eye size={12} /> {busy === 'preview' ? 'Previewing…' : 'Preview'}</button>
+        <button style={{ ...btnPrimary, opacity: busy || !res?.dry_run ? 0.6 : 1 }} onClick={() => go(false)} disabled={!!busy || !res?.dry_run}
+          title={res?.dry_run ? '' : 'Preview first'}>{busy === 'apply' ? 'Working…' : 'Create and assign'}</button>
+      </div>
+      {res && (
+        <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
+          <div><b>{res.dry_run ? 'Org units to create' : 'Org units created'} ({ous.length}):</b> {ous.length ? ous.join(' · ') : 'none'}</div>
+          <div style={{ marginTop: 4 }}><b>{res.dry_run ? 'People to move' : 'People set'} ({moves.length})</b></div>
+          {moves.map(m => <div key={m.employee_code || m.full_name}>{m.full_name} <span style={{ color: 'var(--text-3)' }}>{m.from || 'not set'} → {m.to}</span></div>)}
+          {res.skipped?.length > 0 && <div style={{ color: 'var(--text-3)', marginTop: 4 }}>Skipped: {res.skipped.map(x => `${x.full_name || x.employee_code} (${TEAM_OU_SKIP[x.reason] || x.reason})`).join(' · ')}</div>}
+          {res.teams_skipped?.length > 0 && <div style={{ color: 'var(--text-3)' }}>Teams in an excluded org unit: {res.teams_skipped.map(t => t.path).join(' · ')}</div>}
+          {errs.length > 0 && <div style={{ color: 'var(--state-error-fg)', marginTop: 4 }}>{errs.join(' · ')}</div>}
+          {!res.dry_run && <div style={{ marginTop: 6, fontWeight: 600 }}>{bulkPaused
+            ? 'Podium now holds the new org units. While bulk push is paused, the sync moves people in Google a few at a time as their pages are opened.'
+            : 'Podium now holds the new org units. To move them in Google now, tick Org unit for these people below, then Preview and Push (otherwise the sync takes them a few at a time).'}</div>}
+        </div>
+      )}
+    </div>
   );
 }
 

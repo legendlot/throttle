@@ -102,8 +102,15 @@ export function splitForGoogle(full) {
 }
 
 // Does the OU sit in (or under) an excluded OU? Shared with the Directory import preview.
+// Google OU paths are case-insensitive, so the match is too; an excluded "/" excludes everything.
 export function ouExcluded(ou, excluded) {
-  return (excluded || []).some(x => ou === x || (ou || '').startsWith(x + '/'));
+  const o = String(ou || '').toLowerCase();
+  // Blank entries are ignored; only an explicit "/" excludes everything.
+  return (excluded || []).filter(x0 => String(x0 ?? '').trim() !== '').some(x0 => {
+    const x = String(x0).trim().toLowerCase().replace(/\/+$/, '') || '/';
+    if (x === '/') return true;
+    return o === x || o.startsWith(x + '/');
+  });
 }
 
 // What Google should hold for this person, from Podium (D2). A null value = Podium is blank → leave Google's
@@ -130,6 +137,78 @@ export function googleDepartmentLabel(dept) {
   if (!name) return null;
   const parent = clean(dept?.parent?.name);
   return parent ? `${parent} - ${name}` : name;
+}
+
+// Google org units follow Podium teams (syncTeamOrgUnits, getOrgUnitOptions). A sub-team's OU is "/<Parent>/<Team>",
+// a top-level team's "/<Team>" (the tree is two levels; a parent missing from `depts` — e.g. inactive — gives the
+// top-level form). A "/" inside a name would split the path, so it becomes "-" ("Creator/Influencer" →
+// "/Creator-Influencer"). dept = { id, name, parent_department_id } · depts = the team list. → '/…' | null
+export function teamOuPath(dept, depts) {
+  const seg = (s) => clean(clean(s)?.replace(/\//g, '-'));
+  const name = seg(dept?.name);
+  if (!name) return null;
+  const pid = dept.parent_department_id;
+  const parent = pid ? (depts || []).find(d => d && d.id === pid) : null;
+  const pname = parent ? seg(parent.name) : null;
+  return pname ? `/${pname}/${name}` : `/${name}`;
+}
+
+// The OU in `paths` that `path` names, compared case-insensitively (Google's own spelling wins, so Podium never asks
+// for a near-duplicate "/Supply Chain" next to "/Supply chain"). → the existing path | null
+export function resolveOu(path, paths) {
+  const want = lc(path);
+  if (!want) return null;
+  for (const p of paths || []) if (lc(p) === want) return p;
+  return null;
+}
+const ouExcludedCi = (ou, excluded) => ouExcluded(lc(ou), (excluded || []).map(lc));
+
+// syncTeamOrgUnits' OU half. depts = the ACTIVE teams · existing = every OU path Google has (orgunits.list) ·
+// excluded = settings.directory_excluded_ous. Nothing is ever created in / under an excluded OU, and nothing is
+// renamed or deleted. → { byDept: { department_id: path }, toCreate: [{ path, name, parent }] parents first,
+//   blocked: [{ department_id, name, path, reason }] }
+export function teamOuPlan(depts, existing, excluded) {
+  const have = ['/', ...(existing || [])];
+  const planned = new Map();   // lc(path) → path, for OUs this plan creates
+  const byDept = {}, toCreate = [], blocked = [];
+  for (const d of depts || []) {
+    const path = teamOuPath(d, depts);
+    if (!path) continue;
+    if (ouExcludedCi(path, excluded)) { blocked.push({ department_id: d.id, name: d.name, path, reason: 'excluded_ou' }); continue; }
+    let cur = '';
+    for (const s of path.split('/').slice(1)) {
+      const parent = cur || '/';
+      const next = `${cur}/${s}`;
+      const hit = resolveOu(next, have) || planned.get(lc(next));
+      if (hit) { cur = hit; continue; }
+      planned.set(lc(next), next);
+      toCreate.push({ path: next, name: s, parent });
+      cur = next;
+    }
+    byDept[d.id] = cur;
+  }
+  return { byDept, toCreate, blocked };
+}
+
+// syncTeamOrgUnits' people half. emps = non-exited rows { id, employee_code, full_name, department_id, org_unit_path,
+// google_org_unit } · byDept = teamOuPlan().byDept. Founders, and anyone whose Podium or Google OU is in / under an
+// excluded OU, are skipped; a person with no team is left alone. → { moves: [{ id, employee_code, full_name, from,
+// to }], skipped: [{ id, employee_code, full_name, reason }] }
+export function teamOuMoves(emps, byDept, excluded) {
+  const moves = [], skipped = [];
+  for (const e of emps || []) {
+    if (!e?.department_id) continue;
+    const who = { id: e.id, employee_code: e.employee_code || null, full_name: e.full_name || null };
+    if (FOUNDER_CODES.includes(String(e.employee_code || '').trim().toUpperCase())) { skipped.push({ ...who, reason: 'founder' }); continue; }
+    if ((e.org_unit_path && ouExcludedCi(e.org_unit_path, excluded)) || (e.google_org_unit && ouExcludedCi(e.google_org_unit, excluded))) {
+      skipped.push({ ...who, reason: 'excluded_ou' }); continue;
+    }
+    const to = byDept?.[e.department_id] || null;
+    if (!to) { skipped.push({ ...who, reason: 'no_team_ou' }); continue; }
+    const from = clean(e.org_unit_path);
+    if (from !== to) moves.push({ ...who, from, to });
+  }
+  return { moves, skipped };
 }
 
 // The same shape, read off a Google user (for the diff and the last-pushed comparison).
@@ -271,9 +350,9 @@ export function needsOuCheck(emp, gUser, fields) {
   return (!Array.isArray(fields) || fields.includes('org_unit')) && !!target && target !== clean(gUser?.orgUnitPath);
 }
 
-// R6/R7: the fields this attempt really merges. A TARGET OU that is excluded, or not in the OU list (derived from
-// users' orgUnitPath: the write SA has only admin.directory.user, so an org unit nobody is in yet is invisible) is a
-// skip for the org_unit FIELD only, never for the person's other fields.
+// R6/R7: the fields this attempt really merges. A TARGET OU that is excluded, or not in the OU list (users'
+// orgUnitPath ∪ orgunits.list via the write SA's admin.directory.orgunit scope; users-only when that list fails, so
+// an empty OU can then look unknown) is a skip for the org_unit FIELD only, never for the person's other fields.
 // fields = the attempt's fields (undefined = all) · ctx = scopeOf's ctx. → { fields: [...], fieldSkips: {org_unit?} }
 export function effectiveFields(emp, gUser, fields, ctx = {}) {
   const list = (Array.isArray(fields) ? fields : SYNC_FIELDS).filter(f => SYNC_FIELDS.includes(f));
