@@ -8,6 +8,7 @@ import {
   splitForGoogle, ouExcluded, desiredGoogleFields, googleFieldsOf, sameValue, mergeGoogleUser, bodyFields, scopeOf,
   classifyDiff, diffPerson, nextLastPushed, nextAttemptAt, syncClaimFilter, canClaimSync, cleanSyncFields,
   dirtiedFields, fieldsToPush, afterAttempt, leaseHeld, canonicalJson, previewHash, effectiveFields, needsOuCheck, identityChanged,
+  googleDepartmentLabel,
 } from '../src/googlesync.js';
 import { pushOneToGoogle, googleFetch, pushGoogleFields, bulkPushPaused } from '../src/index.js';
 import { WA_EXTERNAL_ID_TYPE, workAccountExternalIds } from '../src/workaccount.js';
@@ -57,6 +58,15 @@ test('desiredGoogleFields maps every D2 field; blanks become null', () => {
   const b = desiredGoogleFields(emp({ job_title: '  ', phone: null, org_unit_path: '' }), { departmentName: null, hasManager: false });
   assert.equal(b.title, null); assert.equal(b.org_unit, null); assert.equal(b.department, null);
   assert.equal(b.manager, null, 'no manager in Podium = a value (remove), not blank');
+});
+
+test('googleDepartmentLabel: a sub-team pushes "<Parent> - <Child>", a top-level team its own name', () => {
+  assert.equal(googleDepartmentLabel({ name: 'Ecommerce', parent: { name: 'Sales' } }), 'Sales - Ecommerce');
+  assert.equal(googleDepartmentLabel({ name: ' Build ', parent: { name: 'NPD' } }), 'NPD - Build');
+  assert.equal(googleDepartmentLabel({ name: 'Sales', parent: null }), 'Sales');
+  assert.equal(googleDepartmentLabel({ name: 'Sales' }), 'Sales');
+  assert.equal(googleDepartmentLabel({ name: '', parent: { name: 'Sales' } }), null);
+  assert.equal(googleDepartmentLabel(null), null);
 });
 test('desiredGoogleFields: a manager with no known work email is undefined (leave Google alone)', () => {
   assert.equal(desiredGoogleFields(emp(), { hasManager: true, managerEmail: null }).manager, undefined);

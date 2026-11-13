@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
+import { teamOptions } from '../../../../../lib/format.js';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { useToast, Combobox } from '@throttle/ui';
@@ -14,13 +15,14 @@ export default function NewOpeningPage() {
   const { showToast } = useToast();
   const [roles, setRoles] = useState([]);
   const [depts, setDepts] = useState([]);
+  const [levels, setLevels] = useState([]);
   const [emps, setEmps] = useState([]);
   const [busy, setBusy] = useState(false);
   const isHiring = !!brandUser?.permissions?.podium_hiring;
   // A role's band is allow-list data; the worker refuses band_from_role without it (403).
   const canUseRoleBand = !!brandUser?.tier?.comp;
   const [f, setF] = useState({
-    job_role_id: '', designation: '', department_id: '',
+    job_role_id: '', designation: '', department_id: '', level_id: '',
     reporting_manager_employee_id: '', hiring_owner_employee_id: '',
     location_city: 'Bangalore', location_state: 'Karnataka', employment_type: 'full_time',
     headcount: '1', target_join_date: '', notes: '',
@@ -33,7 +35,7 @@ export default function NewOpeningPage() {
     if (!session) return;
     // getHiringLookups is self-serve (most hiring managers hold no podium_view) and never returns bands.
     podiumopsGet('getHiringLookups', {}, session).then(d => {
-      setRoles(d.job_roles || []); setDepts(d.departments || []); setEmps(d.employees || []);
+      setRoles(d.job_roles || []); setDepts(d.departments || []); setLevels(d.levels || []); setEmps(d.employees || []);
     }).catch(() => {});
   }, [session]);
 
@@ -70,6 +72,7 @@ export default function NewOpeningPage() {
       job_role_id: f.job_role_id || null,
       designation: f.designation.trim(),
       department_id: f.department_id || null,
+      level_id: f.level_id || null,
       reporting_manager_employee_id: f.reporting_manager_employee_id,
       location_city: f.location_city || null,
       location_state: f.location_state || null,
@@ -88,6 +91,7 @@ export default function NewOpeningPage() {
     try {
       const r = await podiumopsPost('createOpening', body, session);
       const id = idOf(r, 'opening');
+      if ((r?.data || r)?.level_not_saved) showToast('Opening created, but its level did not save — set it on the opening', 'error');
       // A file JD needs the opening id for its storage path → upload after create.
       if (id && jd.mode === 'file' && jd.file) {
         try { await submitJd(id, jd, session); }
@@ -116,7 +120,13 @@ export default function NewOpeningPage() {
           <Row>
             <F label="Department">
               <Combobox value={f.department_id} onChange={v => set('department_id', v)} inputStyle={comboInp} placeholder="Search department…"
-                options={depts.map(d => ({ value: d.id, label: d.name }))} />
+                options={teamOptions(depts)} />
+            </F>
+            <F label="Level">
+              <select style={inp} value={f.level_id} onChange={e => set('level_id', e.target.value)}>
+                <option value="">—</option>
+                {levels.map(l => <option key={l.id} value={l.id}>{l.code} · {l.name}</option>)}
+              </select>
             </F>
             <F label="Type">
               <select style={inp} value={f.employment_type} onChange={e => set('employment_type', e.target.value)}>

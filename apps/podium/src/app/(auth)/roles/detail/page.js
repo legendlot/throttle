@@ -5,7 +5,7 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { ArrowLeft, Plus, Trash2, Save } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
-import { fmtMoney } from '../../../../lib/format.js';
+import { fmtMoney, teamOptions } from '../../../../lib/format.js';
 
 export default function RoleDetailPage() {
   const { session, perms } = useAuth();
@@ -82,7 +82,7 @@ export default function RoleDetailPage() {
           <Row><F label="Title"><input style={inp} disabled={!canManage} value={jd.title} onChange={e => setJd(s => ({ ...s, title: e.target.value }))} /></F>
             <F label="Code"><input style={inp} disabled={!canManage} value={jd.role_code} onChange={e => setJd(s => ({ ...s, role_code: e.target.value }))} /></F></Row>
           <Row><F label="Level"><input style={inp} disabled={!canManage} value={jd.level} onChange={e => setJd(s => ({ ...s, level: e.target.value }))} /></F>
-            <F label="Department"><Combobox value={jd.department_id || ''} disabled={!canManage} onChange={v => setJd(s => ({ ...s, department_id: v }))} inputStyle={comboInp} placeholder="Search department…" options={depts.map(d => ({ value: d.id, label: d.name }))} /></F></Row>
+            <F label="Department"><Combobox value={jd.department_id || ''} disabled={!canManage} onChange={v => setJd(s => ({ ...s, department_id: v }))} inputStyle={comboInp} placeholder="Search department…" options={teamOptions(depts)} /></F></Row>
           <F label="Summary"><input style={inp} disabled={!canManage} value={jd.summary} onChange={e => setJd(s => ({ ...s, summary: e.target.value }))} /></F>
           <F label="Job description (markdown)"><textarea rows={6} style={{ ...inp, resize: 'vertical' }} disabled={!canManage} value={jd.job_description} onChange={e => setJd(s => ({ ...s, job_description: e.target.value }))} /></F>
           <F label="Responsibilities (one per line)"><textarea rows={5} style={{ ...inp, resize: 'vertical' }} disabled={!canManage} value={jd.responsibilities} onChange={e => setJd(s => ({ ...s, responsibilities: e.target.value }))} /></F>

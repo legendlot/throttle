@@ -1,23 +1,25 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { teamOptions } from '../../../lib/format.js';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, Modal, Combobox } from '@throttle/ui';
 import { Pencil } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../lib/podiumopsFetch.js';
 import { GridHead, GridRow, gridTh, PrimaryButton, iconBtn, formLabel } from '../../../components/ui.js';
 
-const COLS = '1.8fr 0.7fr 1.4fr 1.2fr 110px 60px';
+const COLS = '1.8fr 0.7fr 1.4fr 1.2fr 1.2fr 110px 60px';
 
 export default function DepartmentsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const [rows, setRows] = useState(null);
+  const [founders, setFounders] = useState([]);   // FOUNDER_CODES people — the founder-owner choices
   const [people, setPeople] = useState([]);
   const [edit, setEdit] = useState(null);   // dept object or {} for new, null = closed
   const [busy, setBusy] = useState(false);
   const canManage = !!perms?.podium_hr;
 
-  function load() { podiumopsGet('getDepartments', {}, session).then(d => setRows(d.departments || [])).catch(() => setRows([])); }
+  function load() { podiumopsGet('getDepartments', {}, session).then(d => { setRows(d.departments || []); setFounders(d.founders || []); }).catch(() => setRows([])); }
   useEffect(() => {
     if (!session) return;
     load();
@@ -28,7 +30,7 @@ export default function DepartmentsPage() {
     if (!edit.name?.trim()) { showToast('Name required', 'error'); return; }
     setBusy(true);
     try {
-      const patch = { name: edit.name, code: edit.code || null, parent_department_id: edit.parent_department_id || null, head_employee_id: edit.head_employee_id || null, description: edit.description || null, active: edit.active !== false };
+      const patch = { name: edit.name, code: edit.code || null, parent_department_id: edit.parent_department_id || null, head_employee_id: edit.head_employee_id || null, founder_owner_employee_id: edit.founder_owner_employee_id || null, description: edit.description || null, active: edit.active !== false };
       if (edit.id) await podiumopsPost('updateDepartment', { department_id: edit.id, patch }, session);
       else await podiumopsPost('createDepartment', patch, session);
       showToast('Saved', 'success'); setEdit(null); load();
@@ -38,6 +40,15 @@ export default function DepartmentsPage() {
 
   if (!rows) return <Spinner />;
   const total = rows.reduce((s, d) => s + (d.headcount || 0), 0);
+  // Founder owner: the team's own, else inherited from the nearest parent that names one, else both founders.
+  const byId = new Map(rows.map(d => [d.id, d]));
+  const ownerOf = (d) => {
+    for (let x = d, i = 0; x && i < 25; i++) {
+      if (x.founder_owner_employee_id) return { name: x.founder_owner?.full_name || founders.find(f => f.id === x.founder_owner_employee_id)?.full_name || 'Founder', inherited: x !== d };
+      x = x.parent_department_id ? byId.get(x.parent_department_id) : null;
+    }
+    return { name: 'Both', inherited: false };
+  };
 
   return (
     <div>
@@ -53,6 +64,7 @@ export default function DepartmentsPage() {
           <div style={gridTh}>Code</div>
           <div style={gridTh}>Head</div>
           <div style={gridTh}>Parent</div>
+          <div style={gridTh}>Founder owner</div>
           <div style={gridTh}>Headcount</div>
           <div style={gridTh} />
         </GridHead>
@@ -61,8 +73,9 @@ export default function DepartmentsPage() {
           <GridRow key={d.id} cols={COLS} onClick={canManage ? () => setEdit(d) : undefined}>
             <div style={{ padding: '11px 16px', fontSize: 13.5, fontWeight: 600, color: 'var(--t1)' }}>{d.name}{!d.active && <span style={{ color: 'var(--t4)', fontSize: 11 }}> (inactive)</span>}</div>
             <div style={{ padding: '11px 16px' }}><span className="num" style={{ fontSize: 11.5, color: 'var(--t2)' }}>{d.code || '—'}</span></div>
-            <div style={{ padding: '11px 16px', fontSize: 13, color: 'var(--t2)' }}>{d.head?.full_name || '—'}</div>
+            <div style={{ padding: '11px 16px', fontSize: 13, color: 'var(--t2)' }}>{d.head?.full_name || <span style={{ color: 'var(--t4)', fontStyle: 'italic' }}>To be hired</span>}</div>
             <div style={{ padding: '11px 16px', fontSize: 13, color: 'var(--t3)' }}>{d.parent?.name || '—'}</div>
+            <div style={{ padding: '11px 16px', fontSize: 13, color: 'var(--t2)' }}>{(o => <>{o.name}{o.inherited && <span style={{ color: 'var(--t4)', fontSize: 11 }}> (from parent)</span>}</>)(ownerOf(d))}</div>
             <div style={{ padding: '11px 16px' }}><span className="num" style={{ fontSize: 13, color: 'var(--t1)' }}>{d.headcount || 0}</span></div>
             <div style={{ padding: '11px 16px', display: 'flex', justifyContent: 'center' }}>
               {canManage && <button onClick={(e) => { e.stopPropagation(); setEdit(d); }} style={iconBtn} title="Edit"><Pencil size={13} /></button>}
@@ -75,8 +88,15 @@ export default function DepartmentsPage() {
         {edit && <>
           <Field label="Name *"><input style={inp} value={edit.name || ''} onChange={e => setEdit(s => ({ ...s, name: e.target.value }))} /></Field>
           <Field label="Code"><input style={inp} value={edit.code || ''} onChange={e => setEdit(s => ({ ...s, code: e.target.value }))} /></Field>
-          <Field label="Head"><Combobox value={edit.head_employee_id || ''} onChange={v => setEdit(s => ({ ...s, head_employee_id: v }))} inputStyle={comboInp} placeholder="Search person…" options={people.map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} /></Field>
-          <Field label="Parent department"><Combobox value={edit.parent_department_id || ''} onChange={v => setEdit(s => ({ ...s, parent_department_id: v }))} inputStyle={comboInp} placeholder="Search department…" options={rows.filter(r => r.id !== edit.id).map(r => ({ value: r.id, label: r.name }))} /></Field>
+          <Field label="Head"><Combobox value={edit.head_employee_id || ''} onChange={v => setEdit(s => ({ ...s, head_employee_id: v }))} inputStyle={comboInp} placeholder="To be hired" options={people.map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} /></Field>
+          <Field label="Founder owner">
+            <select style={inp} value={edit.founder_owner_employee_id || ''} onChange={e => setEdit(s => ({ ...s, founder_owner_employee_id: e.target.value }))}>
+              <option value="">{edit.parent_department_id ? 'Same as parent team' : 'Both'}</option>
+              {founders.map(f => <option key={f.id} value={f.id}>{f.full_name}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: 'var(--t4)', marginTop: 4 }}>Skip-level approver for anyone in this team whose manager is to be hired.</div>
+          </Field>
+          <Field label="Parent department"><Combobox value={edit.parent_department_id || ''} onChange={v => setEdit(s => ({ ...s, parent_department_id: v }))} inputStyle={comboInp} placeholder="Search department…" options={teamOptions(rows, edit.id)} /></Field>
           <Field label="Description"><input style={inp} value={edit.description || ''} onChange={e => setEdit(s => ({ ...s, description: e.target.value }))} /></Field>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--t2)' }}><input type="checkbox" checked={edit.active !== false} onChange={e => setEdit(s => ({ ...s, active: e.target.checked }))} /> Active</label>
         </>}

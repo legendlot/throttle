@@ -12,7 +12,7 @@ import { ObservationsPanel, WinsPanel, OneOnOnesPanel } from '../../../../compon
 import PayoutsPanel from '../../../../components/PayoutsPanel.js';
 import { ExitPanel } from '../../../../components/ExitBits.js';
 import { OnboardingCard, PrivateDetailsCard } from '../../../../components/OnboardingBits.js';
-import { fmtDate, fmtMoney, tenure, labelOf, EMPLOYMENT_TYPES, DOC_TYPES, GENDER_LABELS } from '../../../../lib/format.js';
+import { fmtDate, fmtMoney, tenure, labelOf, levelLabel, EMPLOYMENT_TYPES, DOC_TYPES, GENDER_LABELS } from '../../../../lib/format.js';
 
 const TABS = [
   { id: 'profile',      label: 'Profile' },
@@ -59,6 +59,7 @@ export default function PersonDetailPage() {
           <div style={{ color: 'var(--text-2)', fontSize: 13 }}>
             <span style={{ color: 'var(--podium-accent)', fontWeight: 600 }}>{e.employee_code}</span>
             {e.job_title && <> · {e.job_title}</>}
+            {e.level?.code && <> · {levelLabel(e.level)}</>}
             {e.department?.name && <> · {e.department.name}</>}
           </div>
         </div>
@@ -82,9 +83,9 @@ export default function PersonDetailPage() {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14, alignItems: 'start' }}>
           <Card title="Employment">
-            <KV k="Job role" v={e.job_role?.title} />
-            <KV k="Grade" v={e.job_role?.level} />
-            <KV k="Manager" v={e.manager?.full_name} />
+            {/* Job role is hidden (Title / Level / Team, 2026-11-14) — Level replaces the role's grade. */}
+            <KV k="Level" v={levelLabel(e.level)} />
+            <KV k="Manager" v={e.manager?.full_name || (e.manager_to_be_hired ? 'To be hired' : null)} />
             {e.secondary_manager?.full_name && <KV k="Also reports to" v={`${e.secondary_manager.full_name} (dotted)`} />}
             <KV k="Type" v={labelOf(EMPLOYMENT_TYPES, e.employment_type)} />
             <KV k="Legal entity" v={e.legal_entity} />
@@ -116,7 +117,7 @@ export default function PersonDetailPage() {
               {data.reports.map(r => (
                 <div key={r.id} onClick={() => router.push(`/people/detail/?id=${r.id}`)} style={reportRow}>
                   <span>{r.full_name}</span>
-                  <span style={{ color: 'var(--text-3)', fontSize: 12 }}>{r.job_title || ''}</span>
+                  <span style={{ color: 'var(--text-3)', fontSize: 12 }}>{[r.job_title, levelLabel(r.level, true)].filter(Boolean).join(' · ')}</span>
                 </div>
               ))}
             </Card>

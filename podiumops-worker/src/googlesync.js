@@ -123,6 +123,15 @@ export function desiredGoogleFields(emp, { departmentName = null, managerEmail =
   };
 }
 
+// The department label Google gets (podium_title_level_team_v1): a sub-team pushes "<Parent> - <Child>"
+// ("Sales - Ecommerce", "NPD - Build"); a top-level team its own name. dept = { name, parent: { name } | null }.
+export function googleDepartmentLabel(dept) {
+  const name = clean(dept?.name);
+  if (!name) return null;
+  const parent = clean(dept?.parent?.name);
+  return parent ? `${parent} - ${name}` : name;
+}
+
 // The same shape, read off a Google user (for the diff and the last-pushed comparison).
 export function googleFieldsOf(gUser) {
   const g = gUser || {};

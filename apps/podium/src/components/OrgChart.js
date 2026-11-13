@@ -13,10 +13,19 @@ import { buildOrgForest } from '../lib/orgTree.js';
 import { Avatar } from './ui.js';
 
 function deptName(n) { return n.department?.name || n.department || ''; }
+// Title · level code (Title / Level / Team, 2026-11-14), else the department.
+function subtitle(n) { return [n.job_title, n.level?.code].filter(Boolean).join(' · ') || deptName(n) || '—'; }
+// A vacant manager seat (manager_to_be_hired) hangs under the team's founder owner (the worker's skip_level_id)
+// with a "manager to be hired" note; with no owner it stays a root.
+function withSkipLevel(nodes) {
+  const ids = new Set(nodes.map(n => n.id));
+  return nodes.map(n => (n.manager_to_be_hired && !n.manager_id && n.skip_level_id && ids.has(n.skip_level_id)
+    ? { ...n, manager_id: n.skip_level_id, _tbh: true } : n));
+}
 
 export default function OrgChart({ nodes, onSelect }) {
   const { roots, managers } = useMemo(() => {
-    const forest = buildOrgForest(nodes || []);
+    const forest = buildOrgForest(withSkipLevel(nodes || []));
     const mgrs = [];
     // Roots included: a root's IC reports have no other card to appear in — without
     // the root's own manager card they vanish from the chart entirely.
@@ -40,7 +49,7 @@ export default function OrgChart({ nodes, onSelect }) {
             <Avatar name={r.full_name} photoUrl={r.photo_url} tintKey={r.id} size={42} />
             <div>
               <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--t1)' }}>{r.full_name}</div>
-              <div style={{ fontSize: 12, color: 'var(--t2)' }}>{r.job_title || deptName(r) || '—'}</div>
+              <div style={{ fontSize: 12, color: 'var(--t2)' }}>{subtitle(r)}</div>
             </div>
           </div>
         ))}
@@ -57,7 +66,7 @@ export default function OrgChart({ nodes, onSelect }) {
               <Avatar name={m.full_name} photoUrl={m.photo_url} tintKey={m.id} size={34} />
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--t1)' }}>{m.full_name}</div>
-                <div style={{ fontSize: 11.5, color: 'var(--t2)' }}>{m.job_title || deptName(m) || '—'}</div>
+                <div style={{ fontSize: 11.5, color: 'var(--t2)' }}>{subtitle(m)}{m._tbh && ' · manager to be hired'}</div>
               </div>
             </div>
             <div style={{ marginTop: 9, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -66,6 +75,7 @@ export default function OrgChart({ nodes, onSelect }) {
                   style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px', borderRadius: 7, background: 'var(--bg)', cursor: 'pointer' }}>
                   <Avatar name={r.full_name} photoUrl={r.photo_url} tintKey={r.id} size={26} />
                   <span style={{ fontSize: 12.5, color: 'var(--t-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.full_name}</span>
+                  {r._tbh && <span style={{ fontSize: 10.5, color: 'var(--t4)', fontStyle: 'italic', whiteSpace: 'nowrap' }}>(manager to be hired)</span>}
                   {r.children.length > 0 && <span className="num" style={{ marginLeft: 'auto', fontSize: 10.5, color: 'var(--t4)' }}>+{r.children.length}</span>}
                 </div>
               ))}

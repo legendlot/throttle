@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState, useCallback, Suspense } from 'react';
+import { teamOptions } from '../../../../lib/format.js';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState, Combobox, useToast } from '@throttle/ui';
@@ -172,7 +173,7 @@ function NewObjectiveForm({ session, cycleId, people, depts, objectives, onDone 
       <Field label="Level" w={150}><select value={level} onChange={e => setLevel(e.target.value)} style={inp}>{Object.entries(LEVELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></Field>
       <Field label="Objective" w={320}><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Aspirational, qualitative" style={inp} /></Field>
       {level === 'department' && (
-        <Field label="Department" w={220}><Combobox value={deptId} onChange={setDeptId} inputStyle={inp} placeholder="Search department…" options={depts.map(d => ({ value: d.id, label: d.name }))} /></Field>
+        <Field label="Department" w={220}><Combobox value={deptId} onChange={setDeptId} inputStyle={inp} placeholder="Search department…" options={teamOptions(depts)} /></Field>
       )}
       {(level === 'individual' || level === 'company') && (
         <Field label={level === 'company' ? 'Owner (optional)' : 'Owner'} w={220}><Combobox value={ownerId} onChange={setOwnerId} inputStyle={inp} placeholder="Search person…" options={people.map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} /></Field>

@@ -391,10 +391,25 @@ export function cancelBlock({ mode, req, meId, hr, approverManagerId = null, tod
 }
 
 // ── D9: approver at submit ───────────────────────────────────────────────────
-// manager_id; no manager → the other founder when the person is a founder; else null (HR decides).
-export function resolveLeaveApprover(emp, founders = []) {
+// manager_id; no manager → the other founder when the person is a founder; else the founder owner of their team
+// (podium_title_level_team_v1: a vacant manager seat → the skip-level founder); else null (HR decides).
+// `departments` = [{ id, parent_department_id, founder_owner_employee_id }] — loaded once by the caller.
+export function resolveLeaveApprover(emp, founders = [], departments = []) {
   if (emp?.manager_id) return emp.manager_id;
   if ((founders || []).includes(emp?.id)) return (founders || []).find(f => f !== emp.id) || null;
+  return teamFounderOwner(emp, departments);
+}
+
+// The founder who owns this person's team: the team's own founder_owner_employee_id, else the nearest parent's
+// (a sub-team with no owner inherits). null when no team up the chain names one (null owner = both founders → HR),
+// and never the person themselves. Derived on every read, never stored per person.
+export function teamFounderOwner(emp, departments = []) {
+  const byId = new Map((departments || []).map(d => [d.id, d]));
+  let d = emp?.department_id ? byId.get(emp.department_id) : null;
+  for (let depth = 0; d && depth < 25; depth++) {
+    if (d.founder_owner_employee_id) return d.founder_owner_employee_id === emp.id ? null : d.founder_owner_employee_id;
+    d = d.parent_department_id ? byId.get(d.parent_department_id) : null;
+  }
   return null;
 }
 
@@ -697,9 +712,10 @@ export function grantPlan(d, { gender = null, today = null } = {}) {
 
 // ── E4: WFH approver at submit ───────────────────────────────────────────────
 // Afshaan 2026-11-13: "Let work from home go to the manager, not just the skip level" → the approver is the direct
-// manager; the skip-level (the approver's manager) and HR may also decide (D9, decideBlock). No manager → null (HR).
-export function wfhApprover(emp) {
-  return emp?.manager_id || null;
+// manager; the skip-level (the approver's manager) and HR may also decide (D9, decideBlock). No manager → the founder
+// owner of their team (teamFounderOwner — the skip-level for a vacant manager seat), else null (HR).
+export function wfhApprover(emp, departments = []) {
+  return emp?.manager_id || teamFounderOwner(emp, departments);
 }
 
 // ── E5: year-end preview ─────────────────────────────────────────────────────
@@ -743,4 +759,14 @@ export function yearEndPreview({ employee, ledger = [], requests = [], cutoverMo
     out[t] = { projected: fromHalves(p), carry: fromHalves(p > keep ? keep : p), lapse: fromHalves(Math.max(0, p - keep)), pending: fromHalves(pending) };
   }
   return out;
+}
+
+// podium_title_level_team_v1: a vacant manager seat is manager_id null + manager_to_be_hired true — never both
+// (employees_manager_tbh_check). A non-null manager_id forces the flag off; the flag on clears manager_id. Mutates `obj`.
+export function normalizeManagerSeat(obj) {
+  if (!obj) return obj;
+  if ('manager_to_be_hired' in obj) obj.manager_to_be_hired = obj.manager_to_be_hired === true || obj.manager_to_be_hired === 'true';
+  if (obj.manager_id) obj.manager_to_be_hired = false;
+  else if (obj.manager_to_be_hired) obj.manager_id = null;
+  return obj;
 }

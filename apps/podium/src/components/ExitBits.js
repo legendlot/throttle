@@ -532,7 +532,7 @@ export function MyExitBlock({ employeeId, session }) {
                 <button onClick={() => setOpenId(openId === t.id ? null : t.id)} style={{ ...smallBtn, border: 'none', padding: 2 }}>
                   {openId === t.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </button>
-                <span style={{ flex: 1 }}>{t.full_name} <span style={muted}>{t.employee_code}{t.job_title ? ` · ${t.job_title}` : ''}{t.direct ? '' : ' · indirect'}</span></span>
+                <span style={{ flex: 1 }}>{t.full_name} <span style={muted}>{t.employee_code}{t.job_title ? ` · ${t.job_title}` : ''}{t.level?.code ? ` · ${t.level.code}` : ''}{t.direct ? '' : ' · indirect'}</span></span>
                 {t.on_notice && <ToneBadge tone="bad" label="On notice" />}
                 <button onClick={() => setOpenId(openId === t.id ? null : t.id)} style={smallBtn}><LogOut size={12} /> Exit</button>
               </div>

@@ -25,6 +25,7 @@ function OpeningDetailInner() {
   const { showToast } = useToast();
   const [data, setData] = useState(null);
   const [emps, setEmps] = useState([]);
+  const [levels, setLevels] = useState([]);
 
   const load = useCallback(() => {
     if (!session || !id) return;
@@ -32,7 +33,7 @@ function OpeningDetailInner() {
   }, [session, id]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    if (session) podiumopsGet('getHiringLookups', {}, session).then(d => setEmps(d.employees || [])).catch(() => {});
+    if (session) podiumopsGet('getHiringLookups', {}, session).then(d => { setEmps(d.employees || []); setLevels(d.levels || []); }).catch(() => {});
   }, [session]);
 
   if (data === false) return <div style={{ color: 'var(--text-3)' }}>Not found, or you don't have access to this opening.</div>;
@@ -85,6 +86,7 @@ function OpeningDetailInner() {
           <div style={{ color: 'var(--text-2)', fontSize: 13 }}>
             <span style={{ color: 'var(--podium-accent)', fontWeight: 600 }}>{o.opening_code}</span>
             {(o.department?.name || o.department_name) && <> · {o.department?.name || o.department_name}</>}
+            {o.level?.code && <> · {o.level.code} · {o.level.name}</>}
             {o.location_city && <> · {o.location_city}</>}
             {' · '}{labelFrom(HIRING_EMPLOYMENT_TYPES, o.employment_type)} · {o.headcount ?? 1} seat{Number(o.headcount) === 1 ? '' : 's'}
             {o.target_join_date && <> · join by {fmtDate(o.target_join_date)}</>}
@@ -103,7 +105,7 @@ function OpeningDetailInner() {
         <JdCard data={data} canEdit={canEdit} session={session} onChanged={load} />
         <div style={{ display: 'grid', gap: 14 }}>
           <BandCard opening={o} budgets={budgets} canDecide={!!data.can_decide_pending} canEdit={canEdit} canSeeSalary={canSeeSalary} session={session} onChanged={load} />
-          <TeamCard data={data} emps={emps} canEdit={canEdit} canChangeChain={canChangeChain} session={session} onChanged={load} />
+          <TeamCard data={data} emps={emps} levels={levels} canEdit={canEdit} canChangeChain={canChangeChain} session={session} onChanged={load} />
         </div>
       </div>
 
@@ -276,7 +278,7 @@ function BandCard({ opening, budgets, canDecide, canEdit, canSeeSalary, session,
 }
 
 // ── Team: owner / reporting manager / approver; details edit; chain change (podium_hiring) ──
-function TeamCard({ data, emps, canEdit, canChangeChain, session, onChanged }) {
+function TeamCard({ data, emps, levels = [], canEdit, canChangeChain, session, onChanged }) {
   const { showToast } = useToast();
   const o = data.opening || {};
   const [edit, setEdit] = useState(null);
@@ -286,7 +288,7 @@ function TeamCard({ data, emps, canEdit, canChangeChain, session, onChanged }) {
 
   function start() {
     setEdit({
-      designation: o.designation || '', location_city: o.location_city || '', location_state: o.location_state || '',
+      designation: o.designation || '', level_id: o.level_id || '', location_city: o.location_city || '', location_state: o.location_state || '',
       employment_type: o.employment_type || 'full_time', headcount: String(o.headcount ?? 1),
       target_join_date: o.target_join_date || '', notes: o.notes || '',
       reporting_manager_employee_id: o.reporting_manager_employee_id || '', hiring_owner_employee_id: o.hiring_owner_employee_id || '',
@@ -295,7 +297,7 @@ function TeamCard({ data, emps, canEdit, canChangeChain, session, onChanged }) {
   async function save() {
     if (!edit.designation.trim()) { showToast('Designation is required', 'error'); return; }
     const body = {
-      id: o.id, designation: edit.designation.trim(), location_city: edit.location_city || null, location_state: edit.location_state || null,
+      id: o.id, designation: edit.designation.trim(), level_id: edit.level_id || null, location_city: edit.location_city || null, location_state: edit.location_state || null,
       employment_type: edit.employment_type, headcount: Math.round(Number(edit.headcount) || 1),
       target_join_date: edit.target_join_date || null, notes: edit.notes || null,
     };
@@ -306,8 +308,9 @@ function TeamCard({ data, emps, canEdit, canChangeChain, session, onChanged }) {
     }
     setBusy(true);
     try {
-      await podiumopsPost('updateOpening', body, session);
-      showToast(body.reporting_manager_employee_id ? 'Saved — the pending band was re-sent to the new approver' : 'Saved', 'success');
+      const r = await podiumopsPost('updateOpening', body, session);
+      if ((r?.data || r)?.level_not_saved) showToast('Saved, but the level did not save — set it again', 'error');
+      else showToast(body.reporting_manager_employee_id ? 'Saved — the pending band was re-sent to the new approver' : 'Saved', 'success');
       setEdit(null); onChanged();
     } catch (e) { showToast(hiringError(e), 'error'); }
     finally { setBusy(false); }
@@ -322,7 +325,15 @@ function TeamCard({ data, emps, canEdit, canChangeChain, session, onChanged }) {
         {o.notes && <div style={{ ...muted, marginTop: 8, whiteSpace: 'pre-wrap' }}>{o.notes}</div>}
       </> : (
         <div>
-          <F label="Designation"><input style={inp} value={edit.designation} onChange={e => setEdit(s => ({ ...s, designation: e.target.value }))} /></F>
+          <Row>
+            <F label="Designation"><input style={inp} value={edit.designation} onChange={e => setEdit(s => ({ ...s, designation: e.target.value }))} /></F>
+            <F label="Level">
+              <select style={inp} value={edit.level_id} onChange={e => setEdit(s => ({ ...s, level_id: e.target.value }))}>
+                <option value="">—</option>
+                {levels.map(l => <option key={l.id} value={l.id}>{l.code} · {l.name}</option>)}
+              </select>
+            </F>
+          </Row>
           <Row>
             <F label="City"><input style={inp} value={edit.location_city} onChange={e => setEdit(s => ({ ...s, location_city: e.target.value }))} /></F>
             <F label="State"><input style={inp} value={edit.location_state} onChange={e => setEdit(s => ({ ...s, location_state: e.target.value }))} /></F>

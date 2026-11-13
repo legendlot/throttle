@@ -8,6 +8,7 @@ import {
   reclosePlan, splitBase, coveredFromOnChange, holidayListMissing, noHolidayListMessage, LEAVE_COPY,
   APPLY_TYPES, GRANT_TYPES, workingHalves, lopAllocation, lopReport, lopDiff, exitLeaveFigures, exitLeaveBlock, grantPlan,
   wfhApprover, yearEndYear, yearEndPreview, exitLeaveStale, withOpenExit, applyOpenExitsWith, lopExportRows, canonicalJson,
+  teamFounderOwner,
 } from '../src/leave.js';
 
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -298,6 +299,38 @@ test('approver at submit (D9)', () => {
   assert.equal(resolveLeaveApprover({ id: U(5), manager_id: null }, [U(5), U(6)]), U(6));
   assert.equal(resolveLeaveApprover({ id: U(6), manager_id: null }, [U(5), U(6)]), U(5));
   assert.equal(resolveLeaveApprover({ id: U(7), manager_id: null }, [U(5), U(6)]), null);
+});
+
+// podium_title_level_team_v1: a vacant manager seat → the founder owner of the team (walk up parents) → null (HR).
+test('approver for a vacant manager seat = the team founder owner (skip-level)', () => {
+  const F = [U(5), U(6)];
+  const teams = [
+    { id: U(40), parent_department_id: null, founder_owner_employee_id: U(5) },    // Sales → founder 5
+    { id: U(41), parent_department_id: U(40), founder_owner_employee_id: null },   // Sales > Ecommerce (inherits)
+    { id: U(42), parent_department_id: U(40), founder_owner_employee_id: U(6) },   // Sales > B2B → founder 6
+    { id: U(43), parent_department_id: null, founder_owner_employee_id: null },    // Founder's Office (both)
+  ];
+  // manager present: unchanged
+  assert.equal(resolveLeaveApprover({ id: U(1), manager_id: U(2), department_id: U(40) }, F, teams), U(2));
+  assert.equal(wfhApprover({ id: U(1), manager_id: U(2), department_id: U(40) }, teams), U(2));
+  // vacant → the team's own owner
+  assert.equal(resolveLeaveApprover({ id: U(7), manager_id: null, department_id: U(40) }, F, teams), U(5));
+  assert.equal(resolveLeaveApprover({ id: U(7), manager_id: null, department_id: U(42) }, F, teams), U(6));
+  assert.equal(wfhApprover({ id: U(7), manager_id: null, department_id: U(42) }, teams), U(6));
+  // vacant → the parent's owner when the sub-team has none
+  assert.equal(resolveLeaveApprover({ id: U(7), manager_id: null, department_id: U(41) }, F, teams), U(5));
+  assert.equal(wfhApprover({ id: U(7), manager_id: null, department_id: U(41) }, teams), U(5));
+  // no owner up the chain / no team / no departments loaded → null (HR decides)
+  assert.equal(resolveLeaveApprover({ id: U(7), manager_id: null, department_id: U(43) }, F, teams), null);
+  assert.equal(resolveLeaveApprover({ id: U(7), manager_id: null, department_id: null }, F, teams), null);
+  assert.equal(resolveLeaveApprover({ id: U(7), manager_id: null, department_id: U(40) }, F), null);
+  assert.equal(wfhApprover({ id: U(7), manager_id: null, department_id: U(43) }, teams), null);
+  // founders keep their rule (the other founder), never their own team's owner
+  assert.equal(resolveLeaveApprover({ id: U(5), manager_id: null, department_id: U(42) }, F, teams), U(6));
+  // never the person themselves; a parent cycle terminates
+  assert.equal(teamFounderOwner({ id: U(5), department_id: U(40) }, teams), null);
+  const loop = [{ id: U(50), parent_department_id: U(51) }, { id: U(51), parent_department_id: U(50) }];
+  assert.equal(teamFounderOwner({ id: U(7), department_id: U(50) }, loop), null);
 });
 
 test('mail: names type label + dates + days, never reason / borrowed / LOP; period says "Leave"', () => {
@@ -768,4 +801,20 @@ test("re-verify A': a covered person's done leave line with no snapshot is stale
   assert.equal(exitLeaveStale({ exit, item, requests: [], ledger: { PL: 1, SL: 0 } }), true);
   assert.equal(exitLeaveStale({ exit: { ...exit, leave_confirmed_at: '2026-12-10T00:00:00Z' }, item, requests: [], ledger: { PL: 1, SL: 0 } }), true);
   assert.equal(exitLeaveStale({ exit, item, requests: [], ledger: null }), false);
+});
+
+// podium_title_level_team_v1: the vacant-seat rule never lets a manager and "to be hired" coexist (0024 CHECK).
+import { normalizeManagerSeat } from '../src/leave.js';
+test('normalizeManagerSeat: manager + flag on → flag off', () => {
+  assert.deepEqual(normalizeManagerSeat({ manager_id: 'm1', manager_to_be_hired: true }), { manager_id: 'm1', manager_to_be_hired: false });
+});
+test('normalizeManagerSeat: flag on alone → manager cleared', () => {
+  assert.deepEqual(normalizeManagerSeat({ manager_to_be_hired: 'true' }), { manager_to_be_hired: true, manager_id: null });
+});
+test('normalizeManagerSeat: manager only → flag forced off', () => {
+  assert.deepEqual(normalizeManagerSeat({ manager_id: 'm1' }), { manager_id: 'm1', manager_to_be_hired: false });
+});
+test('normalizeManagerSeat: neither → untouched; flag off keeps manager blank', () => {
+  assert.deepEqual(normalizeManagerSeat({ job_title: 'x' }), { job_title: 'x' });
+  assert.deepEqual(normalizeManagerSeat({ manager_id: '', manager_to_be_hired: false }), { manager_id: '', manager_to_be_hired: false });
 });

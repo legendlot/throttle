@@ -100,6 +100,7 @@ import {
   SYNC_FIELDS, DRAIN_CAP as GSYNC_CAP, GOOGLE_CALL_TIMEOUT_MS, SYNC_LEASE_MS, IDENTITY_RETRY_ATTEMPTS, desiredGoogleFields,
   googleFieldsOf, mergeGoogleUser, bodyFields, scopeOf, diffPerson, nextLastPushed, nextAttemptAt, syncClaimFilter,
   cleanSyncFields, ouExcluded, fieldsToPush, leaseHeld, previewHash, needsOuCheck, effectiveFields, identityChanged,
+  FOUNDER_CODES, googleDepartmentLabel,
 } from './googlesync.js';   // J1b Podium → Google field sync (test/googlesync.test.mjs)
 import {
   LEDGER_TYPES, TYPE_LABELS, LEAVE_COPY, LEAVE_POLICIES, DEFAULT_CUTOVER_MONTH, isIsoDay, isMonth, monthOf, yearOf,
@@ -108,7 +109,8 @@ import {
   leaveMessageId, cleanAmount, cleanNote, cleanHoliday, leaveDbErrorCode, reclosePlan, splitBase, coveredFromOnChange,
   holidayListMissing, noHolidayListMessage,
   lopReport, lopDiff, exitLeaveFigures, exitLeaveBlock, grantPlan, wfhApprover, yearEndYear, yearEndPreview,
-  exitLeaveStale, withOpenExit, applyOpenExitsWith, lopExportRows, canonicalJson,
+  exitLeaveStale, withOpenExit, applyOpenExitsWith, lopExportRows, canonicalJson, teamFounderOwner,
+  normalizeManagerSeat,
 } from './leave.js';   // Leave R1 + R2 (test/leave.test.mjs)
 import {
   CAL_SCOPE, CAL_COPY, calendarEventIds, syncedHash, buildInternalEvent, buildCandidateEvent, conferenceOf, meetUrlOf,
@@ -493,6 +495,7 @@ function stripPan(row, auth, edges) {
 const PUBLIC_EMP_KEYS = [
   'id', 'employee_code', 'full_name', 'preferred_name', 'job_title',
   'department_id', 'job_role_id', 'manager_id', 'secondary_manager_id', 'photo_url', 'status', 'work_email',
+  'level_id', 'manager_to_be_hired',
 ];
 function projectPublic(row) {
   const out = {};
@@ -500,6 +503,7 @@ function projectPublic(row) {
   // keep embedded labels if present
   if (row.department) out.department = row.department;
   if (row.job_role)   out.job_role = row.job_role;
+  if (row.level)      out.level = row.level;
   if (row.manager)    out.manager = row.manager;
   if (row.secondary_manager) out.secondary_manager = row.secondary_manager;
   out._restricted = true;
@@ -507,7 +511,7 @@ function projectPublic(row) {
 }
 
 const EMP_EMBED =
-  'department:department_id(id,name,code),job_role:job_role_id(id,title,level),manager:manager_id(id,full_name,job_title),secondary_manager:secondary_manager_id(id,full_name,job_title)';
+  'department:department_id(id,name,code),job_role:job_role_id(id,title,level),level:level_id(id,code,name,rank),manager:manager_id(id,full_name,job_title),secondary_manager:secondary_manager_id(id,full_name,job_title)';
 
 // ────────────────────────────────────────────────────────────────────────────
 // GET ACTIONS
@@ -610,21 +614,31 @@ async function getEmployee(url, auth, env, ctx) {
   const full = canSeeFull(auth, edges, emp.id);
   // Direct reports (directory-safe) for the profile's "Team" section.
   const reports = (r2 => (r2 || []))((await sb(
-    `/rest/v1/employees?manager_id=eq.${emp.id}&status=neq.exited&select=id,employee_code,full_name,job_title,photo_url,status&order=full_name.asc`, env,
+    `/rest/v1/employees?manager_id=eq.${emp.id}&status=neq.exited&select=id,employee_code,full_name,job_title,photo_url,status,level:level_id(code,name)&order=full_name.asc`, env,
   )).data);
   const onNotice = (await openExitEmployeeIds(env)).has(emp.id);
   return ok({ employee: { ...(full ? stripPan(emp, auth, edges) : projectPublic(emp)), on_notice: onNotice }, can_see_full: full, can_see_comp: canComp(auth), reports });
+}
+
+// podium_title_level_team_v1: a node with a vacant manager seat (manager_to_be_hired) carries skip_level_id = the
+// founder owner of its team (teamFounderOwner), so the chart can hang it there with a "manager to be hired" note.
+const ORG_NODE_SELECT = 'id,employee_code,full_name,preferred_name,job_title,manager_id,manager_to_be_hired,department_id,photo_url,status,'
+  + 'level:level_id(code,name),department:department_id(id,name,code)';
+async function orgNodesWithSkipLevel(env, nodes) {
+  if (!nodes.some(n => n.manager_to_be_hired)) return nodes;
+  const teams = await loadTeamOwners(env);
+  return nodes.map(n => (n.manager_to_be_hired ? { ...n, skip_level_id: teamFounderOwner(n, teams || []) } : n));
 }
 
 async function getOrgChart(url, auth, env) {
   const includeExited = url.searchParams.get('include_exited') === 'true';
   const filter = includeExited ? '' : 'status=neq.exited&';
   const r = await sb(
-    `/rest/v1/employees?${filter}select=id,employee_code,full_name,preferred_name,job_title,manager_id,photo_url,status,department:department_id(id,name,code)&order=full_name.asc&limit=5000`,
+    `/rest/v1/employees?${filter}select=${ORG_NODE_SELECT}&order=full_name.asc&limit=5000`,
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  return ok({ nodes: r.data || [] });
+  return ok({ nodes: await orgNodesWithSkipLevel(env, r.data || []) });
 }
 
 async function getOrgSnapshots(url, auth, env) {
@@ -641,16 +655,32 @@ async function getOrgSnapshots(url, auth, env) {
 
 async function getDepartments(url, auth, env) {
   const r = await sb(
-    `/rest/v1/departments?select=*,head:head_employee_id(id,full_name),parent:parent_department_id(id,name)&order=name.asc`,
+    `/rest/v1/departments?select=*,head:head_employee_id(id,full_name),parent:parent_department_id(id,name),founder_owner:founder_owner_employee_id(id,full_name,employee_code)&order=name.asc`,
     env,
   );
   if (!r.ok) return err('db_error', 500);
   // headcount per department (directory-safe)
-  const er = await sb(`/rest/v1/employees?status=neq.exited&select=department_id`, env);
+  const [er, fr] = await Promise.all([
+    sb(`/rest/v1/employees?status=neq.exited&select=department_id`, env),
+    // The founder-owner choices (FOUNDER_CODES) for the Teams page + EmployeeForm's skip-level line.
+    sb(`/rest/v1/employees?employee_code=in.(${FOUNDER_CODES.join(',')})&select=id,full_name,employee_code&order=employee_code.asc`, env),
+  ]);
   const counts = {};
   for (const e of (er.data || [])) if (e.department_id) counts[e.department_id] = (counts[e.department_id] || 0) + 1;
   const rows = (r.data || []).map(d => ({ ...d, headcount: counts[d.id] || 0 }));
-  return ok({ departments: rows });
+  return ok({ departments: rows, founders: fr.ok ? (fr.data || []) : [] });
+}
+
+// podium_title_level_team_v1: the L0–L10 ladder (active, by rank). Directory-safe metadata — any signed-in user
+// (SELF_SERVE_GET); EmployeeForm reads it here, the openings forms via getHiringLookups. → [] | null on a failed read.
+async function loadLevels(env) {
+  const r = await sb(`/rest/v1/levels?active=eq.true&select=id,code,name,rank&order=rank.asc&limit=100`, env);
+  return r.ok && Array.isArray(r.data) ? r.data : null;
+}
+async function listLevels(url, auth, env) {
+  const levels = await loadLevels(env);
+  if (!levels) return err('db_error', 500);
+  return ok({ levels });
 }
 
 // Strip salary-band fields unless the caller may see compensation.
@@ -860,7 +890,28 @@ const EMPLOYEE_FIELDS = [
   'org_unit_path',
   // Leave D1: coverage (null = not covered). Both writers are requireHr; cleanLeavePolicyField validates the value.
   'leave_policy',
+  // podium_title_level_team_v1: the L0–L10 ladder + a vacant manager seat ("To be hired"). cleanLevelManagerFields.
+  'level_id', 'manager_to_be_hired',
 ];
+
+// podium_title_level_team_v1: level_id = an existing podium.levels row or null (blank clears). A vacant manager seat is
+// manager_id null + manager_to_be_hired true — never both (employees_manager_tbh_check), so a non-null manager_id
+// forces the flag off and the flag on clears manager_id, here in the write, before the CHECK can fire. Mutates `obj`;
+// → null | the error response.
+async function cleanLevelManagerFields(obj, env) {
+  if (!obj) return null;
+  if ('level_id' in obj) {
+    if (obj.level_id === '' || obj.level_id == null) obj.level_id = null;
+    else {
+      if (!isUuid(obj.level_id)) return errCode('bad_level', 'Pick a level from the list', 400);
+      const r = await sb(`/rest/v1/levels?id=eq.${obj.level_id}&select=id&limit=1`, env);
+      if (!r.ok) return err('db_error: level lookup failed', 500);
+      if (!r.data?.length) return errCode('bad_level', 'Pick a level from the list', 400);
+    }
+  }
+  normalizeManagerSeat(obj);
+  return null;
+}
 
 // Leave D1: blank → null (not covered); otherwise one of LEAVE_POLICIES. Mutates `obj`; → null | the error response.
 function cleanLeavePolicyField(obj) {
@@ -953,6 +1004,7 @@ async function createEmployee(body, auth, env, ctx) {
   { const le = cleanLeavePolicyField(row); if (le) return le; }
   { const cf = coveredFromOnChange(null, row.leave_policy, istToday()); if (cf) row.leave_covered_from = cf; }
   { const oe = await cleanOrgUnitField(row, env); if (oe) return oe; }
+  { const lm = await cleanLevelManagerFields(row, env); if (lm) return lm; }
   const r = await sb(`/rest/v1/employees`, env, { method: 'POST', body: JSON.stringify([row]), headers: actorHeaders(auth) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   const created = r.data?.[0];
@@ -1021,8 +1073,10 @@ async function reassignReportsOnExit(exitingId, auth, env) {
       for (const e of movable) out.unassigned.push({ id: e.id, full_name: e.full_name, why: 'no active manager above the exiting employee' });
     } else if (movable.length) {
       const ids = movable.map(e => e.id).filter(id => UUID_RE.test(id));
-      const pr = await sb(`/rest/v1/employees?id=in.(${ids.join(',')})&status=neq.exited&select=id`, env,
-        { method: 'PATCH', body: JSON.stringify({ manager_id: heir.id, updated_at: nowIso() }), headers: actorHeaders(auth) });
+      // Only rows STILL reporting to the exiting person (HR may have re-pointed or vacated one since the read), and a
+      // manager set here always clears the to-be-hired flag (0024 CHECK).
+      const pr = await sb(`/rest/v1/employees?id=in.(${ids.join(',')})&manager_id=eq.${exitingId}&status=neq.exited&select=id`, env,
+        { method: 'PATCH', body: JSON.stringify({ manager_id: heir.id, manager_to_be_hired: false, updated_at: nowIso() }), headers: actorHeaders(auth) });
       if (!pr.ok) out.errors.push(`reassign: ${JSON.stringify(pr.data)}`);
       else {
         out.to_manager = { id: heir.id, full_name: heir.full_name };
@@ -1085,6 +1139,7 @@ async function updateEmployee(body, auth, env, ctx) {
   { const pe = cleanPanField(patch); if (pe) return pe; }
   { const le = cleanLeavePolicyField(patch); if (le) return le; }
   { const oe = await cleanOrgUnitField(patch, env, body.employee_id); if (oe) return oe; }
+  { const lm = await cleanLevelManagerFields(patch, env); if (lm) return lm; }
   // Leave D14: a coverage flip is logged (EmployeeForm sends every field, so only a real change counts).
   let leaveFrom;
   if ('leave_policy' in patch) {
@@ -1115,12 +1170,28 @@ async function updateEmployee(body, auth, env, ctx) {
   return ok(saved ? { ...saved, google_sync: await googleSyncAfterSave(env, auth, ctx, saved.id) } : saved);
 }
 
-const DEPARTMENT_FIELDS = ['name', 'code', 'parent_department_id', 'head_employee_id', 'description', 'active'];
+const DEPARTMENT_FIELDS = ['name', 'code', 'parent_department_id', 'head_employee_id', 'description', 'active',
+  'founder_owner_employee_id'];
+
+// podium_title_level_team_v1: a team's founder owner is one of the founders (FOUNDER_CODES) or null (= both; a
+// sub-team with none inherits its parent's). Blank clears. Mutates `obj`; → null | the error response.
+async function cleanFounderOwnerField(obj, env) {
+  if (!obj || !('founder_owner_employee_id' in obj)) return null;
+  const v = obj.founder_owner_employee_id;
+  if (v === '' || v == null) { obj.founder_owner_employee_id = null; return null; }
+  if (!isUuid(v)) return errCode('bad_founder_owner', 'The founder owner must be Afshaan, Vinay or empty (both)', 400);
+  const r = await sb(`/rest/v1/employees?id=eq.${v}&select=employee_code&limit=1`, env);
+  if (!r.ok) return err('db_error: employee lookup failed', 500);
+  if (!FOUNDER_CODES.includes(String(r.data?.[0]?.employee_code || '').trim().toUpperCase()))
+    return errCode('bad_founder_owner', 'The founder owner must be Afshaan, Vinay or empty (both)', 400);
+  return null;
+}
 
 async function createDepartment(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!body.name) return err('name required', 400);
   const row = { created_by: auth.userId, ...pickFields(body, DEPARTMENT_FIELDS) };
+  { const fe = await cleanFounderOwnerField(row, env); if (fe) return fe; }
   const r = await sb(`/rest/v1/departments`, env, { method: 'POST', body: JSON.stringify([row]) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   return ok(r.data?.[0]);
@@ -1130,6 +1201,7 @@ async function updateDepartment(body, auth, env, ctx) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!body.department_id) return err('department_id required', 400);
   const patch = pickPatch(body, DEPARTMENT_FIELDS);
+  { const fe = await cleanFounderOwnerField(patch, env); if (fe) return fe; }
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
   const r = await sb(`/rest/v1/departments?id=eq.${body.department_id}`, env, { method: 'PATCH', body: JSON.stringify(patch), headers: actorHeaders(auth) });
@@ -1275,13 +1347,14 @@ async function deleteDocument(body, auth, env) {
 async function captureOrgSnapshot(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   const r = await sb(
-    `/rest/v1/employees?status=neq.exited&select=id,employee_code,full_name,job_title,manager_id,photo_url,department:department_id(name)&limit=5000`,
+    `/rest/v1/employees?status=neq.exited&select=${ORG_NODE_SELECT}&limit=5000`,
     env,
   );
   if (!r.ok) return err('db_error', 500);
+  const nodes = await orgNodesWithSkipLevel(env, r.data || []);   // the same node shape the live chart draws
   const ins = await sb(`/rest/v1/org_snapshots`, env, {
     method: 'POST',
-    body: JSON.stringify([{ label: body.label || `Snapshot ${nowIso().slice(0, 10)}`, snapshot: { nodes: r.data || [], captured_at: nowIso() }, captured_by: auth.userId }]),
+    body: JSON.stringify([{ label: body.label || `Snapshot ${nowIso().slice(0, 10)}`, snapshot: { nodes, captured_at: nowIso() }, captured_by: auth.userId }]),
   });
   if (!ins.ok) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
   return ok(ins.data?.[0]);
@@ -1775,7 +1848,7 @@ async function getDirectorySyncPreview(url, auth, env) {
     sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
     sb(`/rest/v1/directory_ignored?select=email`, env),
     sb(`/rest/v1/employees?select=id,full_name,work_email,status&limit=5000`, env),
-    sb(`/rest/v1/departments?select=id,name&limit=500`, env),
+    sb(`/rest/v1/departments?select=id,name,parent_department_id,parent:parent_department_id(name)&limit=500`, env),
     podiumMadeAccounts(env),
   ]);
   if (!podiumMade) return err('db_error: work_accounts lookup failed', 500);
@@ -3609,7 +3682,7 @@ const isUuid = (x) => typeof x === 'string' && UUID_RE.test(x);
 const todayIso = () => nowIso().slice(0, 10);
 const numOrNull = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
 const OPENING_EMBED =
-  'department:department_id(id,name),job_role:job_role_id(id,title),reporting_manager:reporting_manager_employee_id(id,employee_code,full_name,job_title),hiring_owner:hiring_owner_employee_id(id,employee_code,full_name,job_title)';
+  'department:department_id(id,name),job_role:job_role_id(id,title),level:level_id(id,code,name,rank),reporting_manager:reporting_manager_employee_id(id,employee_code,full_name,job_title),hiring_owner:hiring_owner_employee_id(id,employee_code,full_name,job_title)';
 
 // Founders = active, no manager, users_profile.role = 'super_admin' (EMP-001 / EMP-002 today).
 async function loadFounders(env) {
@@ -3619,6 +3692,13 @@ async function loadFounders(env) {
   const pr = await sbStore(`/rest/v1/users_profile?id=in.(${rows.map(r => r.auth_user_id).join(',')})&role=eq.super_admin&select=id`, env);
   const sa = new Set((pr.data || []).map(p => p.id));
   return rows.filter(r => sa.has(r.auth_user_id)).map(r => r.id);
+}
+
+// Every team's parent + founder owner, for teamFounderOwner (leave.js) — one read, small table. null on a failed read
+// (callers fail closed: a missed read would silently route a vacant seat's request to HR).
+async function loadTeamOwners(env) {
+  const r = await sb(`/rest/v1/departments?select=id,parent_department_id,founder_owner_employee_id&limit=1000`, env);
+  return r.ok && Array.isArray(r.data) ? r.data : null;
 }
 
 // Append-only timeline, batched. Best-effort like logCompAccess: the write already landed.
@@ -3672,11 +3752,12 @@ async function getHiringLookups(url, auth, env) {
   const edges = await loadOrgEdges(env);
   const me = callerEmployee(edges, auth.userId);
   if (!(await hiringAccess(auth, me, env))) return err('forbidden', 403);
-  const [er, dr, rr, canCreate] = await Promise.all([
+  const [er, dr, rr, canCreate, levels] = await Promise.all([
     sb(`/rest/v1/employees?status=neq.exited&select=id,employee_code,full_name,job_title,department_id,status,auth_user_id&order=full_name.asc&limit=2000`, env),
-    sb(`/rest/v1/departments?active=eq.true&select=id,name&order=name.asc&limit=500`, env),
+    sb(`/rest/v1/departments?active=eq.true&select=id,name,parent_department_id,parent:parent_department_id(name)&order=name.asc&limit=500`, env),
     sb(`/rest/v1/job_roles?active=eq.true&select=id,role_code,title,department_id,job_description,salary_band_max&order=title.asc&limit=1000`, env),
     hasPerm(auth, 'podium_hiring') ? Promise.resolve(true) : hasActiveReports(me, env),
+    loadLevels(env),
   ]);
   if (!er.ok || !dr.ok || !rr.ok) return err('db_error', 500);
   return ok({
@@ -3685,6 +3766,7 @@ async function getHiringLookups(url, auth, env) {
     // O2: can_interview = an active employee with a Podium login (the panel rule, D3). The login id stays here.
     employees: (er.data || []).map(({ auth_user_id, status, ...e }) => ({ ...e, can_interview: status === 'active' && !!auth_user_id })),
     departments: dr.data || [],
+    levels: levels || [],
     job_roles: (rr.data || []).map(r => ({
       id: r.id, role_code: r.role_code, title: r.title, department_id: r.department_id,
       has_jd: !!(r.job_description && String(r.job_description).trim()),
@@ -3732,7 +3814,7 @@ async function getOpenings(url, auth, env) {
     const pend = x.budgets.find(b => b.status === 'pending');
     return {
       id: x.o.id, opening_code: x.o.opening_code, designation: x.o.designation, status: x.o.status,
-      department: x.o.department, job_role: x.o.job_role,
+      department: x.o.department, job_role: x.o.job_role, level: x.o.level || null,
       reporting_manager: x.o.reporting_manager, hiring_owner: x.o.hiring_owner,
       location_city: x.o.location_city, employment_type: x.o.employment_type,
       headcount: x.o.headcount, target_join_date: x.o.target_join_date, created_at: x.o.created_at,
@@ -4042,11 +4124,20 @@ async function hiringRpc(env, name, p, opts = {}) {
 function rpcError(r) { return r && !r.ok ? (r.data?.message || null) : null; }
 
 const OPENING_FIELDS = ['job_role_id', 'designation', 'department_id', 'location_city', 'location_state',
-  'employment_type', 'headcount', 'target_join_date', 'notes'];
+  'employment_type', 'headcount', 'target_join_date', 'notes', 'level_id'];
+
+// podium_title_level_team_v1: an opening's level must be an existing podium.levels row — checked BEFORE the opening RPCs
+// (their fixed column lists drop level_id, so the level is a second write; a bad id must never fail after they commit).
+async function openingLevelError(patch, env) {
+  if (!patch.level_id) return null;
+  const r = await sb(`/rest/v1/levels?id=eq.${patch.level_id}&select=id&limit=1`, env);
+  if (!r.ok) return err('db_error', 500);
+  return r.data?.[0] ? null : errCode('bad_level', 'Pick a level from the list', 400);
+}
 
 function cleanOpeningPatch(d) {
   const p = pickFields(d, OPENING_FIELDS);
-  for (const k of ['job_role_id', 'department_id']) if (k in p) { if (p[k] === '' || p[k] == null) p[k] = null; else if (!isUuid(p[k])) return { error: `bad ${k}` }; }
+  for (const k of ['job_role_id', 'department_id', 'level_id']) if (k in p) { if (p[k] === '' || p[k] == null) p[k] = null; else if (!isUuid(p[k])) return { error: `bad ${k}` }; }
   if ('designation' in p) { p.designation = String(p.designation || '').trim(); if (!p.designation) return { error: 'designation required' }; }
   if ('headcount' in p) { p.headcount = Math.round(Number(p.headcount)); if (!(p.headcount >= 1 && p.headcount <= 100)) return { error: 'headcount must be 1-100' }; }
   if ('employment_type' in p && !['full_time', 'intern'].includes(p.employment_type)) return { error: 'bad employment_type' };
@@ -4082,6 +4173,7 @@ async function createOpening(body, auth, env) {
   const cp = cleanOpeningPatch(d);
   if (cp.error) return err(cp.error, 400);
   if (!cp.patch.designation) return err('designation required', 400);
+  { const le = await openingLevelError(cp.patch, env); if (le) return le; }
   // A role's band is allow-list data (projectJobRole hides it); copying it blind would let a manager
   // mint an opening on a number they cannot see.
   if (d.band_from_role && !canComp(auth)) {
@@ -4114,7 +4206,15 @@ async function createOpening(body, auth, env) {
     event_detail: { jd: !!jdText, band_from_role: !!d.band_from_role, approver_employee_id: approver },
   });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  return ok(r.data?.opening);
+  // podium_title_level_team_v1: hiring_create_opening (0007) inserts a fixed column list without level_id — set it
+  // after. Best-effort: the opening exists; a failed level write leaves it blank for an edit to fill.
+  const opening = r.data?.opening;
+  if (opening?.id && cp.patch.level_id) {
+    const lr = await sb(`/rest/v1/openings?id=eq.${opening.id}`, env, { method: 'PATCH', body: JSON.stringify({ level_id: cp.patch.level_id }) });
+    if (lr.ok && lr.data?.[0]) return ok({ ...opening, level_id: lr.data[0].level_id });
+    return ok({ ...opening, level_not_saved: true });
+  }
+  return ok(opening);
 }
 
 async function updateOpening(body, auth, env) {
@@ -4126,6 +4226,7 @@ async function updateOpening(body, auth, env) {
   if (!canEditOpening(x.roles)) return err('forbidden', 403);
   const cp = cleanOpeningPatch(d);
   if (cp.error) return err(cp.error, 400);
+  { const le = await openingLevelError(cp.patch, env); if (le) return le; }
   const patch = cp.patch;
   const chain = {};
   for (const k of ['reporting_manager_employee_id', 'hiring_owner_employee_id']) {
@@ -4166,6 +4267,13 @@ async function updateOpening(body, auth, env) {
     });
     if (rpcError(r) === 'stale') return errCode('stale', 'The band request changed — reload and retry', 409);
     if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+    // hiring_change_chain (0008) updates a fixed column list without level_id — write a level change after it.
+    if ('level_id' in cp.patch) {
+      const lr = await sb(`/rest/v1/openings?id=eq.${x.o.id}`, env, { method: 'PATCH', body: JSON.stringify({ level_id: cp.patch.level_id }) });
+      // The chain change has committed: report a failed level write as a flag, never a 400 over a saved change.
+      if (!lr.ok) return ok({ ...(r.data?.opening || {}), level_not_saved: true });
+      return ok(lr.data?.[0] || r.data?.opening);
+    }
     return ok(r.data?.opening);
   }
   const r = await sb(`/rest/v1/openings?id=eq.${x.o.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
@@ -6701,7 +6809,7 @@ const J1B_COPY = {
 const j1bErr = (code, status = 409, extra = {}) => json({ ok: false, error: code, message: J1B_COPY[code] || code.replace(/_/g, ' '), ...extra }, status);
 const GSYNC_INLINE_MS = 8000;
 const SYNC_EMP_SELECT = 'id,employee_code,auth_user_id,full_name,work_email,phone,job_title,status,department_id,manager_id,'
-  + 'org_unit_path,google_user_id,google_org_unit,department:department_id(name),manager:manager_id(work_email)';
+  + 'org_unit_path,google_user_id,google_org_unit,department:department_id(name,parent:parent_department_id(name)),manager:manager_id(work_email)';
 const gsyncReady = (env) => googleWriteConfigured(env) && googleConfigured(env);
 // D8/M: who made the change. 0015's gsync_actor() reads this header (PostgREST's request.headers) inside the dirty
 // trigger, so google_sync_state.dirtied_by names the saver however the write reached the table.
@@ -6709,7 +6817,7 @@ const actorHeaders = (auth) => (isUuid(auth?.userId) ? { 'X-Podium-Actor': auth.
 
 // What Google should hold for an employee row loaded with SYNC_EMP_SELECT.
 function desiredFor(e) {
-  return desiredGoogleFields(e, { departmentName: e?.department?.name || null, managerEmail: e?.manager?.work_email || null,
+  return desiredGoogleFields(e, { departmentName: googleDepartmentLabel(e?.department), managerEmail: e?.manager?.work_email || null,
     hasManager: !!e?.manager_id });
 }
 
@@ -7429,7 +7537,7 @@ async function getMyTeamExits(url, auth, env) {
   if (!me) return ok({ employee_id: null, team: [] });
   const ids = [...descendantsOf(edges, me.id)].filter(isUuid);
   const [tr, onNotice] = await Promise.all([
-    ids.length ? sb(`/rest/v1/employees?id=in.(${ids.join(',')})&status=neq.exited&select=id,employee_code,full_name,job_title,manager_id&order=full_name.asc`, env) : Promise.resolve({ ok: true, data: [] }),
+    ids.length ? sb(`/rest/v1/employees?id=in.(${ids.join(',')})&status=neq.exited&select=id,employee_code,full_name,job_title,manager_id,level:level_id(code,name)&order=full_name.asc`, env) : Promise.resolve({ ok: true, data: [] }),
     openExitEmployeeIds(env),
   ]);
   if (!tr.ok) return err('db_error', 500);
@@ -10452,7 +10560,7 @@ async function submitInterviewFeedback(body, auth, env) {
 // before every balance read (D4 / D5). Mail goes from the CALLER's own work mailbox and never fails the action (D12).
 // ────────────────────────────────────────────────────────────────────────────
 
-const LEAVE_EMP_SELECT = 'id,employee_code,full_name,preferred_name,job_title,manager_id,status,gender,date_joined,date_exited,leave_policy,leave_covered_from,work_email';
+const LEAVE_EMP_SELECT = 'id,employee_code,full_name,preferred_name,job_title,department_id,manager_id,status,gender,date_joined,date_exited,leave_policy,leave_covered_from,work_email';
 const LEAVE_REQ_SELECT = 'id,employee_id,leave_type,start_date,end_date,start_half,end_half,days,borrowed_days,lop_days,status,reason,'
   + 'approver_employee_id,decided_by_employee_id,decided_at,decision_note,cancelled_at,cancel_note,created_at,updated_at';
 const LEAVE_STATUS = { report_changed: 409, not_covered: 403, forbidden: 403, no_self_approval: 403, not_found: 404, overlap: 409, period_used: 409,
@@ -10697,13 +10805,14 @@ async function getMyLeave(url, auth, env) {
   const ens = await ensureLeaveCurrent(env, [emp.id], { settings, emps: [emp] });
   if (!ens.ok) return err(`db_error: leave ${ens.error}`, 500);
   const today = istToday(), cy = yearOf(today);
-  const [books, holidays, founders] = await Promise.all([
+  const [books, holidays, founders, teams] = await Promise.all([
     leaveBooks(env, [emp.id], cy), loadHolidays(env, cy, cy + 1), emp.manager_id ? Promise.resolve([]) : loadFounders(env),
+    emp.manager_id ? Promise.resolve([]) : loadTeamOwners(env),
   ]);
-  if (!books || !holidays) return err('db_error: leave read', 500);
+  if (!books || !holidays || !teams) return err('db_error: leave read', 500);
   const reqs = books.reqs[emp.id] || [];
-  const approverId = resolveLeaveApprover(emp, founders);
-  const wfhId = wfhApprover(emp);   // E4: the manager → HR
+  const approverId = resolveLeaveApprover(emp, founders, teams);
+  const wfhId = wfhApprover(emp, teams);   // E4: the manager → the team's founder owner (vacant seat) → HR
   const names = await empNames(env, [approverId, wfhId, ...reqs.map(r => r.decided_by_employee_id)]);
   return ok({
     employee: { id: emp.id, full_name: emp.full_name, employee_code: emp.employee_code, leave_policy: emp.leave_policy },
@@ -10756,8 +10865,11 @@ async function applyLeave(body, auth, env) {
   if (q.error === 'db') return err('db_error: leave read', 500);
   if (q.error) return leaveErr(q.error, q.message ? { message: q.message } : null);
   // E4: WFH goes to the manager (the skip-level may also decide, D9), else HR; leave as D9.
-  const approverId = q.v.leave_type === 'WFH' ? wfhApprover(emp)
-    : resolveLeaveApprover(emp, emp.manager_id ? [] : await loadFounders(env));
+  // No manager (a vacant seat): the team's founder owner is the skip-level approver (teamFounderOwner, leave.js).
+  const teams = emp.manager_id ? [] : await loadTeamOwners(env);
+  if (!teams) return err('db_error: team owners', 500);
+  const approverId = q.v.leave_type === 'WFH' ? wfhApprover(emp, teams)
+    : resolveLeaveApprover(emp, emp.manager_id ? [] : await loadFounders(env), teams);
   const r = await hiringRpc(env, 'leave_apply', {
     employee_id: emp.id, ...q.v, borrowed_days: q.split.borrowed_days, lop_days: q.split.lop_days,
     approver_employee_id: approverId, ...(q.snapshot || {}), actor_user_id: auth.userId, actor_employee_id: me?.id || null,
@@ -11211,7 +11323,7 @@ const GET_ACTIONS = {
   getMe, getSettings,
   getEmployees, getEmployee,
   getOrgChart, getOrgSnapshots,
-  getDepartments,
+  getDepartments, listLevels,
   getJobRoles, getJobRole,
   getCompensation, getMyCompensation,
   getPayouts, getMyPayouts, getPayoutPeriodSheet, getBulkPayouts,
@@ -11337,6 +11449,8 @@ const POST_ACTIONS = {
 // reach their OWN profile + wins via /me. Everything else still requires podium_view.
 const SELF_SERVE_GET = new Set([
   'getMe', 'getPodiumRoles',
+  // The level ladder (podium_title_level_team_v1) — directory-safe metadata, like getPodiumRoles.
+  'listLevels',
   // Salary-access admin — internally super_admin-gated.
   'getCompAccess', 'getCompAccessLog',
   'getEmployee', 'getMyPerformance', 'getAccomplishments', 'getObservations', 'getOneOnOnes',

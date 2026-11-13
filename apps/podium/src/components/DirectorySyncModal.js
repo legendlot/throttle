@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
+import { teamOptions } from '../lib/format.js';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { X, RefreshCw, UserPlus, AlertTriangle, Ban, ArrowLeftRight, Eye, Upload } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
@@ -161,7 +162,7 @@ function FromGoogle({ session, onClose, onDone }) {
                           <td style={td}>
                             <Combobox value={r.department_id || ''} disabled={r.action !== 'import'} onChange={v => setRow(r.email, { department_id: v })}
                               style={comboCell} inputStyle={comboCellInp} placeholder="Search…" portal
-                              options={(data.departments || []).map(d => ({ value: d.id, label: d.name }))} />
+                              options={teamOptions(data.departments || [])} />
                           </td>
                           <td style={td}>
                             <Combobox value={r.manager_id || ''} disabled={r.action !== 'import'} onChange={v => setRow(r.email, { manager_id: v })}

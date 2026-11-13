@@ -5,6 +5,7 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, useListNav, Combobox } from '@throttle/ui';
 import { UserPlus, RefreshCw, Search, KeyRound } from 'lucide-react';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
+import { levelLabel, teamOptions } from '../../../lib/format.js';
 import StatusBadge from '../../../components/StatusBadge.js';
 import DirectorySyncModal from '../../../components/DirectorySyncModal.js';
 import { OverrideAccountModal } from '../../../components/WorkAccountBits.js';
@@ -84,7 +85,7 @@ export default function PeoplePage() {
         {TABS.map(t => <FilterChip key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</FilterChip>)}
         <div style={{ width: 180, marginLeft: 4 }}>
           <Combobox value={dept} onChange={v => setDept(v)} inputStyle={{ fontFamily: 'var(--font-ui)', fontSize: 13, padding: '6px 10px' }}
-            placeholder="All departments" options={depts.map(d => ({ value: d.id, label: d.name }))} />
+            placeholder="All departments" options={teamOptions(depts)} />
         </div>
         <span style={{ flex: 1 }} />
         {/* J1: display flag only (podium.google_admin_access) — the worker re-checks every call. */}
@@ -119,10 +120,13 @@ export default function PeoplePage() {
                   <div className="num" style={{ fontSize: 11, color: 'var(--t4)' }}>{r.employee_code}</div>
                 </div>
               </div>
-              <div style={{ padding: '11px 16px', fontSize: 13, color: 'var(--t2)' }}>{r.job_title || '—'}</div>
+              <div style={{ padding: '11px 16px', fontSize: 13, color: 'var(--t2)' }}>
+                {r.job_title || '—'}
+                {r.level?.code && <div style={{ fontSize: 11, color: 'var(--t4)' }}>{levelLabel(r.level)}</div>}
+              </div>
               <div style={{ padding: '11px 16px' }}>{r.department?.name ? <SoftPill>{r.department.name}</SoftPill> : <span style={{ color: 'var(--t4)' }}>—</span>}</div>
               <div style={{ padding: '11px 16px', fontSize: 12.5, color: 'var(--t3)' }}>
-                {r.manager?.full_name || '—'}
+                {r.manager?.full_name || (r.manager_to_be_hired ? <span style={{ fontStyle: 'italic' }}>To be hired</span> : '—')}
                 {r.secondary_manager?.full_name && <div style={{ fontSize: 11, color: 'var(--t4)' }}>⋯ {r.secondary_manager.full_name} <span style={{ fontStyle: 'italic' }}>(dotted)</span></div>}
               </div>
               <div style={{ padding: '11px 16px' }}><StatusBadge status={r.status} onNotice={r.on_notice} /></div>

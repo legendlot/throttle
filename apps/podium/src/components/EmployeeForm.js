@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useToast, Combobox } from '@throttle/ui';
 import { useAuth } from '@throttle/auth';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
-import { EMPLOYMENT_TYPES, EMPLOYEE_STATUSES, LEGAL_ENTITIES, GENDER_OPTIONS, BLOOD_GROUPS } from '../lib/format.js';
+import { EMPLOYMENT_TYPES, EMPLOYEE_STATUSES, LEGAL_ENTITIES, GENDER_OPTIONS, BLOOD_GROUPS, teamOptions } from '../lib/format.js';
 import { formLabel, cardLabel, btnPrimary, btnGhost } from './ui.js';
 import { LEAVE_POLICIES } from '../lib/leave.js';
 
@@ -17,7 +17,8 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
   const leaveField = !!perms?.podium_hr && (!editing || (initial && 'leave_policy' in initial));
   const [f, setF] = useState(() => seed(initial));
   const [depts, setDepts] = useState([]);
-  const [roles, setRoles] = useState([]);
+  const [founders, setFounders] = useState([]);
+  const [levels, setLevels] = useState([]);
   const [people, setPeople] = useState([]);
   // J1b D5: the Google org unit Podium owns. Options = Google's live OUs minus the excluded ones (getOrgUnitOptions);
   // the department's usual OU is suggested when the department changes.
@@ -28,15 +29,29 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
     if (!session) return;
     Promise.all([
       podiumopsGet('getDepartments', {}, session).catch(() => ({ departments: [] })),
-      podiumopsGet('getJobRoles', {}, session).catch(() => ({ job_roles: [] })),
+      podiumopsGet('listLevels', {}, session).catch(() => ({ levels: [] })),
       podiumopsGet('getEmployees', { status: 'all', limit: 2000 }, session).catch(() => ({ employees: [] })),
-    ]).then(([d, r, e]) => { setDepts(d.departments || []); setRoles(r.job_roles || []); setPeople(e.employees || []); });
+    ]).then(([d, l, e]) => { setDepts(d.departments || []); setFounders(d.founders || []); setLevels(l.levels || []); setPeople(e.employees || []); });
     podiumopsGet('getOrgUnitOptions', {}, session)
       .then(o => setOuOpts(o || { ous: [], default_by_department: {} }))
       .catch(() => setOuOpts({ ous: [], default_by_department: {}, error: true }));
   }, [session]);
 
   function set(k, v) { setF(prev => ({ ...prev, [k]: v })); }
+  // A vacant manager seat ("To be hired") clears the manager; the worker enforces the same (never both).
+  function setToBeHired(on) { setF(prev => ({ ...prev, manager_to_be_hired: on, ...(on ? { manager_id: '' } : {}) })); }
+  // Skip-level for a vacant seat = the founder owner of the team (a sub-team with none inherits its parent's);
+  // none up the chain → the worker's approver is null and HR decides. Mirrors teamFounderOwner in the worker's leave.js.
+  const skipLevel = (() => {
+    if (!f.manager_to_be_hired) return null;
+    const byId = new Map(depts.map(d => [d.id, d]));
+    let d = f.department_id ? byId.get(f.department_id) : null;
+    for (let i = 0; d && i < 25; i++) {
+      if (d.founder_owner_employee_id) return d.founder_owner?.full_name || founders.find(x => x.id === d.founder_owner_employee_id)?.full_name || 'Founder';
+      d = d.parent_department_id ? byId.get(d.parent_department_id) : null;
+    }
+    return 'HR (no founder owner on this team)';
+  })();
   // A department change pre-fills its usual org unit, but only over a blank OU or the OLD department's suggestion:
   // an OU HR picked by hand is never replaced. HR can still pick another one.
   function setDepartment(v) {
@@ -98,7 +113,8 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
       <Section title="Role & Reporting">
         <Grid>
           <Field label="Job title"><Input value={f.job_title} onChange={e => set('job_title', e.target.value)} placeholder="e.g. Account Manager" /></Field>
-          <Field label="Department"><Combobox value={f.department_id || ''} onChange={setDepartment} inputStyle={comboInp} placeholder="Search department…" options={depts.map(d => ({ value: d.id, label: d.name }))} /></Field>
+          <Field label="Level"><Select value={f.level_id || ''} onChange={e => set('level_id', e.target.value)}><option value="">—</option>{levels.map(l => <option key={l.id} value={l.id}>{l.code} · {l.name}</option>)}</Select></Field>
+          <Field label="Department"><Combobox value={f.department_id || ''} onChange={setDepartment} inputStyle={comboInp} placeholder="Search department…" options={teamOptions(depts)} /></Field>
           <Field label="Google org unit">
             {ouOpts && ouList.length > 0 ? (
               <Select value={f.org_unit_path || ''} onChange={e => set('org_unit_path', e.target.value)}>
@@ -110,8 +126,16 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
             )}
             <div style={{ fontSize: 11, color: 'var(--t4)', marginTop: 4 }}>Podium pushes this to Google on save. Org units with nobody in them yet don&apos;t appear.</div>
           </Field>
-          <Field label="Job role"><Combobox value={f.job_role_id || ''} onChange={v => set('job_role_id', v)} inputStyle={comboInp} placeholder="Search role…" options={roles.map(r => ({ value: r.id, label: r.title, hint: r.level || '' }))} /></Field>
-          <Field label="Manager"><Combobox value={f.manager_id || ''} onChange={v => set('manager_id', v)} inputStyle={comboInp} placeholder="Search manager…" options={people.filter(p => p.id !== initial?.id).map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} /></Field>
+          {/* Job role is hidden (Title / Level / Team, 2026-11-14); job_role_id still round-trips unchanged. */}
+          <div>
+            <div style={formLabel}>Manager</div>
+            <Combobox value={f.manager_to_be_hired ? '' : (f.manager_id || '')} onChange={v => set('manager_id', v)} disabled={!!f.manager_to_be_hired} inputStyle={comboInp}
+              placeholder={f.manager_to_be_hired ? 'To be hired' : 'Search manager…'} options={people.filter(p => p.id !== initial?.id).map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t2)', marginTop: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!f.manager_to_be_hired} onChange={e => setToBeHired(e.target.checked)} /> To be hired
+            </label>
+            {skipLevel && <div style={{ fontSize: 11, color: 'var(--t4)', marginTop: 4 }}>Skip-level: {skipLevel}</div>}
+          </div>
           <Field label="Secondary manager (dotted line)"><Combobox value={f.secondary_manager_id || ''} onChange={v => set('secondary_manager_id', v)} inputStyle={comboInp} placeholder="Search dotted-line manager…" options={people.filter(p => p.id !== initial?.id && p.id !== f.manager_id).map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} /></Field>
           <Field label="Employment type">
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -179,13 +203,14 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
 }
 
 const FIELDS = ['full_name', 'preferred_name', 'work_email', 'personal_email', 'phone', 'date_of_birth', 'gender', 'blood_group', 'pan_number', 'photo_url',
-  'job_title', 'department_id', 'org_unit_path', 'job_role_id', 'manager_id', 'secondary_manager_id', 'employment_type', 'legal_entity', 'work_location',
+  'job_title', 'level_id', 'department_id', 'org_unit_path', 'job_role_id', 'manager_id', 'manager_to_be_hired', 'secondary_manager_id', 'employment_type', 'legal_entity', 'work_location',
   'date_joined', 'probation_end_date', 'confirmed_at', 'status', 'date_exited', 'exit_reason',
   'emergency_contact_name', 'emergency_contact_phone', 'leave_policy'];
 
 function seed(initial) {
   const o = {};
   for (const k of FIELDS) o[k] = initial?.[k] ?? '';
+  o.manager_to_be_hired = !!initial?.manager_to_be_hired;
   if (!initial) o.status = 'active';
   return o;
 }

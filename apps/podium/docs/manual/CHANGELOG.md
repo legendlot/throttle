@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.12.0] - 2026-11-14
+### Changed
+- Title / Level / Team: Level (L0 Intern to L10 Founder) beside Title on people and openings; job role hidden on the person form; Manager "To be hired" box with the skip-level line; Teams page founder owner (Afshaan / Vinay / Both) and an empty head reading "To be hired"; leave and work-from-home from someone whose manager is to be hired go to their team's founder owner; Google shows the team as "Team - Sub team".
+
 ## [1.11.0] - 2026-11-13
 ### Changed
 - Add candidate (C5): on an opening it now offers Upload CV (first) or Enter manually. New source list (Other job

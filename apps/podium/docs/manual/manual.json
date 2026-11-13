@@ -2,8 +2,8 @@
   "title": "Podium",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to Legend of Toys' people & performance system: profiles, the org chart, observations, wins, 1:1s, OKRs, appraisals and the people-data that stays private by design.",
-  "version": "1.11.0",
-  "date": "2026-11-13",
+  "version": "1.12.0",
+  "date": "2026-11-14",
   "app_url": "podium.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
