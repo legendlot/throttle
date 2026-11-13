@@ -124,6 +124,8 @@ const REFUSALS = {
   'no redline grant': 'Your LOT access in AI apps does not include Redline. Ask Afshaan if you need it.',
   'no depot grant': 'Your LOT access in AI apps does not include Depot. Ask Afshaan if you need it.',
   'ops denied': 'Your LOT role does not include this screen (the same rule as in the app). Ask Afshaan if you need it.',
+  'no podium grant': 'Your LOT access in AI apps does not include Podium. Ask Afshaan if you need it.',
+  'podium denied': 'Podium does not let your account do this: hiring tools cover openings where you are on the hiring team, or are the opening’s hiring owner or reporting manager. This is Podium’s own rule, not your LOT access.',
   'docket denied': 'Docket does not let your account change this task: only its owner, creator, collaborators or their department can (Docket admins can change any). This is a rule on that one task, not your LOT access.',
   'worker denied': 'That LOT app says your account does not have permission for this. Ask Afshaan if you need it.',
   'session expired': 'LOT could not confirm your LOT login just now. Try once more in a minute; if it says this again, refresh the connection: in your AI app’s connector settings (Claude: Settings, then Connectors; ChatGPT: Settings, then Apps & Connectors), open LOT, disconnect it, then connect again.',
@@ -139,6 +141,7 @@ export function refusalText(reason, { callsPerHour } = {}) {
   }
   // A write whose outcome is unknown: never "try again" (createTask is not idempotent; hostile review 2026-11-09).
   if (reason === 'write unconfirmed') return { fault: true, text: `LOT could not confirm whether that Docket change was saved. Check the task with docket_tasks before trying again, so nothing is done twice. If this keeps happening, tell Afshaan.\n\n${FOOT_FAULT}` };
+  if (reason === 'podium write unconfirmed') return { fault: true, text: `LOT could not confirm whether that Podium change was saved. Check the batch with podium_hiring report=import (or the openings list) before trying again, so nothing is done twice. If this keeps happening, tell Afshaan.\n\n${FOOT_FAULT}` };
   if (REFUSALS[reason]) return { fault: false, text: `${REFUSALS[reason]}\n\n${FOOT_REFUSED}` };
   return { fault: true, text: `${UNREACHABLE}\n\n${FOOT_FAULT}` }; // unreachable, gate unreadable, anything unmapped
 }

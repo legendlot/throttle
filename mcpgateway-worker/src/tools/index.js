@@ -1,6 +1,7 @@
 // The tool registry. One file per LOT system; this file only lists them.
 // A tool: { system (mcp_access grant it needs, null = everyone), name, title, description, inputSchema,
-//   annotations, needsSession, visible?(gate) → bool, deny?(gate) → refusal reason | null,
+//   annotations, needsSession, visible?(gate) → bool, deny?(gate) → refusal reason | null, auditArgs?(args) → what the
+//   call audit row keeps of the arguments (default: all of them),
 //   parse(args, nowMs) → { ok, value } | { ok:false, error }, run({ env, sbAccess, gate, input }) →
 //   { ok, data } | { ok:false, reason } | { ok:false, userError } }.
 import core from './core.js';
@@ -8,8 +9,9 @@ import odo from './odo.js';
 import docket from './docket.js';
 import snorkel from './snorkel.js';
 import ops from './ops.js';
+import podium from './podium.js';
 
-export const TOOLS = [...core, ...odo, ...docket, ...snorkel, ...ops];
+export const TOOLS = [...core, ...odo, ...docket, ...snorkel, ...ops, ...podium];
 
 const names = new Set();
 for (const t of TOOLS) {

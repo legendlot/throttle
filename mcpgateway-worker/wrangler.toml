@@ -30,6 +30,12 @@ service = "snorkelops"
 binding = "LOTOPS"
 service = "lotopsproxy"
 
+# Podium hiring tools (src/tools/podium.js) call podiumops AS THE PERSON; Podium's own hiring gates apply.
+# Afshaan approved this binding 2026-11-13.
+[[services]]
+binding = "PODIUMOPS"
+service = "podiumops"
+
 [triggers]
 crons = ["30 21 * * *"]   # 03:00 IST daily: purge expired grants/tokens from KV
 

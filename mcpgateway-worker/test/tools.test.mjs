@@ -16,7 +16,8 @@ test('every tool parse() returns { ok, value } on success (the shape the core pa
     docket_revise_deadline: { id: U, new_deadline: '2026-11-20', reason: 'r' }, docket_add_comment: { id: U, body: 'b' }, docket_abandon_task: { id: U, reason: 'r' },
     docket_plan: { report: 'themes' }, docket_propose: { title: 'x', why: 'y' }, docket_founder_focus: { items: [] }, docket_accept_handoff: { id: U }, docket_apply_template: { id: U, anchor_id: U, anchor_date: '2026-11-20', roles: { Owner: U } },
     snorkel_procurement: { report: 'pos' }, snorkel_requests: { report: 'requests', mine: true }, snorkel_sales: { report: 'orders' }, snorkel_assets: { report: 'assets', category_id: 3 },
-    garage_store: { report: 'stock', q: 'screw' }, redline_production: { report: 'dashboard' }, depot_dispatch: { report: 'pipeline' } };
+    garage_store: { report: 'stock', q: 'screw' }, redline_production: { report: 'dashboard' }, depot_dispatch: { report: 'pipeline' },
+    podium_hiring: { report: 'openings' }, podium_start_resume_import: { opening_id: U }, podium_accept_resume: { import_id: U, item_id: U } };
   for (const t of TOOLS) {
     assert.ok(t.name in ok, `add ${t.name} to this test`);
     const p = t.parse(ok[t.name], NOW);
@@ -31,7 +32,7 @@ test('registry: unique names, every tool well-formed', () => {
     assert.equal(typeof t.parse, 'function'); assert.equal(typeof t.run, 'function');
     assert.equal(t.inputSchema.type, 'object'); assert.equal(t.inputSchema.additionalProperties, false);
     // Read-only everywhere except the Docket write tools, which must say so (Claude asks before a write).
-    if (t.write) { assert.equal(t.system, 'docket', `${t.name}: only Docket writes`); assert.equal(t.annotations.readOnlyHint, false); }
+    if (t.write) { assert.ok(['docket', 'podium'].includes(t.system), `${t.name}: only Docket and Podium writes`); assert.equal(t.annotations.readOnlyHint, false); }
     else assert.equal(t.annotations.readOnlyHint, true, `${t.name} must be read-only`);
   }
 });
@@ -168,7 +169,7 @@ test('docket: visible only with a docket grant; writes are the only non-read too
   assert.ok(names.includes('docket_tasks') && names.includes('docket_create_task') && !names.includes('odo_sales'));
   assert.ok(!toolsFor({ systems: ['odo'], odo_perms: { sales_view: true } }).map(t => t.name).some(n => n.startsWith('docket_')));
   const writes = TOOLS.filter(t => t.write).map(t => t.name).sort();
-  assert.deepEqual(writes, ['docket_abandon_task', 'docket_accept_handoff', 'docket_add_comment', 'docket_apply_template', 'docket_create_task', 'docket_founder_focus', 'docket_propose', 'docket_revise_deadline', 'docket_set_status', 'docket_update_task']);
+  assert.deepEqual(writes, ['docket_abandon_task', 'docket_accept_handoff', 'docket_add_comment', 'docket_apply_template', 'docket_create_task', 'docket_founder_focus', 'docket_propose', 'docket_revise_deadline', 'docket_set_status', 'docket_update_task', 'podium_accept_resume', 'podium_start_resume_import']);
   assert.equal(findTool('docket_abandon_task').annotations.destructiveHint, true);
 });
 test('docket writes: one fixed action, POST {action,data}, as the person, fields whitelisted', async () => {
@@ -243,12 +244,12 @@ test('hostile 2026-11-09: abandoned tasks are read-only; a second deadline is re
   assert.equal((await st.run({ env: routed(AB, { status: 200, body: { ok: true, data: { id: U, status: 'in_progress' } } }, seen2), sbAccess: 'J', input: st.parse({ id: U, status: 'in_progress' }, NOW).value })).ok, true);
   assert.equal(seen2.length, 1);
 });
-test('the write actions are exactly these ten; reads drop LOT user ids', async () => {
+test('the write actions are exactly these twelve; reads drop LOT user ids', async () => {
   assert.deepEqual(Object.fromEntries(TOOLS.filter(t => t.write).map(t => [t.name, t.action])), {
     docket_create_task: 'createTask', docket_update_task: 'updateTask', docket_set_status: 'changeStatus',
     docket_revise_deadline: 'reviseDeadline', docket_add_comment: 'addComment', docket_abandon_task: 'abandonTask',
     docket_propose: 'proposePlanItem', docket_founder_focus: 'setFounderFocus', docket_accept_handoff: 'acceptHandoff',
-    docket_apply_template: 'applyTemplate' });
+    docket_apply_template: 'applyTemplate', podium_start_resume_import: 'createCvImport', podium_accept_resume: 'cvImportAccept' });
   const rd = findTool('docket_tasks');
   const mk = d => ({ DOCKETOPS: { fetch: async () => new Response(JSON.stringify({ ok: true, data: d }), { status: 200 }) } });
   const people = await rd.run({ env: mk([{ id: U, full_name: 'A B', department_id: null, auth_user_id: 'secret-uid' }]), sbAccess: 'J', input: rd.parse({ report: 'people' }, NOW).value });
