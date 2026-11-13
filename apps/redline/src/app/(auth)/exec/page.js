@@ -5,18 +5,20 @@
    manpower summary strip · prioritized exception feed with a
    drill-down drawer · right rail shift batteries + dispatch today.
    All data from existing APIs (getProductionDashboard,
-   getPlanVsActual, getScanSummary, getManpowerLog,
-   getOperatorAttendance). Exceptions are computed client-side.
+   getPlanVsActual, getActivityBreakdown, getManpowerLog,
+   getOperatorAttendance; violations + return queue via the
+   layout's pending counts). Exceptions are computed client-side.
    ════════════════════════════════════════════════════════════ */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
-import { todayStr, isPresent } from '@throttle/domain';
-import { Plus, Users, X } from 'lucide-react';
+import { garageFetch, useCachedQuery } from '@throttle/db';
+import { Skeleton, useToast } from '@throttle/ui';
+import { todayStr } from '@throttle/domain';
+import { Plus, X } from 'lucide-react';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
-import { useRefreshState } from '../layout.js';
+import { useRefreshState, usePendingState } from '../layout.js';
+import { istDay, istMonth, normaliseDashboard, sumMtdPacked, normaliseRange } from '../../../lib/execData.js';
 import {
   Icon, Spark, ShiftBattery, KpiTile, Panel, FilterChip, ToneBadge, Drawer,
   lineColor, lineRgb, fmt, SEV, istNow, btnPrimary, btnGhost,
@@ -37,6 +39,7 @@ const RUN_TONE = {
 
 const SHIFT_START = 9, SHIFT_END = 18, SHIFT_HRS = 9;
 const REPAIR_CAP = 50;
+const EMPTY = []; // stable stand-in while a query has no data (keeps the memos' deps steady)
 
 function getMondayISO() {
   // Same IST trap as getFirstOfMonthISO below: .toISOString() on a now-timestamped date
@@ -52,6 +55,15 @@ function getFirstOfMonthISO() {
   // day (e.g. "This Month" showing 2026-06-30 instead of 07-01, and pulling one extra day of data).
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+// IST stamp for the freshness line: "21:04" today, "12 Nov 21:04" otherwise (as Garage).
+function istStamp(ms) {
+  const d = new Date(ms);
+  const hhmm = d.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+  const day = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  if (day === new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })) return hhmm;
+  return `${d.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' })} ${hhmm}`;
 }
 
 /* ── snooze persistence (client-side triage convenience) ────── */
@@ -70,74 +82,6 @@ function snooze(id, ms = 3600e3) {
     raw[id] = Date.now() + ms;
     localStorage.setItem('rl-exec-snooze', JSON.stringify(raw));
   } catch (_) {}
-}
-
-/* ── Manpower summary strip — who's on the floor today ──────── */
-function ManpowerStrip({ mp, onOpen }) {
-  if (!mp || !mp.plan) return null;
-  const { present, plan, lines } = mp;
-  const absent = Math.max(plan - present, 0);
-  const rate = plan ? Math.round((present / plan) * 100) : 0;
-  return (
-    <div style={{ display: 'flex', alignItems: 'stretch', gap: 0, background: 'var(--surface)',
-      border: '1px solid var(--border)', borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-card)',
-      overflow: 'hidden', marginBottom: 18 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 15, padding: '15px 22px', flexShrink: 0 }}>
-        <div style={{ width: 42, height: 42, borderRadius: 'var(--r-sm)', display: 'grid', placeItems: 'center',
-          background: 'var(--brand-bg)', color: 'var(--yellow)', border: '1px solid var(--brand-bd)' }}>
-          <Users size={21} strokeWidth={1.75} />
-        </div>
-        <div>
-          <div className="eyebrow">On floor today</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 3 }}>
-            <span className="num" style={{ fontSize: 28, fontWeight: 700, color: 'var(--t1)', lineHeight: 1 }}>{present}</span>
-            <span className="num" style={{ fontSize: 14, color: 'var(--t4)' }}>/ {plan} planned</span>
-          </div>
-        </div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 22, padding: '0 24px', borderLeft: '1px solid var(--border)' }}>
-        <div>
-          <div className="eyebrow">Present</div>
-          <div className="num" style={{ fontSize: 18, fontWeight: 700, color: rate >= 95 ? 'var(--ok-fg)' : 'var(--warn-fg)', marginTop: 3 }}>{rate}%</div>
-        </div>
-        <div>
-          <div className="eyebrow">Absent</div>
-          <div className="num" style={{ fontSize: 18, fontWeight: 700, color: absent > 0 ? 'var(--bad-fg)' : 'var(--t1)', marginTop: 3 }}>{absent}</div>
-        </div>
-      </div>
-      {lines.length > 0 && (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 14, padding: '12px 24px',
-          borderLeft: '1px solid var(--border)', minWidth: 0 }}>
-          {lines.map(l => {
-            const short = l.present < l.plan;
-            const pct = l.plan ? Math.round((l.present / l.plan) * 100) : 0;
-            return (
-              <div key={l.id} style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: lineColor(l.id), flexShrink: 0 }} />
-                  <span className="font-display" style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--t1)' }}>{l.id}</span>
-                  <span className="num" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--t1)', marginLeft: 'auto' }}>
-                    {l.present}<span style={{ color: 'var(--t4)', fontWeight: 400 }}>/{l.plan}</span>
-                  </span>
-                  {short && <span className="num" style={{ fontSize: 10, fontWeight: 700, color: 'var(--bad-fg)',
-                    background: 'var(--bad-bg)', border: '1px solid var(--bad-bd)', borderRadius: 3, padding: '0 4px' }}>−{l.plan - l.present}</span>}
-                </div>
-                <div style={{ height: 5, borderRadius: 3, background: 'var(--bg-2)', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${pct}%`, borderRadius: 3,
-                    background: short ? 'var(--red)' : lineColor(l.id) }} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      <div style={{ display: 'flex', alignItems: 'center', padding: '0 20px', borderLeft: '1px solid var(--border)' }}>
-        <button onClick={onOpen} style={{ ...btnGhost, background: 'transparent', whiteSpace: 'nowrap' }}>
-          <Users size={14} strokeWidth={1.75} /> Manpower
-        </button>
-      </div>
-    </div>
-  );
 }
 
 /* ── clickable exception row with inline quick-ack ──────────── */
@@ -263,28 +207,16 @@ function ExceptionDrawer({ ex, onClose, onAction }) {
    PAGE
    ══════════════════════════════════════════════════════════════ */
 export default function OverviewPage() {
-  const { session } = useAuth();
+  const { session, userId } = useAuth();
   const router = useRouter();
   const { showToast } = useToast();
   const { setRefreshing, setLastRefreshed } = useRefreshState();
+  // Open violations + return queue: the layout's badge queries (one request, one result).
+  const { alertsQ, returnsQ } = usePendingState();
 
   const [preset, setPreset] = useState('today');
-  const [summary, setSummary] = useState(null);
-  const [hourly, setHourly] = useState([]);
-  const [pva, setPva] = useState([]);          // today — batteries + line context
-  const [rangePva, setRangePva] = useState([]); // preset range — week/month KPIs
-  const [rangePacked, setRangePacked] = useState([]); // preset range — ALL packed (drawer's source), feeds the Packed tile
-  const [scanSummary, setScanSummary] = useState(null);
-  const [alertsOpen, setAlertsOpen] = useState(0);
-  const [returnsOpen, setReturnsOpen] = useState(0);
-  const [mp, setMp] = useState(null);
-  const [runs, setRuns] = useState([]);           // open runs (for tomorrow's-runs panel)
-  const [mtdDispatched, setMtdDispatched] = useState(0); // month-to-date packed — ALL RTE/RTR/RTX car/drone scans, run or no run
-  const [scanProducts, setScanProducts] = useState([]); // per-line scan-derived product (lines with no run)
   const [drill, setDrill] = useState(null);       // KPI tile drill-down: 'packed' | 'qcPass' | 'qcFail' | 'pkgOut'
-  const [tick, setTick] = useState(0);            // bumps on every loadData so an open drawer refetches with the tiles
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [tick, setTick] = useState(0);            // bumps after every live refresh so an open drawer refetches with the tiles
   const [filter, setFilter] = useState('all');
   const [sel, setSel] = useState(null);
   const [dismissed, setDismissed] = useState(() => new Set());
@@ -296,101 +228,125 @@ export default function OverviewPage() {
     return { from: today, to: today };
   };
 
-  const loadData = useCallback(async () => {
-    if (!session) return;
-    setRefreshing(true);
-    try {
-      const date = todayStr();
-      const monthStart = getFirstOfMonthISO();
-      const [dashData, pvaData, monthPvaData, scanData, vioData, retData, mplData, attData] = await Promise.allSettled([
-        garageFetch('getProductionDashboard', { date }, session),
-        garageFetch('getPlanVsActual', { from: date, to: date }, session),
-        garageFetch('getActivityBreakdown', { from: monthStart, to: date, activities: PACKED_ACTS }, session),
-        garageFetch('getScanSummary', { date }, session),
-        garageFetch('getViolations', { acknowledged: 'false' }, session),
-        garageFetch('getReturnQueue', {}, session),
-        workerFetch('getManpowerLog', { data: { shift_date: date } }, session),
-        workerFetch('getOperatorAttendance', { data: { date_from: date, date_to: date } }, session),
+  // One cached query per data source (instant-load pattern, as Garage's Overview): each
+  // section paints the last-known result from this tab's sessionStorage straight away and
+  // fills in as its own call returns, instead of the page waiting on the slowest of eight.
+  // Each fetcher is the call + normalisation the page made before; failures are thrown,
+  // never turned into [] (the hook would cache the empty answer as fresh). "Today" figures
+  // are keyed by the IST day, month-to-date by the IST month (see istDay in execData).
+  // No longer called: getScanSummary (nothing read its result) and getManpowerLog +
+  // getOperatorAttendance — they fed only the manpower strip, which never rendered
+  // (getManpowerLog answers lines grouped in an object; the strip read it as an array, so
+  // it was always empty). The strip goes with them; the Manpower page is unaffected.
+  const live = !!session;
+  const day = istDay();
+  const month = istMonth();
+  const dashQ = useCachedQuery({ key: `redline:exec:dashboard:${day}`, userId, enabled: live,
+    fetcher: () => garageFetch('getProductionDashboard', { date: todayStr() }, session).then(normaliseDashboard) });
+  // today — batteries + line context
+  const pvaQ = useCachedQuery({ key: `redline:exec:pva:${day}`, userId, enabled: live,
+    fetcher: () => { const date = todayStr(); return garageFetch('getPlanVsActual', { from: date, to: date }, session).then(v => v || []); } });
+  // Month-to-date packed — ALL RTE/RTR/RTX car/drone scans, run or no run; drives the
+  // Packed card's monthly projection. A month aggregate, so it refreshes every 5 min.
+  const mtdQ = useCachedQuery({ key: `redline:exec:mtd-packed:${month}`, userId, enabled: live,
+    fetcher: () => garageFetch('getActivityBreakdown', { from: getFirstOfMonthISO(), to: todayStr(), activities: PACKED_ACTS }, session).then(sumMtdPacked) });
+  // This Week / This Month tiles. Keyed by preset + the exact range sent, so each range
+  // seeds only its own figures. Packed counts everything packed (Afshaan 2026-09-25), not
+  // just units matched to planned runs — same source as the Packed drawer, so tile and
+  // drawer agree.
+  const ranged = preset !== 'today';
+  const { from: rFrom, to: rTo } = rangeFor(preset);
+  const rangeQ = useCachedQuery({ key: `redline:exec:range:${preset}:${rFrom}:${rTo}`, userId, enabled: live && ranged,
+    fetcher: async () => {
+      const [pv, pk] = await Promise.all([
+        garageFetch('getPlanVsActual', { from: rFrom, to: rTo }, session),
+        garageFetch('getActivityBreakdown', { from: rFrom, to: rTo, activities: PACKED_ACTS }, session),
       ]);
+      return normaliseRange(pv, pk);
+    } });
 
-      if (dashData.status === 'fulfilled') {
-        const d = dashData.value;
-        setSummary(d.summary || null);
-        setHourly(d.hourly_dispatch?.length ? d.hourly_dispatch : (d.hourly_chart || []));
-        setRuns(Array.isArray(d.open_runs) ? d.open_runs : []);
-        setScanProducts(Array.isArray(d.scan_products) ? d.scan_products : []);
-        setError(null);
-      } else {
-        setError('Dashboard data unavailable');
-      }
-      setPva(pvaData.status === 'fulfilled' ? (pvaData.value || []) : []);
+  const liveQs = [dashQ, pvaQ];
+  const allQs = [...liveQs, mtdQ, alertsQ, returnsQ, ...(ranged ? [rangeQ] : [])];
 
-      // Month-to-date packed (every car/drone RTE/RTR/RTX scan, run or no run — Afshaan 2026-09-25)
-      // — drives the Packed card's monthly projection.
-      if (monthPvaData.status === 'fulfilled' && Array.isArray(monthPvaData.value)) {
-        setMtdDispatched(monthPvaData.value.reduce((sum, r) => sum + (Number(r.cnt) || 0), 0));
-      }
-      setScanSummary(scanData.status === 'fulfilled' ? (scanData.value || null) : null);
-      setAlertsOpen(vioData.status === 'fulfilled' && Array.isArray(vioData.value) ? vioData.value.length : 0);
-      setReturnsOpen(retData.status === 'fulfilled' && Array.isArray(retData.value) ? retData.value.length : 0);
+  // Live production numbers keep the 30 s loop (violations + returns ride the layout's own
+  // 30 s loop; the range tiles re-pull on it too, as before); the month-to-date aggregate
+  // moves to 5 min. Both pause in a hidden tab.
+  function loadLive() {
+    if (!session) return;
+    liveQs.forEach(q => q.refresh());
+    if (preset !== 'today') rangeQ.refresh();
+  }
+  useAutoRefresh(loadLive, 30000, !session);
+  useAutoRefresh(() => { if (session) mtdQ.refresh(); }, 300000, !session);
 
-      // manpower strip — planned (assignments) vs present (clock-ins)
-      try {
-        const mplRaw = mplData.status === 'fulfilled' ? mplData.value : null;
-        const attRaw = attData.status === 'fulfilled' ? attData.value : null;
-        const mpl = Array.isArray(mplRaw?.data) ? mplRaw.data : (Array.isArray(mplRaw) ? mplRaw : []);
-        const att = Array.isArray(attRaw?.data) ? attRaw.data : (Array.isArray(attRaw) ? attRaw : []);
-        if (mpl.length) {
-          // An attendance row is NOT the same as being present — see isPresent() in
-          // @throttle/domain for the full rule and the five surfaces this was wrong on.
-          const attIds = new Set(att.filter(isPresent).map(a => a.operator_id));
-          const byLine = {};
-          for (const a of mpl) {
-            const line = a.line || a.line_no || 'Others';
-            if (!/^L\d$/.test(line)) continue; // strip non-production sections from the rail
-            byLine[line] = byLine[line] || { id: line, plan: 0, present: 0 };
-            byLine[line].plan += 1;
-            if (attIds.has(a.operator_id)) byLine[line].present += 1;
-          }
-          const lines = Object.values(byLine).sort((a, b) => a.id.localeCompare(b.id));
-          const plan = mpl.length;
-          const present = new Set(mpl.filter(a => attIds.has(a.operator_id)).map(a => a.operator_id)).size;
-          setMp({ plan, present, lines });
-        } else setMp(null);
-      } catch (_) { setMp(null); }
-    } catch (e) {
-      setError(e.message || 'Failed to load data');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+  // A new key (preset picked, IST day/month rolled over) starts with no data — fetch it
+  // now rather than at the next tick. A refresh already in flight is joined, not repeated.
+  useEffect(() => { if (session && ranged) rangeQ.refresh(); }, [session, preset, rFrom, rTo]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rolled = useRef(null);
+  useEffect(() => {
+    const prev = rolled.current;
+    rolled.current = `${day}|${month}`;
+    if (!session || prev === null || prev === rolled.current) return;
+    loadLive();
+    mtdQ.refresh();
+  }, [session, day, month]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Topbar spinner + "last refreshed" + the drawer's refetch tick follow the live calls, as
+  // they followed the one Promise.allSettled before (set after each round, failed or not).
+  const liveInFlight = liveQs.some(q => q.loading || q.refreshing);
+  const wasInFlight = useRef(false);
+  useEffect(() => {
+    setRefreshing(liveInFlight);
+    if (wasInFlight.current && !liveInFlight) {
       setLastRefreshed(new Date());
       setTick(t => t + 1);
     }
-  }, [session, setRefreshing, setLastRefreshed]);
+    wasInFlight.current = liveInFlight;
+  }, [liveInFlight]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => setRefreshing(false), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useAutoRefresh(loadData, 30000, !session);
+  // Per-section readiness: no data yet → skeleton; a failure with no data → inline retry.
+  const has = (q) => q.data !== undefined;
+  const failedEmpty = (q) => !!q.error && q.data === undefined;
+  const ready = (q) => has(q) || failedEmpty(q);
 
-  // week/month KPI source — PvA over the preset range (existing API)
-  const loadRange = useCallback(async (p) => {
-    if (!session || p === 'today') { setRangePva([]); setRangePacked([]); return; }
-    const { from, to } = rangeFor(p);
-    // Packed counts everything packed (Afshaan 2026-09-25), not just units matched to planned
-    // runs — same source as the Packed drawer, so tile and drawer agree.
-    const [pv, pk] = await Promise.allSettled([
-      garageFetch('getPlanVsActual', { from, to }, session),
-      garageFetch('getActivityBreakdown', { from, to, activities: PACKED_ACTS }, session),
-    ]);
-    setRangePva(pv.status === 'fulfilled' && Array.isArray(pv.value) ? pv.value : []);
-    setRangePacked(pk.status === 'fulfilled' && Array.isArray(pk.value) ? pk.value : null); // null = fetch failed → '—'
-  }, [session]);
+  // Same banner + message as before when the main dashboard call fails.
+  const error = dashQ.error ? 'Dashboard data unavailable' : null;
+  const dashFailed = failedEmpty(dashQ);
+  const dashHasData = has(dashQ);
 
-  const onPreset = (p) => { setPreset(p); loadRange(p); };
-  // Re-pull the range on every 30 s tick too — the drawer refetches on `tick`, so the tile must as well.
-  useEffect(() => { if (tick > 0 && preset !== 'today') loadRange(preset); }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
+  const summary = dashQ.data?.summary ?? null;
+  const hourly = dashQ.data?.hourly ?? EMPTY;
+  const runs = dashQ.data?.runs ?? EMPTY;           // open runs (for tomorrow's-runs panel)
+  const scanProducts = dashQ.data?.scanProducts ?? EMPTY; // per-line scan-derived product (lines with no run)
+  const pva = pvaQ.data ?? EMPTY;
+  const mtdDispatched = mtdQ.data ?? 0;
+  const alertsOpen = alertsQ.data ?? 0;
+  const returnsOpen = returnsQ.data ?? 0;
+  // preset range — week/month KPIs. null = no range data (loading or failed) → '—'.
+  const rangePva = rangeQ.data?.pva ?? null;
+  const rangePacked = rangeQ.data?.packed ?? null; // ALL packed (drawer's source), feeds the Packed tile
+
+  // Freshness: always the OLDEST data on the page. "Updating…" while anything is in
+  // flight; "Couldn't refresh" when any call failed — with stale data showing OR with
+  // none (a failed empty section must not sit under a grey "Updated").
+  const anyInFlight = allQs.some(q => q.loading || q.refreshing);
+  const stamps = allQs.map(q => q.updatedAt).filter(Boolean);
+  const oldest = stamps.length ? istStamp(Math.min(...stamps)) : null;
+  const anyFailed = allQs.some(q => q.error);
+  const freshness = anyInFlight ? (oldest ? `Updating… (showing ${oldest})` : 'Updating…')
+    : anyFailed ? (oldest ? `Couldn't refresh — showing ${oldest}` : "Couldn't refresh")
+    : oldest ? `Updated ${oldest}` : '';
+
+  const onPreset = (p) => setPreset(p);
 
   /* ── KPI rail (preset-keyed; '—' where a range number isn't available) ── */
   const s = summary || {};
   const k = useMemo(() => {
+    // The dashboard call failed with nothing to show: unknown, not zero (fmt(null) is '0').
+    if (preset === 'today' && dashFailed) {
+      return { dispatched: '—', subR: '—', qcPass: '—', passRate: '—', passTone: undefined, qcFail: '—', failSub: 'Today' };
+    }
     if (preset === 'today') {
       return {
         dispatched: fmt(s.today_dispatched), subR: packedSub(s.today_rtr, s.today_rte, s.today_rtx),
@@ -400,7 +356,7 @@ export default function OverviewPage() {
         failSub: s.qc_fail_car != null ? `${fmt(s.qc_fail_car)}C · ${fmt(s.qc_fail_remote || 0)}R` : 'Today',
       };
     }
-    const agg = rangePva.reduce((a, r) => {
+    const agg = (rangePva || []).reduce((a, r) => {
       a.pass += Number(r.actual_qc_pass) || 0;
       a.fail += Number(r.actual_qc_fail) || 0;
       return a;
@@ -418,18 +374,18 @@ export default function OverviewPage() {
     const label = preset === 'week' ? 'Mon → today' : '1st → today';
     // Pass Rate + QC Fail over the range, now that get_plan_vs_actual carries actual_qc_fail
     // (previously hardcoded '—' for non-today presets). Pass, fail and rate derive from rangePva so
-    // they share one source; Packed alone reads rangePacked (all packed, see loadRange).
+    // they share one source; Packed alone reads rangePacked (all packed, see rangeQ).
     const denom = agg.pass + agg.fail;
     const rate = denom > 0 ? Math.round((agg.pass / denom) * 100) : null;
     return {
       dispatched: rangePacked ? fmt(agg.disp) : '—', subR: rangePacked ? packedSub(agg.rtr, agg.rte, agg.rtx) : label,
-      qcPass: fmt(agg.pass),
-      passRate: rate != null ? rate + '%' : '—',
-      passTone: rate >= 95 ? 'ok' : rate != null ? 'warn' : undefined,
-      qcFail: fmt(agg.fail),
+      qcPass: rangePva ? fmt(agg.pass) : '—',
+      passRate: rangePva && rate != null ? rate + '%' : '—',
+      passTone: !rangePva ? undefined : rate >= 95 ? 'ok' : rate != null ? 'warn' : undefined,
+      qcFail: rangePva ? fmt(agg.fail) : '—',
       failSub: label,
     };
-  }, [preset, s, rangePva, rangePacked]);
+  }, [preset, s, rangePva, rangePacked, dashFailed]);
 
   /* ── per-line today series (batteries + pace exceptions) ────── */
   const lineData = useMemo(() => {
@@ -468,7 +424,9 @@ export default function OverviewPage() {
     const nowHr = istNow().hour;
     const hrsElapsed = Math.max(0, Math.min(nowHr - SHIFT_START, SHIFT_HRS));
 
-    for (const l of lineData) {
+    // Pace needs the hourly output: without dashboard data every line would read 0 done
+    // and raise a false "behind pace".
+    if (dashHasData) for (const l of lineData) {
       if (!l.target) continue;
       const pace = (l.target * hrsElapsed) / SHIFT_HRS;
       const gap = Math.round(pace - l.done);
@@ -545,7 +503,7 @@ export default function OverviewPage() {
     return list
       .filter(e => !dismissed.has(e.id) && !snoozed.has(e.id))
       .sort((a, b) => order[a.sev] - order[b.sev]);
-  }, [lineData, s, alertsOpen, returnsOpen, dismissed]);
+  }, [lineData, s, alertsOpen, returnsOpen, dismissed, dashHasData]);
 
   const counts = {
     all: exceptions.length,
@@ -589,9 +547,17 @@ export default function OverviewPage() {
     }
   };
 
-  if (loading) {
-    return <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 60 }}><Spinner /></div>;
-  }
+  // Sections, each with the queries it is drawn from. The feed and the batteries say
+  // "All clear" / "No line targets" only when every source behind them answered.
+  const kpiReady = ready(dashQ) && (!ranged || ready(rangeQ));
+  const attentionQs = [[dashQ, 'production numbers'], [pvaQ, 'line targets'], [alertsQ, 'scan alerts'], [returnsQ, 'returns']];
+  const attentionReady = attentionQs.every(([q]) => ready(q));
+  const attentionFailed = attentionQs.filter(([q]) => failedEmpty(q));
+  const shiftReady = ready(dashQ) && ready(pvaQ);
+  const shiftFailed = failedEmpty(dashQ) || failedEmpty(pvaQ);
+  const retryFailed = (qs) => qs.forEach(q => { if (failedEmpty(q)) q.refresh(); });
+  // With a source missing the severity counts are incomplete, so no chips and no filter.
+  const feed = attentionFailed.length ? exceptions : shown;
 
   const presetBtn = (key, label) => (
     <button key={key} onClick={() => onPreset(key)} style={{ border: 'none', cursor: 'pointer', borderRadius: 'var(--r-xs)',
@@ -613,51 +579,61 @@ export default function OverviewPage() {
             {presetBtn('today', 'Today')}{presetBtn('week', 'This Week')}{presetBtn('month', 'This Month')}
           </div>
         </div>
-        <button onClick={() => router.push('/new-run')} style={btnPrimary}>
-          <Plus size={15} strokeWidth={2} /> New Run
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span aria-live="polite" style={{ fontSize: 12, color: anyFailed && !anyInFlight ? 'var(--warn-fg)' : 'var(--t3)' }}>{freshness}</span>
+          <button onClick={() => router.push('/new-run')} style={btnPrimary}>
+            <Plus size={15} strokeWidth={2} /> New Run
+          </button>
+        </div>
       </div>
 
       {error && (
         <div style={{ background: 'var(--bad-bg)', border: '1px solid var(--bad-bd)', borderRadius: 'var(--r-sm)',
-          padding: '12px 14px', fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--bad-fg)', marginBottom: 20 }}>
+          padding: '12px 14px', fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--bad-fg)', marginBottom: 20,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           {error}
+          {dashFailed && <button onClick={dashQ.refresh} style={retryBtn}>Retry</button>}
         </div>
       )}
 
       {/* KPI rail */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 22 }}>
+        {!kpiReady ? [true, true, false, false, false, false].map((p, i) => <KpiSkeleton key={i} proj={p} />) : <>
         <KpiTile label="Packed" value={k.dispatched} sub={k.subR} tone="ok"
-          proj={projOf(mtdDispatched)} projTitle={projNote(mtdDispatched, 'packed')}
+          proj={has(mtdQ) ? projOf(mtdDispatched) : failedEmpty(mtdQ) ? '—' : <Skeleton width={44} height={11} />}
+          projTitle={has(mtdQ) ? projNote(mtdDispatched, 'packed') : failedEmpty(mtdQ) ? 'Month-to-date packed could not be loaded' : undefined}
           onClick={() => setDrill('packed')} hint="Which units were packed — product, variant, colour, channel" />
         <KpiTile label="QC Pass" value={k.qcPass} sub="First-pass yield" tone="brand"
-          proj={projOf(s.mtd_pass)} projTitle={projNote(s.mtd_pass, 'passed QC')}
+          proj={dashFailed ? '—' : projOf(s.mtd_pass)} projTitle={dashFailed ? undefined : projNote(s.mtd_pass, 'passed QC')}
           onClick={() => setDrill('qcPass')} hint="Which units passed QC" />
         <KpiTile label="Pass Rate" value={k.passRate} sub="Target 95%" tone={k.passTone}
           onClick={() => setDrill('qcFail')} hint="The fails behind the rate" />
         <KpiTile label="QC Fail" value={k.qcFail} sub={k.failSub} tone={preset === 'today' && (Number(s.today_qc_fail) || 0) > 0 ? 'bad' : undefined}
           onClick={() => setDrill('qcFail')} hint="Which units failed QC" />
-        <KpiTile label="Repair Q" value={fmt(s.repair_queue)} sub={`Cap ${REPAIR_CAP}`} tone={(Number(s.repair_queue) || 0) > REPAIR_CAP ? 'warn' : undefined}
+        <KpiTile label="Repair Q" value={dashFailed ? '—' : fmt(s.repair_queue)} sub={`Cap ${REPAIR_CAP}`} tone={(Number(s.repair_queue) || 0) > REPAIR_CAP ? 'warn' : undefined}
           onClick={() => router.push('/repair-queue')} hint="Open the repair queue" />
-        <KpiTile label="Pkg Out" value={fmt(s.dispatch_stock)} sub="Units at RTD" tone="blue"
+        <KpiTile label="Pkg Out" value={dashFailed ? '—' : fmt(s.dispatch_stock)} sub="Units at RTD" tone="blue"
           onClick={() => setDrill('pkgOut')} hint="Units at RTD by product, variant, colour" />
+        </>}
       </div>
-
-      {/* manpower summary */}
-      <ManpowerStrip mp={mp} onOpen={() => router.push('/manpower')} />
 
       {/* two columns */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.55fr 1fr', gap: 18, alignItems: 'start' }}>
         <Panel title="Needs attention now" icon="alert" pad={8}
-          action={<div style={{ display: 'flex', gap: 6 }}>
+          action={!attentionReady || attentionFailed.length ? null : <div style={{ display: 'flex', gap: 6 }}>
             <FilterChip active={filter === 'all'} onClick={() => setFilter('all')} count={counts.all}>All</FilterChip>
             <FilterChip active={filter === 'high'} onClick={() => setFilter('high')} dot={SEV.high.dot} count={counts.high}>High</FilterChip>
             <FilterChip active={filter === 'med'} onClick={() => setFilter('med')} dot={SEV.med.dot} count={counts.med}>Med</FilterChip>
             <FilterChip active={filter === 'low'} onClick={() => setFilter('low')} dot={SEV.low.dot} count={counts.low}>Low</FilterChip>
           </div>}>
+          {!attentionReady ? <RowsSkeleton rows={3} /> : <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {shown.map((ex, i) => <TriageRow key={ex.id} ex={ex} idx={i} onOpen={setSel} onAck={(e) => doAction('ack', e)} />)}
-            {!shown.length && (
+            {attentionFailed.length > 0 && (
+              <PanelError message={`Could not load ${attentionFailed.map(([, l]) => l).join(', ')} — this list may be incomplete.`}
+                onRetry={() => retryFailed(attentionFailed.map(([q]) => q))} pad="11px 13px" />
+            )}
+            {feed.map((ex, i) => <TriageRow key={ex.id} ex={ex} idx={i} onOpen={setSel} onAck={(e) => doAction('ack', e)} />)}
+            {!feed.length && !attentionFailed.length && (
               <div style={{ padding: '40px 0', textAlign: 'center' }}>
                 <div style={{ display: 'inline-grid', placeItems: 'center', width: 46, height: 46, borderRadius: '50%',
                   background: 'var(--ok-bg)', color: 'var(--ok-fg)', border: '1px solid var(--ok-bd)', marginBottom: 12 }}>
@@ -667,17 +643,22 @@ export default function OverviewPage() {
               </div>
             )}
           </div>
-          {shown.length > 0 && (
+          {feed.length > 0 && (
             <div style={{ borderTop: '1px solid var(--border)', marginTop: 8, paddingTop: 10, textAlign: 'center' }}>
               <span onClick={() => router.push('/alerts')}
                 style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', cursor: 'pointer' }}>View all activity →</span>
             </div>
           )}
+          </>}
         </Panel>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           <Panel title="Shift progress" icon="activity"
             action={<span className="num" style={{ fontSize: 11, color: 'var(--t3)' }}>9:00 → 18:00</span>}>
+            {!shiftReady ? <BatteriesSkeleton /> : shiftFailed ? (
+              <PanelError message={failedEmpty(dashQ) ? 'Could not load line output.' : 'Could not load line targets.'}
+                onRetry={() => retryFailed([dashQ, pvaQ])} />
+            ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
               {lineData.filter(l => l.target > 0 || l.done > 0 || l.scan).map(line => (
                 <div key={line.id} onClick={() => router.push('/lines')} style={{ cursor: 'pointer' }}>
@@ -705,6 +686,7 @@ export default function OverviewPage() {
                 </div>
               )}
             </div>
+            )}
           </Panel>
         </div>
       </div>
@@ -714,8 +696,10 @@ export default function OverviewPage() {
         <Panel title={`Tomorrow's runs · ${tomorrowISO}`} icon="factory"
           action={<span onClick={() => router.push('/lines')}
             style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)', cursor: 'pointer' }}>Lines →</span>}
-          pad={tomorrowRuns.length ? 8 : 16}>
-          {tomorrowRuns.length === 0 ? (
+          pad={has(dashQ) && tomorrowRuns.length ? 8 : 16}>
+          {!ready(dashQ) ? <RowsSkeleton rows={2} /> : dashFailed ? (
+            <PanelError message="Could not load tomorrow's runs." onRetry={dashQ.refresh} />
+          ) : tomorrowRuns.length === 0 ? (
             <div style={{ padding: '24px 0', textAlign: 'center', fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)' }}>
               No runs requested or submitted for tomorrow yet.
             </div>
@@ -754,8 +738,70 @@ export default function OverviewPage() {
       {drill && (
         <KpiDrilldown drill={drill} from={rangeFor(preset).from} to={rangeFor(preset).to}
           session={session} onClose={() => setDrill(null)} refreshKey={tick}
-          tileValue={preset === 'today' ? null : ({ qcPass: k.qcPass, qcFail: k.qcFail }[drill] ?? null)} />
+          tileValue={preset === 'today' || !rangePva ? null : ({ qcPass: k.qcPass, qcFail: k.qcFail }[drill] ?? null)} />
       )}
+    </div>
+  );
+}
+
+const retryBtn = { ...btnGhost, padding: '6px 13px', flexShrink: 0 };
+
+// A failed section with nothing to fall back on says so — never zeros, never an
+// "all clear", never a skeleton that spins forever.
+function PanelError({ message, onRetry, pad }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+      fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t3)', padding: pad }}>
+      <span>{message}</span>
+      <button onClick={onRetry} style={retryBtn}>Retry</button>
+    </div>
+  );
+}
+
+// Skeletons, each laid out like the content it stands in for.
+function KpiSkeleton({ proj }) {
+  return (
+    <div aria-busy="true" style={{ background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 'var(--r-md)', padding: '13px 15px', display: 'flex', flexDirection: 'column', gap: 9 }}>
+      {proj && <div style={{ paddingBottom: 8, borderBottom: '1px dashed var(--border-2)' }}><Skeleton width="45%" height={11} /></div>}
+      <Skeleton width="50%" height={10} />
+      <Skeleton width="60%" height={23} />
+      <Skeleton width="75%" height={11} />
+    </div>
+  );
+}
+
+function RowsSkeleton({ rows }) {
+  return (
+    <div aria-busy="true" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px' }}>
+          <Skeleton width={32} height={32} radius="var(--r-sm)" />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Skeleton width="55%" height={13} />
+            <Skeleton width="35%" height={11} />
+          </div>
+          <Skeleton width={36} height={14} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BatteriesSkeleton() {
+  return (
+    <div aria-busy="true" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {Array.from({ length: 3 }, (_, i) => (
+        <div key={i}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <Skeleton width={8} height={8} radius="50%" />
+            <Skeleton width="40%" height={13} />
+            <span style={{ flex: 1 }} />
+            <Skeleton width={56} height={11} />
+          </div>
+          <Skeleton height={26} />
+        </div>
+      ))}
     </div>
   );
 }

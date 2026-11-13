@@ -27,6 +27,17 @@ export function useRefreshState() {
   return useContext(RefreshContext);
 }
 
+// The layout's pending-count queries (nav badges), shared with the Overview so it reads
+// the same request and result rather than fetching getViolations/getReturnQueue again.
+// Outside the provider a consumer gets a failed, idle query (error + Retry, never an
+// endless skeleton) rather than null.
+const NO_PENDING = { data: undefined, error: new Error('Pending counts are provided by the (auth) layout'), loading: false, refreshing: false, updatedAt: null, refresh: () => Promise.resolve() };
+const PendingContext = createContext({ alertsQ: NO_PENDING, returnsQ: NO_PENDING });
+
+export function usePendingState() {
+  return useContext(PendingContext);
+}
+
 export default function AuthLayout({ children }) {
   return (
     <RequireAuth>
@@ -38,9 +49,9 @@ export default function AuthLayout({ children }) {
 }
 
 function AuthLayoutInner({ children }) {
-  const { user, session, role, perms, signOut, loading } = useAuth();
+  const { user, session, userId, role, perms, signOut, loading } = useAuth();
   const { refreshing, lastRefreshed } = useRefreshState();
-  const { alertCount, returnCount }   = usePendingCounts(session);
+  const { alertCount, returnCount, alertsQ, returnsQ } = usePendingCounts(session, userId);
   const [cmdkOpen, setCmdkOpen] = useState(false);
   const pathname = usePathname();
   const router   = useRouter();
@@ -93,7 +104,9 @@ function AuthLayoutInner({ children }) {
             </button>
           } />
         <main className="rl-main" style={{ flex: 1, overflowY: 'auto', padding: '22px 26px' }}>
-          {children}
+          <PendingContext.Provider value={{ alertsQ, returnsQ }}>
+            {children}
+          </PendingContext.Provider>
         </main>
       </div>
       <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} />

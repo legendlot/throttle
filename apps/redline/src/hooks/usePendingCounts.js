@@ -1,44 +1,42 @@
 'use client';
-import { useState, useCallback, useEffect } from 'react';
-import { garageFetch } from '@throttle/db';
+import { garageFetch, useCachedQuery } from '@throttle/db';
+import { useAutoRefresh } from './useAutoRefresh.js';
+import { countOf } from '../lib/execData.js';
 
 /**
  * Polls alert + returns pending counts for nav badge display.
- * Runs once on mount, then on the provided interval.
+ * Runs once on mount, then on the provided interval (paused while the tab is hidden).
+ *
+ * The SAME two queries feed the Overview's "Unacknowledged scan alerts" / "Returns
+ * awaiting action" rows: the layout exposes them through PendingContext, so the page reads
+ * this one request and result instead of making its own (it used to fetch both again on
+ * its own 30 s loop). Only the counts are held/cached, never the rows.
+ *
+ * Badge values are unchanged: a failed poll keeps the last count, and with none yet the
+ * badge reads 0, as before — the page itself shows the failure.
  *
  * @param {object|null} session  — Supabase session
+ * @param {string|null} userId   — cache owner (useAuth().userId)
  * @param {number} intervalMs    — poll interval (default 30 000 ms)
- * @returns {{ alertCount: number, returnCount: number }}
  */
-export function usePendingCounts(session, intervalMs = 30000) {
-  const [alertCount,  setAlertCount]  = useState(0);
-  const [returnCount, setReturnCount] = useState(0);
+export function usePendingCounts(session, userId, intervalMs = 30000) {
+  const live = !!session;
+  // Unacknowledged violations — no date filter so we catch all open ones
+  const alertsQ = useCachedQuery({ key: 'redline:pending:alerts', userId, enabled: live,
+    fetcher: () => garageFetch('getViolations', { acknowledged: 'false' }, session).then(countOf) });
+  const returnsQ = useCachedQuery({ key: 'redline:pending:returns', userId, enabled: live,
+    fetcher: () => garageFetch('getReturnQueue', {}, session).then(countOf) });
 
-  const poll = useCallback(async () => {
+  useAutoRefresh(() => {
     if (!session) return;
-    try {
-      // Unacknowledged violations — no date filter so we catch all open ones
-      const [violations, returnQueue] = await Promise.allSettled([
-        garageFetch('getViolations',  { acknowledged: 'false' }, session),
-        garageFetch('getReturnQueue', {},                         session),
-      ]);
-      if (violations.status  === 'fulfilled') {
-        setAlertCount(Array.isArray(violations.value)  ? violations.value.length  : 0);
-      }
-      if (returnQueue.status === 'fulfilled') {
-        setReturnCount(Array.isArray(returnQueue.value) ? returnQueue.value.length : 0);
-      }
-    } catch (_) {
-      // Badge polling failure is silent — don't disrupt the page
-    }
-  }, [session]);
+    alertsQ.refresh();
+    returnsQ.refresh();
+  }, intervalMs, !session);
 
-  useEffect(() => {
-    if (!session) return;
-    poll();
-    const id = setInterval(poll, intervalMs);
-    return () => clearInterval(id);
-  }, [poll, session, intervalMs]);
-
-  return { alertCount, returnCount };
+  return {
+    alertCount:  alertsQ.data ?? 0,
+    returnCount: returnsQ.data ?? 0,
+    alertsQ,
+    returnsQ,
+  };
 }
