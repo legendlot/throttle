@@ -1,92 +1,73 @@
 'use client';
-import { useEffect, useMemo, useState, useCallback } from 'react';
+// Instant load (2026-11-14, Garage/Depot/Redline's pattern): one useCachedQuery per call —
+// each section paints its last-known result from this tab's sessionStorage and fills in as
+// its own call lands; a failure with nothing to show is an error + Retry, never zeros. Only
+// what the page renders is held or cached (lib/overview.mjs says what is dropped and why).
+// Not polled: refreshed on mount and when the tab returns after more than a minute hidden.
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { garageFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { garageFetch, getValidSession, useCachedQuery } from '@throttle/db';
+import { Spinner, Skeleton } from '@throttle/ui';
 import { ArrowRight, RefreshCw, Plus } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, Pipeline, EmptyState } from '@/components/ui.js';
-import { fmtDateShort, money, inrCompact, PO_TONES, OPEN_PO_STATUSES, sourceTone, urgencyTone } from '@/components/format.js';
+import { fmtDateShort, money, inrCompact, PO_TONES, TONES, sourceTone, urgencyTone } from '@/components/format.js';
 import { NAV_GROUPS, filterNavByPerms } from '../../../lib/nav.js';
-
-const FX = { INR: 1, USD: 84, RMB: 11.6, CNY: 11.6 };
-const toInr = (v, cur) => (Number(v) || 0) * (FX[cur] || 1);
-// The PO flow is Draft → Accepted → Approved (acceptPO sets Accepted; finalApprovePO only moves an
-// Accepted PO to Approved). So Accepted is what "awaiting sign-off" means today — Pending Approval
-// is kept for any legacy row — and stock is already received against Accepted POs, so it arrives.
-const TO_APPROVE_STATUSES = ['Pending Approval', 'Accepted'];
-const ARRIVING_STATUSES = ['Accepted', 'Approved', 'Sent', 'Confirmed & Payment Done'];
+import {
+  slimReorders, slimPOs, arrivingCount, freshness, shouldRefreshOnReturn, poOverviewKey, rowsAreFresh,
+} from '../../../lib/overview.mjs';
 
 export default function ProcurementOverviewPage() {
-  const { session, perms } = useAuth();
-  const { showToast } = useToast();
+  const { session, userId, perms } = useAuth();
   const router = useRouter();
 
-  const [rrRows, setRrRows] = useState([]);
-  const [poRows, setPoRows] = useState([]);
-  const [poTruncated, setPoTruncated] = useState(false);
-  const [loading, setLoading] = useState(true);
+  // One cached query per call, each the call + normalisation the page made before, slimmed to
+  // what it renders. A failure THROWS (garageFetch, and the slimmers on a bad reply shape) —
+  // it is never cached, and never shown as 0.
+  // Nothing seeds or fetches until perms are known AND grant procurement_view: the cached-
+  // identity auth path paints with perms still null, and a cached total must not show to a
+  // viewer whose rights have since narrowed. The PO key also carries the price tier
+  // (poOverviewKey). The token is read at call time — after a long hidden spell the session
+  // this render closed over may have expired.
+  const live = !!session && !!perms?.procurement_view;
+  const qUser = perms?.procurement_view ? userId : null; // null = no identity → no seed
+  const rrQ = useCachedQuery({ key: 'snorkel:overview:reorders', userId: qUser, enabled: live,
+    fetcher: async () => slimReorders(await garageFetch('getReorderRequests', { status: 'Pending' }, await getValidSession())) });
+  const poQ = useCachedQuery({ key: poOverviewKey(perms), userId: qUser, enabled: live,
+    fetcher: async () => slimPOs(await garageFetch('getPOs', {}, await getValidSession())) });
 
-  const load = useCallback(async () => {
-    if (!session) return;
-    setLoading(true);
-    try {
-      const [rrs, pos] = await Promise.all([
-        garageFetch('getReorderRequests', { status: 'Pending' }, session),
-        garageFetch('getPOs', {}, session),
-      ]);
-      setRrRows(Array.isArray(rrs) ? rrs : []);
-      // ⚠️ getPOs returns { rows, … } as of S334. Without the `.rows` fallback this reads
-      // as "not an array" and every PO KPI on this page silently renders 0 — the exact
-      // failure mode the truncation work exists to prevent, one level up.
-      setPoRows(Array.isArray(pos) ? pos : (pos?.rows ?? []));
-      setPoTruncated(Array.isArray(pos) ? false : !!pos?.truncated);
-    } catch (e) {
-      showToast(e.message || 'Failed to load procurement overview', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }, [session, showToast]);
+  const refreshAll = () => { rrQ.refresh(); poQ.refresh(); };
+  useEffect(() => { if (live) refreshAll(); }, [session, perms, live]); // eslint-disable-line
 
-  useEffect(() => { load(); }, [load]);
+  // Convert acts on a reorder row, so it is offered only on rows from a successful fetch made
+  // since this page mounted — never on cached rows, nor while they are being refreshed.
+  const [mountedAt] = useState(() => Date.now());
+  const rrActionable = rowsAreFresh(rrQ, mountedAt);
 
-  const kpis = useMemo(() => {
-    const pendingRR = rrRows.length;
-    const openPO = poRows.filter((p) => OPEN_PO_STATUSES.includes(p.status)).length;
-    const pendingApproval = poRows.filter((p) => TO_APPROVE_STATUSES.includes(p.status)).length;
-    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() + 14);
-    const arriving = poRows.filter((p) => {
-      if (!ARRIVING_STATUSES.includes(p.status)) return false;
-      if (!p.expected_delivery) return false;
-      const d = new Date(p.expected_delivery);
-      return !isNaN(d) && d <= cutoff && d >= new Date();
-    }).length;
-    return { pendingRR, openPO, pendingApproval, arriving };
-  }, [rrRows, poRows]);
+  // Back on the tab after more than a minute away → one refresh (shouldRefreshOnReturn).
+  // Not attached at all for a viewer without access (live is false).
+  const hiddenAt = useRef(null);
+  useEffect(() => {
+    if (!live) return undefined;
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') { hiddenAt.current = Date.now(); return; }
+      const wasHiddenAt = hiddenAt.current;
+      hiddenAt.current = null;
+      if (shouldRefreshOnReturn(wasHiddenAt)) refreshAll();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [live]); // eslint-disable-line
 
-  const topRR = useMemo(() => rrRows.slice(0, 6), [rrRows]);
-  const openPOList = useMemo(
-    () => poRows.filter((p) => OPEN_PO_STATUSES.includes(p.status)).slice(0, 6),
-    [poRows]
-  );
+  const fresh = freshness([rrQ, poQ]);
+  const has = (q) => q.data !== undefined;
+  const failedEmpty = (q) => !!q.error && q.data === undefined;
 
-  const pipeline = useMemo(() => {
-    const c = (s) => poRows.filter((p) => s.includes(p.status)).length;
-    return [
-      { stage: 'To Approve', count: c(TO_APPROVE_STATUSES), tone: 'orange' },
-      { stage: 'Approved', count: c(['Approved']), tone: 'blue' },
-      { stage: 'Sent', count: c(['Sent']), tone: 'yellow' },
-      { stage: 'Confirmed', count: c(['Confirmed & Payment Done']), tone: 'green' },
-      { stage: 'Receiving', count: c(['Partially Received']), tone: 'yellow' },
-    ];
-  }, [poRows]);
-
-  const spend = useMemo(() => {
-    const open = poRows.filter((p) => OPEN_PO_STATUSES.includes(p.status));
-    const total = open.reduce((s, p) => s + toInr(p.po_value, p.currency), 0);
-    // No 'sourced China' % here (S385): China PO lines carry no unit_price, so it could only read 0.
-    return { total };
-  }, [poRows]);
+  const rr = rrQ.data;
+  const po = poQ.data;
+  const poTruncated = !!po?.truncated;
+  // "Arriving · 14d" is counted against the clock now, from the dates the PO query holds.
+  const arriving = useMemo(() => arrivingCount(po?.arrivingDates), [po]);
 
   // This page is the app's DEFAULT LANDING (src/app/page.js hard-redirects here), so a user
   // whose role has no procurement permission used to get "Access restricted." as their very
@@ -119,35 +100,53 @@ export default function ProcurementOverviewPage() {
           <Btn onClick={() => router.push('/procurement/reorders')}><RefreshCw size={14} /> Reorders</Btn>
           {perms?.po_create && <Btn kind="primary" onClick={() => router.push('/procurement/pos/new')}><Plus size={14} /> New PO</Btn>}
         </>} />
+      <div aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, minHeight: 16, marginTop: -12, marginBottom: 14, color: fresh.warn ? 'var(--orange-fg)' : 'var(--text-3)' }}>
+        <span>{fresh.text}</span>
+        {fresh.warn && <button type="button" onClick={refreshAll} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'inherit', fontSize: 12, textDecoration: 'underline' }}>Retry</button>}
+      </div>
 
       <div className="kpi-row">
-        <Kpi label="Open Requests" value={kpis.pendingRR} sub="reorder queue" tone="yellow" onClick={() => router.push('/procurement/reorders')} />
+        {has(rrQ) ? <Kpi label="Open Requests" value={rr.count} sub="reorder queue" tone="yellow" onClick={() => router.push('/procurement/reorders')} />
+          : failedEmpty(rrQ) ? <KpiError label="Open Requests" tone="yellow" onRetry={rrQ.refresh} />
+          : <KpiSkeleton tone="yellow" />}
         {/* These three are counted from the loaded PO page. When that read is truncated the
             counts are floors, not totals — say so in `sub` rather than showing a bare number
             that reads as complete (S334). */}
-        <Kpi label="Open POs" value={kpis.openPO} sub={poTruncated ? 'in flight · partial' : 'in flight'} tone="blue" onClick={() => router.push('/procurement/pos')} />
-        <Kpi label="To Approve" value={kpis.pendingApproval} sub={poTruncated ? 'awaiting sign-off · partial' : 'awaiting sign-off'} tone="orange" onClick={() => router.push('/procurement/pos')} />
-        <Kpi label="Arriving · 14d" value={kpis.arriving} sub={poTruncated ? 'next 14 days · partial' : 'next 14 days'} tone="green" onClick={() => router.push('/procurement/pos')} />
+        {has(poQ) ? <>
+          <Kpi label="Open POs" value={po.openPO} sub={poTruncated ? 'in flight · partial' : 'in flight'} tone="blue" onClick={() => router.push('/procurement/pos')} />
+          <Kpi label="To Approve" value={po.pendingApproval} sub={poTruncated ? 'awaiting sign-off · partial' : 'awaiting sign-off'} tone="orange" onClick={() => router.push('/procurement/pos')} />
+          <Kpi label="Arriving · 14d" value={arriving} sub={poTruncated ? 'next 14 days · partial' : 'next 14 days'} tone="green" onClick={() => router.push('/procurement/pos')} />
+        </> : failedEmpty(poQ) ? <>
+          <KpiError label="Open POs" tone="blue" onRetry={poQ.refresh} />
+          <KpiError label="To Approve" tone="orange" onRetry={poQ.refresh} />
+          <KpiError label="Arriving · 14d" tone="green" onRetry={poQ.refresh} />
+        </> : <>
+          <KpiSkeleton tone="blue" /><KpiSkeleton tone="orange" /><KpiSkeleton tone="green" />
+        </>}
       </div>
 
       <div className="ov-2col">
         <div className="ov-col">
-          <Panel title="Pending Reorder Requests" count={rrRows.length}
+          <Panel title="Pending Reorder Requests" count={rr?.count}
             action={<Btn onClick={() => router.push('/procurement/reorders')}>View all <ArrowRight size={14} /></Btn>}>
-            {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-              : topRR.length === 0 ? <EmptyState icon="check-check" title="Queue is clear" hint="New reorder requests will appear here." />
+            {!has(rrQ) ? (failedEmpty(rrQ)
+                ? <PanelError message="Could not load pending reorder requests." onRetry={rrQ.refresh} />
+                : <TableSkeleton cols={5} />)
+              : rr.top.length === 0 ? <EmptyState icon="check-check" title="Queue is clear" hint="New reorder requests will appear here." />
               : (
                 <table className="dt">
                   <thead><tr><th>ID</th><th>Part / Product</th><th className="num">Qty</th><th>Urgency</th><th className="num"></th></tr></thead>
                   <tbody>
-                    {topRR.map((r) => (
+                    {rr.top.map((r) => (
                       <tr key={r.request_id}>
                         <td className="mono accent">{r.request_id}</td>
                         <td>{rrLabel(r)}</td>
                         <td className="num mono">{r.requested_qty} {r.unit || ''}</td>
                         <td><Badge label={r.urgency || 'Normal'} tone={urgencyTone(r.urgency)} dot /></td>
                         <td className="num">
-                          {perms?.po_create && <Btn kind="primary" onClick={() => router.push(`/procurement/pos/new?rr=${encodeURIComponent(r.request_id)}`)}>Convert</Btn>}
+                          {perms?.po_create && (rrActionable
+                            ? <Btn kind="primary" onClick={() => router.push(`/procurement/pos/new?rr=${encodeURIComponent(r.request_id)}`)}>Convert</Btn>
+                            : <span title="Updating the queue — Convert is available once it has refreshed"><Btn kind="primary" disabled>Convert</Btn></span>)}
                         </td>
                       </tr>
                     ))}
@@ -156,15 +155,17 @@ export default function ProcurementOverviewPage() {
               )}
           </Panel>
 
-          <Panel title="Open Purchase Orders" count={openPOList.length}
+          <Panel title="Open Purchase Orders" count={po?.openList.length}
             action={<Btn onClick={() => router.push('/procurement/pos')}>View all <ArrowRight size={14} /></Btn>}>
-            {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-              : openPOList.length === 0 ? <EmptyState icon="file-search" title="No open purchase orders" hint="Open POs will show up here." />
+            {!has(poQ) ? (failedEmpty(poQ)
+                ? <PanelError message="Could not load open purchase orders." onRetry={poQ.refresh} />
+                : <TableSkeleton cols={6} />)
+              : po.openList.length === 0 ? <EmptyState icon="file-search" title="No open purchase orders" hint="Open POs will show up here." />
               : (
                 <table className="dt">
                   <thead><tr><th>PO</th><th>Vendor</th><th>Source</th><th className="num">Value</th><th>Expected</th><th>Status</th></tr></thead>
                   <tbody>
-                    {openPOList.map((p) => (
+                    {po.openList.map((p) => (
                       <tr key={p.po_number} className="row-click" onClick={() => router.push(`/procurement/pos/detail?po_number=${encodeURIComponent(p.po_number)}`)}>
                         <td className="mono accent">{p.po_number}</td>
                         <td>{p.vendor_name || '—'}</td>
@@ -183,14 +184,77 @@ export default function ProcurementOverviewPage() {
         <div className="ov-col ov-side">
           <Panel title="Open PO Value" pad>
             <div className="ov-stat-row" style={{ marginTop: 0, paddingTop: 0, borderTop: 'none' }}>
-              <div><div className="ov-stat-v">{inrCompact(spend.total)}</div><div className="ov-stat-l">≈ INR, all open</div></div>
+              {has(poQ) ? <div><div className="ov-stat-v">{inrCompact(po.openValueInr)}</div><div className="ov-stat-l">≈ INR, all open</div></div>
+                : failedEmpty(poQ) ? <PanelError message="Could not load open PO value." onRetry={poQ.refresh} />
+                : <div aria-busy="true"><Skeleton width={110} height={26} /><Skeleton width={90} height={11} style={{ marginTop: 6 }} /></div>}
             </div>
           </Panel>
           <Panel title="PO Pipeline" pad>
-            <Pipeline stages={pipeline} />
+            {has(poQ) ? <Pipeline stages={po.pipeline} />
+              : failedEmpty(poQ) ? <PanelError message="Could not load the PO pipeline." onRetry={poQ.refresh} />
+              : <PipelineSkeleton />}
           </Panel>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Loading / error states ────────────────────────────────────
+// A failed section with nothing to fall back on says so — never zeros, never an empty state.
+// A call that fails shows this; a call that hangs keeps its skeleton until the next refresh
+// (Retry, or the tab returning) abandons it after 2 minutes (useCachedQuery's JOIN_MAX_MS).
+function PanelError({ message, onRetry }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, fontSize: 13, color: 'var(--text-3)', padding: 16 }}>
+      <span>{message}</span>
+      <Btn onClick={onRetry}>Retry</Btn>
+    </div>
+  );
+}
+
+// Same frame as <Kpi> (class, accent bar) so the row does not jump when it fills.
+function KpiError({ label, tone, onRetry }) {
+  return (
+    <div className="kpi" style={{ '--kpi-accent': (TONES[tone] || TONES.gray).solid }}>
+      <div className="kpi-top"><span className="kpi-label">{label}</span></div>
+      <div style={{ fontSize: 13, color: 'var(--text-3)', margin: '12px 0 8px' }}>Couldn't load</div>
+      <Btn onClick={onRetry}>Retry</Btn>
+    </div>
+  );
+}
+
+// Skeletons, each laid out like the content it stands in for.
+function KpiSkeleton({ tone }) {
+  return (
+    <div className="kpi" aria-busy="true" style={{ '--kpi-accent': (TONES[tone] || TONES.gray).solid }}>
+      <Skeleton width="55%" height={10} />
+      <Skeleton width="40%" height={33} style={{ margin: '9px 0 4px' }} />
+      <Skeleton width="60%" height={10} />
+    </div>
+  );
+}
+
+function TableSkeleton({ cols }) {
+  return (
+    <div aria-busy="true" style={{ padding: '10px 14px', display: 'grid', gap: 12 }}>
+      {Array.from({ length: 5 }, (_, i) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 12 }}>
+          {Array.from({ length: cols }, (_, k) => <Skeleton key={k} width={k === 1 ? '90%' : '60%'} height={13} />)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PipelineSkeleton() {
+  return (
+    <div aria-busy="true" style={{ display: 'grid', gap: 12 }}>
+      {Array.from({ length: 5 }, (_, i) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: '80px 1fr 28px', gap: 10, alignItems: 'center' }}>
+          <Skeleton width="80%" height={11} /><Skeleton height={8} /><Skeleton width="100%" height={11} />
+        </div>
+      ))}
     </div>
   );
 }
