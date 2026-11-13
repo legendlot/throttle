@@ -111,11 +111,11 @@ export function suggestTick(item, taskCard) {
   return !!(item && item.state === 'open' && taskCard && taskCard.visible !== false && taskCard.status === 'done');
 }
 
-// Link rule (P2 brief): a task ↔ record link only when both are in the SAME space, or the record is in General.
-// A Founders' / private record never gets named on a task outside its own space.
+// Link rule: a task ↔ record link only when both are in the SAME space (P3c: the "or the record is in General" arm went
+// with General). A record never gets named on a task outside its own space.
 export function linkAllowed(recordSpace, taskSpaceId) {
   if (!recordSpace) return false;
-  return !!recordSpace.is_default || recordSpace.id === taskSpaceId;
+  return !!recordSpace.id && recordSpace.id === taskSpaceId;
 }
 
 // Template version bump: items added, removed, renamed or reordered (incl. moved between sections — matched by

@@ -270,7 +270,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
     ownerOpts: [{ value: '', label: '— Unassigned —' }, ...employees.map(e => ({ value: e.id, label: e.full_name }))],
     prioOpts: PRIORITIES.map(p => ({ value: p.key, label: p.label })),
     programCellOpts: [{ value: '', label: '— No program —' }, ...programs.map(p => ({ value: p.id, label: p.name }))],
-    spaceOpts: spaces.map(s => ({ value: s.id, label: s.name + (s.is_private ? '' : ' · open') })),
+    spaceOpts: spaces.filter(s => s.is_private).map(s => ({ value: s.id, label: s.name })),   // P3c: never General
     collabOpts: task ? employees.filter(e => !(task.collaborators || []).some(c => c.employee_id === e.id) && e.id !== task.owner_employee_id).map(e => ({ value: e.id, label: e.full_name })) : [],
     planItems,
     departments, employees,   // F9 R8: the hand-off team / person pickers
@@ -441,7 +441,7 @@ export function TaskView({ id, mode: fixedMode, session, departments = [], emplo
       </div>
       <div className="tv-crumbs">
         {task && <>
-          <span className="tv-crumb"><Hash size={12} aria-hidden />{task.space?.name || 'General'}</span>
+          <span className="tv-crumb"><Hash size={12} aria-hidden />{task.space?.name || 'Space'}</span>
           {task.program && <><span className="tv-crumb-sep">/</span><span className="tv-crumb">{task.program.name}</span></>}
           <span className="tv-crumb-sep">·</span>
           <Tooltip content="Copy task id"><button type="button" className="tv-id" onClick={copyId}>{task.task_no}</button></Tooltip>

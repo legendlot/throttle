@@ -82,8 +82,8 @@ export const TaskRow = memo(function TaskRow({
         return <PlanCell task={task} editable={ed && !task.parent_task_id} items={opts.planItems} onPick={(v) => saveField(task, 'plan_item_id', v)} />;
       case 'space':
         return (
-          <span className="chip soft tl-chip" title={task.space_name || 'General'}>
-            <span className="dot" style={{ background: personColor(task.space_id) }} /><span className="lbl">{task.space_name || 'General'}</span>
+          <span className="chip soft tl-chip" title={task.space_name || 'Space'}>
+            <span className="dot" style={{ background: personColor(task.space_id) }} /><span className="lbl">{task.space_name || 'Space'}</span>
           </span>
         );
       case 'owner':

@@ -79,8 +79,10 @@ test('C4: suggest the tick only for an open item whose visible task is done', ()
   assert.equal(suggestTick({ state: 'open' }, null), false);
 });
 
-test('link rule: same space, or the record in General', () => {
-  assert.equal(linkAllowed({ id: 'G', is_default: true }, 'P'), true);
+test('link rule: same space only — a General record no longer links across (P3c)', () => {
+  assert.equal(linkAllowed({ id: 'G', is_default: true }, 'P'), false);
+  assert.equal(linkAllowed({ id: 'G', is_default: true }, 'G'), true);   // the rule is "same space"; the 0039 trigger keeps tasks out of General
+  assert.equal(linkAllowed({}, undefined), false);
   assert.equal(linkAllowed({ id: 'P', is_default: false }, 'P'), true);
   assert.equal(linkAllowed({ id: 'F', is_default: false, is_founders: true }, 'G'), false);
   assert.equal(linkAllowed(null, 'G'), false);

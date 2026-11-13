@@ -229,7 +229,7 @@ test('Programs (restored): create / update / bulk accept a program; a sub-task i
   assert.equal(r.status, 200, JSON.stringify(r.j));
   assert.equal(s.calls.find(x => x.method === 'POST' && x.p.startsWith('/rest/v1/tasks')).body[0].program_id, U(40));
   // a sub-task (title only) inherits the parent's program
-  s = stub({ programs: PRG, tasks: [TT(5, { status: 'in_progress', program_id: U(40), created_by_user_id: ME })] });
+  s = stub({ programs: PRG, tasks: [TT(5, { status: 'in_progress', program_id: U(40), created_by_user_id: ME, space_id: PERS })] });   // P3c: not General
   r = await run(s, { post: { action: 'createTask', title: 'ZZ sub', parent_task_id: U(905) } });
   assert.equal(r.status, 200, JSON.stringify(r.j));
   assert.equal(s.calls.find(x => x.method === 'POST' && x.p.startsWith('/rest/v1/tasks')).body[0].program_id, U(40));
@@ -260,7 +260,7 @@ test('Programs (restored): create / update / bulk accept a program; a sub-task i
 
 test('Programs (restored): a sub-task inherits only when program_id is OMITTED — explicit null / \'\' stays null; update \'\' clears', async () => {
   const PRG = [{ id: U(40), name: 'ZZ Prog', color: null }];
-  const parent = TT(5, { status: 'in_progress', program_id: U(40), created_by_user_id: ME });
+  const parent = TT(5, { status: 'in_progress', program_id: U(40), created_by_user_id: ME, space_id: PERS });   // P3c: not General
   for (const [extra, want] of [[{}, U(40)], [{ program_id: null }, null], [{ program_id: '' }, null], [{ program_id: U(40) }, U(40)]]) {
     const s = stub({ programs: PRG, tasks: [parent] });
     const r = await run(s, { post: { action: 'createSubtask', parent_task_id: U(905), title: 'ZZ sub', ...extra } });

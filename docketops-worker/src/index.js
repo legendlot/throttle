@@ -392,7 +392,7 @@ async function keepAccessible(auth, tasks, env, { involvement = true } = {}) {
   if (!sr.ok || !mr.ok) return [];   // fail closed
   noteSpaces(auth, sr.data || []);
   const member = new Set((mr.data || []).map(m => m.space_id));
-  const ok = new Set((sr.data || []).filter(sp => sp.is_default || sp.owner_user_id === auth.userId || member.has(sp.id) || (team.has(sp.id) && !sp.is_founders)
+  const ok = new Set((sr.data || []).filter(sp => (sp.is_default && !sp.archived_at) || sp.owner_user_id === auth.userId || member.has(sp.id) || (team.has(sp.id) && !sp.is_founders)
     || planAdminSpace(auth, sp) || viewAllSpace(auth, sp)).map(sp => sp.id));
   if (!involvement) return tasks.filter(t => ok.has(t.space_id));
   // Involvement: only rows read WITH the involvement fields, in a known space that isn't the Founders' space.
@@ -602,8 +602,10 @@ async function isPersonalSpace(space, auth, env) {
   const ids = (r.data || []).map(m => m.user_id);
   return (space.owner_user_id === auth.userId || ids.includes(auth.userId)) && ids.every(u => u === auth.userId);
 }
+// General's id while it is live; null once it is archived (P3c, 0039) — callers pass null on (the SQL list functions
+// take a null p_default_space_id).
 async function defaultSpaceId(env) {
-  const r = await sbDocket(`/rest/v1/spaces?is_default=eq.true&select=id&limit=1`, env);
+  const r = await sbDocket(`/rest/v1/spaces?is_default=eq.true&archived_at=is.null&select=id&limit=1`, env);
   return (r.ok && r.data?.[0]?.id) || null;
 }
 // P2 (0036): the caller's personal space id — created on first use. Once per request; null on failure.
@@ -686,22 +688,24 @@ function viewAllSpace(auth, space) {
   return canViewAll(auth) && !!space && !!space.is_private && !space.is_default && space.is_personal === false
     && space.is_founders === false && 'archived_at' in space && !space.archived_at;
 }
-// Can the caller READ a space at all? General = everyone; private = owner, member, or a member of a team
+// Can the caller READ a space at all? A live General = everyone (archived, P3c: nobody); private = owner, member, or a member of a team
 // it is shared with; a plan admin, any team space (planAdminSpace). (docket_admin is NOT special here — strict
 // separation — unless they've broken-glass in.)
 async function canAccessSpace(auth, space, env) {
   return planAdminSpace(auth, space) || viewAllSpace(auth, space) || canAccessSpaceDirect(auth, space, env);
 }
 // May the caller PUT work in this space (create, move in, apply a template, a new record)? As canAccessSpace, less
-// the view-all read (viewAllSpace).
+// the view-all read (viewAllSpace) — and never General (retired, P3c; the 0039 trigger refuses it too) or an
+// archived space.
 async function canWriteSpace(auth, space, env) {
+  if (!space || space.is_default || space.archived_at) return false;
   return planAdminSpace(auth, space) || canAccessSpaceDirect(auth, space, env);
 }
 // The same rule WITHOUT planAdminSpace: real rights in the space (owner, member, team share), for what a plan admin's
 // "see every team space" must not widen.
 async function canAccessSpaceDirect(auth, space, env) {
   if (!space) return false;
-  if (space.is_default) return true;
+  if (space.is_default) return !space.archived_at;   // P3c: an archived (retired) General opens nothing
   if (space.owner_user_id === auth.userId) return true;
   if (await isSpaceMember(space.id, auth.userId, env)) return true;
   // A team share never opens the Founders' space (refused at share time and by the 0035 trigger; this is the
@@ -713,7 +717,7 @@ async function canAccessSpaceDirect(auth, space, env) {
 // planAdminSpace alone (founders SEE every team space; they don't edit others' work in it).
 async function adminActsIn(auth, space, env) {
   if (!isAdmin(auth) || !space) return false;
-  if (space.is_default || (space.is_founders && isPlanAdmin(auth))) return true;
+  if ((space.is_default && !space.archived_at) || (space.is_founders && isPlanAdmin(auth))) return true;
   return canAccessSpaceDirect(auth, space, env);
 }
 // Batched for a list: the ids of these space rows (accessibleSpaces' shape or SPACE_COLS) where adminActsIn holds.
@@ -767,14 +771,19 @@ async function getMe(url, auth, env) {
   ]);
   // P2: everyone has a personal space — made on the first app load that finds none (one extra read, once).
   if (!spaces.some(s => s.is_personal && s.is_owner) && await personalSpaceId(auth, env)) spaces = await accessibleSpaces(auth, env);
+  // …and a listed one is THE personal space for default_space_id below — no ensure_personal_space call on every load.
+  const mine = spaces.find(s => s.is_personal && s.is_owner);
+  if (mine && !auth._personalP) auth._personalP = Promise.resolve(mine.id);
   // Programs sidebar (cross-space): only programs the caller has >=1 visible task in, with counts.
   const memberSpaceIds = spaces.filter(s => s.is_private).map(s => s.id);
   const defaultId = (spaces.find(s => !s.is_private) || {}).id || await defaultSpaceId(env);
   // Space badges (S309) run alongside the programs call, not after it — both are
   // independent reads and getMe is on the app-load path.
-  const [programs, spaceCounts] = await Promise.all([
+  // default_space_id (P3c): where /tasks with no space opens — the caller's team home space, else Personal.
+  const [programs, spaceCounts, default_space_id] = await Promise.all([
     programsForUser(auth, memberSpaceIds, defaultId, env),
     spaceCountsForUser(auth, spaces.map(s => s.id), env),
+    defaultTargetSpace(auth, auth.departmentId, env),
   ]);
   // A space with no open work is ABSENT from the RPC result and is left without a
   // task_count entirely, so the sidebar renders no badge rather than a "0" — a zero
@@ -785,7 +794,7 @@ async function getMe(url, auth, env) {
     id: auth.userId, email: auth.email, role: auth.role, full_name: auth.fullName,
     permissions: auth.permissions || {}, employee_id: auth.employeeId, department_id: auth.departmentId,
     spaces: spaces.map(s => (countBySpace[s.id] ? { ...s, task_count: countBySpace[s.id] } : s)),
-    programs, can_view_dashboard,
+    programs, can_view_dashboard, default_space_id: default_space_id || null,
   });
 }
 // Cross-space program scope: the caller's accessible private spaces (owned+member) + General id.
@@ -1065,7 +1074,10 @@ async function getTasks(url, auth, env) {
   const q = url.searchParams;
   const wf = await weekFilterFor(q, env);
   if (!wf) return err('bad_week', 400);
-  const spaceId = q.get('space_id') || await defaultSpaceId(env);
+  // P3c: no space named → the caller's default (team home space they can write to, else Personal — getMe's
+  // default_space_id). The rows carry space_id; the response stays a plain array.
+  const spaceId = q.get('space_id') || await defaultTargetSpace(auth, auth.departmentId, env);
+  if (!spaceId) return err('no_default_space', 500);
   const space = await loadSpace(spaceId, env);
   if (!space) return err('space_not_found', 404);
   if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
@@ -1498,17 +1510,40 @@ async function removeTaskLink(body, auth, env) {
   return ok({ removed: true });
 }
 
+// The org dashboard's spaces (P3c): every LIVE team space — private, not General, not someone's Personal space, not
+// the Founders' space. view_all / docket_admin read every one of them (P3b); a dashboard grantee or dashboard_public
+// gets only the team HOME spaces — what General used to hold — never an ad-hoc private space it isn't in
+// (RULE-DOCKET-006: "private spaces keep membership"). → [{id, home_department_id}] | null (the read failed).
+async function orgTeamSpaces(auth, env) {
+  const r = await sbDocket(`/rest/v1/spaces?is_private=eq.true&is_default=eq.false&is_personal=eq.false&is_founders=eq.false&archived_at=is.null&select=id,home_department_id`, env);
+  if (!r.ok) return null;
+  const rows = r.data || [];
+  return canViewAll(auth) ? rows : rows.filter(s => s.home_department_id);
+}
 async function getDashboard(url, auth, env) {
-  const spaceId = url.searchParams.get('space_id') || await defaultSpaceId(env);
-  const space = await loadSpace(spaceId, env);
-  if (!space) return err('space_not_found', 404);
-  // General dashboard is org-wide → shareable (view_all, or the dashboard_public flag, or a
-  // per-person grant — RULE-DOCKET-006); a private space's dashboard is open to its members.
-  if (space.is_default) { if (!(await canViewDashboard(auth, env))) return err('forbidden_dashboard', 403); }
-  else { if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403); }
-  const r = await sbDocket(`/rest/v1/rpc/dashboard_stats`, env, { method: 'POST', body: JSON.stringify({ p_space_id: spaceId }) });
+  const spaceId = url.searchParams.get('space_id');
+  let r, orgSpaces = null;
+  if (!spaceId) {
+    // The org dashboard (was General's) is shareable — view_all, the dashboard_public flag, or a per-person grant
+    // (RULE-DOCKET-006) — and spans every live team space (dashboard_stats_spaces, 0039).
+    if (!(await canViewDashboard(auth, env))) return err('forbidden_dashboard', 403);
+    orgSpaces = await orgTeamSpaces(auth, env);
+    if (!orgSpaces) return err('db_error: spaces', 500);
+    r = await sbDocket(`/rest/v1/rpc/dashboard_stats_spaces`, env, { method: 'POST', body: JSON.stringify({ p_space_ids: orgSpaces.map(s => s.id) }) });
+  } else {
+    // One space's dashboard is open to whoever can read the space. General is retired (P3c): not found.
+    const space = await loadSpace(spaceId, env);
+    if (!space || space.is_default) return err('space_not_found', 404);
+    if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403);
+    r = await sbDocket(`/rest/v1/rpc/dashboard_stats`, env, { method: 'POST', body: JSON.stringify({ p_space_id: spaceId }) });
+  }
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
   const stats = r.data || {};
+  // Org scope: each team row names its home space, so the app's drill-through opens THAT space (hostile review P3c #1).
+  if (orgSpaces && Array.isArray(stats.by_department)) {
+    const home = new Map(orgSpaces.filter(s => s.home_department_id).map(s => [lcId(s.home_department_id), s.id]));
+    for (const d of stats.by_department) d.home_space_id = home.get(lcId(d.dept_id || '')) || null;
+  }
   // Attach each person's "last seen" (presence) to the by_person rows: emp → auth user → last_seen_at.
   const people = Array.isArray(stats.by_person) ? stats.by_person : [];
   if (people.length) {
@@ -2075,6 +2110,8 @@ async function createTaskCore(d, auth, env) {
   }
   const space = await loadSpace(spaceId, env);
   if (!space) return err('space_not_found', 404);
+  // An archived space the caller can read says so (as createChecklistRecord does); canWriteSpace refuses it.
+  if (space.archived_at && !space.is_default && await canAccessSpaceDirect(auth, space, env)) return err('space_archived', 422);
   if (!(await canWriteSpace(auth, space, env))) return err('forbidden_space', 403);
   // Defaults — explicit values always win: a top-level task in your personal space is yours; a task with an
   // owner and no team takes the owner's team (a sub-task takes its parent's first, above). On create, null / ''
@@ -3355,7 +3392,8 @@ async function recoverSpace(body, auth, env) {
   const gate = requireAdmin(auth); if (gate) return gate;
   const d = body.data || body; if (!d.space_id) return err('space_id required', 400);
   const space = await loadSpace(d.space_id, env);
-  if (!space || space.is_default) return err('not_recoverable', 422);
+  if (!space) return err('not_recoverable', 422);
+  if (space.is_default) return err('general_is_system', 422);   // P3c: General stays retired — nothing un-archives it
   // Admin recovery never applies to the Founders' space (§5.2) — not even the un-archive path.
   if (space.is_founders) return err('founders_space_fixed', 403);
   // A personal space is never taken over (P3 decides what happens to a leaver's personal tasks).
@@ -4608,8 +4646,8 @@ async function applyTemplate(body, auth, env) {
 // — a change and its history commit together; the worker only stamps the actor (updated_by_user_id /
 // created_by_user_id / removed_by_user_id) in the same write. Arithmetic is records-core.mjs.
 // LINK RULE: a task ↔ record link needs the record visible, edit rights on the task (as F7 dependencies), and
-// the record in the task's own space or in General — so a private / Founders' record is never named on a task
-// outside its space (link_cross_space). Moving a linked task (or an item's task, or a sub-task moving with its
+// the record in the task's own space (P3c: same space only — General is retired) — so a record is never named on a
+// task outside its space (link_cross_space). Moving a linked task (or an item's task, or a sub-task moving with its
 // parent) to a space where that no longer holds is refused (record_link_space — moveTask / bulkMoveTasks).
 // Every read whose emptiness would drive a write is checked: a failed read aborts, never reads as "nothing".
 // ════════════════════════════════════════════════════════════════════════════
@@ -4664,8 +4702,8 @@ async function checklistLabels(ids, auth, env) {
 }
 
 // moveTask / bulkMoveTasks: which of these top-level tasks may NOT move to `targetSpaceId`, because they — or a
-// sub-task that moves with them — are linked to a record, or are a record item's task, whose space is neither
-// General nor the target. Batched (children, links, item tasks, records, spaces). → { blocked: Set } | { error }
+// sub-task that moves with them — are linked to a record, or are a record item's task, whose space is not the
+// target. Batched (children, links, item tasks, records). → { blocked: Set } | { error }
 async function recordMoveBlocks(rootIds, targetSpaceId, env) {
   if (!rootIds.length) return { blocked: new Set() };
   const kr = await sbInAll(sbDocket, rootIds, l => `/rest/v1/tasks?parent_task_id=in.${l}&select=id,parent_task_id&order=id.asc`, env);
@@ -4683,18 +4721,15 @@ async function recordMoveBlocks(rootIds, targetSpaceId, env) {
   if (!pairs.length) return { blocked: new Set() };
   const rr = await sbIn(sbDocket, uniq(pairs.map(p => p.record_id)), l => `/rest/v1/checklist_records?id=in.${l}&select=id,space_id`, env);
   if (!rr.ok) return { error: dbErr(rr) };
-  const sr = await sbIn(sbDocket, uniq((rr.data || []).map(r => r.space_id)), l => `/rest/v1/spaces?id=in.${l}&select=id,is_default`, env);
-  if (!sr.ok) return { error: dbErr(sr) };
-  const general = new Set((sr.data || []).filter(s => s.is_default).map(s => s.id));
   const recSpace = new Map((rr.data || []).map(r => [r.id, r.space_id]));
   const blocked = new Set();
   for (const p of pairs) {
     const sp = recSpace.get(p.record_id);
-    if (!sp || !linkAllowed({ id: sp, is_default: general.has(sp) }, targetSpaceId)) blocked.add(rootOf.get(p.task_id));
+    if (!sp || !linkAllowed({ id: sp }, targetSpaceId)) blocked.add(rootOf.get(p.task_id));
   }
   return { blocked };
 }
-const RECORD_LINK_SPACE = 'record_link_space: this task (or a sub-task) is tied to a record checklist in another space — it can move only to that space, or the checklist must be in General';
+const RECORD_LINK_SPACE = 'record_link_space: this task (or a sub-task) is tied to a record checklist in another space — it can move only to that space';
 
 // GET ?action=getChecklistRecords[&template_id][&product][&status=open|complete|archived|all][&owner_employee_id][&q][&limit]
 // Default status: everything but archived. q matches title or product (⌘K / + Link checklist).
@@ -4825,7 +4860,8 @@ async function taskChecklists(taskId, auth, env) {
 }
 
 // POST createChecklistRecord { template_id, title, product?, space_id?, owner_employee_id? } — snapshots the
-// template's items (later template edits never rewrite it). Space default General; the caller must open it.
+// template's items (later template edits never rewrite it). No space → the owner's team home space, else the caller's
+// Personal space; the caller must be able to put work there.
 async function createChecklistRecord(body, auth, env) {
   const d = body.data || body;
   const title = String(d.title || '').trim();
@@ -4841,8 +4877,9 @@ async function createChecklistRecord(body, auth, env) {
     d.owner_employee_id ? await employeeDept(d.owner_employee_id, env) : auth.departmentId, env);
   const space = spaceId ? await loadSpace(spaceId, env) : null;
   if (!space) return err('space_not_found', 404);
+  // An archived space the caller can read says so (space_archived); canWriteSpace refuses every archived space.
+  if (space.archived_at && await canAccessSpaceDirect(auth, space, env)) return err('space_archived', 422);
   if (!(await canWriteSpace(auth, space, env))) return err('forbidden_space', 403);
-  if (space.archived_at) return err('space_archived', 422);
   const product = d.product == null ? '' : String(d.product).trim();
   if (product) { const ex = await productExists(product, env); if (ex === null) return err('db_error: product', 500); if (!ex) return err('unknown_product', 400); }
   const owner = d.owner_employee_id || auth.employeeId || null;
@@ -5002,8 +5039,7 @@ async function insertRecordLink(taskId, recordId, auth, env) {
 
 // POST createTaskFromRecordItem { item_id, title?, owner_employee_id?, deadline?, priority?, department_id?, description? }
 // The task goes through createTaskCore (the createTask path: validation, source, deadline rules) in the
-// record's space, owned by the caller and in the caller's department unless given (so General viewers of the
-// record can see it); then record_item.task_id is set (only if still empty) and the task is linked to the
+// record's space, owned by the caller and in the caller's department unless given; then record_item.task_id is set (only if still empty) and the task is linked to the
 // record. Every write is checked; a failure after the task exists names it.
 async function createTaskFromRecordItem(body, auth, env) {
   const d = body.data || body;
@@ -5060,7 +5096,7 @@ async function linkTaskChecklist(body, auth, env) {
   if (e.task.status === 'abandoned') return abandonedRO();
   if (e.task.is_recurring) return err('recurring_task: a recurring (checklist) task takes no record checklist', 422);   // as dependencies
   if (e.rec.status === 'archived') return err('record_archived', 409);
-  if (!linkAllowed(e.space, e.task.space_id)) return err('link_cross_space: a checklist links only to tasks in its own space (or from General)', 422);
+  if (!linkAllowed(e.space, e.task.space_id)) return err('link_cross_space: a checklist links only to tasks in its own space', 422);
   const r = await insertRecordLink(e.task.id, e.rec.id, auth, env);
   if (r.error) return err('link_failed: ' + JSON.stringify(r.error.data), 400);
   return ok({ task_id: e.task.id, record_id: e.rec.id, already: !r.inserted });

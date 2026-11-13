@@ -3,7 +3,7 @@
 // client-side only, over what the app already holds:
 //   Tasks              — the rows the tasks page has loaded (useCommandSource('tasks'));
 //                        DKT id ("DKT-123" / "123") ranks first, then the title
-//   Spaces & programs  — the shell's getMe spaces (General · My spaces · By others) + programs
+//   Spaces & programs  — the shell's getMe spaces (My spaces · By others) + programs
 //   Navigation         — the rail destinations (Dashboard perm-gated, Admin for docket_admin)
 //   Commands           — New task / space / program, My tasks, List ↔ Board + density (on
 //                        /tasks, via useCommandSource('tasksView')), sidebar, shortcuts;
@@ -20,7 +20,7 @@
 // F8 P2: the same debounced query (≥2 chars) also asks getChecklistRecords (q = title or product, the caller's
 // spaces only) → a "Checklists" group that opens the Record page.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Target, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Hash, Lock, Flag,
+import { Search, Target, ListTodo, UserCheck, ListChecks, NotebookPen, LayoutDashboard, BookOpen, Settings, Lock, Flag,
   SquarePen, FolderPlus, LayoutList, Columns3, Rows3, PanelLeft, Keyboard, Clock, CornerDownLeft, Info, Loader2, OctagonMinus, ClipboardCheck } from 'lucide-react';
 import { fuzzyMatch, dktQuery, rankGroups, scoreTask, serverFloor } from '../lib/fuzzy.js';
 import { docketopsGet } from '../lib/docketopsFetch.js';
@@ -165,8 +165,6 @@ export function CommandBar({ open = true, userId, session, onClose, router, spac
     ];
     for (const n of navItems) add({ ...n, group: 'nav', kind: 'nav', run: () => go(n.route) });
 
-    const general = spaces.find(s => !s.is_private);
-    if (general) add({ key: 'space:' + general.id, group: 'places', kind: 'nav', label: general.name || 'General', sub: 'Space', icon: Hash, route: '/tasks', run: () => go('/tasks') });
     for (const s of spaces.filter(x => x.is_private)) {
       const route = '/tasks?space=' + s.id;
       add({ key: 'space:' + s.id, group: 'places', kind: 'nav', label: s.name || 'Space', sub: s.is_owner ? 'My space' : 'Space · by others', icon: Lock, route, run: () => go(route) });

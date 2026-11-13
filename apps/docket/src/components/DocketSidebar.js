@@ -1,7 +1,7 @@
 'use client';
 // Docket context sidebar (ClickUp redesign P1). Sits between the icon rail and the
 // page; holds the hierarchy only — Plan, then Programs (a free cross-space label, kept alongside the
-// plan link), then Spaces (General · My spaces · By others) — or, on an Admin route, the three admin pages.
+// plan link), then Spaces (My spaces · By others) — or, on an Admin route, the three admin pages.
 //
 // Collapsible sections (S138): per-section open state is persisted per person in
 // localStorage (`docket.nav.collapsed`); Programs + Spaces default open, the two
@@ -73,10 +73,6 @@ export function DocketSidebar({
   // Your personal space (P2) leads My spaces.
   const mySpaces = privates.filter(s => s.is_owner).sort((a, b) => (b.is_personal ? 1 : 0) - (a.is_personal ? 1 : 0));
   const otherSpaces = privates.filter(s => !s.is_owner);
-  // General is the non-private (default) space. It carries a badge like any other
-  // (S309); the worker omits task_count entirely when a space has no open work, so
-  // `count` stays undefined and Row renders nothing rather than a "0".
-  const general = (spaces || []).find(s => !s.is_private);
   const go = (route) => () => onSelect(route);
 
   const [navCollapsed, setNavCollapsed] = useStoredObject('docket.nav.collapsed');
@@ -87,7 +83,7 @@ export function DocketSidebar({
   const programActive = activeKey.startsWith('/tasks?program=');
   const mySpaceActive = mySpaces.some(s => activeKey === '/tasks?space=' + s.id);
   const otherSpaceActive = otherSpaces.some(s => activeKey === '/tasks?space=' + s.id);
-  const spacesActive = activeKey === '/tasks' || mySpaceActive || otherSpaceActive;
+  const spacesActive = mySpaceActive || otherSpaceActive;
   const open = (key, hasActive) => !isCollapsed(key) || hasActive;
   const shown = (key, hasActive) => !hidden[key] || hasActive;
 
@@ -149,15 +145,12 @@ export function DocketSidebar({
           ))}
         </div>}
 
-        {/* Spaces: General (the org-wide board — the worker's default when no space_id is
-            set), then the caller's own private spaces, then private spaces others added them to. */}
+        {/* Spaces: the caller's own spaces (Personal first), then spaces others added them to or
+            share with their team. General is retired (P3c) — /tasks opens your default space. */}
         <div className="dks-section">
           <SectionHead label="Spaces" open={open('spaces', spacesActive)} onToggle={() => toggle('spaces')}
             onAdd={onNewSpace} addLabel="New space" />
           {open('spaces', spacesActive) && <>
-            <Row depth={1} lead={dot('var(--text-4)')} label="General" count={general?.task_count}
-              active={activeKey === '/tasks'} onClick={go('/tasks')} />
-
             {shown('mySpaces', mySpaceActive) && <>
               <SectionHead depth={1} label="My spaces" open={open('mySpaces', mySpaceActive)} onToggle={() => toggle('mySpaces')} />
               {open('mySpaces', mySpaceActive) && (mySpaces.length

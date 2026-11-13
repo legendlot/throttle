@@ -41,24 +41,28 @@ export default function DashboardPage() {
   if (!stats) return null;
   const linkSuffix = spaceId ? `&space=${spaceId}` : '';
   const go = (href) => () => router.push(href);
+  // The org dashboard (no space) spans every team space, but a task list opens ONE space: a team row opens that team's
+  // home space; the KPI and person drill-throughs exist only on a single space's dashboard (hostile review P3c #1).
+  const org = !spaceId;
+  const kpiGo = (href) => (org ? undefined : go(href));
   const rowKeys = (href) => (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); router.push(href); } };
 
   const byStatus = STATUSES.map(s => ({ key: s.key, label: s.label, color: s.color, n: Number(stats.by_status?.[s.key] || 0) }));
   const statusTotal = byStatus.reduce((a, b) => a + b.n, 0);
   const openTotal = byStatus.filter(s => s.key !== 'done' && s.key !== 'abandoned').reduce((a, b) => a + b.n, 0);
-  const byTeam = (stats.by_department || []).map(r => ({ name: r.dept_name, id: r.dept_id, open: Number(r.open || 0), done: Number(r.done || 0), overdue: Number(r.overdue || 0) }));
+  const byTeam = (stats.by_department || []).map(r => ({ name: r.dept_name, id: r.dept_id, home: r.home_space_id || null, open: Number(r.open || 0), done: Number(r.done || 0), overdue: Number(r.overdue || 0) }));
   const byPerson = (stats.by_person || []).map(r => ({ name: r.emp_name, id: r.emp_id, open: Number(r.open || 0), done: Number(r.done || 0), overdue: Number(r.overdue || 0), last_seen: r.last_seen || null }));
 
   return (
     <div className="screen dash">
-      <p className="dash-lede">{spaceName ? `${spaceName} · space task review.` : 'Org-wide task review. General space.'}</p>
+      <p className="dash-lede">{spaceName ? `${spaceName} · space task review.` : 'Org-wide task review — every team space.'}</p>
 
       <div className="kpi-row">
-        <Kpi icon={AlertTriangle} label="Overdue" value={stats.overdue} accent="var(--overdue)" onClick={go(`/tasks?overdue=1${linkSuffix}`)} />
+        <Kpi icon={AlertTriangle} label="Overdue" value={stats.overdue} accent="var(--overdue)" onClick={kpiGo(`/tasks?overdue=1${linkSuffix}`)} />
         <Kpi icon={Clock} label="Due ≤ 7 days" value={stats.due_soon} accent="var(--st-blocked)" />
         <Kpi icon={List} label="Open" value={openTotal} />
         <Kpi icon={Check} label="Done (30d)" value={stats.completed_30d} accent="var(--st-done)" />
-        <Kpi icon={RefreshCw} label="Revised" value={stats.revised} accent="var(--st-blocked)" onClick={go(`/tasks?revised=1${linkSuffix}`)} />
+        <Kpi icon={RefreshCw} label="Revised" value={stats.revised} accent="var(--st-blocked)" onClick={kpiGo(`/tasks?revised=1${linkSuffix}`)} />
       </div>
 
       <section className="dash-card">
@@ -88,9 +92,10 @@ export default function DashboardPage() {
             <tbody>
               {byTeam.length === 0 && <tr><td colSpan={4} className="dtable-none">No tasks yet.</td></tr>}
               {byTeam.map(r => {
-                const href = `/tasks?department_id=${r.id}${linkSuffix}`;
+                const href = org ? (r.home ? `/tasks?space=${r.home}&department_id=${r.id}` : null) : `/tasks?department_id=${r.id}${linkSuffix}`;
+                const nav = href ? { className: 'clickable', tabIndex: 0, onClick: go(href), onKeyDown: rowKeys(href) } : {};
                 return (
-                  <tr key={r.id || r.name} className="clickable" tabIndex={0} onClick={go(href)} onKeyDown={rowKeys(href)}>
+                  <tr key={r.id || r.name} {...nav}>
                     <td><span className="dtable-name"><span className="dot" style={{ background: personColor(r.id || r.name) }} />{r.name || '—'}</span></td>
                     <td className="num">{r.open}</td><td className="num">{r.done}</td>
                     <td className={'num' + (r.overdue ? ' over' : '')}>{r.overdue}</td>
@@ -112,9 +117,10 @@ export default function DashboardPage() {
               {byPerson.map(r => {
                 const total = Math.max(1, r.open + r.done);
                 const ls = lastSeen(r.last_seen);
-                const href = `/tasks?employee_id=${r.id}${linkSuffix}`;
+                const href = org ? null : `/tasks?employee_id=${r.id}${linkSuffix}`;
+                const nav = href ? { className: 'clickable', tabIndex: 0, onClick: go(href), onKeyDown: rowKeys(href) } : {};
                 return (
-                  <tr key={r.id || r.name} className="clickable" tabIndex={0} onClick={go(href)} onKeyDown={rowKeys(href)}>
+                  <tr key={r.id || r.name} {...nav}>
                     <td><span className="dtable-name"><Avatar name={r.name} size={22} />{r.name || '—'}</span></td>
                     <td className="num">{r.open}</td><td className="num">{r.done}</td>
                     <td className={'num' + (r.overdue ? ' over' : '')}>{r.overdue}</td>

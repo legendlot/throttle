@@ -212,7 +212,7 @@ export function TaskProps({ task, canEdit, busy, edit, setEdit, refs, abandonMod
 
       <Prop icon={Hash} label="Space">
         <Trigger field="space" label="Space" {...{ refs, edit, setEdit, canEdit }}>
-          <span className="tv-person">{task.space?.name || 'General'}</span>
+          <span className="tv-person">{task.space?.name || '—'}</span>
         </Trigger>
         {canEdit && pop('space', 240, <OptionList options={opts.spaceOpts} value={task.space_id || ''} searchable
           onPick={(v) => { actions.moveToSpace(v); close(); }} />)}

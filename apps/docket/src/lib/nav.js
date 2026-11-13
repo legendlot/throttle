@@ -40,11 +40,6 @@ export function routeModel(pathname, search, { spaces = [], programs = [] } = {}
       return { path, spaceId, activeKey: `/tasks?program=${programId}`, railKey: 'tasks', showCount: true,
         crumbs: [{ label: 'Programs' }, { label: p?.name || 'Program' }] };
     }
-    // ?space=<General's id> is the General board, not a private space.
-    if (spaceId && space && !space.is_private) {
-      return { path, spaceId, activeKey: '/tasks', railKey: 'tasks', showCount: true,
-        crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: space.name || 'General' }] };
-    }
     if (spaceId) {
       return { path, spaceId, activeKey: `/tasks?space=${spaceId}`, railKey: 'tasks', showCount: true,
         crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: space?.name || 'Space', lock: space ? !!space.is_private : true }] };
@@ -56,8 +51,8 @@ export function routeModel(pathname, search, { spaces = [], programs = [] } = {}
     if (lens === 'mine') {
       return { path, spaceId, activeKey: '/tasks?lens=mine', railKey: 'mine', showCount: true, crumbs: [{ label: 'My tasks' }] };
     }
-    return { path, spaceId, activeKey: '/tasks', railKey: 'tasks', showCount: true,
-      crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: 'General' }] };
+    // No space (P3c — General is retired): the page is about to replace this with ?space=<your default space>.
+    return { path, spaceId, activeKey: '/tasks', railKey: 'tasks', showCount: true, crumbs: [{ label: 'Tasks' }] };
   }
   const base = { path, spaceId, activeKey: path, showCount: false };
   if (path.startsWith('/tasks/detail')) return { ...base, railKey: 'tasks', crumbs: [{ label: 'Tasks', href: '/tasks' }, { label: 'Task' }] };

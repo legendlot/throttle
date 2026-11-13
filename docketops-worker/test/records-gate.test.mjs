@@ -2,7 +2,7 @@
 // F8 P2 record checklists against a stubbed Supabase: a record's visibility is its space's (a private record is
 // absent from a non-member's list, a 404 by id, and only a count on a task's Checklists strip — its title never
 // in the response); ticking is open to every viewer (C6); title / owner / product / archive is the owner's,
-// creator's or an admin's; a link needs the record in the task's space or in General; createTaskFromRecordItem
+// creator's or an admin's; a link needs the record in the task's own space (P3c); createTaskFromRecordItem
 // goes through createTask in the record's space and refuses an item that already has a task.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -189,7 +189,7 @@ test('edit title / owner / product / archive: a viewer who is not owner, creator
 });
 
 // ── links ──
-test('link: a private-space record onto a General task is refused (link_cross_space); same space and from General are allowed', async () => {
+test('link: same space only — a private record onto a task elsewhere, and (P3c) a General record, are refused (link_cross_space)', async () => {
   const s = stub({ records: [PRIV_REC], tasks: [T(1)], members: [PRIV] });
   const r = await run(s, { post: { action: 'linkTaskChecklist', task_id: U(101), record_id: U(202) } });
   assert.equal(r.status, 422, JSON.stringify(r.j));
@@ -197,8 +197,10 @@ test('link: a private-space record onto a General task is refused (link_cross_sp
   assert.equal(writes(s, '/rest/v1/task_checklist_links').length, 0);
   const same = stub({ records: [PRIV_REC], tasks: [T(2, { space_id: PRIV })], members: [PRIV] });
   assert.equal((await run(same, { post: { action: 'linkTaskChecklist', task_id: U(102), record_id: U(202) } })).status, 200);
-  const gen = stub({ records: [REC(1)], tasks: [T(2, { space_id: PRIV })], members: [PRIV] });
-  assert.equal((await run(gen, { post: { action: 'linkTaskChecklist', task_id: U(102), record_id: U(201) } })).status, 200);
+  const gen = stub({ records: [REC(1)], tasks: [T(2, { space_id: PRIV })], members: [PRIV] });   // P3c: General no longer links anywhere
+  const g = await run(gen, { post: { action: 'linkTaskChecklist', task_id: U(102), record_id: U(201) } });
+  assert.equal(g.status, 422, JSON.stringify(g.j)); assert.equal(g.j.error, 'link_cross_space: a checklist links only to tasks in its own space');
+  assert.equal(writes(gen, '/rest/v1/task_checklist_links').length, 0);
   // a record the caller can't see is a 404, never "cross space"
   const hid = stub({ records: [PRIV_REC], tasks: [T(1)] });
   assert.equal((await run(hid, { post: { action: 'linkTaskChecklist', task_id: U(101), record_id: U(202) } })).status, 404);
@@ -274,7 +276,7 @@ test('pull-updates banner only while the record is open', async () => {
   assert.equal(p.status, 409);
 });
 
-test('moveTask: a task tied to a record in another space is refused (linked, item task, or its sub-task); a General record lets it move', async () => {
+test('moveTask: a task tied to a record in another space is refused (linked, item task, or its sub-task) — a General record too (P3c); into the record\'s space it moves', async () => {
   const recP2 = REC(3, { space_id: P2 });
   const cases = [
     ['linked', { links: [{ id: U(401), task_id: U(101), record_id: U(203) }] }],
@@ -282,21 +284,24 @@ test('moveTask: a task tied to a record in another space is refused (linked, ite
     ['sub-task is an item task', { items: [ITEM(1, 3, { task_id: U(102) })] }],
   ];
   for (const [label, o] of cases) {
-    const s = stub({ records: [recP2], tasks: [T(1, { space_id: P2 }), T(2, { space_id: P2, parent_task_id: U(101) })], members: [P2], ...o });
-    const r = await run(s, { post: { action: 'moveTask', id: U(101), space_id: G } });
+    const s = stub({ records: [recP2], tasks: [T(1, { space_id: P2 }), T(2, { space_id: P2, parent_task_id: U(101) })], members: [P2, HOME], ...o });
+    const r = await run(s, { post: { action: 'moveTask', id: U(101), space_id: HOME } });
     assert.equal(r.status, 422, label + ' ' + JSON.stringify(r.j));
     assert.match(r.j.error, /^record_link_space/, label);
     assert.equal(writes(s, '/rest/v1/tasks').filter(c => c.method === 'PATCH').length, 0, label);
   }
-  const ok = stub({ records: [REC(1)], tasks: [T(1, { space_id: P2 })], members: [P2], links: [{ id: U(401), task_id: U(101), record_id: U(201) }] });
-  const r = await run(ok, { post: { action: 'moveTask', id: U(101), space_id: G } });
+  const gen = stub({ records: [REC(1)], tasks: [T(1, { space_id: P2 })], members: [P2, HOME], links: [{ id: U(401), task_id: U(101), record_id: U(201) }] });
+  const g = await run(gen, { post: { action: 'moveTask', id: U(101), space_id: HOME } });
+  assert.equal(g.status, 422, JSON.stringify(g.j)); assert.equal(g.j.error, 'record_link_space: this task (or a sub-task) is tied to a record checklist in another space — it can move only to that space');
+  const ok = stub({ records: [REC(1, { space_id: HOME })], tasks: [T(1, { space_id: P2 })], members: [P2, HOME], links: [{ id: U(401), task_id: U(101), record_id: U(201) }] });
+  const r = await run(ok, { post: { action: 'moveTask', id: U(101), space_id: HOME } });
   assert.equal(r.status, 200, JSON.stringify(r.j));
 });
 
 test('bulkMoveTasks: tied tasks are skipped and named; the rest move', async () => {
-  const s = stub({ records: [REC(3, { space_id: P2 })], tasks: [T(1, { space_id: P2 }), T(2, { space_id: P2 })], members: [P2],
+  const s = stub({ records: [REC(3, { space_id: P2 })], tasks: [T(1, { space_id: P2 }), T(2, { space_id: P2 })], members: [P2, HOME],
     links: [{ id: U(401), task_id: U(101), record_id: U(203) }] });
-  const r = await run(s, { post: { action: 'bulkMoveTasks', ids: [U(101), U(102)], space_id: G } });
+  const r = await run(s, { post: { action: 'bulkMoveTasks', ids: [U(101), U(102)], space_id: HOME } });
   assert.equal(r.status, 200, JSON.stringify(r.j));
   assert.deepEqual(r.j.data.record_link_space, ['DKT-1']);
   assert.equal(r.j.data.updated, 1);
@@ -306,7 +311,7 @@ test('bulkMoveTasks: tied tasks are skipped and named; the rest move', async () 
 });
 
 test('createTaskFromRecordItem: losing the claim race still links the new task and names both; defaults owner + team to the caller', async () => {
-  const s = stub({ records: [REC(1)], items: [ITEM(1, 1)], tasks: [T(7, { task_no: 'DKT-7' })], race: U(107) });
+  const s = stub({ records: [REC(1, { space_id: P2 })], items: [ITEM(1, 1)], tasks: [T(7, { task_no: 'DKT-7', space_id: P2 })], members: [P2], race: U(107) });
   const r = await run(s, { post: { action: 'createTaskFromRecordItem', item_id: U(301) } });
   assert.equal(r.status, 409, JSON.stringify(r.j));
   assert.equal(r.j.error, 'item_has_task');
@@ -390,7 +395,7 @@ test('P3b createChecklistRecord: no space → the team\'s home space if the call
   s = stub({ home: true });                                        // home space the caller can't open
   r = await run(s, { post: mk() });
   assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(spaceOf(s), PERS);
-  s = stub({ home: true, members: [HOME] });                       // explicit space wins
-  r = await run(s, { post: mk({ space_id: G }) });
-  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(spaceOf(s), G);
+  s = stub({ home: true, members: [HOME, P2] });                   // explicit space wins
+  r = await run(s, { post: mk({ space_id: P2 }) });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(spaceOf(s), P2);
 });

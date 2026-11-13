@@ -41,6 +41,8 @@ function AuthLayoutInner({ children }) {
   const [canViewDashboard, setCanViewDashboard] = useState(false);
   const [myEmployeeId, setMyEmployeeId] = useState(null);   // getMe.employee_id (F2 capture toast)
   const [myDepartmentId, setMyDepartmentId] = useState(null); // getMe.department_id (P3b: template space default)
+  const [defaultSpaceId, setDefaultSpaceId] = useState(null); // getMe.default_space_id (P3c: where /tasks with no space opens)
+  const [meLoaded, setMeLoaded] = useState(false);   // getMe has answered (or failed) once — the board waits for it
   const [showTemplates, setShowTemplates] = useState(false); // F9 R9a: the Templates nav entry (getTemplates)
   const [helpOpen, setHelpOpen] = useState(false);
   const [count, setCount] = useState(null);   // board task count, published by the tasks page
@@ -76,11 +78,12 @@ function AuthLayoutInner({ children }) {
       setPrograms(me?.programs || []);
       setMyEmployeeId(me?.employee_id || null);
       setMyDepartmentId(me?.department_id || null);
+      setDefaultSpaceId(me?.default_space_id || null);
       const can = !!me?.can_view_dashboard;
       setCanViewDashboard(can);
       // Remembered so the next load's mobile tab bar / rail don't flip Scratchpad → Dashboard.
       try { if (user?.id) localStorage.setItem(`docket.canViewDashboard.${user.id}`, can ? '1' : '0'); } catch { /* ignore */ }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setMeLoaded(true));
   }, [session, user?.id]);
   // Last-known value per user, read before getMe answers (getMe still decides).
   useEffect(() => {
@@ -113,14 +116,15 @@ function AuthLayoutInner({ children }) {
   const go = useCallback((r) => router.push(r), [router]);
   // + New → New task: on a program board, stay and focus its ProgramCapture (it
   // auto-tags the program); otherwise as the old sidebar button — the current space's
-  // board (or General) — and focus its un-prefilled top "New task" capture
+  // board (or, with none, your default space) — and focus its un-prefilled top "New task" capture
   // ([data-create-primary]; focusing reveals it) once that route has landed.
   const newTask = useCallback(() => {
     const programId = onTasksBoard ? (search.get('program') || '') : '';
-    const target = programId ? `/tasks?program=${programId}` : route.spaceId ? `/tasks?space=${route.spaceId}` : '/tasks';
+    const sp = route.spaceId || defaultSpaceId;
+    const target = programId ? `/tasks?program=${programId}` : sp ? `/tasks?space=${sp}` : '/tasks';
     if (!atRoute(target)) router.push(target);
     focusWhenReady('[data-create-primary]', { route: target });
-  }, [router, route.spaceId, onTasksBoard, search]);
+  }, [router, route.spaceId, defaultSpaceId, onTasksBoard, search]);
   const newSpace = useCallback(() => router.push('/tasks?space=new'), [router]);
   const newProgram = useCallback(() => { setMobileNavOpen(false); setProgramModal(true); }, []);
   // ⌘K command bar (P6): the top-bar search trigger, ⌘K / Ctrl+K anywhere, and `/` on a
@@ -198,7 +202,7 @@ function AuthLayoutInner({ children }) {
   const isAdmin = !!perms?.docket_admin;
   const isPlanAdmin = !!perms?.docket_plan_admin;   // F9 R6b: the founders' catch-up nav entry
   // shellModalOpen: a layout-owned modal is up; pages fold it into their hotkey guards.
-  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, myDepartmentId, spaces, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
+  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount, myEmployeeId, myDepartmentId, defaultSpaceId, meLoaded, spaces, shellModalOpen: !!settingsSpace || helpOpen || programModal || cmdOpen };
 
   return (
     <ChromeContext.Provider value={ctxValue}>
@@ -280,6 +284,9 @@ function AuthLayoutInner({ children }) {
             onChanged={spacesChanged}
             onArchived={() => {
               const wasHere = route.activeKey === '/tasks?space=' + settingsSpace.id;
+              // Archiving your default space: forget it, so /tasks lets the worker pick the next default (Personal)
+              // instead of redirecting back here before getMe refreshes (hostile review P3c #4).
+              if (defaultSpaceId === settingsSpace.id) setDefaultSpaceId(null);
               setSettingsSpace(null); spacesChanged();
               if (wasHere) router.push('/tasks');
             }} />

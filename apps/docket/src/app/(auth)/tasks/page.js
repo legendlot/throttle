@@ -62,7 +62,7 @@ function TasksBoard() {
   const { showToast } = useToast();
   // shellModalOpen: a layout-owned modal (sidebar ⋯ SpaceSettings, shortcuts sheet,
   // New program) is up — page hotkeys must not fire behind it.
-  const { setCount, shellModalOpen, myEmployeeId } = useChrome();
+  const { setCount, shellModalOpen, myEmployeeId, defaultSpaceId, meLoaded } = useChrome();
   const router = useRouter();
   const search = useSearchParams();
 
@@ -76,6 +76,15 @@ function TasksBoard() {
   // My-tasks mode: cross-space list of tasks I own / collaborate on / raised, in sections.
   const mineMode = lensParam === 'mine' && !spaceId && !inProgramMode;
   const crossSpace = inProgramMode || mineMode;
+  // P3c: General is retired — a board with no space opens the caller's default space (getMe.default_space_id: their
+  // team's home space, else Personal). The other params (filters, ?task=) come along. `?space=new` stays put.
+  const needsSpace = !spaceParam && !crossSpace;
+  useEffect(() => {
+    if (!needsSpace || !defaultSpaceId) return;
+    const p = new URLSearchParams(search.toString());
+    p.set('space', defaultSpaceId);
+    router.replace('/tasks?' + p.toString());
+  }, [needsSpace, defaultSpaceId, search, router]);
 
   const view = useTaskViewState({ lensParam, planParam: search.get('plan') || '' });
   const { filters: f, groupBy, setGroupBy, density, chooseDensity, archiveDone, toggleArchiveDone, viewMode, chooseView, cardSize, chooseCardSize,
@@ -178,6 +187,9 @@ function TasksBoard() {
 
   const load = useCallback(async () => {
     if (!session) return;
+    // No space yet: wait for getMe — then either move to ?space=<default> (that load reads it) or, with no default
+    // (getMe failed), let the worker resolve it. Never a throwaway read first (hostile review P3c #4).
+    if (needsSpace && (!meLoaded || defaultSpaceId)) return;
     setLoading(true);
     try {
       const common = {
@@ -198,7 +210,7 @@ function TasksBoard() {
       setTasksFor(inProgramMode ? viewProgramId : '');
     } catch (e) { showToast(e.message || 'Failed to load tasks', 'error'); }
     finally { setLoading(false); }
-  }, [session, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, week, showToast]);
+  }, [session, needsSpace, defaultSpaceId, meLoaded, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, deps, mine, week, showToast]);
   useEffect(() => { load(); }, [load]);
   // The task view's onMutated: the list re-reads, and so does Incoming (an accept there changes it).
   const onDrawerMutated = useCallback(() => { setIncomingKey(k => k + 1); return load(); }, [load]);
@@ -313,9 +325,8 @@ function TasksBoard() {
   }
 
   // Program mode: smart default space for new tasks = the space this program already lives
-  // in most (programs live in private spaces; General is rarely used). Falls back to General.
-  // Derived only from THIS program's completed load — until it lands, program capture is off
-  // (programReady), so new work can't fall into General while a private program is still loading.
+  // in most. Derived only from THIS program's completed load — until it lands, program capture is off
+  // (programReady), so new work can't fall into your default space while the program is still loading.
   const programReady = !inProgramMode || tasksFor === viewProgramId;
   const programDefaultSpace = useMemo(() => {
     if (!inProgramMode || !programReady) return '';
@@ -340,8 +351,8 @@ function TasksBoard() {
     if (!programReady) return false;   // program page still loading its tasks: no capture yet
     const body = mineMode ? { title, assign_self: true }
       : inProgramMode ? { title, space_id: (programSpace || programDefaultSpace) || undefined, program_id: viewProgramId }
-      // P3b: General's add row names no space — the worker puts it in its team's space, else your Personal space
-      // (General is being retired; the toast says where it went).
+      // No space (only while the board is still moving to your default space): the worker puts it in its team's
+      // space, else your Personal space — the toast says where it went.
       : { title, space_id: spaceId || undefined };
     // The active single-value filters carry into the new task, so it lands in the view you're looking at
     // (Afshaan 2026-11-13). The group's value is narrower and goes over them; quick-add tokens go over both.
@@ -800,7 +811,7 @@ function TasksBoard() {
         <BulkBar count={selected.size} onClear={clearSelection} onApply={applyBulk}
           ownerOpts={ownerCellOpts} prioOpts={prioOpts} programOpts={programCellOpts}
           empOpts={empOpts}
-          spaceOpts={spaces.filter(s => !s.archived_at).map(s => ({ value: s.id, label: s.name }))}
+          spaceOpts={spaces.filter(s => s.is_private && !s.archived_at).map(s => ({ value: s.id, label: s.name }))}
           onCollaborator={applyBulkCollaborator} onMove={applyBulkMove} onAbandon={applyBulkAbandon} />
       )}
 

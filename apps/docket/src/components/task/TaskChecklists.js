@@ -4,7 +4,7 @@
 // the viewer can't open is only a count (getTask.checklists_hidden — the F7 wording). + Link checklist searches
 // records (getChecklistRecords q=, the same scope as the Records tab) → linkTaskChecklist; ✕ unlinks. Both need
 // edit rights on the task (as dependencies); unlinking also works on an abandoned task, linking doesn't. The
-// worker refuses a record outside the task's space unless it is in General (link_cross_space).
+// worker refuses a record outside the task's own space (link_cross_space).
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@throttle/ui';

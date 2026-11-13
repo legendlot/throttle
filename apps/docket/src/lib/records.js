@@ -43,7 +43,7 @@ export function hiddenChecklistsText(n) {
 
 // Worker refusal codes → plain words. Unknown codes fall back to the worker's message.
 const RECORD_ERRORS = {
-  link_cross_space: 'A checklist can be linked only to a task in its own space, or from General.',
+  link_cross_space: 'A checklist can be linked only to a task in its own space.',
   item_has_task: 'This item already has a task.',
   item_not_open: 'Only an open item can become a task.',
   record_archived: 'This record is archived. Un-archive it to change it.',

@@ -217,7 +217,7 @@ test('createTask: a hand-off is set (history handoff_set), a receiver alone name
   r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ x', handoff_to_department_id: D1 } } });
   assert.equal(r.status, 200, JSON.stringify(r.j));
   // a sub-task can't be one
-  s = stub({ dept: D1, tasks: [T(1, { owner_employee_id: MEE })] });
+  s = stub({ dept: D1, tasks: [T(1, { owner_employee_id: MEE, space_id: HOMEOK })], members: [HOMEOK] });   // P3c: not General
   r = await run(s, { post: { action: 'createSubtask', data: { title: 'ZZ sub', parent_task_id: U(101), handoff_to_department_id: D2 } } });
   assert.equal(r.status, 400); assert.equal(r.j.error, 'handoff_top_level');
 });
@@ -669,15 +669,15 @@ test('create defaults: team = owner\'s team; owner = me in a personal space only
   let s = stub({ dept: D2 });
   let r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ a', owner_employee_id: OE } } });
   assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].department_id, D1);   // OE is in D1
-  s = stub({ dept: D2 });
-  await run(s, { post: { action: 'createTask', data: { title: 'ZZ b', owner_employee_id: OE, department_id: D3, space_id: G } } });
+  s = stub({ dept: D2, members: [HOMEOK] });
+  await run(s, { post: { action: 'createTask', data: { title: 'ZZ b', owner_employee_id: OE, department_id: D3, space_id: HOMEOK } } });
   assert.equal(s.posted[0].department_id, D3);                                                       // explicit team wins
   s = stub({ dept: D2 });                                                                            // P3b review #4: another team,
   r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ b2', owner_employee_id: OE, department_id: D3 } } });   // no space
   assert.equal(r.status, 422); assert.equal(r.j.error, 'team_space_closed'); assert.equal(s.posted.length, 0);   // it can open → refused
-  s = stub({ dept: D2 });
-  await run(s, { post: { action: 'createTask', data: { title: 'ZZ c', space_id: G } } });
-  assert.equal(s.posted[0].owner_employee_id, null); assert.equal(s.posted[0].department_id, null);  // General: stays blank (The Grid)
+  s = stub({ dept: D2, members: [HOMEOK] });
+  await run(s, { post: { action: 'createTask', data: { title: 'ZZ c', space_id: HOMEOK } } });
+  assert.equal(s.posted[0].owner_employee_id, null); assert.equal(s.posted[0].department_id, null);  // a team space: stays blank (The Grid)
   s = stub({ dept: D2, members: [MYSP] });
   await run(s, { post: { action: 'createTask', data: { title: 'ZZ d', space_id: MYSP } } });
   assert.equal(s.posted[0].owner_employee_id, MEE); assert.equal(s.posted[0].department_id, D2);     // personal space → me, my team
@@ -831,16 +831,16 @@ test('P3b create routing: no team / no home space → the caller\'s Personal', a
 });
 
 test('P3b create routing: an explicit space_id still wins over a home space', async () => {
-  const s = stub({ dept: D2, homes: { [D1]: HOMEOK, [D2]: HOMEOK }, members: [HOMEOK] });
-  const r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ p', owner_employee_id: OE, space_id: G } } });
-  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].space_id, G);
+  const s = stub({ dept: D2, homes: { [D1]: HOMEOK, [D2]: HOMEOK }, members: [HOMEOK, PRIV] });
+  const r = await run(s, { post: { action: 'createTask', data: { title: 'ZZ p', owner_employee_id: OE, space_id: PRIV } } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].space_id, PRIV);
   assert.ok(!s.calls.some(c => c.p.includes('home_department_id') || c.p.includes('ensure_personal_space')));
 });
 
 test('P3b create routing: a sub-task still takes its parent\'s space, not the home space or Personal', async () => {
-  const s = stub({ dept: D2, homes: { [D1]: HOMEOK, [D2]: HOMEOK }, members: [HOMEOK], tasks: [T(1, { owner_employee_id: MEE, department_id: D2, space_id: G })] });
+  const s = stub({ dept: D2, homes: { [D1]: HOMEOK, [D2]: HOMEOK }, members: [HOMEOK, PRIV], tasks: [T(1, { owner_employee_id: MEE, department_id: D2, space_id: PRIV })] });
   const r = await run(s, { post: { action: 'createSubtask', data: { title: 'ZZ sub', parent_task_id: U(101) } } });
-  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].space_id, G);
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.equal(s.posted[0].space_id, PRIV);
   assert.ok(!s.calls.some(c => c.p.includes('home_department_id') || c.p.includes('ensure_personal_space')));
 });
 
@@ -1069,9 +1069,9 @@ test('P3a: an involvement-only viewer can\'t move the task — single or bulk; a
   assert.deepEqual([r.j.data.updated, r.j.data.skipped], [1, 1], JSON.stringify(r.j));               // DKT-2 (General) moves; DKT-1 skipped
   const mv = s.patches.filter(x => x.body.space_id && x.p.startsWith('/rest/v1/tasks?id=in.'));
   assert.equal(mv.length, 1); assert.deepEqual(inIds(new URL('https://x' + mv[0].p).searchParams.get('id')), [U(102)]);
-  s = stub({ dept: D2, tasks: [own()], members: [PRIV] });                                          // a member moves it
-  r = await run(s, { post: { action: 'moveTask', id: U(101), space_id: G } });
-  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.ok(s.patches.some(x => x.body.space_id === G));
+  s = stub({ dept: D2, tasks: [own()], members: [PRIV, HOMEOK] });                                  // a member moves it
+  r = await run(s, { post: { action: 'moveTask', id: U(101), space_id: HOMEOK } });
+  assert.equal(r.status, 200, JSON.stringify(r.j)); assert.ok(s.patches.some(x => x.body.space_id === HOMEOK));
   // nor can the involvement-only owner put a sub-task under it from outside (the space isn't theirs)
   s = stub({ dept: D2, tasks: [own()] });
   r = await run(s, { post: { action: 'createSubtask', data: { title: 'ZZ sub', parent_task_id: U(101) } } });
